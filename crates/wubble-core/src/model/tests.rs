@@ -207,7 +207,7 @@ fn close_inactive_keeps_active() {
 }
 
 #[test]
-fn activate_switches_space_and_forgets_openers() {
+fn activate_switches_space_and_keeps_openers_between_child_and_opener() {
     let (m, ids) = with_tabs(1);
     let (m, t) = open(m, Some(ids[0]));
     assert_eq!(m.tabs[&t].opener, Some(ids[0]));
@@ -215,7 +215,8 @@ fn activate_switches_space_and_forgets_openers() {
     let (m, _) = run(m, Command::SwitchSpace(s2));
     let (m, fx) = run(m, Command::ActivateTab(ids[0]));
     assert_eq!(m.active_space(), s0());
-    assert_eq!(m.tabs[&t].opener, None);
+    // from the child to its opener: Chromium keeps the relation
+    assert_eq!(m.tabs[&t].opener, Some(ids[0]));
     assert_eq!(
         fx,
         vec![Effect::SpaceChanged(s0()), Effect::ActivateTab(ids[0])]
@@ -3235,4 +3236,183 @@ fn check_holds_one_pip_window_of_a_placed_tab() {
     assert!(err.contains("Pip window"), "{err}");
     m.windows[0].shown = Shown::Pip(TabId(99));
     assert!(m.check().is_err(), "an unknown tab");
+}
+
+// ----- openers (Chromium `tab_strip_model.cc`: DetermineNewSelectedIndex, FixOpeners,
+// InsertTabAtImpl, OnActiveTabChanged)
+
+fn background(m: Model, opener: TabId) -> (Model, TabId) {
+    let (m, fx) = run(
+        m,
+        Command::BackgroundTab {
+            url: "https://b.test".into(),
+            opener,
+        },
+    );
+    let Effect::CreateTab { tab, .. } = fx[0] else {
+        panic!("no CreateTab: {fx:?}")
+    };
+    (m, tab)
+}
+
+/// Three tabs, the first one shown.
+fn three_on_first() -> (Model, Vec<TabId>) {
+    let (m, ids) = with_tabs(3);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    (m, ids)
+}
+
+#[test]
+fn a_closed_child_returns_to_its_opener_past_the_tab_above_it() {
+    // the owner's case: YouTube (pinned) opens a shop link, which goes last, under another tab
+    let (m, ids) = three_on_first();
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, shop) = open(m, Some(ids[0]));
+    let order = m.order(s0());
+    assert_eq!(
+        order[order.len() - 2],
+        ids[2],
+        "another tab sits right above it"
+    );
+    let (m, fx) = run(m, Command::CloseTab(shop));
+    assert_eq!(active(&m), Some(ids[0]));
+    assert_eq!(
+        fx,
+        vec![Effect::CloseTab(shop), Effect::ActivateTab(ids[0])]
+    );
+}
+
+#[test]
+fn an_opener_closed_first_leaves_its_child_to_close_to_its_neighbour() {
+    let (m, ids) = three_on_first();
+    let (m, child) = open(m, Some(ids[0]));
+    let (m, _) = run(m, Command::CloseTab(ids[0]));
+    assert_eq!(m.tabs[&child].opener, None);
+    let (m, _) = run(m, Command::ActivateTab(child));
+    // [child, 1, 2]: the next one
+    let (m, _) = run(m, Command::CloseTab(child));
+    assert_eq!(active(&m), Some(ids[1]));
+}
+
+#[test]
+fn a_switch_to_an_unrelated_tab_forgets_the_opener() {
+    let (m, ids) = three_on_first();
+    let (m, child) = open(m, Some(ids[0]));
+    // [0, child, 1, 2]: away to 2, back to the child
+    let (m, _) = run(m, Command::ActivateTab(ids[2]));
+    assert_eq!(m.tabs[&child].opener, None);
+    let (m, _) = run(m, Command::ActivateTab(child));
+    let (m, _) = run(m, Command::CloseTab(child));
+    assert_eq!(active(&m), Some(ids[1]), "its neighbour, as today");
+}
+
+#[test]
+fn switching_between_a_child_and_its_opener_keeps_the_relation() {
+    let (m, ids) = three_on_first();
+    let (m, child) = open(m, Some(ids[0]));
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::ActivateTab(child));
+    assert_eq!(m.tabs[&child].opener, Some(ids[0]));
+    let (m, _) = run(m, Command::CloseTab(child));
+    assert_eq!(active(&m), Some(ids[0]));
+}
+
+#[test]
+fn a_background_tab_selected_from_its_opener_closes_back_to_it() {
+    let (m, ids) = three_on_first();
+    let (m, b) = background(m, ids[0]);
+    assert_eq!(active(&m), Some(ids[0]), "opened in the background");
+    let (m, _) = run(m, Command::ActivateTab(b));
+    let (m, _) = run(m, Command::CloseTab(b));
+    assert_eq!(active(&m), Some(ids[0]));
+}
+
+#[test]
+fn a_closed_child_picks_its_sibling_before_its_opener() {
+    // [0, c2, c1, 1, 2]: two background links from 0, then the user goes to c1
+    let (m, ids) = three_on_first();
+    let (m, c1) = background(m, ids[0]);
+    let (m, c2) = background(m, ids[0]);
+    assert_eq!(&m.order(s0())[..3], &[ids[0], c2, c1]);
+    let (m, _) = run(m, Command::ActivateTab(c2));
+    let (m, _) = run(m, Command::CloseTab(c2));
+    assert_eq!(active(&m), Some(c1), "a tab of the same opener");
+    let (m, _) = run(m, Command::CloseTab(c1));
+    assert_eq!(active(&m), Some(ids[0]), "then the opener");
+}
+
+#[test]
+fn closing_the_opener_selects_the_tab_it_opened() {
+    let (m, ids) = three_on_first();
+    let (m, b) = background(m, ids[0]);
+    let (m, _) = run(m, Command::CloseTab(ids[0]));
+    assert_eq!(active(&m), Some(b));
+}
+
+#[test]
+fn closing_a_hidden_tab_never_moves_the_selection() {
+    let (m, ids) = three_on_first();
+    let (m, child) = open(m, Some(ids[0]));
+    let (m, fx) = run(m, Command::CloseTab(ids[0]));
+    assert_eq!(active(&m), Some(child));
+    assert_eq!(fx, vec![Effect::CloseTab(ids[0])]);
+}
+
+#[test]
+fn a_chain_closes_back_up_as_chromium_does() {
+    // A opens B, B opens C, all in the foreground: opening C makes B forget A (one opener
+    // relation at a time), so C closes to B and B to its neighbour.
+    let (m, ids) = three_on_first();
+    let (m, b) = open(m, Some(ids[0]));
+    let (m, c) = open(m, Some(b));
+    assert_eq!((m.tabs[&b].opener, m.tabs[&c].opener), (None, Some(b)));
+    let (m, _) = run(m, Command::CloseTab(c));
+    assert_eq!(active(&m), Some(b));
+    let (m, _) = run(m, Command::CloseTab(b));
+    assert_eq!(active(&m), Some(ids[1]));
+    // in the background the chain stays: B closed first hands C to A (FixOpeners)
+    let (m, ids) = three_on_first();
+    let (m, b) = background(m, ids[0]);
+    let (m, _) = run(m, Command::ActivateTab(b));
+    let (m, c) = background(m, b);
+    let (m, _) = run(m, Command::CloseTab(b));
+    assert_eq!(active(&m), Some(c), "B's child first");
+    assert_eq!(m.tabs[&c].opener, Some(ids[0]), "C inherits B's opener");
+    let (m, _) = run(m, Command::CloseTab(c));
+    assert_eq!(active(&m), Some(ids[0]));
+}
+
+#[test]
+fn a_promoted_peek_closes_back_to_its_page() {
+    let (m, ids) = three_on_first();
+    let w = m.windows[0].id;
+    let (m, _) = run(
+        m,
+        Command::OpenGlance {
+            window: w,
+            opener: ids[0],
+            url: "https://p.test".into(),
+        },
+    );
+    let g = m.glance_of(w).expect("a peek").tab;
+    let (m, _) = run(
+        m,
+        Command::PromoteGlance {
+            window: w,
+            to: GlanceTo::Tab,
+        },
+    );
+    assert_eq!(active(&m), Some(g));
+    let (m, _) = run(m, Command::CloseTab(g));
+    assert_eq!(active(&m), Some(ids[0]));
+}
+
+#[test]
+fn shell_tabs_have_no_opener_and_close_to_their_neighbour() {
+    // [0, 1, 2, new]: Ctrl+T's tab goes last and closes to the one above it
+    let (m, ids) = three_on_first();
+    let (m, t) = open(m, None);
+    assert_eq!(m.tabs[&t].opener, None);
+    let (m, _) = run(m, Command::CloseTab(t));
+    assert_eq!(active(&m), Some(ids[2]));
 }

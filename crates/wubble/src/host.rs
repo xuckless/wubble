@@ -2269,6 +2269,7 @@ impl Host {
                     && w.get_exit_t() >= 1.0
                     && w.get_exit_page().size().width == 0
             }),
+            shown_index: visible.and_then(|v| order.iter().position(|&t| t == v)),
         }
     }
 
@@ -2499,13 +2500,45 @@ impl Host {
             Some(tabs_smoke::Action::OpenSolid(i)) => {
                 self.dispatch(new_tab(page_url(&tabs_smoke::solid_page(i)), None));
             }
-            Some(tabs_smoke::Action::CheckNoBleed) => match self.check_no_bleed() {
-                Ok(()) => {
-                    self.tabs_passed = true;
-                    quit();
+            Some(tabs_smoke::Action::CheckNoBleed) => {
+                if let Err(e) = self.check_no_bleed() {
+                    self.fail(e);
                 }
-                Err(e) => self.fail(e),
-            },
+            }
+            // as a pinned site would: the tab its link opens goes last, under another tab
+            Some(tabs_smoke::Action::OpenLinkPage) => {
+                self.dispatch(new_tab(page_url(&tabs_smoke::link_page()), None));
+                if let Some(tab) = self.shown() {
+                    self.dispatch(Command::PinTab(tab));
+                }
+            }
+            // a real click through the page's pointer path: the link opens with a gesture
+            Some(tabs_smoke::Action::ClickLink(middle)) => {
+                if let (Some(tab), Some(window)) = (self.shown(), self.w.window.upgrade()) {
+                    let pane = crate::shell::pane_id(tab);
+                    let at = Point {
+                        x: window.get_content_width() / 2.0,
+                        y: window.get_content_height() / 2.0,
+                    };
+                    let button = if middle {
+                        PointerEventButton::Middle
+                    } else {
+                        PointerEventButton::Left
+                    };
+                    self.pointer_moved(pane, at);
+                    self.pointer_button(pane, button, true, at);
+                    self.pointer_button(pane, button, false, at);
+                }
+            }
+            Some(tabs_smoke::Action::CloseShown) => {
+                if let Some(tab) = self.shown() {
+                    self.dispatch(Command::CloseTab(tab));
+                }
+            }
+            Some(tabs_smoke::Action::Pass) => {
+                self.tabs_passed = true;
+                quit();
+            }
             Some(tabs_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
         }

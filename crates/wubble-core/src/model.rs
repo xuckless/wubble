@@ -5,11 +5,18 @@
 //! unchanged with no effects; indices are clamped. The engine executes the effects.
 //!
 //! Rules ported, no code copied, from:
-//! - Chromium `chrome/browser/ui/tabs/tab_strip_model.cc` (BSD-3-Clause):
-//!   `DetermineNewSelectedIndex` (selection after close: opener child, opener, next,
-//!   else previous), `ConstrainInsertionIndex` (pinned tabs form a prefix; indices
-//!   clamp into their section), pinned tabs never join a group (here: folder), and
-//!   `ForgetAllOpeners` on a user tab switch (from memory of the file, unverified).
+//! - Chromium `chrome/browser/ui/tabs/tab_strip_model.cc` (BSD-3-Clause, read at main
+//!   2026-11): the opener rules. `DetermineNewSelectedIndex` (selection after closing the
+//!   active tab: a tab it opened, else a tab its opener opened, else its opener, else the next,
+//!   else the previous; each search looks after the tab first, then before it),
+//!   `FixOpeners` (a closed tab's children inherit its opener), `AddWebContents` /
+//!   `InsertTabAtImpl` (a page's tab remembers its opener; one opened in the foreground first
+//!   makes every other tab forget theirs, `ForgetAllOpeners`) and `OnActiveTabChanged` (a user
+//!   switch forgets every opener unless it moves between a tab and its opener or between two
+//!   tabs of one opener). Not ported: the Ctrl+T "quick look-up" opener (wubble's shell tabs
+//!   have none) and `TabNavigating` (wubble does not tell typed navigations from link ones).
+//!   Also `ConstrainInsertionIndex` (pinned tabs form a prefix; indices clamp into their
+//!   section) and pinned tabs never joining a group (here: folder).
 //! - Zen `src/zen/spaces/ZenSpaceManager.mjs` (MPL-2.0): a workspace has a default
 //!   container (0 = none), deleting a container resets workspaces using it, deleting
 //!   a workspace closes its tabs (`#deleteWorkspaceOwnedTabs`), and each workspace
@@ -791,16 +798,21 @@ impl Model {
             .collect();
         let i = order.iter().position(|&t| t == tab)?;
         if use_openers {
-            let is_child = |t: &&TabId| self.tabs[*t].opener == Some(tab);
-            if let Some(&c) = order[i + 1..]
-                .iter()
-                .find(is_child)
-                .or_else(|| order[..i].iter().rev().find(is_child))
+            // `GetIndexOfNextWebContentsOpenedBy`: after the tab, then before it
+            let opened_by = |o: TabId| {
+                let by = |t: &&TabId| self.tabs[*t].opener == Some(o);
+                order[i + 1..]
+                    .iter()
+                    .find(by)
+                    .or_else(|| order[..i].iter().rev().find(by))
+                    .copied()
+            };
+            let opener = self.tabs[&tab].opener.filter(|o| order.contains(o));
+            if let Some(t) = opened_by(tab)
+                .or_else(|| opener.and_then(opened_by))
+                .or(opener)
             {
-                return Some(c);
-            }
-            if let Some(o) = self.tabs[&tab].opener.filter(|o| order.contains(o)) {
-                return Some(o);
+                return Some(t);
             }
         }
         order.get(i + 1).or_else(|| order[..i].last()).copied()
@@ -847,13 +859,31 @@ impl Model {
         }
     }
 
-    /// Drops a closed tab from the map and from every opener reference.
+    /// Drops closed tabs from the map; the tabs one opened inherit its opener (Chromium
+    /// `FixOpeners`), and no opener names a closed tab.
     fn forget(&mut self, gone: &[TabId]) {
-        for t in gone {
-            self.tabs.remove(t);
+        for g in gone {
+            let Some(closed) = self.tabs.remove(g) else {
+                continue;
+            };
+            for t in self.tabs.values_mut() {
+                if t.opener == Some(*g) {
+                    t.opener = closed.opener.filter(|&o| o != t.id);
+                }
+            }
         }
         for t in self.tabs.values_mut() {
             if t.opener.is_some_and(|o| gone.contains(&o)) {
+                t.opener = None;
+            }
+        }
+    }
+
+    /// Every tab of the Space forgets its opener (Chromium `ForgetAllOpeners`; a Space is a
+    /// tab strip).
+    fn forget_openers(&mut self, si: usize) {
+        for t in self.order_idx(si) {
+            if let Some(t) = self.tabs.get_mut(&t) {
                 t.opener = None;
             }
         }
@@ -876,6 +906,14 @@ impl Model {
         let Some((id, si, create)) = self.place_new_tab(url, container, opener, None) else {
             return vec![];
         };
+        // A page's tab opened in the foreground: one opener relation at a time (Chromium
+        // `InsertTabAtImpl`, ADD_INHERIT_OPENER with ADD_ACTIVE).
+        if show && let Some(o) = self.tabs[&id].opener {
+            self.forget_openers(si);
+            if let Some(t) = self.tabs.get_mut(&id) {
+                t.opener = Some(o);
+            }
+        }
         let mut fx = vec![create];
         // one opened from a Little or Popup window's page shows in the Main window
         if show {
@@ -1017,10 +1055,15 @@ impl Model {
             return vec![];
         }
         let mut fx = self.set_active_space(id);
-        self.spaces[si].active = Some(tab);
-        for t in self.tabs.values_mut() {
-            t.opener = None;
+        // Chromium `OnActiveTabChanged` on a user's switch: the openers stay only while the
+        // switch is between a tab and its opener, or between two tabs of one opener.
+        let old = self.spaces[si].active;
+        let opener = |t: TabId| self.tabs.get(&t).and_then(|t| t.opener);
+        let (was, now) = (old.and_then(opener), opener(tab));
+        if was != now && now != old && was != Some(tab) {
+            self.forget_openers(si);
         }
+        self.spaces[si].active = Some(tab);
         fx.push(Effect::ActivateTab(tab));
         fx
     }

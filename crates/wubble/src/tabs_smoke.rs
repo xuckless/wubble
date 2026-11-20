@@ -3,7 +3,10 @@
 //! close one, then freeze a hidden page and check its timers stop while a
 //! hidden control page's keep running, and run again once thawed. Last, two fresh tabs of one
 //! solid colour each: once the switch to the second settles, its card shows none of the first's
-//! pixels (QA HIGH-04). After each step the model and the engine must agree. Every wait is
+//! pixels (QA HIGH-04). Then a pinned page opens a tab by a `target=_blank` link click (it goes
+//! last, under another tab); closing it shows the page again, not the tab above it (qa4: a tab
+//! closes back to its opener). Again by a middle click (a background tab), then the tab is selected
+//! in the sidebar and closed: the page shows again. After each step the model and the engine must agree. Every wait is
 //! "until the host sees X", bounded by a count of CEF work runs, never by time.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,6 +36,19 @@ fn solid_title(i: usize) -> String {
     format!("solid {i}")
 }
 
+/// The opener page's title.
+pub const LINK_TITLE: &str = "opener";
+
+/// The opener page: one `target=_blank` link over the whole page, so a click anywhere on it
+/// opens a new tab (on `about:blank`: a page may not open a `data:` URL).
+pub fn link_page() -> String {
+    format!(
+        "<!doctype html><meta charset=utf-8><title>{LINK_TITLE}</title>\
+         <body style=\"margin:0\"><a href=\"about:blank#opened\" target=\"_blank\" \
+         style=\"position:fixed;inset:0;display:block;background:#335\">open</a>"
+    )
+}
+
 /// What the host sees after a run of CEF work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Seen {
@@ -58,6 +74,8 @@ pub struct Seen {
     pub shown_title: String,
     /// No tab switch is fading: the entrance and the hidden page's exit are over.
     pub settled: bool,
+    /// Where the visible tab is in `titles`.
+    pub shown_index: Option<usize>,
 }
 
 impl Seen {
@@ -131,6 +149,28 @@ pub enum Stage {
     },
     /// Opened solid page `i` as a new tab, waiting for it to show, painted, the switch over.
     Solid(usize),
+    /// The bleed check ran: next the opener page.
+    Opener,
+    /// Opened the opener page, pinned, waiting for it to show, painted.
+    LinkShown,
+    /// Clicked its link with `tabs` tabs open, waiting for the opened tab to show.
+    Linked {
+        tabs: usize,
+    },
+    /// Closed the opened tab, waiting for the opener to show again; then the background round
+    /// (`background` false) or the pass.
+    Reverted {
+        tabs: usize,
+        background: bool,
+    },
+    /// Middle-clicked the link with `tabs` tabs open, waiting for the background tab.
+    Background {
+        tabs: usize,
+    },
+    /// Selected the background tab, waiting for it to show.
+    Selected {
+        tabs: usize,
+    },
     Done,
 }
 
@@ -176,9 +216,16 @@ pub enum Action {
     Freeze(usize, bool),
     /// Open solid page `i` ([`solid_page`]) as a new tab.
     OpenSolid(usize),
-    /// Snapshot the window: the card shows solid page 1 and no pixel of solid page 0; pass or
-    /// fail on it.
+    /// Snapshot the window: the card shows solid page 1 and no pixel of solid page 0; fail on
+    /// it.
     CheckNoBleed,
+    /// Open [`link_page`] as a new tab and pin it.
+    OpenLinkPage,
+    /// Click the visible page's middle (middle button: `true`).
+    ClickLink(bool),
+    /// Close the visible tab.
+    CloseShown,
+    Pass,
     Fail(String),
 }
 
@@ -267,9 +314,67 @@ pub fn next(s: TabsSmoke, seen: &Seen, want: &[&str]) -> (TabsSmoke, Option<Acti
             if *i == 0 {
                 Some((Solid(1), Some(Action::OpenSolid(1))))
             } else {
-                Some((Done, Some(Action::CheckNoBleed)))
+                Some((Opener, Some(Action::CheckNoBleed)))
             }
         }
+        Opener => Some((LinkShown, Some(Action::OpenLinkPage))),
+        LinkShown if seen.one_visible() && seen.painted && seen.shown_title == LINK_TITLE => {
+            Some((
+                Linked {
+                    tabs: seen.titles.len(),
+                },
+                Some(Action::ClickLink(false)),
+            ))
+        }
+        Linked { tabs }
+            if seen.titles.len() == tabs + 1
+                && seen.one_visible()
+                && seen.shown_title != LINK_TITLE =>
+        {
+            let above = seen
+                .shown_index
+                .and_then(|i| i.checked_sub(1))
+                .map(|i| seen.title(i));
+            match above {
+                Some(t) if t != LINK_TITLE => Some((
+                    Reverted {
+                        tabs: *tabs,
+                        background: false,
+                    },
+                    Some(Action::CloseShown),
+                )),
+                _ => fail(format!(
+                    "the opened tab is not under another tab, the close proves nothing: {seen:?}"
+                )),
+            }
+        }
+        Reverted { tabs, background } if seen.titles.len() == *tabs && seen.one_visible() => {
+            if seen.shown_title != LINK_TITLE {
+                fail(format!(
+                    "closing the tab a link opened showed {:?}, not its opener",
+                    seen.shown_title
+                ))
+            } else if *background {
+                Some((Done, Some(Action::Pass)))
+            } else {
+                Some((Background { tabs: *tabs }, Some(Action::ClickLink(true))))
+            }
+        }
+        // the opener stays shown; the new tab is last (the opener is pinned)
+        Background { tabs } if seen.titles.len() == tabs + 1 => {
+            if seen.shown_title == LINK_TITLE {
+                Some((Selected { tabs: *tabs }, Some(Action::Activate(*tabs))))
+            } else {
+                fail(format!("a middle click showed {:?}", seen.shown_title))
+            }
+        }
+        Selected { tabs } if seen.shown_index == Some(*tabs) && seen.one_visible() => Some((
+            Reverted {
+                tabs: *tabs,
+                background: true,
+            },
+            Some(Action::CloseShown),
+        )),
         _ => None,
     };
     match step {
@@ -323,6 +428,7 @@ mod tests {
             frozen: vec![],
             shown_title: String::new(),
             settled: true,
+            shown_index: None,
         }
     }
 
@@ -398,6 +504,13 @@ mod tests {
             solid(0, true, true),
             solid(1, false, false),
             solid(1, true, true),
+            solid(1, true, true),
+            link(&["opener", "a", "b", "c"], 0),
+            link(&["opener", "a", "b", "c", ""], 4),
+            link(&["opener", "a", "b", "c"], 0),
+            link(&["opener", "a", "b", "c", ""], 0),
+            link(&["opener", "a", "b", "c", ""], 4),
+            link(&["opener", "a", "b", "c"], 0),
         ]);
         assert_eq!(s.stage, Stage::Done);
         assert_eq!(
@@ -415,7 +528,46 @@ mod tests {
                 Action::OpenSolid(0),
                 Action::OpenSolid(1),
                 Action::CheckNoBleed,
+                Action::OpenLinkPage,
+                Action::ClickLink(false),
+                Action::CloseShown,
+                Action::ClickLink(true),
+                Action::Activate(4),
+                Action::CloseShown,
+                Action::Pass,
             ]
+        );
+    }
+
+    /// The opener page's stage: `titles` in order, the visible one at `shown`.
+    fn link(titles: &[&str], shown: usize) -> Seen {
+        Seen {
+            shown_title: titles[shown].to_string(),
+            shown_index: Some(shown),
+            ..seen(titles, titles.len(), titles.len())
+        }
+    }
+
+    #[test]
+    fn closing_the_opened_tab_must_show_its_opener() {
+        let opened = link(&["opener", "a", "b", "c", ""], 4);
+        let (s, actions) = run_from(
+            at(Stage::Linked { tabs: 4 }),
+            &[opened, link(&["opener", "a", "b", "c"], 3)],
+        );
+        assert_eq!(s.stage, Stage::Done);
+        assert!(
+            matches!(actions.as_slice(), [Action::CloseShown, Action::Fail(e)] if e.contains("not its opener")),
+            "{actions:?}"
+        );
+        // a tab opened right under its opener proves nothing
+        let (_, actions) = run_from(
+            at(Stage::Linked { tabs: 2 }),
+            &[link(&["a", "opener", ""], 2)],
+        );
+        assert!(
+            matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("proves nothing")),
+            "{actions:?}"
         );
     }
 
@@ -483,7 +635,7 @@ mod tests {
         );
         assert_eq!(
             (s.stage, actions),
-            (Stage::Done, vec![Action::CheckNoBleed])
+            (Stage::Opener, vec![Action::CheckNoBleed])
         );
     }
 
