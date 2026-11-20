@@ -20,6 +20,8 @@ use crate::with_host;
 
 /// The smoke's state beside the pure driver's.
 pub struct ParityRun {
+    /// The parity page's URL (`parity::home`).
+    home: String,
     items: Vec<parity::Item>,
     state: Parity,
     failed: Vec<&'static str>,
@@ -33,9 +35,10 @@ pub struct ParityRun {
     gaps: Vec<&'static str>,
 }
 
-impl Default for ParityRun {
-    fn default() -> Self {
+impl ParityRun {
+    pub fn new(home: String) -> Self {
         Self {
+            home,
             items: parity::selected(std::env::var("WUBBLE_PARITY").ok().as_deref()),
             state: Parity::default(),
             failed: vec![],
@@ -138,6 +141,10 @@ impl Host {
         self.checks.parity.as_mut()
     }
 
+    fn parity_home(&self) -> Option<String> {
+        self.checks.parity.as_ref().map(|run| run.home.clone())
+    }
+
     fn parity_url(&self) -> Option<String> {
         let tab = self.model.visible_tab()?;
         self.model.tabs.get(&tab).map(|t| t.url.clone())
@@ -147,10 +154,10 @@ impl Host {
         use wubble_engine::nav::WebEvent;
         match event {
             WebEvent::LoadingChanged { loading: false, .. } => {
-                let home = crate::page_url(crate::PARITY_PAGE);
+                let home = self.parity_home();
                 let at_home = self
                     .parity_url()
-                    .is_some_and(|u| u.split('#').next() == Some(&home));
+                    .is_some_and(|u| u.split('#').next() == home.as_deref());
                 let Some(run) = self.parity_run() else { return };
                 if run.restoring && !at_home {
                     return;
@@ -402,7 +409,9 @@ impl Host {
                 }
                 self.parity_host_op(window, HostOp::OnlyFirstTab);
                 self.parity_host_op(window, HostOp::ZoomReset);
-                let home = crate::page_url(crate::PARITY_PAGE);
+                let Some(home) = self.parity_home() else {
+                    return;
+                };
                 let tab = self.model.visible_tab();
                 let away = self
                     .parity_url()

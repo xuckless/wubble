@@ -29,6 +29,11 @@ input, textarea, [contenteditable] { font: 16px monospace; }
 #blankwin { left: 520px; top: 200px; }
 #open { left: 520px; top: 240px; width: 100px; height: 30px; }
 #tip { left: 520px; top: 290px; width: 100px; height: 30px; background: #445; }
+/* The page's own copy buttons, one per way a page writes the clipboard. */
+#clip1, #clip2, #clip3, #clip4 { top: 410px; width: 90px; height: 30px; }
+#clip1 { left: 20px; } #clip2 { left: 120px; } #clip3 { left: 220px; } #clip4 { left: 320px; }
+#frameok, #frameno { top: 460px; width: 280px; height: 60px; border: 0; }
+#frameok { left: 20px; } #frameno { left: 320px; }
 </style>
 </head>
 <body>
@@ -52,6 +57,12 @@ input, textarea, [contenteditable] { font: 16px monospace; }
 <a id="blankwin" class="at" href="https://example.invalid/b">b</a>
 <button id="open" class="at">window.open</button>
 <div id="tip" class="at" title="tip text">tooltip</div>
+<button id="clip1" class="at">writeText</button>
+<button id="clip2" class="at">execCommand</button>
+<button id="clip3" class="at">write</button>
+<button id="clip4" class="at">copy event</button>
+<iframe id="frameok" class="at" allow="clipboard-write"></iframe>
+<iframe id="frameno" class="at"></iframe>
 <script>
 const $ = (id) => document.getElementById(id);
 // What the page saw, for the smoke's checks.
@@ -99,7 +110,7 @@ const parity = {
     getSelection().removeAllRanges(); getSelection().addRange(r);
   },
   reset() {
-    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.neutral = 0;
+    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.neutral = 0; seen.clip = {}; seen.copied = '';
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
     scrollTo(0, 0);
@@ -136,6 +147,41 @@ $('copybtn').addEventListener('click', () => {
   const t = document.createElement('textarea'); t.value = 'from execCommand'; document.body.append(t);
   t.select(); document.execCommand('copy'); t.remove();
 });
+// The page's own copies (`seen.clip[name]`: 'ok', or the rejection's name and message).
+seen.clip = {};
+const clipDone = (name, p) => {
+  seen.clip[name] = 'pending';
+  Promise.resolve(p).then(
+    (v) => { seen.clip[name] = v === false ? 'false' : 'ok'; },
+    (e) => { seen.clip[name] = `${e && e.name}: ${e && e.message}`; },
+  ).finally(() => console.log(`parity clip ${name}: ${seen.clip[name]}`));
+};
+// A textarea out of sight, as Angular CDK's Clipboard and most copy buttons use.
+const execCopy = (text) => {
+  const t = document.createElement('textarea'); t.value = text;
+  t.style.cssText = 'position: fixed; top: -999em; opacity: 0;';
+  document.body.append(t); t.focus(); t.select();
+  try { return document.execCommand('copy'); } finally { t.remove(); }
+};
+$('clip1').addEventListener('click', () => clipDone('a1', navigator.clipboard.writeText('a1')));
+$('clip2').addEventListener('click', () => clipDone('a2', execCopy('a2')));
+$('clip3').addEventListener('click', () => clipDone('a3', navigator.clipboard.write([
+  new ClipboardItem({ 'text/plain': new Blob(['a3'], { type: 'text/plain' }) })])));
+// A selection and a `copy` listener that puts other text on the clipboard instead, as the
+// `copy-to-clipboard` package does (`seen.copied`: what the listener set).
+$('clip4').addEventListener('click', () => {
+  const span = document.createElement('span'); span.textContent = 'a4 selected'; document.body.append(span);
+  getSelection().selectAllChildren(span);
+  const set = (e) => { e.clipboardData.setData('text/plain', 'a4'); seen.copied = 'a4'; e.preventDefault(); };
+  document.addEventListener('copy', set, { once: true });
+  try { clipDone('a4', document.execCommand('copy')); } finally {
+    document.removeEventListener('copy', set); span.remove();
+  }
+});
+// Two cross-origin frames (`localhost`, on this page's port), one allowed to write the
+// clipboard: the same copy button in each posts its outcome here (`seen.clip['f-' + id]`).
+for (const id of ['frameok', 'frameno']) $(id).src = `http://localhost:${location.port}/parity/frame#${id}`;
+addEventListener('message', (e) => { if (e.data && e.data.clip) seen.clip['f-' + e.data.clip] = e.data.r; });
 $('open').addEventListener('click', () => window.open('https://example.invalid/opened'));
 window.name = String(Number(window.name || 0) + 1); // loads of this page, across reloads
 </script>

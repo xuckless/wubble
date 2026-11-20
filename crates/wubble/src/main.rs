@@ -1187,7 +1187,7 @@ fn run(
             ..
         }
     );
-    let autofill_port = (matches!(mode, Mode::Autofill | Mode::Block) || memory_run)
+    let autofill_port = (matches!(mode, Mode::Autofill | Mode::Block | Mode::Parity) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
@@ -1218,7 +1218,7 @@ fn run(
     // The database loads, and the GPU device is made (about 150 ms on the Linux box, as long
     // as CEF's start), while CEF starts.
     let (store, loaded) = StoreClient::spawn(db, keyring);
-    if let Some(port) = autofill_port {
+    if let Some(port) = autofill_port.filter(|_| !matches!(mode, Mode::Parity)) {
         seed_autofill_login(&store, port);
     }
     let gpu_init = std::thread::Builder::new()
@@ -1321,9 +1321,9 @@ fn run(
             },
         ),
         Mode::Parity => (
-            Some(page_url(PARITY_PAGE)),
+            autofill_port.map(parity::home),
             Checks {
-                parity: Some(Default::default()),
+                parity: autofill_port.map(|port| host::ParityRun::new(parity::home(port))),
                 ..none
             },
         ),

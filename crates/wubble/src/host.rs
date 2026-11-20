@@ -50,6 +50,7 @@ mod videos;
 mod window;
 pub(crate) use boost::KIT;
 pub use media::MediaObserver;
+pub(crate) use parity::ParityRun;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;

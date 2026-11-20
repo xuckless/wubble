@@ -182,6 +182,10 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         "/block" | "/block/next" => crate::BLOCK_PAGE.to_owned(),
         // `--measure memory`'s article, on every `t<n>.localhost` site.
         "/memory" => crate::ARTICLE_PAGE.to_owned(),
+        // `--smoke parity`'s page, in a secure context (the async Clipboard API needs one;
+        // a `data:` page is not), and the copy button it frames from another origin.
+        "/parity" => crate::PARITY_PAGE.to_owned(),
+        "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
         _ => {
             return stream.write_all(
                 b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",

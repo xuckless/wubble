@@ -1,6 +1,6 @@
 //! `--smoke parity`: the ordinary web-page interactions a Chromium window
 //! gives for free, checked one by one through the host's real input paths on
-//! the bundled `parity.html`. The checklist is one table, [`ITEMS`]: a name,
+//! `parity.html`, served on a loopback port ([`home`]). The checklist is one table, [`ITEMS`]: a name,
 //! how to drive it ([`Step`]s) and what must be true afterwards ([`Expect`]s).
 //! [`next`] is the pure driver; `host/parity.rs` executes its [`Action`]s.
 //!
@@ -36,6 +36,29 @@ pub const RETRY_EVERY: u32 = 10;
 /// Runs of CEF work between two asks of the same check.
 pub const POLL_GAP: u32 = 6;
 
+/// The parity page on the smoke's loopback server (`autofill_smoke::serve`): an
+/// `http://127.0.0.1` page is a secure context, as the async Clipboard API needs.
+pub fn home(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/parity")
+}
+
+/// The page `parity.html` frames twice from `localhost` (another origin): a copy button
+/// calling `navigator.clipboard.writeText` with the frame's `#name`, which posts the
+/// outcome to the parent; a `write` message from the parent makes the same call with no
+/// click in the frame (no user activation there).
+pub const FRAME_PAGE: &str = r#"<!doctype html><meta charset=utf-8>
+<body style="margin:0;background:#223;color:#eee">
+<button id="b" style="width:280px;height:60px">frame copy</button><script>
+const id = location.hash.slice(1);
+const report = (r) => parent.postMessage({ clip: id, r }, '*');
+const run = (text) => {
+  let p; try { p = navigator.clipboard.writeText(text); } catch (e) { p = Promise.reject(e); }
+  Promise.resolve(p).then(() => report('ok'), (e) => report(`${e.name}: ${e.message}`));
+};
+document.getElementById('b').addEventListener('click', () => run(id));
+addEventListener('message', (e) => { if (e.data === 'write') run(id + '-script'); });
+</script>"#;
+
 /// Where `parity.html` puts things (view-relative logical px).
 pub mod at {
     use wubble_engine::input::Point;
@@ -69,6 +92,18 @@ pub mod at {
     pub const MAIL: Point = p(535.0, 169.0);
     pub const OPEN_BUTTON: Point = p(570.0, 255.0);
     pub const TIP: Point = p(570.0, 305.0);
+    /// The page's own copy buttons: `writeText`, `execCommand` on a hidden field,
+    /// `write` with a `ClipboardItem`, a `copy` listener's `setData`.
+    pub const CLIP: [Point; 4] = [
+        p(65.0, 425.0),
+        p(165.0, 425.0),
+        p(265.0, 425.0),
+        p(365.0, 425.0),
+    ];
+    /// The cross-origin frame allowed `clipboard-write` (its copy button) ...
+    pub const FRAME_OK: Point = p(160.0, 490.0);
+    /// ... and the one not allowed it.
+    pub const FRAME_NO: Point = p(460.0, 490.0);
     pub const BLANK: Point = p(700.0, 420.0);
     /// The page's empty right side (nothing sits right of x 620 at any scroll), where
     /// [`super::HostOp::Neutral`] clicks: first here ...
@@ -624,6 +659,86 @@ pub const ITEMS: &[Item] = &[
         [H(C::Clipboard("from execCommand"))]
     ),
     item!(
+        "B.page-writetext",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::CLIP[0])
+        ],
+        [J("eq(seen.clip.a1, 'ok')"), H(C::Clipboard("a1"))]
+    ),
+    item!(
+        "B.page-execcommand-hidden",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::CLIP[1])
+        ],
+        [J("eq(seen.clip.a2, 'ok')"), H(C::Clipboard("a2"))]
+    ),
+    item!(
+        "B.page-write-item",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::CLIP[2])
+        ],
+        [J("eq(seen.clip.a3, 'ok')"), H(C::Clipboard("a3"))]
+    ),
+    item!(
+        "B.page-copy-event",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::CLIP[3])
+        ],
+        [
+            J("eq(seen.clip.a4, 'ok')"),
+            J("eq(seen.copied, 'a4')"),
+            H(C::Clipboard("a4"))
+        ]
+    ),
+    item!(
+        "B.frame-no-activation",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Js("$('frameok').focus(); $('frameok').contentWindow.postMessage('write', '*')")
+        ],
+        [
+            J(
+                "/^NotAllowedError: .*denied/.test(seen.clip['f-frameok']) || seen.clip['f-frameok']"
+            ),
+            H(C::Clipboard("stale"))
+        ]
+    ),
+    item!(
+        "B.frame-writetext",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::FRAME_OK)
+        ],
+        [
+            J("eq(seen.clip['f-frameok'], 'ok')"),
+            H(C::Clipboard("frameok"))
+        ]
+    ),
+    item!(
+        "B.frame-not-allowed",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::FRAME_NO)
+        ],
+        [
+            J(
+                "/^NotAllowedError: .*permissions policy/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"
+            ),
+            H(C::Clipboard("stale"))
+        ]
+    ),
+    item!(
         "B.primary-selection",
         [
             Js("parity.field('inp', 'primary text')"),
@@ -867,7 +982,7 @@ pub const ITEMS: &[Item] = &[
         [
             H(C::Tabs(2)),
             H(C::Visible(0)),
-            J("eq(location.href.startsWith('data:'), true)")
+            J("eq(location.pathname, '/parity')")
         ]
     ),
     item!(
@@ -2045,11 +2160,23 @@ mod tests {
     }
 
     #[test]
+    fn the_page_is_a_secure_context_framing_another_origin() {
+        // `http://127.0.0.1` is potentially trustworthy (a `data:` page is not), and the
+        // copy frames come from `localhost`: another site, so another origin.
+        assert_eq!(home(8080), "http://127.0.0.1:8080/parity");
+        let page = include_str!("../assets/parity.html");
+        assert!(page.contains("http://localhost:${location.port}/parity/frame#"));
+        assert!(page.contains("allow=\"clipboard-write\""));
+        assert!(FRAME_PAGE.contains("parent.postMessage({ clip: id"));
+    }
+
+    #[test]
     fn the_page_has_what_the_table_points_at() {
         let page = include_str!("../assets/parity.html");
         for id in [
             "inp", "inp2", "ta", "ce", "para", "link", "img", "video", "drag", "drop", "filezone",
-            "copybtn", "dl", "blank", "mail", "open", "tip",
+            "copybtn", "dl", "blank", "mail", "open", "tip", "clip1", "clip2", "clip3", "clip4",
+            "frameok", "frameno",
         ] {
             assert!(page.contains(&format!("id=\"{id}\"")), "{id}");
         }
