@@ -8803,6 +8803,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "wubble-mcp"
+version = "0.1.0-preview.1"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "wubble-release"
 version = "0.1.0-preview.1"
 dependencies = [

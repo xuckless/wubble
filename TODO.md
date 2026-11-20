@@ -16,6 +16,7 @@ macOS is driven only from the owner's own session and has not been run since bat
 ## Now (2026-11-20): extensions, password managers, the MCP server
 - [ ] Extensions on our own Chromium build (M6), far enough that third-party password managers (Bitwarden, 1Password) work as extensions
 - [ ] The MCP server, basic version (M7, [docs/research/mcp-server.md](docs/research/mcp-server.md) section 0)
+  - [x] `wubble-mcp`: the protocol, pure (framing, discover, tools/list, tools/call, v0 tool table, `AgentCall`)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 - Then the "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 

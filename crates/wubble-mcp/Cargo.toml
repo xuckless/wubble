@@ -1,0 +1,11 @@
+[package]
+name = "wubble-mcp"
+description = "The MCP protocol for wubble's agent sessions (revision 2026-07-28): framing, discovery, the tool table, parsed calls. Pure: no I/O, no CEF."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
