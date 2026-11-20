@@ -12,6 +12,7 @@ import { BrowserCss } from "../gen/css.slint";
 import { KitText } from "../text.slint";
 import { Role } from "../gen/text.slint";
 import { RailBadge } from "rail-badge.slint";
+import { AgentMark } from "agent-mark.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -30,7 +31,7 @@ export component TabRow inherits Rectangle {
     // wubble change: the sound badge (the speaker on the extended row, the badge on the rail),
     // shown while the page plays sound or is muted (`tab.sound`); a press mutes or unmutes the tab.
     callback mute();
-    // wubble change: the agent badge of a tab an agent session drives; a press stops the sessions.
+    // wubble change: the mark of a tab an agent session drives (extended row); a click stops the session.
     callback agent-stop();
     // wubble change: a right click, pointer in window px (the tab's context menu).
     callback context(length, length);
@@ -160,6 +161,12 @@ export component TabRow inherits Rectangle {
                 tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
             }
         }
+        // wubble change: the agent mark (kit AgentMark, derived), after the speaker.
+        if !root.compact && root.tab.agent: AgentMark {
+            stopped => {
+                root.agent-stop();
+            }
+        }
         // wubble change: the split glyph of a pane of the Space's split (tabs.tsx `wb-tab-split`:
         // 22 px, haze, the icon at 13 px), gone while the row is hovered.
         if !root.compact && root.tab.in-split && !root.row-hovered: Rectangle {
@@ -215,10 +222,10 @@ export component TabRow inherits Rectangle {
     // wubble change: the badges on the favicon's corners (kit RailBadge, derived): on the rail the
     // close badge on the top-left, while the row or a badge is hovered; the sound badge on the
     // top-right (the extended row has its speaker), always shown while the tab plays sound or is
-    // muted; on both layouts the agent badge on the bottom-right of an agent's tab, which stops
-    // the sessions. The rest of the icon still picks the tab.
+    // muted; on both layouts the agent badge on the bottom-right of an agent's tab, an indicator
+    // only (no pointer input: a press on it picks the tab). The rest of the icon picks the tab.
     property <length> icon-top: (root.height - Shell.tab-icon) / 2;
-    property <bool> row-hovered: touch.has-hover || close-touch.has-hover || rail-close.hovered || rail-sound.hovered || agent-badge.hovered;
+    property <bool> row-hovered: touch.has-hover || close-touch.has-hover || rail-close.hovered || rail-sound.hovered;
     out property <bool> rail-close-shown: root.compact && root.row-hovered && !root.dragging;
     rail-close := RailBadge {
         visible: root.compact;
@@ -244,13 +251,10 @@ export component TabRow inherits Rectangle {
     agent-badge := RailBadge {
         visible: root.tab.agent;
         shown: !root.dragging;
+        inert: true;
         icon-path: Glyph.agent;
-        label: "Stop all agents";
         x: root.icon-x + Shell.tab-icon - self.width / 2;
         y: root.icon-top + Shell.tab-icon - self.height / 2;
-        clicked => {
-            root.agent-stop();
-        }
     }
     // wubble change: the keyboard focus ring, inside the row (.wb-tab outline-offset -2px)
     FocusRing {

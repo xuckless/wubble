@@ -3,10 +3,10 @@
 // The close badge (owner, 2026-11-19: "on these icons I'd like to see a (x) mark that closes the
 // tab … on the top left corner") is the window's close light at its own size, centred on the
 // tab icon's top-left corner; it shows while the row or the badge is hovered, as the full row's
-// close button does. The sound badge (top-right: mutes, unmutes) and the agent badge
-// (bottom-right: stops the agent sessions) are the same circle with their own glyph and
-// hover light, always shown: `shown` is what fades and grows the circle. Recorded in
-// docs/fidelity/derived-review.md.
+// close button does. The sound badge (top-right: mutes, unmutes) is the same circle with its own
+// glyph and hover light, always shown: `shown` is what fades and grows the circle. The agent
+// badge (bottom-right) is the same circle as an indicator only (`inert`: no pointer input, no
+// hover light, a press falls through to the row). Recorded in docs/fidelity/derived-review.md.
 
 import { BrowserCss } from "../gen/css.slint";
 import { Shell } from "../derived.slint";
@@ -19,20 +19,18 @@ export component RailBadge inherits Rectangle {
     in property <string> label: "Close tab";
     // the light the circle takes on its own hover: the window's close (coral) by default
     in property <color> light: BrowserCss.wb-lights-hover-wb-light-nth-child-1--background;
+    // an indicator: takes no pointer input and is no button to assistive tech (the button is the
+    // touch area)
+    in property <bool> inert: false;
     callback clicked();
-    out property <bool> hovered: ta.has-hover;
+    in-out property <bool> hovered;
 
     width: BrowserCss.wb-light--width;
     height: BrowserCss.wb-light--height;
-    accessible-role: AccessibleRole.button;
-    accessible-label: root.label;
-    accessible-action-default => {
-        root.clicked();
-    }
 
     Rectangle {
         border-radius: self.width * BrowserCss.wb-light--border-radius;
-        background: ta.has-hover ? root.light : BrowserCss.wb-light--background;
+        background: root.hovered ? root.light : BrowserCss.wb-light--background;
         animate background {
             duration: Calm.ms(BrowserCss.wb-light--transition-background-color-duration);
             easing: ease;
@@ -54,16 +52,24 @@ export component RailBadge inherits Rectangle {
             size: Shell.light-glyph;
             weight: Shell.light-stroke;
             path: root.icon-path;
-            tint: ta.has-hover ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-tab-x-hover--color;
+            tint: root.hovered ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-tab-x-hover--color;
             animate tint {
                 duration: Calm.ms(BrowserCss.wb-light--transition-color-duration);
                 easing: ease;
             }
         }
     }
-    ta := TouchArea {
+    if !root.inert: TouchArea {
+        accessible-role: AccessibleRole.button;
+        accessible-label: root.label;
+        accessible-action-default => {
+            root.clicked();
+        }
         enabled: root.shown;
         mouse-cursor: pointer;
+        changed has-hover => {
+            root.hovered = self.has-hover;
+        }
         clicked => {
             root.clicked();
         }

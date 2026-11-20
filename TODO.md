@@ -19,7 +19,7 @@ macOS is driven only from the owner's own session and has not been run since bat
   - [x] `wubble-mcp`: the protocol, pure (framing, discover, tools/list, tools/call, v0 tool table, `AgentCall`)
   - [x] Agent sessions in `wubble-core::agent`: one state machine, named secrets, activity log (`agent_log` table), `agent.mcp_enabled`
   - [x] Transport and execution: the profile's MCP socket, `wubble mcp` relay, a Space and container per session, the tools through the engine paths, `--smoke mcp` (92a726b)
-  - [x] Shell UI: the approval sheet (one modal, Escape denies), the agent mark on the Space header, "Stop All Agents" (command bar, mark), the activity page `wubble://agent` linked from Settings, gallery scenes, `--smoke mcp` drives the real sheet
+  - [x] Shell UI: the approval sheet (one modal, Escape denies), the agent mark on tab rows and the Space header, "Stop All Agents" (command bar, mark), the activity page `wubble://agent` linked from Settings, gallery scenes, `--smoke mcp` drives the real sheet
   - [x] Agent icons: an agent session's Space draws the agent glyph (footer, Spaces popup, Settings), its tabs a badge of it on the favicon (extended, rail); the glyph is the design's `sparkle`, to swap for the owner's own (`Glyph.agent`, derived-review.md) (346be2e)
   - [x] Rail sound badge: a tab that plays sound or is muted shows a round badge on the favicon's top-right corner; a press mutes or unmutes (6835b86)
   - [ ] Bind a requested secret name to a vault login on the sheet (the sheet shows the names; a grant holds none until then)
