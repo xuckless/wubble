@@ -23,6 +23,7 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod ext_tabs;
 mod external;
 mod gallery;
 mod gesture;
@@ -1045,6 +1046,7 @@ impl Host {
         self.enter_focused();
         // once per change, not per window: a tab switch is picture-in-picture's cue
         self.media_after_change();
+        self.ext_push();
     }
 
     /// The open windows, the one the host is in first.
@@ -1275,6 +1277,7 @@ impl Host {
                 self.on_page_event(&window, view, event);
             }
         }
+        self.ext_requests();
         self.media_pump();
         self.enter_focused();
         let Some(window) = self.w.window.upgrade() else {

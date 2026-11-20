@@ -1,0 +1,148 @@
+# What: tabs extensions open are opened by wubble: wubble_ext_open.cc keeps
+#   the pending requests (delegate.open_tab, answered by tab_opened with the
+#   new tab's browser, or 0 to refuse; all fail when the delegate goes), and
+#   ChromeContentBrowserClientCef::OpenURL sends service workers'
+#   clients.openWindow there when wubble hosts the APIs.
+# Why: without a Browser, Chromium either fails (tabs.create) or makes an
+#   unmanaged native Chrome window with no CEF client (openOptionsPage,
+#   clients.openWindow; chrome_browser_delegate.cc), which wubble cannot show
+#   and which blocks shutdown.
+# Applies in: chromium/src/cef (git apply -p1), after 10-cef-tabs-windows.
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index f990219e7..775ededa2 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -16,6 +16,7 @@
+ #include "cef/libcef/browser/browser_manager.h"
+ #include "cef/libcef/browser/certificate_query.h"
+ #include "cef/libcef/browser/chrome/chrome_browser_main_extra_parts_cef.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"
+ #include "cef/libcef/browser/context.h"
+ #include "cef/libcef/browser/net/throttle_handler.h"
+ #include "cef/libcef/browser/net_service/cookie_manager_impl.h"
+@@ -37,6 +38,8 @@
+ #include "components/performance_manager/embedder/performance_manager_registry.h"
+ #include "content/public/browser/client_certificate_delegate.h"
+ #include "content/public/browser/navigation_throttle.h"
++#include "content/public/browser/page_navigator.h"
++#include "content/public/browser/site_instance.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/render_widget_host.h"
+@@ -402,6 +405,21 @@ base::OnceClosure ChromeContentBrowserClientCef::SelectClientCertificate(
+   return base::OnceClosure();
+ }
+ 
++// wubble change.
++void ChromeContentBrowserClientCef::OpenURL(
++    content::SiteInstance* site_instance,
++    const content::OpenURLParams& params,
++    base::OnceCallback<void(content::WebContents*)> callback) {
++  if (cef::wubble::IsActive()) {
++    cef::wubble::OpenTab(
++        Profile::FromBrowserContext(site_instance->GetBrowserContext()),
++        params.url, /*window_id=*/-1, /*active=*/true, std::move(callback));
++    return;
++  }
++  ChromeContentBrowserClient::OpenURL(site_instance, params,
++                                      std::move(callback));
++}
++
+ bool ChromeContentBrowserClientCef::CanCreateWindow(
+     content::RenderFrameHost* opener,
+     const GURL& opener_url,
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+index c7dc8039c..6d6d18749 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
+@@ -54,6 +54,12 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+       net::SSLCertRequestInfo* cert_request_info,
+       net::ClientCertIdentityList client_certs,
+       std::unique_ptr<content::ClientCertificateDelegate> delegate) override;
++  // wubble change: service workers' clients.openWindow (extensions' and
++  // sites') opens a wubble tab when wubble hosts the extension APIs.
++  void OpenURL(
++      content::SiteInstance* site_instance,
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::WebContents*)> callback) override;
+   bool CanCreateWindow(content::RenderFrameHost* opener,
+                        const GURL& opener_url,
+                        const GURL& opener_top_level_frame_url,
+diff --git a/libcef/browser/chrome/extensions/wubble_ext_open.cc b/libcef/browser/chrome/extensions/wubble_ext_open.cc
+new file mode 100644
+index 000000000..09054fe47
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext_open.cc
+@@ -0,0 +1,72 @@
++// wubble change: tabs extensions open (tabs.create, runtime.openOptionsPage,
++// clients.openWindow) are opened by wubble, which decides where they go, and
++// answered with the new tab's contents (see wubble_ext.h).
++
++#include <map>
++#include <utility>
++
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++#include "base/no_destructor.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext_impl.h"
++#include "chrome/browser/profiles/profile.h"
++#include "url/gurl.h"
++
++namespace cef::wubble {
++
++namespace {
++
++struct Pending {
++  int next = 1;
++  std::map<int, OpenedCallback> callbacks;
++};
++
++Pending& pending() {
++  static base::NoDestructor<Pending> instance;
++  return *instance;
++}
++
++}  // namespace
++
++bool OpenTab(Profile* profile,
++             const GURL& url,
++             int window_id,
++             bool active,
++             OpenedCallback callback) {
++  const cef_wubble_ext_delegate_t* delegate = impl::Delegate();
++  if (!delegate || !profile) {
++    return false;
++  }
++  int request = pending().next++;
++  pending().callbacks.emplace(request, std::move(callback));
++  int wubble_window = window_id < 0 ? -1 : impl::WubbleWindowOf(window_id);
++  delegate->open_tab(delegate->ctx, request,
++                     profile->GetOriginalProfile()->GetPath().AsUTF8Unsafe().c_str(),
++                     url.spec().c_str(), wubble_window, active ? 1 : 0);
++  return true;
++}
++
++namespace impl {
++
++void TabOpened(int request_id, int browser_id) {
++  auto it = pending().callbacks.find(request_id);
++  if (it == pending().callbacks.end()) {
++    return;
++  }
++  OpenedCallback callback = std::move(it->second);
++  pending().callbacks.erase(it);
++  std::move(callback).Run(ContentsOf(browser_id));
++}
++
++void FailPendingOpens() {
++  auto callbacks = std::move(pending().callbacks);
++  pending().callbacks.clear();
++  for (auto& [request, callback] : callbacks) {
++    std::move(callback).Run(nullptr);
++  }
++}
++
++}  // namespace impl
++
++}  // namespace cef::wubble

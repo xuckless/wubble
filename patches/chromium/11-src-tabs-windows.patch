@@ -1,0 +1,408 @@
+# What: Chromium side of the tab/window APIs: CreateTabObject fills index,
+#   active and pinned of a wubble tab; GetCurrentWindowController falls back to
+#   wubble's focused window; tabs.query also walks wubble's windows (the same
+#   window and tab rules, on the controller and the tab object);
+#   windows.getAll and windows.getLastFocused list wubble's windows;
+#   tabs.update {active} and tabs.remove on a wubble tab ask wubble (the
+#   remove still answers on WebContentsDestroyed); TabsEventRouter's TabEntry
+#   and favicon observation tolerate a tab without TabInterface or favicon
+#   driver; the router names cef::WubbleTabsAccess a friend and its platform
+#   delegate registers wubble's existing tabs when it is created.
+# Why: see 10-cef-tabs-windows.patch. Every change is under
+#   BUILDFLAG(ENABLE_CEF) and is a no-op until wubble sets its delegate.
+# Applies in: chromium/src (git apply -p1), after CEF's patches.
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -96,6 +96,7 @@
+ 
+ #if BUILDFLAG(ENABLE_CEF)
+ #include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"  // wubble change
+ #endif
+ 
+ using content::NavigationEntry;
+@@ -383,6 +384,12 @@
+   tab_object.selected = is_active;
+   tab_object.highlighted = tab_interface && tab_interface->IsSelected();
+   tab_object.pinned = tab_interface && tab_interface->IsPinned();
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: a wubble tab's place in its window.
++  if (!tab_interface) {
++    cef::wubble::FillTab(contents, &tab_object);
++  }
++#endif
+ 
+   tab_object.group_id = -1;
+   if (tab_interface) {
+--- a/chrome/browser/extensions/chrome_extension_function_details.cc
++++ b/chrome/browser/extensions/chrome_extension_function_details.cc
+@@ -16,6 +16,11 @@
+ #include "extensions/buildflags/buildflags.h"
+ #include "ui/base/base_window.h"
+ 
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"  // wubble change
++#endif
++
+ #if BUILDFLAG(ENABLE_PLATFORM_APPS)
+ #include "extensions/browser/app_window/app_window.h"
+ #include "extensions/browser/app_window/app_window_registry.h"
+@@ -76,6 +81,12 @@
+   // A similar situation may arise during shutdown.
+   // TODO(rafaelw): Delay creation of background_page until the browser
+   // is available. http://code.google.com/p/chromium/issues/detail?id=13284
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: else wubble's focused window.
++  if (!window_controller) {
++    window_controller = cef::wubble::CurrentWindow(profile);
++  }
++#endif
+   return window_controller;
+ }
+ 
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -114,6 +114,13 @@
+ #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service.h"
+ #endif
+ 
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++// wubble change
++#include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"
++#endif
++
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+@@ -331,6 +338,84 @@
+   return !boolean || *boolean == value;
+ }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++// wubble change: TabsQueryFunction::MatchesWindow and MatchesTab for a wubble
++// window and its tabs, which have no Browser and no TabInterface: the same
++// rules, read from the window controller and the tab object.
++bool MatchesWubbleWindow(const tabs::Query::Params::QueryInfo& query,
++                         const Extension* extension,
++                         WindowController* candidate,
++                         WindowController* current,
++                         bool last_focused,
++                         const std::string& target_window_type,
++                         int target_window_id) {
++  if (!candidate->IsVisibleToTabsAPIForExtension(
++          extension, /*include_dev_tools_windows=*/false)) {
++    return false;
++  }
++  if (target_window_id >= 0 && target_window_id != candidate->GetWindowId()) {
++    return false;
++  }
++  if (target_window_id == extension_misc::kCurrentWindowId &&
++      candidate != current) {
++    return false;
++  }
++  if (!MatchesBool(query.current_window, candidate == current) ||
++      !MatchesBool(query.last_focused_window, last_focused)) {
++    return false;
++  }
++  return target_window_type.empty() ||
++         target_window_type == candidate->GetWindowTypeText();
++}
++
++bool MatchesWubbleTab(const tabs::Query::Params::QueryInfo& query,
++                      const tabs::Tab& tab,
++                      content::WebContents* web_contents,
++                      const Extension* extension,
++                      mojom::ContextType context,
++                      const URLPatternSet& target_url_patterns) {
++  if (!MatchesBool(query.highlighted, tab.highlighted) ||
++      !MatchesBool(query.active, tab.active) ||
++      !MatchesBool(query.pinned, tab.pinned) ||
++      !MatchesBool(query.audible, tab.audible.value_or(false)) ||
++      !MatchesBool(query.frozen, tab.frozen) ||
++      !MatchesBool(query.discarded, tab.discarded) ||
++      !MatchesBool(query.auto_discardable, tab.auto_discardable) ||
++      !MatchesBool(query.muted, web_contents->IsAudioMuted())) {
++    return false;
++  }
++  // No groups and no splits.
++  if ((query.group_id && *query.group_id != -1) ||
++      (query.split_view_id && *query.split_view_id != -1)) {
++    return false;
++  }
++  ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
++      ExtensionTabUtil::GetScrubTabBehavior(extension, context, web_contents);
++  if (query.title && !query.title->empty() &&
++      (scrub_tab_behavior.committed_info == ExtensionTabUtil::kScrubTabFully ||
++       !base::MatchPattern(web_contents->GetTitle(),
++                           base::UTF8ToUTF16(*query.title)))) {
++    return false;
++  }
++  if (!target_url_patterns.is_empty()) {
++    bool matches_committed =
++        scrub_tab_behavior.committed_info != ExtensionTabUtil::kScrubTabFully &&
++        target_url_patterns.MatchesURL(web_contents->GetLastCommittedURL());
++    content::NavigationEntry* pending_entry =
++        web_contents->GetController().GetPendingEntry();
++    bool matches_pending =
++        pending_entry &&
++        scrub_tab_behavior.pending_info != ExtensionTabUtil::kScrubTabFully &&
++        target_url_patterns.MatchesURL(pending_entry->GetVirtualURL());
++    if (!matches_committed && !matches_pending) {
++      return false;
++    }
++  }
++  return query.status == tabs::TabStatus::kNone ||
++         query.status == ExtensionTabUtil::GetLoadingStatus(web_contents);
++}
++#endif  // BUILDFLAG(ENABLE_CEF)
++
+ // Returns the tab group ID for the tab at `index`. Returns nullopt if the index
+ // is out of range, the tab is not found, or the tab is not part of a group.
+ std::optional<tab_groups::TabGroupId> GetTabGroupForTab(
+@@ -948,6 +1033,23 @@
+         }
+         return true;  // Continue iterating.
+       });
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: else wubble's most recently focused window.
++  if (!last_focused_browser) {
++    for (WindowController* controller : cef::wubble::Windows(
++             Profile::FromBrowserContext(browser_context()))) {
++      if (windows_util::CanOperateOnWindow(this, controller,
++                                           extractor.type_filters())) {
++        return RespondNow(
++            WithArguments(controller->CreateWindowValueForExtension(
++                extension(),
++                extractor.populate_tabs() ? WindowController::kPopulateTabs
++                                          : WindowController::kDontPopulateTabs,
++                source_context_type())));
++      }
++    }
++  }
++#endif
+   if (!last_focused_browser) {
+     return RespondNow(Error(tabs_constants::kNoLastFocusedWindowError));
+   }
+@@ -973,6 +1075,17 @@
+       extractor.populate_tabs() ? WindowController::kPopulateTabs
+                                 : WindowController::kDontPopulateTabs;
+   for (WindowController* controller : *WindowControllerList::GetInstance()) {
++#if BUILDFLAG(ENABLE_CEF)
++    // wubble change: wubble's windows have no Browser.
++    if (cef::wubble::IsWubbleWindow(controller)) {
++      if (windows_util::CanOperateOnWindow(this, controller,
++                                           extractor.type_filters())) {
++        window_list.Append(controller->CreateWindowValueForExtension(
++            extension(), populate_tab_behavior, source_context_type()));
++      }
++      continue;
++    }
++#endif
+     if (!controller->GetBrowserWindowInterface() ||
+         !windows_util::CanOperateOnWindow(this, controller,
+                                           extractor.type_filters())) {
+@@ -1982,6 +2095,30 @@
+                         .ToValue());
+     }
+   }
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: and wubble's windows, by the same rules.
++  std::vector<WindowController*> wubble_windows =
++      cef::wubble::Windows(Profile::FromBrowserContext(browser_context()));
++  WindowController* current_window =
++      ChromeExtensionFunctionDetails(this).GetCurrentWindowController();
++  for (WindowController* window : wubble_windows) {
++    bool last_focused = !last_active_browser && window == wubble_windows[0];
++    if (!MatchesWubbleWindow(query_info_, extension(), window, current_window,
++                             last_focused, window_type, window_id)) {
++      continue;
++    }
++    for (content::WebContents* contents : cef::wubble::TabsOf(window)) {
++      tabs::Tab tab = tabs_internal::CreateTabObjectHelper(
++          contents, extension(), source_context_type(), nullptr, -1);
++      if ((tab_index > -1 && tab.index != tab_index) ||
++          !MatchesWubbleTab(query_info_, tab, contents, extension(),
++                            source_context_type(), url_patterns)) {
++        continue;
++      }
++      result.Append(tab.ToValue());
++    }
++  }
++#endif
+   return result;
+ }
+ 
+@@ -2735,6 +2872,14 @@
+     }
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: wubble activates its own tabs.
++  if (!tab_list && (params->update_properties.active.value_or(false) ||
++                    params->update_properties.selected.value_or(false))) {
++    cef::wubble::ActivateTab(contents);
++  }
++#endif
++
+   // Cache the original web contents.
+   content::WebContents* original_contents = contents;
+ 
+@@ -3358,8 +3503,25 @@
+   content::WebContents* contents = nullptr;
+   if (!tabs_internal::GetTabById(tab_id, browser_context(),
+                                  include_incognito_information(), &window,
+-                                 &contents, nullptr, error) ||
+-      !window) {
++                                 &contents, nullptr, error)) {
++    return false;
++  }
++
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: wubble closes its own tabs; the response still waits for
++  // WebContentsDestroyed, as below.
++  if (!window && cef::wubble::IsActive() &&
++      cef::IsAlloyContents(contents, /*primary_only=*/true)) {
++    web_contents_destroyed_observers_.push_back(
++        std::make_unique<WebContentsDestroyedObserver>(this, contents));
++    AddRef();
++    remaining_tabs_count_++;
++    cef::wubble::CloseTab(contents);
++    return true;
++  }
++#endif
++
++  if (!window) {
+     return false;
+   }
+ 
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.h
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.h
+@@ -41,6 +41,10 @@
+ class WebContents;
+ }
+ 
++namespace cef {
++class WubbleTabsAccess;  // wubble change
++}
++
+ namespace tabs {
+ class TabInterface;
+ }
+@@ -68,6 +72,7 @@
+   // The platform delegate is basically a platform-specific addendum to this
+   // class, so we allow it to reach into this class's internal state.
+   friend class TabsEventRouterPlatformDelegate;
++  friend class ::cef::WubbleTabsAccess;  // wubble change
+ 
+   // Maintain some information about known tabs, so we can:
+   //
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router.cc
+@@ -8,6 +8,7 @@
+ #include <set>
+ 
+ #include "base/values.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_api.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+@@ -112,9 +113,16 @@
+                                     content::WebContents& contents)
+     : WebContentsObserver(&contents),
+       router_(router) {
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: wubble's tabs are windowless browsers, without a
++  // TabInterface; they have no pinned/group notifications to watch.
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(&contents);
++  if (tab) {
++#else
+   // We should only get here for WebContents that are tabs.
+   tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(&contents);
+   CHECK(tab);
++#endif
+ 
+   pinned_state_subscription_ =
+       tab->RegisterPinnedStateChanged(base::BindRepeating(
+@@ -122,8 +130,16 @@
+ 
+   group_changed_subscription_ = tab->RegisterGroupChanged(base::BindRepeating(
+       &TabEntry::OnGroupChanged, weak_factory_.GetWeakPtr()));
++#if BUILDFLAG(ENABLE_CEF)
++  }
++#endif
+ 
+   auto* audible_helper = RecentlyAudibleHelper::FromWebContents(&contents);
++#if BUILDFLAG(ENABLE_CEF)
++  if (!audible_helper) {
++    return;  // wubble change
++  }
++#endif
+   recently_audible_subscription_ =
+       audible_helper->RegisterRecentlyAudibleChangedCallback(
+           base::BindRepeating(&TabEntry::OnRecentlyAudibleStateChanged,
+@@ -250,8 +266,16 @@
+ void TabsEventRouter::RegisterForTabNotifications(
+     content::WebContents& web_contents,
+     int tab_index) {
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: a windowless browser may have no favicon driver.
++  if (auto* favicon_driver =
++          favicon::ContentFaviconDriver::FromWebContents(&web_contents)) {
++    favicon_scoped_observations_.AddObservation(favicon_driver);
++  }
++#else
+   favicon_scoped_observations_.AddObservation(
+       favicon::ContentFaviconDriver::FromWebContents(&web_contents));
++#endif
+ 
+   // Some pages on Android (like the NTP) may not have a zoom controller.
+   if (auto* zoom_controller =
+@@ -279,7 +303,12 @@
+       favicon::ContentFaviconDriver::FromWebContents(&web_contents);
+   bool is_observing_favicon_driver =
+       favicon_scoped_observations_.IsObservingSource(favicon_driver);
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: see RegisterForTabNotifications.
++  CHECK(is_observing_favicon_driver || !expect_registered || !favicon_driver);
++#else
+   CHECK(is_observing_favicon_driver || !expect_registered);
++#endif
+   if (is_observing_favicon_driver) {
+     favicon_scoped_observations_.RemoveObservation(favicon_driver);
+   }
+--- a/chrome/browser/extensions/api/tabs/tabs_event_router_platform_delegate_non_android.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_event_router_platform_delegate_non_android.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <utility>
+ 
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_event_router.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_windows_api.h"
+@@ -25,6 +26,10 @@
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/web_contents.h"
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"  // wubble change
++#endif
++
+ using base::Value;
+ using content::WebContents;
+ 
+@@ -61,6 +66,11 @@
+ 
+   tab_source_scoped_observation_.Observe(
+       resource_coordinator::GetTabLifecycleUnitSource());
++
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: and wubble's tabs.
++  cef::wubble::OnTabsEventRouterCreated(&router, &profile);
++#endif
+ }
+ 
+ TabsEventRouterPlatformDelegate::~TabsEventRouterPlatformDelegate() = default;

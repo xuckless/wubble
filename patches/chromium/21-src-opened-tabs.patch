@@ -1,0 +1,130 @@
+# What: tabs.create without a Browser asks wubble (RespondLater, answered in
+#   the new TabsCreateFunction::OnWubbleTabOpened with the tab object);
+#   runtime.openOptionsPage the same; windows.create is refused with
+#   "windows.create is not supported in wubble" while wubble hosts the APIs.
+# Why: see 20-cef-opened-tabs.patch; windows.create would make an unmanaged
+#   Browser window beside wubble's own.
+# Applies in: chromium/src (git apply -p1), after 11-src-tabs-windows.
+--- a/chrome/browser/extensions/api/tabs/tabs_api.cc
++++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -1107,6 +1107,14 @@
+       windows::Create::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: a window wubble does not manage would be a bare Chrome
++  // window beside wubble's own.
++  if (cef::wubble::IsActive()) {
++    return RespondNow(Error("windows.create is not supported in wubble"));
++  }
++#endif
++
+   DCHECK(extension() || source_context_type() == mojom::ContextType::kWebUi ||
+          source_context_type() == mojom::ContextType::kUntrustedWebUi);
+   create_data_ = std::move(params->create_data);
+@@ -2387,6 +2395,19 @@
+     browser = controller->GetBrowserWindowInterface();
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: no Browser: wubble opens the tab where it decides and
++  // answers with it (OnWubbleTabOpened).
++  if (!browser && cef::wubble::IsActive()) {
++    cef::wubble::OpenTab(
++        Profile::FromBrowserContext(browser_context()), validated_url_,
++        create_properties.window_id.value_or(extension_misc::kCurrentWindowId),
++        active_.value_or(true),
++        base::BindOnce(&TabsCreateFunction::OnWubbleTabOpened, this));
++    return RespondLater();
++  }
++#endif
++
+   // We didn't find a browser. Bail.
+   // TODO(https://crbug.com/468223125): This isn't consistent, since sometimes
+   // we *will* create a new browser below.
+@@ -2571,6 +2592,27 @@
+   OpenTabInBrowser(*browser, opener);
+ }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++// wubble change.
++void TabsCreateFunction::OnWubbleTabOpened(content::WebContents* contents) {
++  if (!contents) {
++    Respond(Error("wubble did not open the tab"));
++    return;
++  }
++  if (has_callback()) {
++    Respond(WithArguments(
++        ExtensionTabUtil::CreateTabObject(
++            contents,
++            ExtensionTabUtil::GetScrubTabBehavior(
++                extension(), source_context_type(), contents),
++            extension())
++            .ToValue()));
++    return;
++  }
++  Respond(NoArguments());
++}
++#endif
++
+ void TabsCreateFunction::OpenTabInBrowser(BrowserWindowInterface& browser,
+                                           content::WebContents* opener_tab) {
+   OpenTabHelper::Params options;
+--- a/chrome/browser/extensions/api/tabs/tabs_api.h
++++ b/chrome/browser/extensions/api/tabs/tabs_api.h
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "cef/libcef/features/features.h"  // wubble change
+ #include "base/memory/raw_ref.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/types/expected.h"
+@@ -326,6 +327,11 @@
+   void OpenTabInBrowser(BrowserWindowInterface& browser,
+                         content::WebContents* opener_tab);
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: wubble opened the tab (null: it did not).
++  void OnWubbleTabOpened(content::WebContents* contents);
++#endif
++
+   // Stashed properties, since the browser window to use may be created
+   // asynchronously.
+   std::optional<int> opener_tab_id_;
+--- a/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc
++++ b/chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.cc
+@@ -31,6 +31,11 @@
+ #include "chrome/browser/ui/navigator/browser_navigator_params.h"
+ #include "components/update_client/update_query_params.h"
+ #include "content/public/browser/web_contents.h"
++
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"  // wubble change
++#endif
+ #include "extensions/browser/delayed_install_manager.h"
+ #include "extensions/browser/extension_registrar.h"
+ #include "extensions/browser/extension_system.h"
+@@ -412,6 +417,21 @@
+   BrowserWindowInterface* browser =
+       extensions::browser_window_util::GetLastActiveNormalBrowserWithProfile(
+           *profile, /*include_incognito_or_parent=*/false);
++#if BUILDFLAG(ENABLE_CEF)
++  // wubble change: no Browser: wubble opens the options page as its tab.
++  if (!browser && cef::wubble::IsActive()) {
++    cef::wubble::OpenTab(
++        profile, extensions::OptionsPageInfo::GetOptionsPage(extension),
++        /*window_id=*/-1, /*active=*/true,
++        base::BindOnce(
++            [](base::OnceCallback<void(bool)> done,
++               content::WebContents* contents) {
++              std::move(done).Run(contents != nullptr);
++            },
++            std::move(callback)));
++    return;
++  }
++#endif
+   const bool create_new_browser = !browser;
+ 
+   if (create_new_browser) {

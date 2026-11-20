@@ -10,6 +10,15 @@
 //! with its worker's answer `worker:wubble`, the ids must be the ones wubble-core computes, and
 //! at least one renderer must be an extension process.
 //!
+//! On a CEF carrying wubble's patches (`patches/chromium`, `Engine::ext_apis`), the same run also
+//! drives the tab, window and action APIs on wubble's tabs: the page is the directory copy's
+//! `?apis=<id>`, the smoke pushes a one-window projection (the page at index 0, active), the
+//! worker reports `windows.getCurrent/getAll/getLastFocused`, `tabs.query({active,
+//! currentWindow})`, a `tabs.create({active: false})` the smoke answers with a new view (and its
+//! `tabs.onUpdated` `complete`), a `tabs.sendMessage` to the page and `action.setBadgeText('7')`;
+//! then the smoke reads the badge, clicks the action (the worker's `action.onClicked` sets
+//! `hit` on the clicked tab) and waits for the change. On a stock CEF it says so and skips that.
+//!
 //! `extensions-none`: nothing installed (today's `disable-extensions`); the same page loads with
 //! no mark and no extension process.
 //!
@@ -20,11 +29,14 @@ use std::error::Error;
 use std::path::Path;
 use std::time::Duration;
 
+use wubble_core::extensions::{ExtWindow, ExtWindowKind};
 use wubble_core::extensions::{
     Installed, Source, crx3_unsigned, id_from_key, id_from_path, zip_stored,
 };
 use wubble_core::space::ContainerId;
+use wubble_core::window::WindowId;
 use wubble_engine::app::{Engine, EngineConfig, EngineError, ViewId};
+use wubble_engine::ext_api::{ActionClick, ExtRequest, ExtViewTab};
 use wubble_engine::page::PageEvent;
 use wubble_engine::view::{Layout, ViewConfig};
 use wubble_gfx::{FrameSize, GpuContext};
@@ -55,11 +67,15 @@ const MAX_TURNS: u32 = 300_000;
 const LOOK_EVERY: u32 = 500;
 const TURN_PAUSE: Duration = Duration::from_millis(1);
 
-/// The page's load state and every extension mark, `id -> value`.
+/// The page's load state, every extension mark (`id -> value`) and the tab APIs' report.
 const LOOK: &str = "JSON.stringify({ready: document.readyState, marks: Object.fromEntries(\
                     [...document.documentElement.attributes]\
                     .filter(a => a.name.startsWith('data-wubble-ext-'))\
-                    .map(a => [a.name.slice(16), a.value]))})";
+                    .map(a => [a.name.slice(16), a.value])), \
+                    apis: document.documentElement.getAttribute('data-wubble-apis')})";
+
+/// The one window the projection lists.
+const WINDOW: WindowId = WindowId(1);
 
 /// Installs the test extension both ways on `profile`; the ids Chromium must give them.
 fn install(
@@ -161,10 +177,27 @@ pub fn run(
         },
         ..config
     })?;
-    let outcome = drive(&mut engine, &gpu, &server.url("/article"), &want)
-        .and_then(|marks| Ok((marks, extension_targets(&mut engine, port)?)));
+    // The directory copy drives the tab APIs, on a CEF that has them.
+    let patched = engine.ext_apis();
+    let apis = patched.then(|| want.first().cloned()).flatten();
+    let page = match &apis {
+        Some(id) => server.url(&format!("/article?apis={id}")),
+        None => server.url("/article"),
+    };
+    let outcome = drive(&mut engine, &gpu, &page, &want, apis.is_some()).and_then(|look| {
+        let tabs = match (&apis, &look.apis) {
+            (Some(id), Some(report)) => Some(check_apis(&mut engine, id, &page, &look, report)?),
+            _ => None,
+        };
+        Ok((look.marks, tabs, extension_targets(&mut engine, port)?))
+    });
     crate::drain(&mut engine);
-    let (marks, targets) = outcome?;
+    let (marks, tabs, targets) = outcome?;
+    match tabs {
+        Some(summary) => println!("extensions: tab APIs ok ({summary})"),
+        None if patched => println!("extensions: tab APIs: skipped (no extension installed)"),
+        None => println!("extensions: tab APIs: skipped (CEF without the wubble patches)"),
+    }
     println!("extensions: marks {marks:?}, extension targets {targets:?}");
     let expected: BTreeMap<String, String> = want
         .iter()
@@ -254,15 +287,28 @@ fn extension_targets(engine: &mut Engine, port: u16) -> Result<Vec<String>, Box<
     Ok(out)
 }
 
+/// What the page showed when [`drive`] stopped looking.
+struct Seen {
+    marks: BTreeMap<String, String>,
+    /// The tab APIs' report (`data-wubble-apis`), JSON.
+    apis: Option<String>,
+    /// The page's view, and the view opened for the worker's `tabs.create`.
+    page: ViewId,
+    opened: Option<ViewId>,
+}
+
 /// Opens the page and looks at it until it shows the marks `want` with their answers (none:
-/// until it has loaded); the marks it had then.
+/// until it has loaded) and, with `apis`, the tab APIs' report, meanwhile serving the
+/// extensions' requests as the host would: an opened tab gets a view of its own, in the
+/// projection after the page.
 fn drive(
     engine: &mut Engine,
     gpu: &GpuContext,
     url: &str,
     want: &[String],
-) -> Result<BTreeMap<String, String>, Box<dyn Error>> {
-    let view = engine.open_view(ViewConfig {
+    apis: bool,
+) -> Result<Seen, Box<dyn Error>> {
+    let config = |url: &str, container: Option<ContainerId>| ViewConfig {
         url: url.into(),
         layout: Layout {
             size: FrameSize::new(800, 600),
@@ -272,17 +318,40 @@ fn drive(
         frame_rate: 30,
         begin_frames: false,
         gpu: gpu.presenter().context().clone(),
-        container: ContainerId::DEFAULT,
-    })?;
+        container: container.unwrap_or(ContainerId::DEFAULT),
+    };
+    let view = engine.open_view(config(url, None))?;
+    let mut tabs = vec![view];
+    project(engine, &tabs);
     let mut asked = None;
-    let mut last = BTreeMap::new();
+    let mut seen = Seen {
+        marks: BTreeMap::new(),
+        apis: None,
+        page: view,
+        opened: None,
+    };
     for turn in 0..MAX_TURNS {
         engine.tick();
         std::thread::sleep(TURN_PAUSE);
+        for request in engine.take_ext_requests() {
+            if let ExtRequest::OpenTab {
+                request,
+                container,
+                url,
+                ..
+            } = request
+            {
+                let opened = engine.open_view(config(&url, container))?;
+                tabs.push(opened);
+                project(engine, &tabs);
+                engine.answer_open_tab(request, Some(opened));
+                seen.opened = Some(opened);
+            }
+        }
         for (from, event) in engine.take_page_events() {
             if let Some(answer) = answer_of(view, asked, from, &event) {
                 asked = None;
-                let (ready, marks) = answer?;
+                let (ready, marks, report) = answer?;
                 let done = if want.is_empty() {
                     ready == "complete"
                 } else {
@@ -290,9 +359,10 @@ fn drive(
                         .all(|id| marks.get(id).is_some_and(|v| v == ANSWER))
                         || marks.values().any(|v| v.starts_with("error"))
                 };
-                last = marks;
-                if done {
-                    return Ok(last);
+                seen.marks = marks;
+                seen.apis = report;
+                if done && (!apis || seen.apis.is_some()) {
+                    return Ok(seen);
                 }
             }
         }
@@ -300,10 +370,110 @@ fn drive(
             asked = engine.view(view).ok_or("the view closed")?.eval(LOOK);
         }
     }
-    Err(format!("the page never showed its marks; last {last:?}").into())
+    Err(format!(
+        "the page never showed its marks; last {:?}, tab APIs {:?}",
+        seen.marks, seen.apis
+    )
+    .into())
 }
 
-type Look = Result<(String, BTreeMap<String, String>), Box<dyn Error>>;
+/// The projection of one window holding `tabs` in order, the first active.
+fn project(engine: &mut Engine, tabs: &[ViewId]) {
+    let window = ExtWindow {
+        id: WINDOW,
+        focused: true,
+        kind: ExtWindowKind::Normal,
+    };
+    let tabs = tabs
+        .iter()
+        .zip(0..)
+        .map(|(&view, index)| ExtViewTab {
+            view,
+            window: WINDOW,
+            index,
+            active: index == 0,
+            pinned: false,
+        })
+        .collect();
+    engine.set_ext_projection(vec![window], tabs);
+}
+
+/// Checks the worker's report, then the action: badge `7`, a click, its change, badge `hit`.
+fn check_apis(
+    engine: &mut Engine,
+    id: &str,
+    page_url: &str,
+    seen: &Seen,
+    report: &str,
+) -> Result<String, Box<dyn Error>> {
+    let r: serde_json::Value =
+        serde_json::from_str(report).map_err(|e| format!("tab APIs report {report:?}: {e}"))?;
+    let bad = |what: &str| format!("tab APIs: {what}; report {report}");
+    if let Some(error) = r["error"].as_str() {
+        return Err(bad(&format!("the worker failed: {error}")).into());
+    }
+    let w = &r["windows"];
+    let current = w["current"]
+        .as_i64()
+        .ok_or_else(|| bad("no current window"))?;
+    if w["last"].as_i64() != Some(current)
+        || w["all"] != serde_json::json!([current])
+        || w["type"] != "normal"
+    {
+        return Err(bad("windows.getCurrent, getAll and getLastFocused disagree").into());
+    }
+    let q = &r["query"];
+    if q["index"] != 0
+        || q["url"].as_str() != Some(page_url)
+        || q["window"].as_i64() != Some(current)
+        || q["id"] != r["sender"]
+    {
+        return Err(bad("tabs.query({active, currentWindow}) is not the page at index 0").into());
+    }
+    let c = &r["created"];
+    if c["index"] != 1 || c["active"] != false || c["window"].as_i64() != Some(current) {
+        return Err(bad("tabs.create's tab is not the inactive second tab").into());
+    }
+    let opened = seen
+        .opened
+        .filter(|v| engine.has_view(*v))
+        .ok_or_else(|| bad("tabs.create opened no view"))?;
+    if r["echo"] != "tab" {
+        return Err(bad("tabs.sendMessage did not reach the page").into());
+    }
+    let badge = |engine: &Engine| engine.action_state(id, seen.page).map(|s| s.badge);
+    if badge(engine).as_deref() != Some("7") {
+        return Err(bad(&format!("the badge is {:?}, not 7", badge(engine))).into());
+    }
+    engine.take_ext_requests();
+    let click = engine.action_click(id, seen.page);
+    if click != ActionClick::Clicked {
+        return Err(bad(&format!("the action click did {click:?}")).into());
+    }
+    let mut changed = false;
+    for _ in 0..MAX_TURNS {
+        engine.tick();
+        std::thread::sleep(TURN_PAUSE);
+        changed |= engine
+            .take_ext_requests()
+            .iter()
+            .any(|r| matches!(r, ExtRequest::ActionChanged { extension } if extension == id));
+        if changed && badge(engine).as_deref() == Some("hit") {
+            return Ok(format!(
+                "window {current}, page tab {}, opened tab {} as view {opened:?}, badge 7 then hit",
+                r["sender"], c["id"]
+            ));
+        }
+    }
+    Err(bad(&format!(
+        "after the click: changed {changed}, badge {:?}",
+        badge(engine)
+    ))
+    .into())
+}
+
+/// The page's load state, its marks and the tab APIs' report.
+type Look = Result<(String, BTreeMap<String, String>, Option<String>), Box<dyn Error>>;
 
 /// The parsed answer of the look `asked`, if `event` is it.
 fn answer_of(
@@ -334,7 +504,8 @@ fn answer_of(
                 .flatten()
                 .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned()))
                 .collect();
-            Ok::<_, String>((ready, marks))
+            let apis = v["apis"].as_str().map(str::to_owned);
+            Ok::<_, String>((ready, marks, apis))
         })()
         .map_err(Into::into),
     )

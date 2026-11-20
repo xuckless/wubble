@@ -25,6 +25,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
+use crate::ext_api::{ActionClick, ActionState, ExtApi, ExtRequest, ExtViewTab};
 use crate::filter::{ContentFilter, ResponseObserver};
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
@@ -777,6 +778,13 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(usize);
 
+impl ViewId {
+    #[cfg(test)]
+    pub(crate) fn for_test(n: usize) -> Self {
+        Self(n)
+    }
+}
+
 /// What the host must do with its single-shot pump timer after a pump call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PumpTimer {
@@ -834,6 +842,8 @@ pub struct Engine {
     /// One CEF request context per container in use (`storage`), released
     /// when the shutdown begins.
     profiles: Profiles,
+    /// The extension tab APIs of a patched CEF (`ext_api`); inert on a stock one.
+    ext: ExtApi,
 }
 
 impl Engine {
@@ -882,6 +892,7 @@ impl Engine {
             content_filter: config.content_filter,
             response_observer: config.response_observer,
             profiles: Profiles::new(config.cache_dir),
+            ext: ExtApi::find(),
         };
         engine.apply(Event::Initialised);
         // Outside any host callback: bringing a context up pumps CEF, which a
@@ -916,6 +927,8 @@ impl Engine {
 
     /// Starts an orderly shutdown; keep calling [`Self::tick`] until [`Self::is_stopped`].
     pub fn request_shutdown(&mut self) {
+        // Extensions ask nothing more of the host; their pending tab openings fail.
+        self.ext.release();
         // Open browsers keep their own context references until they close,
         // which the shutdown waits for; none outlives `cef::shutdown`.
         self.profiles.release();
@@ -1065,6 +1078,75 @@ impl Engine {
             .count()
     }
 
+    /// This CEF carries wubble's patches (`patches/chromium`): extensions see wubble's tabs and
+    /// windows through [`Self::set_ext_projection`], ask through [`Self::take_ext_requests`].
+    pub fn ext_apis(&self) -> bool {
+        self.ext.available()
+    }
+
+    /// wubble's windows and tabs as extensions are to see them (a projection of the host's
+    /// model, `wubble_core::extensions::project`, its tabs by view). Kept, and sent to CEF now
+    /// and whenever a view's browser comes or goes; nothing is sent while it stays the same.
+    pub fn set_ext_projection(
+        &mut self,
+        windows: Vec<wubble_core::extensions::ExtWindow>,
+        tabs: Vec<ExtViewTab>,
+    ) {
+        self.ext.set_projection(windows, tabs);
+        self.sync_ext();
+    }
+
+    /// What extensions asked of the host's model since the last call.
+    pub fn take_ext_requests(&mut self) -> Vec<ExtRequest> {
+        let views = &self.views;
+        let view_of = |browser: i32| {
+            views
+                .iter()
+                .find(|(_, v)| v.browser_id() == browser)
+                .map(|(id, _)| *id)
+        };
+        self.ext.take(view_of, self.profiles.root())
+    }
+
+    /// Answers [`ExtRequest::OpenTab`] `request` with the view the host opened for it (`None`:
+    /// refused). The projection is sent first, so the tab extensions get back has its place.
+    pub fn answer_open_tab(&mut self, request: i32, view: Option<ViewId>) {
+        self.sync_ext();
+        let browser = view.and_then(|v| self.open_browser(v));
+        self.ext.tab_opened(request, browser);
+    }
+
+    /// Clicks extension `extension`'s action on `view`'s page.
+    pub fn action_click(&self, extension: &str, view: ViewId) -> ActionClick {
+        match self.open_browser(view) {
+            Some(browser) => self.ext.action_click(extension, browser),
+            None => ActionClick::None,
+        }
+    }
+
+    /// Extension `extension`'s action as `view`'s page sees it; `None` without one.
+    pub fn action_state(&self, extension: &str, view: ViewId) -> Option<ActionState> {
+        self.ext.action_state(extension, self.open_browser(view)?)
+    }
+
+    /// `view`'s browser id while it is open.
+    fn open_browser(&self, view: ViewId) -> Option<i32> {
+        self.views
+            .iter()
+            .find(|(id, v)| *id == view && v.is_open())
+            .map(|(_, v)| v.browser_id())
+    }
+
+    fn sync_ext(&mut self) {
+        let views = &self.views;
+        self.ext.sync(|view| {
+            views
+                .iter()
+                .find(|(id, v)| *id == view && v.is_open())
+                .map(|(_, v)| v.browser_id())
+        });
+    }
+
     /// CPU `OnPaint` frames across every view so far, closed ones included;
     /// `None` where welding does not count them.
     pub fn cpu_fallback_frames(&self) -> Option<u64> {
@@ -1118,7 +1200,9 @@ impl Engine {
             runtime.do_message_loop_work();
         }
         self.apply_extra();
-        self.reap_closed_views()
+        let events = self.reap_closed_views();
+        self.sync_ext();
+        events
     }
 
     /// Reports the extra browsers created or closed to the lifecycle.

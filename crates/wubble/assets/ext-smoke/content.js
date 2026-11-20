@@ -9,3 +9,22 @@ chrome.runtime.sendMessage({ ping: 'wubble' }, (answer) => {
     answer && answer.pong ? answer.pong : 'error ' + (error ? error.message : 'no answer'),
   );
 });
+
+// The worker's tabs.sendMessage.
+chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+  if (message.hello) {
+    reply({ echo: message.hello });
+  }
+});
+
+// On `?apis=<this id>` (a patched CEF), the worker drives the tab and window APIs; its report
+// goes into `data-wubble-apis`.
+if (new URLSearchParams(location.search).get('apis') === chrome.runtime.id) {
+  chrome.runtime.sendMessage({ run: 'apis' }, (report) => {
+    const error = chrome.runtime.lastError;
+    document.documentElement.setAttribute(
+      'data-wubble-apis',
+      JSON.stringify(report || { error: error ? error.message : 'no answer' }),
+    );
+  });
+}

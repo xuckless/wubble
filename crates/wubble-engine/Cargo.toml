@@ -22,6 +22,11 @@ serde_json.workspace = true
 # uses). Default features: without a backend winit refuses to build alone.
 winit = "0.30"
 
+# Finds the patched CEF's `cef_wubble_ext_v1` among the loaded symbols (`ext_api.rs`); already in
+# Cargo.lock through welding (ISC).
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.9.1"
+
 # The CEF-aware `NSApplication` subclass (`mac_app.rs`); both already in Cargo.lock through cef
 # (MIT OR Apache-2.0 OR Zlib).
 [target.'cfg(target_os = "macos")'.dependencies]

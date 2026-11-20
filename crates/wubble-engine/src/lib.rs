@@ -11,6 +11,7 @@ pub mod cosmetic;
 pub mod devtools;
 pub mod download;
 pub mod drag;
+pub mod ext_api;
 pub mod extensions;
 pub mod favicon;
 pub mod fetch;

@@ -1,0 +1,1067 @@
+# What: CEF side of the extension tab/window APIs on wubble's model. New
+#   libcef/browser/chrome/extensions/wubble_ext{.h,.cc,_capi.h,_impl.h}: the
+#   plain C table cef_wubble_ext_v1 (set_delegate, set_state, tab_opened,
+#   action_click, action_state, free_string, free_action), a UI-thread
+#   registry that makes one WindowController per (wubble window, loaded
+#   profile) (ported from Chromium's AppWindowController and AppBaseWindow),
+#   gives each wubble tab its window id (SessionTabHelper::SetWindowID), and
+#   dispatches tabs.onCreated/onRemoved/onActivated and windows.onFocusChanged
+#   through TabsEventRouter (as its friend). BUILD.gn lists every file of the
+#   module, including those patches 20 and 30 add.
+# Why: wubble's tabs are windowless Alloy browsers; Chromium's chrome.tabs and
+#   chrome.windows only walk Browser windows and their tab strips, so
+#   extensions see no tab and no window (docs/research/extensions.md). A
+#   translated CEF API would need regenerated cef-dll-sys bindings; one
+#   exported cef_* function looked up at run time keeps stock CEF working.
+# Applies in: chromium/src/cef (git apply -p1), after CEF's own patches.
+diff --git a/BUILD.gn b/BUILD.gn
+index 2018b0dc0..e0959f623 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -581,6 +581,13 @@ source_set("libcef_static") {
+     "libcef/browser/chrome/extensions/chrome_extension_util.h",
+     "libcef/browser/chrome/extensions/chrome_mime_handler_view_guest_delegate_cef.cc",
+     "libcef/browser/chrome/extensions/chrome_mime_handler_view_guest_delegate_cef.h",
++    # wubble change: wubble's tabs and windows for the extension APIs.
++    "libcef/browser/chrome/extensions/wubble_ext.cc",
++    "libcef/browser/chrome/extensions/wubble_ext.h",
++    "libcef/browser/chrome/extensions/wubble_ext_action.cc",
++    "libcef/browser/chrome/extensions/wubble_ext_capi.h",
++    "libcef/browser/chrome/extensions/wubble_ext_impl.h",
++    "libcef/browser/chrome/extensions/wubble_ext_open.cc",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_child_window.cc",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_child_window.h",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_views.cc",
+diff --git a/libcef/browser/chrome/extensions/wubble_ext.cc b/libcef/browser/chrome/extensions/wubble_ext.cc
+new file mode 100644
+index 000000000..45112d566
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext.cc
+@@ -0,0 +1,768 @@
++// wubble change: wubble's tabs and windows as Chromium's extension model (see
++// wubble_ext.h). WubbleWindowController and WubbleBaseWindow are ported from
++// Chromium's chrome/browser/extensions/api/tabs/app_window_controller.{h,cc}
++// and app_base_window.{h,cc} (BSD-3-Clause, The Chromium Authors);
++// WubbleTabsAccess::Activated from TabsEventRouter::OnActiveTabChanged
++// (tabs_event_router.cc, same licence).
++
++#include "cef/libcef/browser/chrome/extensions/wubble_ext.h"
++
++#include <algorithm>
++#include <cstdlib>
++#include <cstring>
++#include <iterator>
++#include <map>
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/functional/callback_helpers.h"
++#include "base/memory/ptr_util.h"
++#include "base/no_destructor.h"
++#include "base/scoped_multi_source_observation.h"
++#include "base/values.h"
++#include "cef/libcef/browser/browser_host_base.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext_capi.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext_impl.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/extensions/api/tabs/tabs_constants.h"
++#include "chrome/browser/extensions/api/tabs/tabs_event_router.h"
++#include "chrome/browser/extensions/api/tabs/tabs_windows_api.h"
++#include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/extensions/window_controller.h"
++#include "chrome/browser/extensions/window_controller_list.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_manager.h"
++#include "chrome/browser/profiles/profile_observer.h"
++#include "chrome/common/extensions/api/tabs.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/sessions/core/session_id.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_event_histogram_value.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/mojom/context_type.mojom.h"
++#include "ui/base/base_window.h"
++#include "ui/base/mojom/window_show_state.mojom.h"
++#include "ui/gfx/geometry/rect.h"
++#include "url/gurl.h"
++
++namespace cef {
++
++// Reaches TabsEventRouter's private dispatch (it names this class a friend),
++// the way Chromium's own tab strip observers do through TabListInterface.
++class WubbleTabsAccess {
++ public:
++  static void Track(extensions::TabsEventRouter* router,
++                    content::WebContents* contents,
++                    int index) {
++    if (!router->GetTabEntry(*contents)) {
++      router->RegisterForTabNotifications(*contents, index);
++    }
++  }
++
++  static void Created(extensions::TabsEventRouter* router,
++                      content::WebContents* contents,
++                      int index,
++                      bool active) {
++    Track(router, contents, index);
++    router->DispatchTabCreatedEvent(contents, active);
++  }
++
++  // TabsEventRouter::DispatchTabRemovedEvent, but tolerating a tab that its
++  // own TabEntry already unregistered (when the contents is being destroyed).
++  static void Removed(extensions::TabsEventRouter* router,
++                      content::WebContents* contents) {
++    base::ListValue args;
++    args.Append(extensions::ExtensionTabUtil::GetTabId(contents));
++    base::DictValue object_args;
++    object_args.Set(extensions::tabs_constants::kWindowIdKey,
++                    extensions::ExtensionTabUtil::GetWindowIdOfTab(contents));
++    object_args.Set(extensions::tabs_constants::kIsWindowClosingKey, false);
++    args.Append(std::move(object_args));
++    Profile* profile =
++        Profile::FromBrowserContext(contents->GetBrowserContext());
++    router->DispatchEvent(profile, extensions::events::TABS_ON_REMOVED,
++                          extensions::api::tabs::OnRemoved::kEventName,
++                          std::move(args),
++                          extensions::EventRouter::UserGestureState::kUnknown);
++    router->UnregisterForTabNotifications(*contents,
++                                          /*expect_registered=*/false);
++  }
++
++  // Ported from TabsEventRouter::OnActiveTabChanged, which takes a
++  // TabListInterface wubble's windows do not have.
++  static void Activated(extensions::TabsEventRouter* router,
++                        content::WebContents* contents) {
++    base::ListValue args;
++    int tab_id = extensions::ExtensionTabUtil::GetTabId(contents);
++    args.Append(tab_id);
++
++    base::DictValue object_args;
++    object_args.Set(extensions::tabs_constants::kWindowIdKey,
++                    extensions::ExtensionTabUtil::GetWindowIdOfTab(contents));
++    args.Append(object_args.Clone());
++
++    Profile* profile =
++        Profile::FromBrowserContext(contents->GetBrowserContext());
++    router->DispatchEvent(
++        profile, extensions::events::TABS_ON_SELECTION_CHANGED,
++        extensions::api::tabs::OnSelectionChanged::kEventName, args.Clone(),
++        extensions::EventRouter::UserGestureState::kUnknown);
++    router->DispatchEvent(
++        profile, extensions::events::TABS_ON_ACTIVE_CHANGED,
++        extensions::api::tabs::OnActiveChanged::kEventName, std::move(args),
++        extensions::EventRouter::UserGestureState::kUnknown);
++
++    base::ListValue on_activated_args;
++    object_args.Set("tabId", tab_id);
++    on_activated_args.Append(std::move(object_args));
++    router->DispatchEvent(
++        profile, extensions::events::TABS_ON_ACTIVATED,
++        extensions::api::tabs::OnActivated::kEventName,
++        std::move(on_activated_args),
++        extensions::EventRouter::UserGestureState::kUnknown);
++  }
++};
++
++namespace wubble {
++
++namespace {
++
++using extensions::WindowController;
++
++struct WindowState {
++  int id = 0;
++  bool focused = false;
++  bool popup = false;
++  gfx::Rect bounds;
++};
++
++struct TabState {
++  int browser_id = 0;
++  int window = 0;
++  int index = 0;
++  bool active = false;
++  bool pinned = false;
++};
++
++Profile* ProfileOf(content::WebContents* contents) {
++  return Profile::FromBrowserContext(contents->GetBrowserContext());
++}
++
++// The router dispatching |profile|'s tab events, once an extension listens.
++extensions::TabsEventRouter* RouterFor(Profile* profile) {
++  auto* api = extensions::TabsWindowsAPI::Get(profile);
++  return api ? api->tabs_event_router() : nullptr;
++}
++
++class Registry;
++Registry& registry();
++
++// Ported from AppBaseWindow: the window state extensions read; wubble moves
++// and focuses its windows itself, so the mutators do nothing.
++class WubbleBaseWindow final : public ui::BaseWindow {
++ public:
++  explicit WubbleBaseWindow(int window_id) : window_id_(window_id) {}
++  WubbleBaseWindow(const WubbleBaseWindow&) = delete;
++  WubbleBaseWindow& operator=(const WubbleBaseWindow&) = delete;
++  ~WubbleBaseWindow() = default;
++
++  bool IsActive() const override;
++  bool IsMaximized() const override { return false; }
++  bool IsMinimized() const override { return false; }
++  bool IsFullscreen() const override { return false; }
++  gfx::NativeWindow GetNativeWindow() const override {
++    return gfx::NativeWindow();
++  }
++  gfx::Rect GetRestoredBounds() const override { return GetBounds(); }
++  ui::mojom::WindowShowState GetRestoredState() const override {
++    return ui::mojom::WindowShowState::kNormal;
++  }
++  gfx::Rect GetBounds() const override;
++  void Show() override {}
++  void Hide() override {}
++  bool IsVisible() const override { return true; }
++  void ShowInactive() override {}
++  void Close() override {}
++  void Activate() override {}
++  void Deactivate() override {}
++  void Maximize() override {}
++  void Minimize() override {}
++  void Restore() override {}
++  void SetBounds(const gfx::Rect& bounds) override {}
++  void FlashFrame(bool flash) override {}
++  ui::ZOrderLevel GetZOrderLevel() const override {
++    return ui::ZOrderLevel::kNormal;
++  }
++  void SetZOrderLevel(ui::ZOrderLevel order) override {}
++
++ private:
++  const int window_id_;
++};
++
++// Ported from AppWindowController: one wubble window as seen from one
++// profile (extensions only operate on windows of their own profile).
++class WubbleWindowController : public WindowController {
++ public:
++  static std::unique_ptr<WubbleWindowController> Create(int window_id,
++                                                        SessionID session,
++                                                        Profile* profile) {
++    auto base_window = std::make_unique<WubbleBaseWindow>(window_id);
++    return base::WrapUnique(new WubbleWindowController(
++        window_id, session, std::move(base_window), profile));
++  }
++
++  WubbleWindowController(const WubbleWindowController&) = delete;
++  WubbleWindowController& operator=(const WubbleWindowController&) = delete;
++
++  ~WubbleWindowController() override {
++    extensions::WindowControllerList::GetInstance()->RemoveExtensionWindow(
++        this);
++  }
++
++  int wubble_window() const { return window_id_; }
++
++  // extensions::WindowController:
++  int GetWindowId() const override { return session_.id(); }
++  std::string GetWindowTypeText() const override;
++  void SetFullscreenMode(bool is_fullscreen,
++                         const GURL& extension_url) const override {}
++  BrowserWindowInterface* GetBrowser() const override { return nullptr; }
++  content::WebContents* GetActiveTab() const override;
++  int GetTabCount() const override {
++    return static_cast<int>(TabsOf(this).size());
++  }
++  content::WebContents* GetWebContentsAt(int i) const override {
++    auto tabs = TabsOf(this);
++    return i >= 0 && i < static_cast<int>(tabs.size()) ? tabs[i] : nullptr;
++  }
++  bool IsVisibleToTabsAPIForExtension(
++      const extensions::Extension* extension,
++      bool allow_dev_tools_windows) const override {
++    return !extension || !extension->is_platform_app();
++  }
++  base::DictValue CreateWindowValueForExtension(
++      const extensions::Extension* extension,
++      PopulateTabBehavior populate_tab_behavior,
++      extensions::mojom::ContextType context) const override;
++  base::ListValue CreateTabList(
++      const extensions::Extension* extension,
++      extensions::mojom::ContextType context) const override;
++  bool OpenOptionsPage(const extensions::Extension* extension,
++                       const GURL& url,
++                       bool open_in_tab) override {
++    return OpenTab(profile(), url, GetWindowId(), /*active=*/true,
++                   base::DoNothing());
++  }
++
++ private:
++  WubbleWindowController(int window_id,
++                         SessionID session,
++                         std::unique_ptr<WubbleBaseWindow> base_window,
++                         Profile* profile)
++      : WindowController(base_window.get(), profile),
++        window_id_(window_id),
++        session_(session),
++        base_window_(std::move(base_window)) {
++    extensions::WindowControllerList::GetInstance()->AddExtensionWindow(this);
++  }
++
++  const int window_id_;
++  const SessionID session_;
++  std::unique_ptr<WubbleBaseWindow> base_window_;
++};
++
++// Sends onRemoved for a tab whose contents goes before wubble drops it.
++class TabWatch : public content::WebContentsObserver {
++ public:
++  TabWatch(content::WebContents* contents, int browser_id)
++      : WebContentsObserver(contents), browser_id_(browser_id) {}
++  void WebContentsDestroyed() override;
++
++ private:
++  const int browser_id_;
++};
++
++class Registry : public ProfileObserver {
++ public:
++  Registry() = default;
++  Registry(const Registry&) = delete;
++  Registry& operator=(const Registry&) = delete;
++
++  const cef_wubble_ext_delegate_t* delegate() const {
++    return delegate_ ? &*delegate_ : nullptr;
++  }
++
++  void SetDelegate(const cef_wubble_ext_delegate_t* delegate) {
++    if (delegate) {
++      delegate_ = *delegate;
++      return;
++    }
++    delegate_.reset();
++    impl::FailPendingOpens();
++    SetState({}, {});
++  }
++
++  const WindowState* Window(int id) const {
++    for (const auto& window : windows_) {
++      if (window.id == id) {
++        return &window;
++      }
++    }
++    return nullptr;
++  }
++
++  int WubbleWindowOf(int session_id) const {
++    for (const auto& [id, session] : sessions_) {
++      if (session.id() == session_id) {
++        return id;
++      }
++    }
++    return -1;
++  }
++
++  const TabState* TabOf(content::WebContents* contents) const {
++    int id = impl::BrowserIdOf(contents);
++    auto it = tabs_.find(id);
++    return id && it != tabs_.end() ? &it->second : nullptr;
++  }
++
++  // |window|'s tabs of |profile| by index.
++  std::vector<content::WebContents*> TabsIn(int window, Profile* profile,
++                                            bool active_only) const {
++    std::vector<std::pair<int, content::WebContents*>> found;
++    for (const auto& [id, tab] : tabs_) {
++      if (tab.window != window || (active_only && !tab.active)) {
++        continue;
++      }
++      content::WebContents* contents = impl::ContentsOf(id);
++      if (contents && ProfileOf(contents) == profile) {
++        found.emplace_back(tab.index, contents);
++      }
++    }
++    std::sort(found.begin(), found.end());
++    std::vector<content::WebContents*> out;
++    for (auto& [index, contents] : found) {
++      out.push_back(contents);
++    }
++    return out;
++  }
++
++  // Most recently focused first.
++  std::vector<WindowController*> Controllers(Profile* profile) const {
++    std::vector<WindowController*> out;
++    auto entry = profiles_.find(profile);
++    if (entry == profiles_.end()) {
++      return out;
++    }
++    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
++      auto controller = entry->second.find(it->id);
++      if (controller != entry->second.end()) {
++        out.push_back(controller->second.get());
++      }
++    }
++    return out;
++  }
++
++  bool Owns(const WindowController* controller) const {
++    for (const auto& [profile, controllers] : profiles_) {
++      for (const auto& [id, owned] : controllers) {
++        if (owned.get() == controller) {
++          return true;
++        }
++      }
++    }
++    return false;
++  }
++
++  void SetState(std::vector<WindowState> windows, std::vector<TabState> tabs) {
++    int old_focused = FocusedWindow();
++    windows_ = std::move(windows);
++    std::map<int, SessionID> sessions;
++    for (const auto& window : windows_) {
++      auto it = sessions_.find(window.id);
++      sessions.emplace(window.id,
++                       it != sessions_.end() ? it->second : SessionID::NewUnique());
++    }
++    sessions_ = std::move(sessions);
++    SyncControllers();
++
++    std::map<int, TabState> old_tabs = std::move(tabs_);
++    tabs_.clear();
++    for (const auto& tab : tabs) {
++      if (impl::ContentsOf(tab.browser_id) && sessions_.count(tab.window)) {
++        tabs_[tab.browser_id] = tab;
++      }
++    }
++
++    // Gone tabs first, so a window's new active tab is announced after them.
++    for (const auto& [id, tab] : old_tabs) {
++      if (tabs_.count(id)) {
++        continue;
++      }
++      watches_.erase(id);
++      if (content::WebContents* contents = impl::ContentsOf(id)) {
++        if (auto* router = RouterFor(ProfileOf(contents))) {
++          WubbleTabsAccess::Removed(router, contents);
++        }
++        SetWindowId(contents, SessionID::InvalidValue());
++      }
++    }
++    for (const auto& [id, tab] : tabs_) {
++      content::WebContents* contents = impl::ContentsOf(id);
++      SetWindowId(contents, sessions_.at(tab.window));
++      auto* router = RouterFor(ProfileOf(contents));
++      auto old = old_tabs.find(id);
++      if (old == old_tabs.end()) {
++        watches_[id] = std::make_unique<TabWatch>(contents, id);
++        if (router) {
++          WubbleTabsAccess::Created(router, contents, tab.index, tab.active);
++        }
++      } else if (router && tab.active &&
++                 (!old->second.active || old->second.window != tab.window)) {
++        WubbleTabsAccess::Activated(router, contents);
++      }
++    }
++
++    int focused = FocusedWindow();
++    if (focused != old_focused && focused != -1) {
++      for (auto& [profile, controllers] : profiles_) {
++        auto it = controllers.find(focused);
++        if (it != controllers.end()) {
++          it->second->NotifyWindowFocusChanged(true);
++        }
++      }
++    }
++  }
++
++  // The contents of a listed tab is being destroyed.
++  void ContentsGone(int browser_id, content::WebContents* contents) {
++    tabs_.erase(browser_id);
++    Profile* profile = ProfileOf(contents);
++    if (profiles_.count(profile)) {
++      if (auto* router = RouterFor(profile)) {
++        WubbleTabsAccess::Removed(router, contents);
++      }
++    }
++    watches_.erase(browser_id);  // Deletes the caller.
++  }
++
++  void RouterCreated(extensions::TabsEventRouter* router, Profile* profile) {
++    for (const auto& [id, tab] : tabs_) {
++      content::WebContents* contents = impl::ContentsOf(id);
++      if (contents && ProfileOf(contents) == profile) {
++        WubbleTabsAccess::Track(router, contents, tab.index);
++      }
++    }
++  }
++
++  // ProfileObserver:
++  void OnProfileWillBeDestroyed(Profile* profile) override {
++    profile_observations_.RemoveObservation(profile);
++    profiles_.erase(profile);
++    impl::UnwatchActions(profile);
++    for (auto it = tabs_.begin(); it != tabs_.end();) {
++      content::WebContents* contents = impl::ContentsOf(it->first);
++      if (!contents || ProfileOf(contents) == profile) {
++        watches_.erase(it->first);
++        it = tabs_.erase(it);
++      } else {
++        ++it;
++      }
++    }
++  }
++
++ private:
++  using ControllerMap =
++      std::map<int, std::unique_ptr<WubbleWindowController>>;
++
++  int FocusedWindow() const {
++    for (const auto& window : windows_) {
++      if (window.focused) {
++        return window.id;
++      }
++    }
++    return -1;
++  }
++
++  static void SetWindowId(content::WebContents* contents, SessionID id) {
++    if (auto* helper = sessions::SessionTabHelper::FromWebContents(contents)) {
++      if (helper->window_id() != id) {
++        helper->SetWindowID(id);
++      }
++    }
++  }
++
++  // One controller per (listed window, loaded regular profile).
++  void SyncControllers() {
++    std::vector<Profile*> loaded;
++    if (windows_.size() && g_browser_process &&
++        g_browser_process->profile_manager()) {
++      loaded = g_browser_process->profile_manager()->GetLoadedProfiles();
++    }
++    for (auto it = profiles_.begin(); it != profiles_.end();) {
++      if (std::find(loaded.begin(), loaded.end(), it->first) == loaded.end()) {
++        profile_observations_.RemoveObservation(it->first);
++        impl::UnwatchActions(it->first);
++        it = profiles_.erase(it);
++      } else {
++        ++it;
++      }
++    }
++    for (Profile* profile : loaded) {
++      if (profile->IsOffTheRecord()) {
++        continue;
++      }
++      if (!profiles_.count(profile)) {
++        profile_observations_.AddObservation(profile);
++        impl::WatchActions(profile);
++      }
++      ControllerMap& controllers = profiles_[profile];
++      for (auto it = controllers.begin(); it != controllers.end();) {
++        it = sessions_.count(it->first) ? std::next(it) : controllers.erase(it);
++      }
++      for (const auto& window : windows_) {
++        if (!controllers.count(window.id)) {
++          controllers[window.id] = WubbleWindowController::Create(
++              window.id, sessions_.at(window.id), profile);
++        }
++      }
++    }
++  }
++
++  std::optional<cef_wubble_ext_delegate_t> delegate_;
++  // As wubble listed them: least recently focused first.
++  std::vector<WindowState> windows_;
++  // wubble window id -> its extension window id, while it is listed.
++  std::map<int, SessionID> sessions_;
++  // By browser identifier; only tabs whose contents exists.
++  std::map<int, TabState> tabs_;
++  std::map<int, std::unique_ptr<TabWatch>> watches_;
++  std::map<Profile*, ControllerMap> profiles_;
++  base::ScopedMultiSourceObservation<Profile, ProfileObserver>
++      profile_observations_{this};
++};
++
++Registry& registry() {
++  static base::NoDestructor<Registry> instance;
++  return *instance;
++}
++
++void TabWatch::WebContentsDestroyed() {
++  registry().ContentsGone(browser_id_, web_contents());
++}
++
++bool WubbleBaseWindow::IsActive() const {
++  const WindowState* window = registry().Window(window_id_);
++  return window && window->focused;
++}
++
++gfx::Rect WubbleBaseWindow::GetBounds() const {
++  const WindowState* window = registry().Window(window_id_);
++  return window ? window->bounds : gfx::Rect();
++}
++
++std::string WubbleWindowController::GetWindowTypeText() const {
++  const WindowState* window = registry().Window(window_id_);
++  return extensions::api::tabs::ToString(
++      window && window->popup ? extensions::api::tabs::WindowType::kPopup
++                              : extensions::api::tabs::WindowType::kNormal);
++}
++
++content::WebContents* WubbleWindowController::GetActiveTab() const {
++  auto active = registry().TabsIn(window_id_, profile(), /*active_only=*/true);
++  return active.empty() ? nullptr : active.front();
++}
++
++// Ported from BrowserExtensionWindowController::CreateWindowValueForExtension.
++base::DictValue WubbleWindowController::CreateWindowValueForExtension(
++    const extensions::Extension* extension,
++    PopulateTabBehavior populate_tab_behavior,
++    extensions::mojom::ContextType context) const {
++  base::DictValue dict;
++  dict.Set(extension_misc::kId, GetWindowId());
++  dict.Set("type", GetWindowTypeText());
++  dict.Set("focused", window()->IsActive());
++  dict.Set("incognito", profile()->IsOffTheRecord());
++  dict.Set("alwaysOnTop", false);
++  dict.Set("state", "normal");
++  const gfx::Rect bounds = window()->GetBounds();
++  dict.Set("left", bounds.x());
++  dict.Set("top", bounds.y());
++  dict.Set("width", bounds.width());
++  dict.Set("height", bounds.height());
++  if (populate_tab_behavior == kPopulateTabs) {
++    dict.Set(extensions::ExtensionTabUtil::kTabsKey,
++             CreateTabList(extension, context));
++  }
++  return dict;
++}
++
++base::ListValue WubbleWindowController::CreateTabList(
++    const extensions::Extension* extension,
++    extensions::mojom::ContextType context) const {
++  base::ListValue list;
++  for (content::WebContents* contents : TabsOf(this)) {
++    auto scrub = extensions::ExtensionTabUtil::GetScrubTabBehavior(
++        extension, context, contents);
++    list.Append(extensions::ExtensionTabUtil::CreateTabObject(
++                    contents, scrub, extension)
++                    .ToValue());
++  }
++  return list;
++}
++
++// The C table.
++
++void SetDelegate(const cef_wubble_ext_delegate_t* delegate) {
++  registry().SetDelegate(delegate);
++}
++
++void SetState(const cef_wubble_ext_window_t* windows,
++              size_t window_count,
++              const cef_wubble_ext_tab_t* tabs,
++              size_t tab_count) {
++  std::vector<WindowState> w;
++  for (size_t i = 0; i < window_count; ++i) {
++    w.push_back({windows[i].window_id, windows[i].focused != 0,
++                 windows[i].type == 1,
++                 gfx::Rect(windows[i].x, windows[i].y, windows[i].width,
++                           windows[i].height)});
++  }
++  std::vector<TabState> t;
++  for (size_t i = 0; i < tab_count; ++i) {
++    t.push_back({tabs[i].browser_id, tabs[i].window_id, tabs[i].index,
++                 tabs[i].active != 0, tabs[i].pinned != 0});
++  }
++  registry().SetState(std::move(w), std::move(t));
++}
++
++void FreeString(char* string) {
++  free(string);
++}
++
++const cef_wubble_ext_t kTable = {
++    sizeof(cef_wubble_ext_t),
++    CEF_WUBBLE_EXT_VERSION,
++    SetDelegate,
++    SetState,
++    impl::TabOpened,
++    impl::ActionClick,
++    impl::ActionState,
++    FreeString,
++    impl::FreeAction,
++};
++
++}  // namespace
++
++namespace impl {
++
++const cef_wubble_ext_delegate_t* Delegate() {
++  return registry().delegate();
++}
++
++content::WebContents* ContentsOf(int browser_id) {
++  if (browser_id <= 0) {
++    return nullptr;
++  }
++  auto browser = CefBrowserHostBase::GetBrowserForBrowserId(browser_id);
++  return browser && browser->IsAlloyStyle() ? browser->GetWebContents()
++                                            : nullptr;
++}
++
++int BrowserIdOf(content::WebContents* contents) {
++  auto browser = CefBrowserHostBase::GetBrowserForContents(contents);
++  if (!browser || !browser->IsAlloyStyle() ||
++      browser->GetWebContents() != contents) {
++    return 0;
++  }
++  return browser->GetIdentifier();
++}
++
++int WubbleWindowOf(int window_id) {
++  return registry().WubbleWindowOf(window_id);
++}
++
++char* CopyString(const std::string& value) {
++  char* out = static_cast<char*>(malloc(value.size() + 1));
++  memcpy(out, value.c_str(), value.size() + 1);
++  return out;
++}
++
++}  // namespace impl
++
++bool IsActive() {
++  return registry().delegate() != nullptr;
++}
++
++void FillTab(content::WebContents* contents, extensions::api::tabs::Tab* tab) {
++  const TabState* state = registry().TabOf(contents);
++  if (!state) {
++    return;
++  }
++  tab->index = state->index;
++  tab->active = state->active;
++  tab->selected = state->active;
++  tab->highlighted = state->active;
++  tab->pinned = state->pinned;
++}
++
++WindowController* CurrentWindow(Profile* profile) {
++  auto windows = Windows(profile);
++  return windows.empty() ? nullptr : windows.front();
++}
++
++std::vector<WindowController*> Windows(Profile* profile) {
++  return registry().Controllers(profile);
++}
++
++bool IsWubbleWindow(const WindowController* controller) {
++  return controller && registry().Owns(controller);
++}
++
++std::vector<content::WebContents*> TabsOf(const WindowController* controller) {
++  if (!IsWubbleWindow(controller)) {
++    return {};
++  }
++  auto* wubble = static_cast<const WubbleWindowController*>(controller);
++  return registry().TabsIn(wubble->wubble_window(), wubble->profile(),
++                           /*active_only=*/false);
++}
++
++bool CloseTab(content::WebContents* contents) {
++  const cef_wubble_ext_delegate_t* delegate = impl::Delegate();
++  int id = impl::BrowserIdOf(contents);
++  if (!delegate || !id) {
++    return false;
++  }
++  delegate->close_tab(delegate->ctx, id);
++  return true;
++}
++
++bool ActivateTab(content::WebContents* contents) {
++  const cef_wubble_ext_delegate_t* delegate = impl::Delegate();
++  int id = impl::BrowserIdOf(contents);
++  if (!delegate || !id) {
++    return false;
++  }
++  delegate->activate_tab(delegate->ctx, id);
++  return true;
++}
++
++void OnTabsEventRouterCreated(extensions::TabsEventRouter* router,
++                              Profile* profile) {
++  registry().RouterCreated(router, profile);
++}
++
++}  // namespace wubble
++}  // namespace cef
++
++extern "C" CEF_EXPORT const cef_wubble_ext_t* cef_wubble_ext_v1(void) {
++  return &cef::wubble::kTable;
++}
+diff --git a/libcef/browser/chrome/extensions/wubble_ext.h b/libcef/browser/chrome/extensions/wubble_ext.h
+new file mode 100644
+index 000000000..8f14901bf
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext.h
+@@ -0,0 +1,84 @@
++// wubble change: wubble's tabs and windows as Chromium's extension model.
++//
++// wubble (the embedder) owns its tabs and windows; each tab is an Alloy style
++// windowless browser, which Chromium's chrome.tabs/chrome.windows code does
++// not see (it walks Browser windows and their tab strips only). wubble pushes
++// a projection of its model through the C table in wubble_ext_capi.h; this
++// registry turns it into one extensions::WindowController per (wubble window,
++// loaded profile), gives each tab its window's id (SessionTabHelper) and its
++// index/active/pinned (ExtensionTabUtil::CreateTabObject calls FillTab), and
++// dispatches the tab events through TabsEventRouter. Changes extensions ask
++// for (open, close, activate a tab) go back to wubble through its delegate.
++// Without a delegate (wubble not running the APIs) every hook is a no-op.
++// UI thread only. See wubble's patches/README.md.
++
++#ifndef CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_H_
++#define CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_H_
++#pragma once
++
++#include <vector>
++
++#include "base/functional/callback_forward.h"
++
++class GURL;
++class Profile;
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++namespace extensions {
++class TabsEventRouter;
++class WindowController;
++namespace api::tabs {
++struct Tab;
++}  // namespace api::tabs
++}  // namespace extensions
++
++namespace cef::wubble {
++
++// wubble set its delegate: the hooks below are live.
++bool IsActive();
++
++// Fills index, active, selected, highlighted and pinned of |tab| when
++// |contents| is a wubble tab; else leaves it as it is.
++void FillTab(content::WebContents* contents, extensions::api::tabs::Tab* tab);
++
++// The focused wubble window's controller for |profile|, else the most
++// recently focused one, else null.
++extensions::WindowController* CurrentWindow(Profile* profile);
++
++// Every wubble window's controller for |profile|, most recently focused first.
++std::vector<extensions::WindowController*> Windows(Profile* profile);
++
++// |controller| is one of wubble's.
++bool IsWubbleWindow(const extensions::WindowController* controller);
++
++// The wubble tabs of |controller|'s window and profile, by index.
++std::vector<content::WebContents*> TabsOf(
++    const extensions::WindowController* controller);
++
++// Asks wubble to close / activate |contents|. False when it is not a wubble
++// tab or there is no delegate (nothing was asked).
++bool CloseTab(content::WebContents* contents);
++bool ActivateTab(content::WebContents* contents);
++
++// Asks wubble to open |url| as a tab of |profile| in the window with the
++// extension id |window_id| (-1: the current one). |callback| gets the new
++// tab's contents, or null when wubble refused or went away. False (and
++// |callback| dropped) when there is no delegate.
++using OpenedCallback = base::OnceCallback<void(content::WebContents*)>;
++bool OpenTab(Profile* profile,
++             const GURL& url,
++             int window_id,
++             bool active,
++             OpenedCallback callback);
++
++// Called by TabsEventRouterPlatformDelegate's constructor: registers the
++// wubble tabs of |profile| with the new |router| (no onCreated).
++void OnTabsEventRouterCreated(extensions::TabsEventRouter* router,
++                              Profile* profile);
++
++}  // namespace cef::wubble
++
++#endif  // CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_H_
+diff --git a/libcef/browser/chrome/extensions/wubble_ext_capi.h b/libcef/browser/chrome/extensions/wubble_ext_capi.h
+new file mode 100644
+index 000000000..99a57db7a
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext_capi.h
+@@ -0,0 +1,105 @@
++// wubble change: the plain C table wubble (the embedder) looks up at run time
++// to host the chrome.tabs, chrome.windows and chrome.action APIs on its own
++// tabs and windows. Not a translated CEF API: one exported cef_* function
++// (libcef.lst exports every cef_* symbol), mirrored by
++// crates/wubble-engine/src/ext_api.rs. A stock CEF has no such symbol and
++// wubble keeps its behaviour without the APIs. Every entry runs on the CEF UI
++// thread; delegate callbacks are made from it and must not re-enter the table.
++
++#ifndef CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_CAPI_H_
++#define CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_CAPI_H_
++#pragma once
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "include/internal/cef_export.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define CEF_WUBBLE_EXT_VERSION 1
++
++// One wubble window. |type|: 0 normal, 1 popup.
++typedef struct _cef_wubble_ext_window_t {
++  int window_id;
++  int focused;
++  int type;
++  int x;
++  int y;
++  int width;
++  int height;
++} cef_wubble_ext_window_t;
++
++// One wubble tab with a live browser, by CefBrowser identifier.
++typedef struct _cef_wubble_ext_tab_t {
++  int browser_id;
++  int window_id;
++  int index;
++  int active;
++  int pinned;
++} cef_wubble_ext_tab_t;
++
++// What CEF asks of wubble. Copied by set_delegate; |ctx| is passed back.
++typedef struct _cef_wubble_ext_delegate_t {
++  void* ctx;
++  // Open |url| as a tab of the profile at |profile_path| in |window_id| (-1:
++  // the current window); answer with tab_opened(|request_id|, ...).
++  void (*open_tab)(void* ctx,
++                   int request_id,
++                   const char* profile_path,
++                   const char* url,
++                   int window_id,
++                   int active);
++  void (*close_tab)(void* ctx, int browser_id);
++  void (*activate_tab)(void* ctx, int browser_id);
++  // The action of |extension_id| changed (badge, title, icon, popup, ...).
++  void (*action_changed)(void* ctx, const char* extension_id);
++} cef_wubble_ext_delegate_t;
++
++// An action's state for one tab. Strings are UTF-8; freed with free_action.
++typedef struct _cef_wubble_ext_action_t {
++  char* title;
++  char* badge;
++  uint32_t badge_bg;  // ARGB
++  uint32_t badge_fg;  // ARGB
++  int enabled;
++  char* popup_url;  // empty: no popup
++  uint8_t* icon_png;  // the icon set by the extension, if any
++  size_t icon_png_len;
++  char* icon_path;  // the manifest's default icon file, if any
++} cef_wubble_ext_action_t;
++
++typedef struct _cef_wubble_ext_t {
++  size_t size;  // sizeof(cef_wubble_ext_t)
++  int version;  // CEF_WUBBLE_EXT_VERSION
++  // NULL clears it (and fails every pending open request).
++  void (*set_delegate)(const cef_wubble_ext_delegate_t* delegate);
++  // The whole projection of wubble's windows and tabs; CEF diffs it.
++  void (*set_state)(const cef_wubble_ext_window_t* windows,
++                    size_t window_count,
++                    const cef_wubble_ext_tab_t* tabs,
++                    size_t tab_count);
++  // Answers open_tab; |browser_id| 0: refused.
++  void (*tab_opened)(int request_id, int browser_id);
++  // Runs the action as a click on the tab: 0 nothing ran, 1 ran (onClicked or
++  // blocked scripts), 2 it has a popup (*popup_url set; free_string it).
++  int (*action_click)(const char* extension_id,
++                      int browser_id,
++                      char** popup_url);
++  // 1 and |out| filled when the extension has an action, else 0.
++  int (*action_state)(const char* extension_id,
++                      int browser_id,
++                      cef_wubble_ext_action_t* out);
++  void (*free_string)(char* string);
++  void (*free_action)(cef_wubble_ext_action_t* action);
++} cef_wubble_ext_t;
++
++CEF_EXPORT const cef_wubble_ext_t* cef_wubble_ext_v1(void);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  // CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_CAPI_H_
+diff --git a/libcef/browser/chrome/extensions/wubble_ext_impl.h b/libcef/browser/chrome/extensions/wubble_ext_impl.h
+new file mode 100644
+index 000000000..7b31dbe6c
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext_impl.h
+@@ -0,0 +1,52 @@
++// wubble change: what the files of the wubble extension module share
++// (wubble_ext.cc: the C table and the registry; wubble_ext_open.cc: tabs
++// opened for extensions; wubble_ext_action.cc: chrome.action). UI thread only.
++
++#ifndef CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_IMPL_H_
++#define CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_IMPL_H_
++#pragma once
++
++#include <string>
++
++#include "cef/libcef/browser/chrome/extensions/wubble_ext_capi.h"
++
++class Profile;
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++namespace cef::wubble::impl {
++
++// wubble's delegate, or null.
++const cef_wubble_ext_delegate_t* Delegate();
++
++// The main contents of the Alloy style browser |browser_id|, or null.
++content::WebContents* ContentsOf(int browser_id);
++
++// The Alloy style browser identifier of |contents| (its main contents), or 0.
++int BrowserIdOf(content::WebContents* contents);
++
++// The wubble window id of the extension window id |window_id|, or -1.
++int WubbleWindowOf(int window_id);
++
++// A malloc'd copy for the C side (free_string / free_action).
++char* CopyString(const std::string& value);
++
++// wubble_ext_open.cc.
++void TabOpened(int request_id, int browser_id);
++void FailPendingOpens();
++
++// wubble_ext_action.cc.
++int ActionClick(const char* extension_id, int browser_id, char** popup_url);
++int ActionState(const char* extension_id,
++                int browser_id,
++                cef_wubble_ext_action_t* out);
++void FreeAction(cef_wubble_ext_action_t* action);
++// Watches |profile|'s action changes for the delegate, until Unwatch.
++void WatchActions(Profile* profile);
++void UnwatchActions(Profile* profile);
++
++}  // namespace cef::wubble::impl
++
++#endif  // CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_IMPL_H_

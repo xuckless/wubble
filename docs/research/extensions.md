@@ -20,9 +20,9 @@ Tags: **[V]** read in the cited source or seen in a run; **[I]** inferred, to be
 | Content scripts (`document_start`) in wubble's views | **Yes** [V, smoke] | CEF attaches Chrome's tab helpers to Alloy-style (windowless) browsers: `browser_platform_delegate_alloy.cc:206` |
 | `storage`, `alarms` | Expected yes [I] | profile-level APIs |
 | `scripting.executeScript`, `tabs.get/update/sendMessage` by `tabId` | Partly [I] | CEF's minimal shim: `chrome_extension_util.cc` `cef::GetAlloyTabById`, hooked into `ExtensionTabUtil::GetTabById` (`chrome_browser_extensions.patch`) |
-| `tabs.query`, `tabs.on*` events, `windows.*` | **No** [V source] | `TabsQueryFunction::BuildTabList` walks only `Browser` windows' tab lists (`tabs_api.cc` ~1956); `TabsEventRouter` observes `TabListInterface` only. **P1** |
-| `tabs.create`, `windows.create`, `runtime.openOptionsPage`, `clients.openWindow` | **No**: a native Chrome-style window with no client, which blocks shutdown [V source] | `chrome_browser_delegate.cc:628-650` (`cef_params == nullptr`); only hook `CefBrowserProcessHandler::GetDefaultClient` (welding does not implement it). **P2** |
-| Action button, badge, `action.onClicked`, the popup, `activeTab` | **No UI** [V source] | state exists, nothing can click it or read it. **P3**; the popup page itself can be a windowless view at `chrome-extension://<id>/<default_popup>` (but `tabs.query` inside it hits P1) |
+| `tabs.query`, `tabs.on*` events, `windows.*` | **No** [V source] | `TabsQueryFunction::BuildTabList` walks only `Browser` windows' tab lists (`tabs_api.cc` ~1956); `TabsEventRouter` observes `TabListInterface` only. **P1**. **Patched** (section 7): `tabs.query`, `get`, `update`, `remove`, `sendMessage`, `onCreated/onUpdated/onActivated/onRemoved`, `windows.getCurrent/getAll/getLastFocused/get`, `onFocusChanged` [V, smoke on `cef-ext`] |
+| `tabs.create`, `windows.create`, `runtime.openOptionsPage`, `clients.openWindow` | **No**: a native Chrome-style window with no client, which blocks shutdown [V source] | `chrome_browser_delegate.cc:628-650` (`cef_params == nullptr`); only hook `CefBrowserProcessHandler::GetDefaultClient` (welding does not implement it). **P2**. **Patched**: `tabs.create`, `openOptionsPage` and `clients.openWindow` open a wubble tab; `windows.create` is refused [V, smoke: `tabs.create`] |
+| Action button, badge, `action.onClicked`, the popup, `activeTab` | **No UI** [V source] | state exists, nothing can click it or read it. **P3**; the popup page itself can be a windowless view at `chrome-extension://<id>/<default_popup>` (but `tabs.query` inside it hits P1). **Patched** for the engine (click with `activeTab`, `onClicked` or the popup URL, badge/title/icon state, change notices) [V, smoke]; no button UI yet |
 | Options page | Yes when wubble opens `chrome-extension://<id>/<options_page>` in a tab [I] | the extension's own `openOptionsPage` hits P2 |
 | `webRequest` (observe), `declarativeNetRequest` | Expected yes [I] | `ChromeContentBrowserClientCef::WillCreateURLLoaderFactory` calls Chrome's (where the web request proxy goes in) before CEF's interceptor (`chrome_content_browser_client_cef.cc:504-563`) |
 | `nativeMessaging` | Yes, with host manifests in `<cache>/NativeMessagingHosts` or `/etc/chromium/native-messaging-hosts` (Linux), `/Library/Application Support/Chromium/NativeMessagingHosts` (macOS) [V source] | `chrome_paths.cc:454-485`; CEF overrides `DIR_USER_DATA` (`resource_util.cc:130`). Password managers' desktop apps write Chrome's/Chromium's dirs, so wubble's user dir needs them copied or linked (later). |
@@ -116,3 +116,29 @@ test and developer extensions, and the UI should say so.
 - Windows ids for path-loaded extensions use the UTF-16, upper-case drive letter rule (ported, untested on Windows).
 - `disable-default-apps` and `disable-component-extensions-with-background-pages` apply only while an extension is
   installed; `--smoke builtins` (the PDF viewer) and `--smoke page` (DevTools) pass with the list empty.
+
+## 7. The patch queue (P1 to P3)
+
+wubble's patches live in `patches/chromium/` ([patches/README.md](../../patches/README.md)), applied by
+`scripts/build-cef.sh WORK patch` after CEF's hook, and built beside the CEF in use (`CEF_INSTALL`; the lane's
+build is `~/Dev/wubble-wt/cef-ext`). No translated CEF API: cef-dll-sys ships pregenerated bindings for API
+15600, so the patches export one plain C function, `cef_wubble_ext_v1` (libcef.lst exports every `cef_*`), which
+`crates/wubble-engine/src/ext_api.rs` looks up at run time. A stock CEF lacks it and wubble behaves as before.
+
+| API | On the patched CEF | How |
+|---|---|---|
+| `windows.getCurrent`, `getAll`, `getLastFocused`, `get` | wubble's Main windows (`normal`) and Little/Popup windows (`popup`); Pip left out; bounds 0 | one `WindowController` per (wubble window, loaded profile), ported from Chromium's `AppWindowController`/`AppBaseWindow`; `getAll`/`getLastFocused` fallbacks in `tabs_api.cc` |
+| `tabs.query` | wubble's live tabs, index/active/pinned from wubble's model | `BuildTabList` also walks wubble's controllers (the same window and tab rules); `CreateTabObject` asks the registry |
+| `tabs.get`, `sendMessage`, `update {url, muted}`, `scripting` by tab | yes (CEF's own shim) with the window id and index | `SessionTabHelper::SetWindowID` per tab |
+| `tabs.update {active}`, `tabs.remove` | wubble activates / closes the tab; `remove` answers when the page is gone | delegate `activate_tab` / `close_tab` |
+| `tabs.create`, `runtime.openOptionsPage`, `clients.openWindow` | wubble opens a tab (active: a new tab; inactive: in the background after the shown Space's active tab) and answers with it | delegate `open_tab`, answered by `tab_opened` |
+| `windows.create` | refused: "windows.create is not supported in wubble" | would make an unmanaged `Browser` window |
+| `onCreated`, `onUpdated`, `onActivated`, `onRemoved`, `windows.onFocusChanged` | yes | `TabsEventRouter`'s own entries and dispatch, reached as its friend |
+| `onMoved`, `onAttached`, `onDetached`, `onReplaced`, `windows.onCreated/onRemoved` | no | Chromium ignores controllers without a `Browser` for window events (`windows_event_router.cc:203-206, 227-230`); moves are not diffed yet |
+| `action` click, badge, title, icon, popup URL, changes | engine API (`Engine::action_click`, `action_state`, `ExtRequest::ActionChanged`); no buttons yet | `ExtensionActionRunner::RunAction(ext, true)`, `ExtensionAction` getters, `ExtensionActionDispatcher` observer |
+
+The model mapping (decision "Extension tabs model"): `wubble_core::extensions::project` lists each Main window's
+Space tabs (pinned, then items, folders flattened), puts tabs of Spaces no window shows at the end of the focused
+Main window (never active), leaves sleeping tabs out (Chrome would keep the tab and send `onReplaced` on wake: a
+follow-up), and lists every window in every container's profile, each profile's controller holding only its own
+tabs (indices are the window's, so a profile may see gaps).

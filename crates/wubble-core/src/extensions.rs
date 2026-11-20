@@ -28,6 +28,9 @@ use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+mod projection;
+pub use projection::{ExtTab, ExtWindow, ExtWindowKind, Projection, project};
+
 /// A Chrome extension id: 32 letters `a` to `p`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExtensionId(String);

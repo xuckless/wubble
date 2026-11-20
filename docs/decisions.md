@@ -96,6 +96,9 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Accessibility | Shell through Slint's AccessKit tree; pages get the accessibility media features; web content's full subtree waits for a Slint graft API (M6). | 2026-11-19 |
 | Extensions on | Chrome's extension system runs only while at least one extension is installed and enabled (`--load-extension`, else `disable-extensions`); changes apply at the next start; extensions load in every container. Supersedes "Extensions" (2026-11-18): our own Chromium is here ([research/extensions.md](research/extensions.md)). | 2026-11-20 |
 | Extension install | From the user's files only: an unpacked directory in place, a .crx unpacked by wubble with its key kept (signature not verified); no Chromium or CEF patch for loading; tabs, windows, actions and prompts wait for patches P1 to P4. | 2026-11-20 |
+| Extension tabs model | Extensions see wubble's model: a Main window is a Chrome `normal` window in every container's profile listing its Space's live tabs in sidebar order; tabs of Spaces no window shows sit at the end of the focused Main window, never active; Little and Popup windows are `popup` windows; Pip windows and sleeping tabs are not listed; wubble places every tab an extension opens ([research/extensions.md](research/extensions.md) section 7). | 2026-11-20 |
+| CEF patch API | wubble's CEF patches (`patches/chromium`) export one plain C table, `cef_wubble_ext_v1`, looked up at run time; no translated CEF API (no cef-dll-sys fork); a stock CEF runs without the tab APIs. | 2026-11-20 |
+| windows.create | Refused while wubble hosts the extension APIs: it would make an unmanaged Chrome window. | 2026-11-20 |
 
 ## Shell and UI
 
