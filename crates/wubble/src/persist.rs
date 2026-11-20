@@ -285,6 +285,8 @@ enum Request {
         now_ms: i64,
     },
     PushClosed(ClosedTab),
+    /// One agent session's call for the activity log (`agent_log`).
+    PushAgentLog(wubble_core::agent::log::Entry),
     PopClosed(Reply<Option<ClosedTab>>),
     /// Files a tab in the Archive; replies with its archive id when the store kept it (only then may the tab close).
     PushArchive(ArchivedTab, Reply<Option<i64>>),
@@ -478,6 +480,10 @@ impl StoreClient {
 
     pub fn push_closed(&self, tab: ClosedTab) {
         self.send(Request::PushClosed(tab));
+    }
+
+    pub fn push_agent_log(&self, entry: wubble_core::agent::log::Entry) {
+        self.send(Request::PushAgentLog(entry));
     }
 
     /// `reply` runs on the store thread.
@@ -974,6 +980,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
             now_ms,
         } => store.put_favicon(&page_url, &icon, now_ms).await?,
         Request::PushClosed(tab) => store.push_closed(&tab).await?,
+        Request::PushAgentLog(entry) => store.push_agent_log(&entry).await?,
         Request::PopClosed(reply) => {
             let tab = store.pop_closed().await;
             match tab {

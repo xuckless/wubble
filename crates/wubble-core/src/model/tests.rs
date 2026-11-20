@@ -126,6 +126,55 @@ fn new_tab_goes_after_opener_else_last() {
 }
 
 #[test]
+fn open_in_space_puts_a_hidden_tab_in_that_space_and_its_container() {
+    let m = Model::new(t0());
+    let (m, _) = run(m, Command::NewContainer { name: "A".into() });
+    let c = m.containers.last().unwrap().id;
+    let (m, s) = add_space(m, c);
+    let before = m.active_space();
+    let (m, fx) = run_all(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "u".into(),
+        },
+    );
+    let t = *m.order(s).last().unwrap();
+    assert_eq!(m.tabs[&t].container, c);
+    assert_eq!(m.active_space(), before, "the user's Space stays shown");
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].active, Some(t));
+    assert!(!m.visible_tabs().contains(&t));
+    assert_eq!(
+        core_effects(fx),
+        vec![Effect::CreateTab {
+            tab: t,
+            url: "u".into(),
+            container: c
+        }]
+    );
+    // A second tab goes last and leaves the active one.
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "v".into(),
+        },
+    );
+    assert_eq!(m.order(s).len(), 2);
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].active, Some(t));
+    // An unknown Space: nothing.
+    let (m2, fx) = run(
+        m.clone(),
+        Command::OpenInSpace {
+            space: SpaceId(99),
+            url: "w".into(),
+        },
+    );
+    assert_eq!(m2, m);
+    assert!(fx.is_empty());
+}
+
+#[test]
 fn new_tab_container_override_and_unknown() {
     let (m, _) = run(
         Model::new(t0()),

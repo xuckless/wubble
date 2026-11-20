@@ -98,6 +98,13 @@ pub enum Command {
         url: String,
         opener: TabId,
     },
+    /// A tab at the end of `space`, in its container, never shown: an agent session's tab
+    /// (`agent`), which lives in a Space no window may show. The Space's active tab when it
+    /// has none, so showing the Space shows it.
+    OpenInSpace {
+        space: SpaceId,
+        url: String,
+    },
     CloseTab(TabId),
     /// Closes each of these tabs (the tab menu's "Close Tabs Below", a folder's "Close Folder").
     CloseTabs(Vec<TabId>),
@@ -1833,6 +1840,14 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::BackgroundTab { url, opener } => m
             .place_new_tab(url, None, Some(opener), None)
             .map(|(_, _, create)| create)
+            .into_iter()
+            .collect(),
+        Command::OpenInSpace { space, url } => m
+            .place_new_tab(url, None, None, Some(space))
+            .map(|(id, si, create)| {
+                m.spaces[si].active.get_or_insert(id);
+                create
+            })
             .into_iter()
             .collect(),
         Command::CloseTab(t) => m.close_tab(t),

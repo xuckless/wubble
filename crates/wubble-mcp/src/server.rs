@@ -32,6 +32,9 @@ pub enum RpcError {
     InvalidRequest(String),
     MethodNotFound(String),
     InvalidParams(String),
+    /// The server cannot answer at all (no browser runs): JSON-RPC's implementation-defined
+    /// server error.
+    Unavailable(String),
 }
 
 impl RpcError {
@@ -41,13 +44,16 @@ impl RpcError {
             RpcError::InvalidRequest(_) => -32600,
             RpcError::MethodNotFound(_) => -32601,
             RpcError::InvalidParams(_) => -32602,
+            RpcError::Unavailable(_) => -32000,
         }
     }
 
     pub fn message(&self) -> String {
         match self {
             RpcError::Parse => "parse error".into(),
-            RpcError::InvalidRequest(m) | RpcError::InvalidParams(m) => m.clone(),
+            RpcError::InvalidRequest(m) | RpcError::InvalidParams(m) | RpcError::Unavailable(m) => {
+                m.clone()
+            }
             RpcError::MethodNotFound(m) => format!("method not found: {m}"),
         }
     }
@@ -159,6 +165,16 @@ fn read_id(v: &Value) -> Result<Option<RequestId>, RpcError> {
             "id must be a string or an integer".into(),
         )),
     }
+}
+
+/// The answer to `line` when no server is there to take it (`wubble mcp` with no browser
+/// running): every request gets [`RpcError::Unavailable`] with `why`; notifications and
+/// responses get nothing.
+pub fn unavailable(line: &str, why: &str) -> Option<Value> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    v.get("method")?;
+    let id = read_id(&v).ok()??;
+    Some(RpcError::Unavailable(why.into()).response(Some(&id)))
 }
 
 /// Parses one line and answers what needs no host: discovery, the tool list, protocol errors.
@@ -275,7 +291,12 @@ mod tests {
                 args.insert((*first).into(), json!("x"));
             }
             match call(t.name, Value::Object(args)) {
-                Incoming::Call { .. } => {}
+                Incoming::Call { call, .. } => {
+                    assert_eq!(call.tool(), t.name);
+                    assert_eq!(call.session().is_none(), t.name == "start_session");
+                    let names_tab = t.args.iter().any(|a| a.name == "tab");
+                    assert_eq!(call.tab().is_some(), names_tab, "{}", t.name);
+                }
                 other => panic!("{}: {other:?}", t.name),
             }
         }
@@ -402,6 +423,25 @@ mod tests {
             handle_line(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
             Incoming::Ignore
         );
+    }
+
+    #[test]
+    fn without_a_server_requests_get_an_error_and_notifications_nothing() {
+        let r = unavailable(
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#,
+            "no browser",
+        )
+        .unwrap();
+        assert_eq!(r["id"], 4);
+        assert_eq!(r["error"]["code"], -32000);
+        assert_eq!(r["error"]["message"], "no browser");
+        for quiet in [
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            "{nope",
+        ] {
+            assert_eq!(unavailable(quiet, "x"), None, "{quiet}");
+        }
     }
 
     #[test]

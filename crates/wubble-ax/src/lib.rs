@@ -185,6 +185,14 @@ impl PageTree {
             .collect()
     }
 
+    /// The page document's Chromium tree id, once its tree has arrived; a navigation gives the
+    /// page a new one.
+    pub fn document(&self) -> Option<&str> {
+        self.trees
+            .contains_key(&self.root)
+            .then_some(self.root.as_str())
+    }
+
     /// The page document's subtree, for the graft under the page pane.
     pub fn tree(&self) -> Option<TreeId> {
         self.trees

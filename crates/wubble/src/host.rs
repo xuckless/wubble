@@ -14,6 +14,7 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+mod agent;
 mod autofill;
 mod autoscroll;
 mod ax;
@@ -295,6 +296,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
+    /// `--smoke mcp`: agent sessions are approved without the sheet (`host/agent.rs`).
+    pub mcp_smoke: bool,
     /// `--smoke overlay` (`host/overlay.rs`).
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
@@ -518,6 +521,10 @@ pub struct Host {
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     pub ax_passed: Option<usize>,
+    /// Agent sessions over MCP (`host/agent.rs`).
+    agents: agent::Agents,
+    /// `--smoke mcp` passed, with its step count.
+    pub mcp_passed: Option<usize>,
     /// `--smoke overlay` passed.
     pub overlay_passed: bool,
     overlay_timer: slint::Timer,
@@ -702,6 +709,8 @@ impl Host {
             ax: ax::WebAx::default(),
             video_passed: None,
             ax_passed: None,
+            agents: agent::Agents::default(),
+            mcp_passed: None,
             overlay_passed: false,
             overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
@@ -1002,6 +1011,10 @@ impl Host {
                 }
             }
             Call::SetVisible { tab, visible } => {
+                // An agent session's page is never shown, yet must lay out, keep its
+                // accessibility tree and paint for screenshots: visible to CEF, in no window
+                // (`host/agent.rs`).
+                let visible = visible || self.agent_drives(tab);
                 if let Some(view) = self.tab_view(tab) {
                     view.set_visible(visible);
                 }
@@ -1276,6 +1289,7 @@ impl Host {
             }
         }
         self.media_pump();
+        self.agent_check();
         self.enter_focused();
         let Some(window) = self.w.window.upgrade() else {
             return;
@@ -1515,6 +1529,7 @@ impl Host {
             self.ax_smoke_step(crate::ax_smoke::Input::Title(title));
         }
         self.parity_web(&event);
+        self.agent_web(tab, &event);
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         if self.checks.video_smoke.is_some() {
@@ -2179,6 +2194,8 @@ impl Host {
     /// Orderly shutdown: the final save, then the store thread finishes and
     /// closes the database. `ui` was read before the window went away.
     pub fn shutdown(&mut self, ui: UiState) {
+        // agent sessions end with the browser, their Spaces closed before the last save
+        self.agents_quit();
         self.media_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, ui);

@@ -112,6 +112,66 @@ pub enum AgentCall {
 }
 
 impl AgentCall {
+    /// The tool's name, as `tools/list` gives it.
+    pub fn tool(&self) -> &'static str {
+        match self {
+            AgentCall::StartSession { .. } => "start_session",
+            AgentCall::StopSession { .. } => "stop_session",
+            AgentCall::Navigate { .. } => "navigate",
+            AgentCall::ReadPage { .. } => "read_page",
+            AgentCall::Click { .. } => "click",
+            AgentCall::Type { .. } => "type",
+            AgentCall::PressKey { .. } => "press_key",
+            AgentCall::Screenshot { .. } => "screenshot",
+            AgentCall::ListTabs { .. } => "list_tabs",
+            AgentCall::OpenTab { .. } => "open_tab",
+            AgentCall::CloseTab { .. } => "close_tab",
+            AgentCall::WaitFor { .. } => "wait_for",
+            AgentCall::Evaluate { .. } => "evaluate",
+            AgentCall::FillSecret { .. } => "fill_secret",
+        }
+    }
+
+    /// The session handle the call presents; `None` only for `start_session`.
+    pub fn session(&self) -> Option<&SessionId> {
+        match self {
+            AgentCall::StartSession { .. } => None,
+            AgentCall::StopSession { session }
+            | AgentCall::Navigate { session, .. }
+            | AgentCall::ReadPage { session, .. }
+            | AgentCall::Click { session, .. }
+            | AgentCall::Type { session, .. }
+            | AgentCall::PressKey { session, .. }
+            | AgentCall::Screenshot { session, .. }
+            | AgentCall::ListTabs { session }
+            | AgentCall::OpenTab { session, .. }
+            | AgentCall::CloseTab { session, .. }
+            | AgentCall::WaitFor { session, .. }
+            | AgentCall::Evaluate { session, .. }
+            | AgentCall::FillSecret { session, .. } => Some(session),
+        }
+    }
+
+    /// The tab the call acts on, if it names one.
+    pub fn tab(&self) -> Option<&TabId> {
+        match self {
+            AgentCall::Navigate { tab, .. }
+            | AgentCall::ReadPage { tab, .. }
+            | AgentCall::Click { tab, .. }
+            | AgentCall::Type { tab, .. }
+            | AgentCall::PressKey { tab, .. }
+            | AgentCall::Screenshot { tab, .. }
+            | AgentCall::CloseTab { tab, .. }
+            | AgentCall::WaitFor { tab, .. }
+            | AgentCall::Evaluate { tab, .. }
+            | AgentCall::FillSecret { tab, .. } => Some(tab),
+            AgentCall::StartSession { .. }
+            | AgentCall::StopSession { .. }
+            | AgentCall::ListTabs { .. }
+            | AgentCall::OpenTab { .. } => None,
+        }
+    }
+
     /// Validates `args` against the tool table, then builds the call with the row's constructor.
     /// The error is the text for an `InvalidParams` reply; an unknown tool name is the caller's
     /// to report first.

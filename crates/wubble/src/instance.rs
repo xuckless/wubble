@@ -15,9 +15,27 @@ use std::path::{Path, PathBuf};
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, Listener, ListenerOptions, Stream};
 
-/// The socket's file in the profile.
-#[cfg(not(windows))]
-pub const SOCKET_FILE: &str = "instance.sock";
+/// The profile's sockets: this one, and the MCP server's (`mcp.rs`), a second socket because
+/// this one takes unauthenticated "open this URL" lines from anyone who can reach it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Socket {
+    Instance,
+    Mcp,
+}
+
+impl Socket {
+    /// Its file in the profile, and the stem of its hashed name elsewhere.
+    fn names(self) -> (&'static str, &'static str) {
+        match self {
+            Socket::Instance => ("instance.sock", "wubble"),
+            Socket::Mcp => ("mcp.sock", "wubble-mcp"),
+        }
+    }
+}
+
+/// The instance socket's file in the profile.
+#[cfg(all(test, not(windows)))]
+const SOCKET_FILE: &str = "instance.sock";
 /// The longest message read; anything longer is dropped.
 pub const MAX_MESSAGE: usize = 8 * 1024;
 /// The longest socket path used as is. `sockaddr_un.sun_path` holds 108 bytes on Linux and 104
@@ -64,31 +82,43 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
     }
 }
 
-/// Where the socket of `profile` lives: in it when the path is short enough, else a name
-/// hashed from it in `runtime` (`$XDG_RUNTIME_DIR`, else the temp directory). On Windows a
-/// named pipe ([`pipe_path`]): interprocess takes only `\\.\pipe\` paths there.
-#[cfg(windows)]
-pub fn socket_path(profile: &Path, _runtime: &Path) -> PathBuf {
-    pipe_path(profile)
+/// Where the instance socket of `profile` lives ([`path_of`]).
+pub fn socket_path(profile: &Path, runtime: &Path) -> PathBuf {
+    path_of(Socket::Instance, profile, runtime)
 }
 
-/// The named pipe of `profile`, named by a hash of its path.
+/// Where `socket` of `profile` lives: in it when the path is short enough, else a name hashed
+/// from it in `runtime` (`$XDG_RUNTIME_DIR`, else the temp directory). On Windows a named pipe
+/// ([`pipe_of`]): interprocess takes only `\\.\pipe\` paths there.
+#[cfg(windows)]
+pub fn path_of(socket: Socket, profile: &Path, _runtime: &Path) -> PathBuf {
+    pipe_of(socket, profile)
+}
+
+/// The instance's named pipe of `profile`, named by a hash of its path.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn pipe_path(profile: &Path) -> PathBuf {
+    pipe_of(Socket::Instance, profile)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn pipe_of(socket: Socket, profile: &Path) -> PathBuf {
     PathBuf::from(format!(
-        r"\\.\pipe\wubble-{:016x}",
+        r"\\.\pipe\{}-{:016x}",
+        socket.names().1,
         fnv1a(profile.as_os_str().as_encoded_bytes())
     ))
 }
 
 #[cfg(not(windows))]
-pub fn socket_path(profile: &Path, runtime: &Path) -> PathBuf {
-    let inside = profile.join(SOCKET_FILE);
+pub fn path_of(socket: Socket, profile: &Path, runtime: &Path) -> PathBuf {
+    let (file, stem) = socket.names();
+    let inside = profile.join(file);
     if inside.as_os_str().len() <= MAX_SOCKET_PATH {
         return inside;
     }
     runtime.join(format!(
-        "wubble-{:016x}.sock",
+        "{stem}-{:016x}.sock",
         fnv1a(profile.as_os_str().as_encoded_bytes())
     ))
 }
@@ -163,7 +193,7 @@ fn taken(e: &io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn remove_stale(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_stale(path: &Path) -> io::Result<()> {
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
@@ -172,7 +202,7 @@ fn remove_stale(path: &Path) -> io::Result<()> {
 
 /// A named pipe leaves no file behind.
 #[cfg(not(unix))]
-fn remove_stale(_path: &Path) -> io::Result<()> {
+pub(crate) fn remove_stale(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -240,6 +270,8 @@ mod tests {
         assert!(s.starts_with(r"\\.\pipe\wubble-"), "{s}");
         assert_eq!(s.len(), r"\\.\pipe\wubble-".len() + 16);
         assert_ne!(a, pipe_path(Path::new(r"C:\other")));
+        let mcp = pipe_of(Socket::Mcp, Path::new(r"C:\Users\u\AppData\Local\wubble"));
+        assert!(mcp.to_str().unwrap().starts_with(r"\\.\pipe\wubble-mcp-"));
         #[cfg(windows)]
         assert_eq!(
             socket_path(Path::new(r"C:\p"), &runtime_dir()),
@@ -260,6 +292,12 @@ mod tests {
         assert_eq!(hashed, socket_path(&long, runtime), "stable");
         let other = socket_path(&long.join("x"), runtime);
         assert_ne!(hashed, other);
+        // the MCP socket beside it, never the same name
+        assert_eq!(path_of(Socket::Mcp, short, runtime), short.join("mcp.sock"));
+        let mcp = path_of(Socket::Mcp, &long, runtime);
+        assert_eq!(mcp.parent(), Some(runtime));
+        assert!(mcp.as_os_str().len() <= MAX_SOCKET_PATH);
+        assert_ne!(mcp, hashed);
     }
 
     #[test]

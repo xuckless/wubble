@@ -80,6 +80,10 @@ wubble-release.workspace = true
 # Single instance: a local socket in the profile (Unix domain socket, Windows named pipe);
 # 0BSD OR Apache-2.0.
 interprocess = "2.2"
+# Agent sessions over MCP (`mcp.rs`, `host/agent.rs`): the protocol, and the session token's
+# randomness from the OS (rand 0.8, as wubble-vault; MIT OR Apache-2.0).
+wubble-mcp.workspace = true
+rand = "0.8"
 
 # CEF's pump requests through the main dispatch queue (`ui_loop.rs`); already in Cargo.lock
 # through winit's AppKit backend (Zlib OR Apache-2.0 OR MIT).

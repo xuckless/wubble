@@ -93,7 +93,22 @@ fn view_of(index: usize, item: &AxItem, pane_x: f32) -> AxItemView {
     }
 }
 
+/// A page script that scrolls by `(dx, dy)` CSS px and answers with how far it went
+/// (`[dx, dy]`, clamped at the page's ends).
+pub(super) fn scroll_script(dx: f64, dy: f64) -> String {
+    format!(
+        "(()=>{{const x=scrollX,y=scrollY;\
+         scrollBy({{left:{dx},top:{dy},behavior:'instant'}});\
+         return [scrollX-x,scrollY-y]}})()"
+    )
+}
+
 impl Host {
+    /// `tab`'s mirrored tree, while one is kept (pages' accessibility on, or an agent's tab).
+    pub(super) fn ax_tree(&self, tab: TabId) -> Option<&PageTree> {
+        self.ax.trees.get(&tab)
+    }
+
     pub(super) fn set_web_ax(&mut self, setting: Calm) {
         self.ax.setting = setting;
         self.ax_follow();
@@ -110,12 +125,16 @@ impl Host {
             return;
         }
         self.ax.on = on;
-        self.ax.trees.clear();
         self.ax.waiting = None;
-        let views: Vec<_> = self.views.values().copied().collect();
-        for id in views {
+        // an agent session's tabs keep theirs (`host/agent.rs`)
+        let views: Vec<_> = self.views.iter().map(|(&t, &id)| (t, id)).collect();
+        for (tab, id) in views {
+            let wanted = on || self.agent_drives(tab);
+            if !wanted {
+                self.ax.trees.remove(&tab);
+            }
             if let Some(view) = self.engine.view(id) {
-                view.set_accessibility(on);
+                view.set_accessibility(wanted);
             }
         }
         self.after_change();
@@ -123,7 +142,7 @@ impl Host {
 
     /// A view opened: it builds its tree from the start while pages' accessibility is on.
     pub(super) fn ax_view_opened(&mut self, tab: TabId) {
-        if self.ax.on
+        if (self.ax.on || self.agent_drives(tab))
             && let Some(view) = self.tab_view(tab)
         {
             view.set_accessibility(true);
@@ -136,7 +155,7 @@ impl Host {
 
     /// A tree or location change of `tab`'s page; its window shows it again.
     pub(super) fn ax_event(&mut self, tab: TabId, json: &str, location: bool) {
-        if !self.ax.on {
+        if !self.ax.on && !self.agent_drives(tab) {
             return;
         }
         let Some(v) = AxValue::from_json(json) else {
@@ -149,7 +168,8 @@ impl Host {
             tree.apply(&value::parse_updates(&v));
         }
         let here = self.w.id;
-        if let Some(w) = self.model.window_of(tab)
+        if self.ax.on
+            && let Some(w) = self.model.window_of(tab)
             && self.enter(w)
             && let Some(window) = self.w.window.upgrade()
         {
@@ -200,11 +220,7 @@ impl Host {
         match wubble_ax::reach(item.bounds, viewport) {
             Reach::At { x, y } => self.ax_act(tab, x, y, name, text),
             Reach::ScrollBy { dx, dy } => {
-                let script = format!(
-                    "(()=>{{const x=scrollX,y=scrollY;\
-                     scrollBy({{left:{dx},top:{dy},behavior:'instant'}});\
-                     return [scrollX-x,scrollY-y]}})()"
-                );
+                let script = scroll_script(dx, dy);
                 let Some(id) = self.tab_view(tab).and_then(|v| v.eval(&script)) else {
                     return;
                 };

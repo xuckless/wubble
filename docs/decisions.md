@@ -245,6 +245,12 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Tab opener | A tab opened from a page returns to its opener when closed, by Chromium's rules (forgotten once the user selects another tab). | 2026-11-20 |
 | MCP server | Planned after the first release: wubble as an MCP server, sessions bound to a Space; plan in [research/mcp-server.md](research/mcp-server.md). | 2026-11-19 |
 | MCP build order | Basic version first (secrets as variables, strict containers, headless, full control incl. script), experimental and off by default; guardrails added where use shows the need. | 2026-11-19 |
+| MCP transport | A second private socket in the profile (`mcp.sock`, 0600; a named pipe on Windows), never TCP, only while `agent.mcp_enabled` is on; `wubble mcp` relays stdio to it and starts nothing; with no browser it answers each request with an MCP error. | 2026-11-20 |
+| MCP session handle | The handle `start_session` returns is the session's 256-bit token, valid only on the connection that started it; a connection that closes ends its sessions. | 2026-11-20 |
+| MCP session Space | An approved session gets a new Space and a new container (never-sleep), deleted with both when the session stops, its client goes or the browser quits; windowed switches the window to it, headless leaves it unshown. | 2026-11-20 |
+| Agent views | An agent session's pages stay visible to CEF though no window shows them (visible-but-unmapped): a hidden view lays out nothing, so it has no accessibility tree and no screenshot. | 2026-11-20 |
+| MCP approval for now | Until the approval sheet (mcp4) exists, a session outside `--smoke mcp` is refused with that reason; the smoke approves through `approve_for_smoke`, with no secrets. | 2026-11-20 |
+| Agent refs and waits | `read_page` refs are `e<doc>.<node>` from the accessibility mirror, stale after a navigation; `navigate` returns once the load ended and the new document's tree arrived; every waiting call has a deadline (30 s, or `wait_for`'s `timeout_ms`). | 2026-11-20 |
 
 ## Process
 
