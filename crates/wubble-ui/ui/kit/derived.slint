@@ -273,6 +273,10 @@ export global Shell {
     out property <length> settings-bottom: 96px;
     out property <length> settings-pad-min: 16px;
     out property <length> settings-pad-max: 48px;
+    // The new-tab page: the search capsule's centre, as a fraction of the page's height. Owner
+    // override of the web design (2026-11-19; start.css has the column's top at 56%, the capsule
+    // near 70%). The bubble rises with it (`wubble_core::start::living::NEW_TAB_AT_Y`).
+    out property <float> start-search-at: 0.6;
     out property <length> settings-side: SettingsCss.st-grid--grid-template-columns-1;
     out property <length> settings-gap: SettingsCss.st-grid--gap-column;
     out property <length> settings-title: Role.st-title.size;

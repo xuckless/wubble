@@ -236,9 +236,9 @@ impl StartHost {
         }
         if let Some(tab) = shown {
             let nonce = self.nonce;
-            self.lives.entry(tab).or_insert_with(|| {
-                Living::new(Options::start_page(), Rng::new(seed_of(tab, nonce)))
-            });
+            self.lives
+                .entry(tab)
+                .or_insert_with(|| Living::new(Options::new_tab(), Rng::new(seed_of(tab, nonce))));
             self.event_for(tab, Event::Active(true));
             if matches!(self.wfield, WField::Missing) {
                 let (tx, rx) = mpsc::channel();

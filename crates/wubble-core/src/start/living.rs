@@ -37,7 +37,20 @@ impl Options {
             wobble: K::wobble,
         }
     }
+
+    /// The new-tab page's: the start page's, with the bubble higher. Owner override of the web
+    /// design (2026-11-19): the search capsule sits at 60% of the page, so the bubble goes up
+    /// with it (the web has it at .4, the capsule near 70%).
+    pub fn new_tab() -> Self {
+        Options {
+            at: (KS::at_x, NEW_TAB_AT_Y),
+            ..Self::start_page()
+        }
+    }
 }
+
+/// Where the new-tab page's bubble rests, as a fraction of the page's height (owner, 2026-11-19).
+pub const NEW_TAB_AT_Y: f64 = 0.31;
 
 /// Pointer events in page-local logical px; `t_ms` is the event's timestamp (for the fling's
 /// velocity), any monotonic ms clock the host has.

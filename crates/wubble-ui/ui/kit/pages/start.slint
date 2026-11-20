@@ -28,6 +28,7 @@ import { StartCss, BrowserCss } from "../gen/css.slint";
 import { StartGen } from "../gen/literals.slint";
 import { Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
+import { Shell } from "../derived.slint";
 import { GlassPanel } from "../material/glass.slint";
 import { PressableButton } from "../controls/button.slint";
 import { OverlapLayer } from "../motion/overlap.slint";
@@ -106,7 +107,7 @@ component StartTile inherits PressableButton {
 export component StartPage inherits Rectangle {
     in property <[StartSite]> sites;
     // the page's own copy (pages/start.tsx)
-    in property <string> heading: "Where to next?";
+    in property <string> heading: "Let's Wubble";
     in property <string> placeholder: "Search or type an address";
     // the focus-address shortcut as the shell's key table writes it
     in property <string> shortcut;
@@ -184,7 +185,9 @@ export component StartPage inherits Rectangle {
 
     front := VerticalLayout {
         x: root.pad-x;
-        y: root.height * (root.compact ? StartCss.max-height-560px-wb-start-front--top : StartCss.wb-start-front--top);
+        // the capsule's centre at Shell.start-search-at of the page (owner override); the compact
+        // page keeps the design's top
+        y: root.compact ? root.height * StartCss.max-height-560px-wb-start-front--top : root.height * Shell.start-search-at - StartCss.wb-start-search--height / 2 - root.gap - h1.preferred-height;
         width: root.inner;
         height: self.preferred-height;
         spacing: root.gap;
