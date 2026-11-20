@@ -2,7 +2,10 @@
 //! Chromium loads. Chromium owns their running state; it does not keep extensions loaded from
 //! the command line between runs (`installed_loader.cc`, "Skip extensions that were loaded from
 //! the command-line"), so this list is all there is. Every change applies at the next start:
-//! the list becomes `--load-extension` (`wubble_engine::app`), read only when CEF starts.
+//! the list becomes `--load-extension` (`wubble_engine::app`), read only when CEF starts. So
+//! nothing is deleted while running: the running Chromium keeps reading a removed or replaced
+//! copy's files (its popup, its service worker restarting); [`unused_copies`] are deleted at
+//! the next start, before CEF loads.
 //!
 //! Ported:
 //! - Extension ids ([`id_from_key`], [`id_from_path`]): Chromium
@@ -442,7 +445,8 @@ pub fn zip_entry(name: &str) -> Result<Entry, ExtError> {
 pub enum Source {
     /// The user's own directory, loaded in place; never deleted by wubble.
     Unpacked { dir: PathBuf },
-    /// A .crx file the user picked (`file`), unpacked by wubble into `dir`, which wubble owns.
+    /// A .crx file the user picked (`file`, kept for the UI only), unpacked by wubble into
+    /// `dir`, which wubble owns.
     Crx { file: PathBuf, dir: PathBuf },
 }
 
@@ -478,7 +482,7 @@ impl Extension {
         }
     }
 
-    /// The directory wubble owns, deleted with the entry.
+    /// The directory wubble owns: deleted at the next start once nothing names it.
     fn owned_dir(&self) -> Option<&Path> {
         match &self.source {
             Source::Unpacked { .. } => None,
@@ -573,13 +577,12 @@ pub enum Event {
     Remove(ExtensionId),
 }
 
-/// What the edge does after a change. Every change takes effect at the next start.
+/// What the edge does after a change. Every change takes effect at the next start, and a copy
+/// the list stops naming is deleted then ([`unused_copies`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// Store the list (`settings::EXTENSIONS_INSTALLED`).
     Save(Installed),
-    /// A directory wubble unpacked that nothing uses now.
-    DeleteDir(PathBuf),
     /// The event was refused, the list is unchanged.
     Refused(ExtError),
 }
@@ -592,31 +595,23 @@ fn loadable(dir: &Path) -> Result<(), ExtError> {
     }
 }
 
-/// The list after `event`, and what to do about it: one `Save` per change, then any
-/// `DeleteDir`; nothing for an event that changes nothing (an unknown id, enabling an enabled
-/// extension), `Refused` for an install Chromium could not load.
+/// The list after `event`, and what to do about it: one `Save` per change; nothing for an
+/// event that changes nothing (an unknown id, enabling an enabled extension), `Refused` for an
+/// install Chromium could not load.
 pub fn transition(list: Installed, event: Event) -> (Installed, Vec<Effect>) {
     let before = list.clone();
     let Installed(mut items) = list;
-    let mut deleted = None;
     let at = |items: &[Extension], id: &ExtensionId| items.iter().position(|e| &e.id == id);
     match event {
         Event::Install(mut ext) => {
-            let paths = match &ext.source {
-                Source::Unpacked { dir } => vec![dir],
-                Source::Crx { file, dir } => vec![file, dir],
-            };
-            if let Some(e) = paths.into_iter().find_map(|p| loadable(p).err()) {
+            // Only the directory reaches Chromium; a .crx file's own path is never loaded.
+            if let Err(e) = loadable(ext.dir()) {
                 return (before, vec![Effect::Refused(e)]);
             }
             match at(&items, &ext.id) {
                 Some(i) => {
                     ext.enabled = items[i].enabled;
-                    let old = std::mem::replace(&mut items[i], ext);
-                    deleted = old
-                        .owned_dir()
-                        .filter(|d| *d != items[i].dir())
-                        .map(Path::to_path_buf);
+                    items[i] = ext;
                 }
                 None => {
                     ext.enabled = true;
@@ -637,7 +632,7 @@ pub fn transition(list: Installed, event: Event) -> (Installed, Vec<Effect>) {
         }
         Event::Remove(id) => {
             if let Some(i) = at(&items, &id) {
-                deleted = items.remove(i).owned_dir().map(Path::to_path_buf);
+                items.remove(i);
             }
         }
     }
@@ -645,9 +640,19 @@ pub fn transition(list: Installed, event: Event) -> (Installed, Vec<Effect>) {
     if after == before {
         return (after, vec![]);
     }
-    let mut effects = vec![Effect::Save(after.clone())];
-    effects.extend(deleted.map(Effect::DeleteDir));
-    (after, effects)
+    (after.clone(), vec![Effect::Save(after)])
+}
+
+/// The copies in wubble's extensions directory (`found`, every `<id>/<version>` there) that
+/// `list` does not name: replaced, removed, refused or half-unpacked ones. The edge deletes them
+/// at start, before CEF loads, when no running Chromium can still be reading them.
+pub fn unused_copies(list: &Installed, found: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let named: std::collections::HashSet<&Path> =
+        list.0.iter().filter_map(Extension::owned_dir).collect();
+    found
+        .into_iter()
+        .filter(|d| !named.contains(d.as_path()))
+        .collect()
 }
 
 /// The directories Chromium loads: the enabled extensions', in id order.
@@ -659,10 +664,15 @@ pub fn load_paths(list: &Installed) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether the list differs from what this run loaded (`at_start`, [`load_paths`] when CEF
-/// started): the UI's "restart to apply".
-pub fn restart_needed(at_start: &[PathBuf], now: &Installed) -> bool {
-    load_paths(now) != at_start
+/// Whether the list differs from what this run loaded (`at_start`, the list when CEF started):
+/// the UI's "restart to apply". Every enabled entry counts, not only its directory: a new copy
+/// in the same directory (an unpacked extension edited and installed again) is only read at
+/// start too.
+pub fn restart_needed(at_start: &Installed, now: &Installed) -> bool {
+    let loaded = |list: &Installed| -> Vec<Extension> {
+        list.0.iter().filter(|e| e.enabled).cloned().collect()
+    };
+    loaded(at_start) != loaded(now)
 }
 
 #[cfg(test)]
@@ -867,24 +877,13 @@ mod tests {
         assert!(list.get(&a).unwrap().enabled);
         assert_eq!(fx, [saved(&list)]);
 
-        // A new crx version replaces the old copy, which goes.
+        // A new crx version replaces the old copy, which is left for the next start.
         let (list, fx) = transition(list, Event::Install(crx("b", "2")));
-        assert_eq!(
-            fx,
-            [
-                saved(&list),
-                Effect::DeleteDir(PathBuf::from("/p/extensions/b/1"))
-            ]
-        );
+        assert_eq!(fx, [saved(&list)]);
+        assert_eq!(list.get(&b).unwrap().dir(), Path::new("/p/extensions/b/2"));
         let (list, fx) = transition(list, Event::Remove(b.clone()));
         assert!(list.get(&b).is_none());
-        assert_eq!(
-            fx,
-            [
-                saved(&list),
-                Effect::DeleteDir(PathBuf::from("/p/extensions/b/2"))
-            ]
-        );
+        assert_eq!(fx, [saved(&list)]);
         let (list, fx) = transition(list, Event::Remove(a));
         assert_eq!(fx, [saved(&list)]);
         assert!(list.extensions().is_empty());
@@ -906,17 +905,46 @@ mod tests {
         let (list, fx) = transition(Installed::default(), Event::Install(comma));
         assert!(list.extensions().is_empty());
         assert_eq!(fx, [Effect::Refused(ExtError::UnusablePath("/a,b".into()))]);
+        // A .crx file's own path never reaches Chromium: a comma there is fine.
         let file = ext(
             "c",
             Source::Crx {
-                file: "/dl/x,y.crx".into(),
+                file: "/dl/uBlock, Lite.crx".into(),
                 dir: "/p/c".into(),
             },
         );
+        let (list, fx) = transition(list, Event::Install(file));
+        assert_eq!(fx, [saved(&list)]);
+        let dir = ext(
+            "d",
+            Source::Crx {
+                file: "/dl/d.crx".into(),
+                dir: "/p/d,1".into(),
+            },
+        );
         assert!(matches!(
-            transition(list, Event::Install(file)).1.as_slice(),
+            transition(list, Event::Install(dir)).1.as_slice(),
             [Effect::Refused(_)]
         ));
+    }
+
+    #[test]
+    fn copies_the_list_stops_naming_are_unused() {
+        let mut list = Installed::default();
+        for e in [unpacked("a"), crx("b", "1"), crx("c", "1")] {
+            list = transition(list, Event::Install(e)).0;
+        }
+        list = transition(list, Event::Install(crx("b", "2"))).0;
+        list = transition(list, Event::Remove(id_from_key(b"c"))).0;
+        // Disabled copies stay: enabling one needs its files.
+        list = transition(list, Event::Disable(id_from_key(b"b"))).0;
+        let found = ["b/1", "b/2", "c/1", "x/1.unpacking-7"]
+            .map(|d| PathBuf::from("/p/extensions").join(d));
+        assert_eq!(
+            unused_copies(&list, found),
+            ["b/1", "c/1", "x/1.unpacking-7"].map(|d| PathBuf::from("/p/extensions").join(d))
+        );
+        assert!(unused_copies(&list, []).is_empty());
     }
 
     #[test]
@@ -933,7 +961,8 @@ mod tests {
         want.sort();
         let all: Vec<PathBuf> = want.iter().map(|(_, d)| d.clone()).collect();
         assert_eq!(load_paths(&list), all);
-        assert!(!restart_needed(&all, &list));
+        let at_start = list.clone();
+        assert!(!restart_needed(&at_start, &list));
         let (list, _) = transition(list, Event::Disable(id_from_key(b"y")));
         let without: Vec<PathBuf> = all
             .iter()
@@ -941,9 +970,23 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(load_paths(&list), without);
-        assert!(restart_needed(&all, &list));
-        assert!(restart_needed(&[], &list));
-        assert!(!restart_needed(&[], &Installed::default()));
+        assert!(restart_needed(&at_start, &list));
+        assert!(restart_needed(&Installed::default(), &list));
+        assert!(!restart_needed(
+            &Installed::default(),
+            &Installed::default()
+        ));
+        // Disabling then enabling again is what was loaded.
+        let (list, _) = transition(list, Event::Enable(id_from_key(b"y")));
+        assert!(!restart_needed(&at_start, &list));
+        // The same directory installed again with a new manifest: the paths are the same,
+        // what Chromium read at start is not.
+        let mut edited = unpacked("x");
+        edited.version = "9".into();
+        edited.permissions.push("tabs".into());
+        let (list, _) = transition(list, Event::Install(edited));
+        assert_eq!(load_paths(&list), all);
+        assert!(restart_needed(&at_start, &list));
     }
 
     #[test]

@@ -50,11 +50,11 @@ pub fn read_unpacked(dir: &Path) -> Result<Extension, ExtError> {
 }
 
 /// The entries of the zip `data` with their bytes, through CEF's zip reader. Works before
-/// `cef::initialize`: the reader is plain minizip over a copy of the bytes.
+/// `cef::initialize` (the reader is plain minizip over a copy of the bytes) once the framework
+/// is loaded, which on macOS nothing has done yet.
 fn unzip(data: &[u8]) -> Result<Vec<(Entry, Vec<u8>)>, ExtError> {
     let bad = |what: &str| ExtError::Crx(format!("the archive {what}"));
-    // The API version pin welding sets before `initialize`; only the first call counts.
-    let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+    crate::app::prepare_cef_api().map_err(|e| ExtError::Io(e.to_string()))?;
     // CEF copies the bytes (`CefBytesReader::SetData`); the pointer is only read.
     let mut copy = data.to_vec();
     let mut stream = cef::stream_reader_create_for_data(copy.as_mut_ptr(), copy.len())
@@ -123,9 +123,11 @@ fn write_tree(to: &Path, files: &[(Entry, Vec<u8>)], manifest: &str) -> Result<(
     std::fs::write(&file, manifest).map_err(io(&file))
 }
 
-/// Unpacks the .crx `file` into `root/<id>/<version>` with the .crx's key in the manifest,
-/// through a temporary sibling renamed into place, so a failed unpack leaves nothing
-/// half-written. An existing copy of the same version is replaced.
+/// Unpacks the .crx `file` into a new `root/<id>/<version>` with the .crx's key in the
+/// manifest, through a temporary sibling renamed into place, so a failed unpack leaves nothing
+/// half-written. An existing copy is never touched, since the running Chromium may be reading
+/// it: the same version again goes to `<version>-2`, `-3`, ... The list's `unused_copies` are
+/// deleted at the next start.
 pub fn unpack_crx(file: &Path, root: &Path) -> Result<Extension, ExtError> {
     let file = as_chromium_sees(file)?;
     let bytes = std::fs::read(&file).map_err(io(&file))?;
@@ -139,15 +141,15 @@ pub fn unpack_crx(file: &Path, root: &Path) -> Result<Extension, ExtError> {
     let version = parse_manifest(&manifest_text)?.version;
     let keyed = manifest_with_key(&manifest_text, crx.public_key)?;
     let id_dir = root.join(crx.id.as_str());
-    let dir = id_dir.join(&version);
+    let dir = std::iter::once(version.clone())
+        .chain((2..).map(|n| format!("{version}-{n}")))
+        .map(|name| id_dir.join(name))
+        .find(|d| !d.exists())
+        .expect("an unused name");
     let tmp = id_dir.join(format!("{version}.unpacking-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
-    let written = write_tree(&tmp, &files, &keyed).and_then(|()| {
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir).map_err(io(&dir))?;
-        }
-        std::fs::rename(&tmp, &dir).map_err(io(&dir))
-    });
+    let written = write_tree(&tmp, &files, &keyed)
+        .and_then(|()| std::fs::rename(&tmp, &dir).map_err(io(&dir)));
     if let Err(e) = written {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(e);
@@ -160,6 +162,22 @@ pub fn unpack_crx(file: &Path, root: &Path) -> Result<Extension, ExtError> {
         return Err(ExtError::Crx("the unpacked copy has another id".into()));
     }
     Ok(Extension::new(id, manifest, Source::Crx { file, dir }))
+}
+
+/// Every copy under `root` (`<id>/<version>`, as Chromium sees it, so it compares with the
+/// list's directories), for `wubble_core::extensions::unused_copies`. None when `root` is not
+/// there.
+pub fn copies(root: &Path) -> Vec<PathBuf> {
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| as_chromium_sees(&e.path()).ok())
+            .collect()
+    };
+    children(root).iter().flat_map(|id| children(id)).collect()
 }
 
 #[cfg(test)]
@@ -177,7 +195,10 @@ mod tests {
         dir
     }
 
+    // A test binary on macOS has no app bundle to load the framework from (ci.yml: "macOS tests
+    // do not load the framework"); `--smoke extensions` covers it there.
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "needs the CEF framework")]
     fn a_crx_unpacks_with_its_key_and_keeps_its_id() {
         let dir = scratch("crx");
         let zip = zip_stored(&[
@@ -189,23 +210,30 @@ mod tests {
         std::fs::write(&file, crx3_unsigned(b"key bytes", &zip)).unwrap();
         let root = dir.join("extensions");
         let first = unpack_crx(&file, &root);
-        // Again: the same version is replaced in place.
+        // Again: a new copy beside the first, which a running Chromium may still be reading.
         let again = unpack_crx(&file, &root);
         let ext = first.unwrap();
         let read_back = std::fs::read_to_string(ext.dir().join("js/c.js"));
-        let leftovers = std::fs::read_dir(root.join(ext.id.as_str()))
+        let first_kept = ext.dir().join(MANIFEST).is_file();
+        let mut copies: Vec<_> = std::fs::read_dir(root.join(ext.id.as_str()))
             .unwrap()
-            .count();
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        copies.sort();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(ext.id, id_from_key(b"key bytes"));
         assert_eq!((ext.name.as_str(), ext.version.as_str()), ("T", "2.1"));
         assert!(ext.dir().ends_with(format!("{}/2.1", ext.id)));
         assert_eq!(read_back.unwrap(), "// c");
-        assert_eq!(again.unwrap(), ext);
-        assert_eq!(leftovers, 1);
+        let again = again.unwrap();
+        assert_eq!((&again.id, &again.version), (&ext.id, &ext.version));
+        assert!(again.dir().ends_with(format!("{}/2.1-2", ext.id)));
+        assert!(first_kept);
+        assert_eq!(copies, ["2.1", "2.1-2"]);
     }
 
     #[test]
+    #[cfg_attr(target_os = "macos", ignore = "needs the CEF framework")]
     fn a_crx_with_an_escaping_entry_writes_nothing() {
         let dir = scratch("slip");
         let zip = zip_stored(&[

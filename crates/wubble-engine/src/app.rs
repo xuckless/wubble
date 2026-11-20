@@ -290,15 +290,12 @@ impl EngineConfig {
     /// Config for the running executable's directory and the per-user cache; the sandbox
     /// is off only when this process's command line has `--no-sandbox`.
     pub fn from_current_exe() -> Result<Self, EngineError> {
-        let exe = std::env::current_exe().map_err(|e| EngineError::ExeDir(e.to_string()))?;
-        let exe_dir = exe
-            .parent()
-            .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))?;
+        let exe_dir = current_exe_dir()?;
         let cache_dir = user_data_dir()
             .map(|dir| dir.join(CEF_CACHE))
             .ok_or(EngineError::CacheDir)?;
         Ok(Self {
-            exe_dir: exe_dir.to_path_buf(),
+            exe_dir,
             cache_dir,
             pump_scheduler: None,
             clipboard_bridge: false,
@@ -380,6 +377,21 @@ pub const CEF_CACHE: &str = "cef";
 /// [`CEF_CACHE`], CEF's cache. `None` when the environment names none.
 pub fn user_data_dir() -> Option<PathBuf> {
     Current::user_data_dir(&|key| std::env::var_os(key))
+}
+
+/// The running executable's directory.
+fn current_exe_dir() -> Result<PathBuf, EngineError> {
+    let exe = std::env::current_exe().map_err(|e| EngineError::ExeDir(e.to_string()))?;
+    exe.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))
+}
+
+/// Makes CEF's plain C functions (its zip reader) callable before [`Engine::start`]: on macOS
+/// the framework must be loaded first, from where the running executable's CEF is.
+pub(crate) fn prepare_cef_api() -> Result<(), EngineError> {
+    CefRuntime::prepare_api(&Current::framework_dir(&current_exe_dir()?))
+        .map_err(|e| EngineError::Init(e.to_string()))
 }
 
 /// What differs per OS. One impl per OS, chosen by cfg into [`Current`].

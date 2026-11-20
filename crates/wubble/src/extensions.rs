@@ -1,19 +1,20 @@
 //! The edge of `wubble_core::extensions`: installs what the user picked (a directory or a
-//! .crx file, through `wubble_engine::extensions`) and runs the list's effects, `Save` into the
-//! store and `DeleteDir` on disk. Every change applies at the next start, when the list becomes
-//! CEF's `--load-extension` (`persist::Settings::extensions`); the UI says "restart to apply"
-//! from `wubble_core::extensions::restart_needed`.
+//! .crx file, through `wubble_engine::extensions`), runs the list's `Save` into the store, and
+//! at start deletes the copies the list no longer names. Every change applies at the next start,
+//! when the list becomes CEF's `--load-extension` (`persist::Settings::extensions`); the UI says
+//! "restart to apply" from `wubble_core::extensions::restart_needed`.
 
 use std::path::Path;
 
-use wubble_core::extensions::{Effect, Event, ExtError, Installed, transition};
+use wubble_core::extensions::{Effect, Event, ExtError, Installed, transition, unused_copies};
 use wubble_core::settings::EXTENSIONS_INSTALLED;
 use wubble_store::{InstalledExtensions, text_of};
 
 use crate::persist::StoreClient;
 
 /// The list after installing `picked`, a .crx file (unpacked under `root`, wubble's copies) or
-/// an extension's directory (loaded in place), stored through `store`.
+/// an extension's directory (loaded in place), stored through `store`. A copy unpacked for a
+/// refused install is left to [`sweep`].
 pub fn install(
     store: &StoreClient,
     list: Installed,
@@ -39,14 +40,23 @@ pub fn change(store: &StoreClient, list: Installed, event: Event) -> Result<Inst
                     return Err(ExtError::Io("the store refused the extension list".into()));
                 }
             }
-            Effect::DeleteDir(dir) => match std::fs::remove_dir_all(&dir) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                // The list no longer names it; a leftover directory is only disk space.
-                Err(e) => eprintln!("wubble: cannot remove {}: {e}", dir.display()),
-            },
             Effect::Refused(e) => return Err(e),
         }
     }
     Ok(list)
+}
+
+/// Deletes the copies under `root` that `list` does not name. Only before CEF starts: until
+/// then no Chromium is reading them.
+pub fn sweep(root: &Path, list: &Installed) {
+    for dir in unused_copies(list, wubble_engine::extensions::copies(root)) {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            // The list no longer names it; a leftover directory is only disk space.
+            eprintln!("wubble: cannot remove {}: {e}", dir.display());
+        }
+        // The id's directory too once it is empty; not empty is fine.
+        if let Some(id_dir) = dir.parent() {
+            let _ = std::fs::remove_dir(id_dir);
+        }
+    }
 }

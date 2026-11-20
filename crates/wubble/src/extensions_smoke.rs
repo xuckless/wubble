@@ -5,7 +5,8 @@
 //! on `http://127.0.0.1/*` at document start, a service worker answering its message) is
 //! installed twice through the browser's own path (`extensions::install`, the store, the
 //! settings read at start): once as its directory (a path-made id), once as a .crx built from the
-//! same files (a key-made id, unpacked by wubble). A loopback page then must carry each id's mark
+//! same files (a key-made id, unpacked by wubble; installed twice, so the start's sweep must
+//! leave only the second copy). A loopback page then must carry each id's mark
 //! with its worker's answer `worker:wubble`, the ids must be the ones wubble-core computes, and
 //! at least one renderer must be an extension process.
 //!
@@ -19,7 +20,9 @@ use std::error::Error;
 use std::path::Path;
 use std::time::Duration;
 
-use wubble_core::extensions::{Installed, crx3_unsigned, id_from_key, id_from_path, zip_stored};
+use wubble_core::extensions::{
+    Installed, Source, crx3_unsigned, id_from_key, id_from_path, zip_stored,
+};
 use wubble_core::space::ContainerId;
 use wubble_engine::app::{Engine, EngineConfig, EngineError, ViewId};
 use wubble_engine::page::PageEvent;
@@ -75,6 +78,7 @@ fn install(
     let root = profile.extensions_dir();
     let list = crate::extensions::install(store, list, &src, &root)?;
     let list = crate::extensions::install(store, list, &crx, &root)?;
+    let list = crate::extensions::install(store, list, &crx, &root)?;
     let ids = [
         id_from_path(&src.canonicalize()?).to_string(),
         id_from_key(CRX_KEY).to_string(),
@@ -119,6 +123,22 @@ pub fn run(
     let stored = stored?;
     if stored != list {
         return Err(format!("the store kept another list: {}", stored.to_json()).into());
+    }
+    if installed {
+        // Two copies of the .crx on disk, the list names the second: the sweep the browser
+        // runs at start leaves only it.
+        let root = profile.extensions_dir();
+        crate::extensions::sweep(&root, &stored);
+        let left = wubble_engine::extensions::copies(&root);
+        let named: Vec<_> = stored
+            .extensions()
+            .iter()
+            .filter(|e| matches!(e.source, Source::Crx { .. }))
+            .map(|e| e.dir().to_path_buf())
+            .collect();
+        if left != named || named.len() != 1 {
+            return Err(format!("the sweep left {left:?}, the list names {named:?}").into());
+        }
     }
     let paths = wubble_core::extensions::load_paths(&stored);
     println!(

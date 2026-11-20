@@ -39,16 +39,20 @@ Tags: **[V]** read in the cited source or seen in a run; **[I]** inferred, to be
   extension system's ~60 MiB PSS never start); a non-empty one gives `load-extension`,
   `disable-component-extensions-with-background-pages` and `disable-default-apps` (section 3).
 - **The list** is `wubble_core::extensions::Installed` (id, name, version, enabled, source, granted permissions) in the
-  setting `extensions.installed`; install/enable/disable/remove is one pure `transition` returning `Save`, `DeleteDir`
-  and `Refused` effects, run by `crates/wubble/src/extensions.rs`. Chromium does not keep command-line extensions
+  setting `extensions.installed`; install/enable/disable/remove is one pure `transition` returning `Save` and
+  `Refused` effects, run by `crates/wubble/src/extensions.rs`. Chromium does not keep command-line extensions
   between runs (`installed_loader.cc:365-367`) [V], so the list is the one owner. Every change applies at the next
-  start (`restart_needed` is derived from the start-time paths).
+  start (`restart_needed` compares the enabled entries with the list at start, so a new copy in the same directory
+  counts). Nothing is deleted while running, since the running Chromium keeps reading a removed or replaced copy
+  (popup, options, a service worker restarting): at start, before CEF, `sweep` deletes the copies the list no
+  longer names (`unused_copies`), refused and half-unpacked ones included.
 - **Ids** follow Chromium exactly: with a manifest `key`, SHA-256 of the decoded key; without, SHA-256 of the
   directory's absolute, symlink-free path (`id_util.cc`, `extension.cc` `ComputeExtensionID`; ported with the upstream
   test vectors). The smoke checks that Chromium gives both test copies the ids wubble-core computes [V].
 - **.crx**: `parse_crx` reads the CRX3 header (port of electron-chrome-web-store `parseCrx`, CRX2 dropped), the zip is
-  unpacked with CEF's own `CefZipReader` (works before `cef::initialize`, unit-tested) into
-  `<profile>/extensions/<id>/<version>`, refusing entries that would escape (zip slip), and `"key"` is written into the
+  unpacked with CEF's own `CefZipReader` (works before `cef::initialize` once the framework is loaded, which on macOS
+  welding's `CefRuntime::prepare_api` does first; unit-tested on Linux and Windows) into a new
+  `<profile>/extensions/<id>/<version>` (`<version>-2`, ... when that copy exists), refusing entries that would escape (zip slip), and `"key"` is written into the
   manifest so the copy keeps the .crx's id. As in electron-chrome-web-store, the signature is not verified: the declared
   id must match a key in the file. RSA verification can go into `parse_crx` later.
 - **Per container.** Every Chrome profile reads the global command line in `ExtensionService::Init` [V source], and each

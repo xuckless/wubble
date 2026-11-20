@@ -1542,6 +1542,15 @@ fn run(
             "0".into(),
         );
     }
+    let installed = loaded.settings.extensions();
+    // Before CEF starts, when no Chromium can still be reading a copy the list dropped.
+    extensions::sweep(
+        &Profile {
+            dir: profile.into(),
+        }
+        .extensions_dir(),
+        &installed,
+    );
     let mut engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
         content_filter: filter
@@ -1551,7 +1560,7 @@ fn run(
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
-        extensions: wubble_core::extensions::load_paths(&loaded.settings.extensions()),
+        extensions: wubble_core::extensions::load_paths(&installed),
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);
