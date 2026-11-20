@@ -107,6 +107,28 @@ pub const AMBIENCE_LEVEL: f32 = 1.0;
 /// else needs `P`: a still page costs nothing.
 pub const AMBIENCE_HZ: f64 = 8.0;
 
+/// wubble: the glass's material over pages, handed in by the host (`wubble_core::glass`): over a
+/// page the glass is the design's CSS tier (core/wubble.css), and no glass gets brighter than
+/// the contrast ceiling. The default is no CSS filter and no ceiling (the scene's own tests).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Material {
+    /// Thin, regular, thick: `[saturate, brightness, fill r, g, b (0-1), fill alpha]`.
+    pub css: [[f32; 6]; 3],
+    /// The brightest relative luminance the glass may have, and where easing toward it starts.
+    pub ceiling: f32,
+    pub knee: f32,
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Material {
+            css: [[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]; 3],
+            ceiling: 1.0,
+            knee: 1.0,
+        }
+    }
+}
+
 /// The ambience's update period, [`AMBIENCE_HZ`].
 pub fn ambience_every() -> Duration {
     Duration::from_secs_f64(1.0 / AMBIENCE_HZ)
@@ -194,11 +216,13 @@ pub(super) struct GlassU {
     u_material: f32,
     u_amb: f32,
     u_amb_level: f32,
-    _p: f32,
+    u_page: f32,
     u_beam: [f32; 4],
     u_voice: [f32; 4],
     u_wave: [[f32; 4]; 4],
-} // 208 bytes
+    u_css: [f32; 4],
+    u_css_f: [f32; 4],
+} // 240 bytes
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -215,7 +239,7 @@ const _: () = {
     assert!(std::mem::size_of::<FluidU>() == 64);
     assert!(std::mem::size_of::<CompositeU>() == 160);
     assert!(std::mem::size_of::<BlurU>() == 16);
-    assert!(std::mem::size_of::<GlassU>() == 208);
+    assert!(std::mem::size_of::<GlassU>() == 240);
 };
 
 // @source slint-render-targets
@@ -562,6 +586,8 @@ pub struct Renderer {
     pages_built: u64,
     /// How much of `P` the glass under the page mixes in ([`AMBIENCE_STRENGTH`]; 0 is off).
     ambience: f32,
+    /// The glass over pages and its contrast ceiling ([`Material`]).
+    material: Material,
     /// Each overlay layer's image (straight alpha), and the premultiplied target it is drawn in.
     over: [Option<Target>; 3],
     scratch: Option<Target>,
@@ -667,6 +693,7 @@ impl Renderer {
             page_built: None,
             pages_built: 0,
             ambience: AMBIENCE_STRENGTH,
+            material: Material::default(),
             over: [None, None, None],
             scratch: None,
             over_new: [false; 3],
@@ -690,6 +717,11 @@ impl Renderer {
     /// The ambience's strength: [`AMBIENCE_STRENGTH`], 0 for none (the overlay smoke's control).
     pub fn set_ambience(&mut self, strength: f32) {
         self.ambience = strength.max(0.0);
+    }
+
+    /// The glass's material over pages and its contrast ceiling ([`Material`]).
+    pub fn set_material(&mut self, material: Material) {
+        self.material = material;
     }
 
     /// The panes under the glass, left to right: each card and its latest frame. A changed
@@ -1062,6 +1094,9 @@ impl Renderer {
             };
             let ambient = page.filter(|_| s.layer.is_none());
             let mut gu = self.glass_u(s);
+            if over_page && page.is_some() {
+                gu.u_page = 1.0;
+            }
             if ambient.is_some() {
                 gu.u_amb = self.ambience;
                 gu.u_amb_level = AMBIENCE_LEVEL;
@@ -1279,6 +1314,8 @@ impl Renderer {
     fn glass_u(&self, s: &GlassSurface) -> GlassU {
         let pad = GLASS_PAD;
         let (u_wave, u_wave_n) = wave_uniforms(&s.waves);
+        let m = &self.material;
+        let t = m.css[(s.tier.round() as usize).min(2)];
         GlassU {
             u_quad: [
                 (s.x - pad) as f32,
@@ -1307,7 +1344,7 @@ impl Renderer {
             },
             u_amb: 0.0,
             u_amb_level: 0.0,
-            _p: 0.0,
+            u_page: 0.0,
             u_beam: s
                 .beam
                 .map(|b| {
@@ -1321,6 +1358,8 @@ impl Renderer {
                 .unwrap_or([0.0, 0.25, 0.0, 0.0]),
             u_voice: [0.0; 4],
             u_wave,
+            u_css: [t[2], t[3], t[4], t[5]],
+            u_css_f: [t[0], t[1], m.ceiling, m.knee],
         }
     }
 

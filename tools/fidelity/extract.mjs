@@ -625,6 +625,26 @@ function rustGen(css) {
   out.push('}', '');
   out.push('/// core/tokens.ts', '#[rustfmt::skip]', 'pub mod tokens {');
   for (const k of ['radius', 'space', 'chrome', 'motion', 'type']) rmod(k, tokens[k], `core/tokens.ts:${lineOf('core/tokens.ts', `export const ${k}`)}`, 4, out);
+  // the colours as 8-bit RGB, and each glass tier's backdrop filter and fill (saturate,
+  // brightness, fill r g b 0-255 and alpha): the scene's glass over a page draws the CSS tier
+  const cl = lineOf('core/tokens.ts', 'export const color');
+  out.push(`    /// core/tokens.ts:${cl} (\`color\`)`, '    pub mod color {');
+  for (const [k, v] of Object.entries(tokens.color)) {
+    const ln = lineOf('core/tokens.ts', `${k}: '`);
+    use('core/tokens.ts', ln);
+    out.push(`        pub const ${rid(k)}: [u8; 3] = ${rgb(v)}; // core/tokens.ts:${ln}`);
+  }
+  out.push('    }');
+  out.push('    /// core/tokens.ts `glass`: [saturate, brightness, fill r, g, b (0-255), fill alpha]', '    pub mod glass {');
+  for (const [k, g] of Object.entries(tokens.glass)) {
+    const ln = lineOf('core/tokens.ts', `  ${k}: {`);
+    use('core/tokens.ts', ln);
+    const f = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(g.fill);
+    if (!f) throw new Error(`tokens.ts glass.${k}: fill ${g.fill} is not rgba()`);
+    const v = [g.saturate, g.brightness, ...f.slice(1).map(Number)];
+    out.push(`        pub const ${rid(k)}: [f64; 6] = [${v.map(rnum).join(', ')}]; // core/tokens.ts:${ln}`);
+  }
+  out.push('    }');
   out.push('}', '');
   out.push('/// Keyframe tables [t, scale x, scale y, rotate deg] from the CSS (0 and 1 at rest).', '#[rustfmt::skip]', 'pub mod keyframes {');
   for (const [n, file, kf] of [['SQUASH_CSS', 'core/wubble.css', 'wb-sq-a'], ['WOBBLE', 'core/wubble.css', 'wb-wob-a'], ['BUTTON_SQUASH', 'pages/touch.css', 'tp-bq-a']]) {

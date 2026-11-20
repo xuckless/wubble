@@ -19,6 +19,7 @@ pub mod download;
 pub mod external;
 pub mod favicon;
 pub mod gesture;
+pub mod glass;
 pub mod gpu;
 pub mod hints;
 pub mod hovercard;

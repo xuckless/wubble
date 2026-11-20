@@ -147,7 +147,9 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
             },
         )
     }) {
-        Ok(renderer) => {
+        Ok(mut renderer) => {
+            // over a page the design's CSS glass, and the contrast ceiling (wubble_core::glass)
+            renderer.set_material(material());
             let signal = if renderer.measures_cost() {
                 Signal::SceneCost
             } else {
@@ -182,6 +184,16 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
             eprintln!("wubble: glass: slint-only ({reason})");
             Glass::SlintOnly
         }
+    }
+}
+
+/// The glass's material over pages and its contrast ceiling, from the design's tokens.
+pub fn material() -> wubble_gfx::scene::Material {
+    use wubble_core::glass;
+    wubble_gfx::scene::Material {
+        css: glass::css_tiers(),
+        ceiling: glass::ceiling() as f32,
+        knee: glass::knee() as f32,
     }
 }
 

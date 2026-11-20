@@ -84,7 +84,7 @@ pub use quality::{
 pub(crate) use render::with_prelude;
 pub use render::{
     AMBIENCE_HZ, AMBIENCE_LEVEL, AMBIENCE_STRENGTH, BLUR_SIGMA, DPR_MAX, Frame, GLASS_PAD,
-    PYRAMID_DIV, PagePane, Renderer, ambience_every, out_size, readback_rgba8, view_of,
+    Material, PYRAMID_DIV, PagePane, Renderer, ambience_every, out_size, readback_rgba8, view_of,
 };
 pub use start::{BubbleDraw, PopDraw, RING_N, StartCard, StartDraw, StartFx};
 pub use state::{
