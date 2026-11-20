@@ -140,7 +140,9 @@ pub fn next(state: AutofillSmoke, input: Input) -> (AutofillSmoke, Vec<Action>) 
 
 /// Serves the smoke's pages on `127.0.0.1` at a free port, from a thread that
 /// ends with the process; the port. Loopback only, nothing is fetched from
-/// outside.
+/// outside. Each connection is answered on its own thread: Chromium opens
+/// connections ahead of its requests (preconnects) and can hold one idle for
+/// minutes, which would stall every later request queued behind it.
 pub fn serve() -> std::io::Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -148,7 +150,15 @@ pub fn serve() -> std::io::Result<u16> {
         .name("autofill-smoke-http".into())
         .spawn(move || {
             for stream in listener.incoming().flatten() {
-                if let Err(e) = answer(stream, port) {
+                let reply = move || {
+                    if let Err(e) = answer(stream, port) {
+                        eprintln!("smoke: autofill page server: {e}");
+                    }
+                };
+                if let Err(e) = std::thread::Builder::new()
+                    .name("autofill-smoke-http-conn".into())
+                    .spawn(reply)
+                {
                     eprintln!("smoke: autofill page server: {e}");
                 }
             }
