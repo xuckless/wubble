@@ -1,29 +1,336 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" width="480" height="260" role="img" aria-labelledby="t d">
-<title id="t">The sidebar</title><desc id="d">The wubble sidebar cycles through its three modes: extended, a narrow rail, and hidden with a glowing ring at the edge that peeks the sidebar back over the page. The widths spring and settle.</desc>
-<defs><radialGradient id="gb"><stop offset="0" stop-color="#2F5FC4" stop-opacity=".5"/><stop offset="1" stop-color="#2F5FC4" stop-opacity="0"/></radialGradient>
-<radialGradient id="gm"><stop offset="0" stop-color="#A84886" stop-opacity=".42"/><stop offset="1" stop-color="#A84886" stop-opacity="0"/></radialGradient>
-<radialGradient id="gg"><stop offset="0" stop-color="#237E69" stop-opacity=".4"/><stop offset="1" stop-color="#237E69" stop-opacity="0"/></radialGradient>
-<linearGradient id="film" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7CC8FF"/><stop offset=".36" stop-color="#B8A6FF"/><stop offset=".68" stop-color="#FF9ED8"/><stop offset="1" stop-color="#8AF2D0"/></linearGradient>
-<linearGradient id="hA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7CC8FF"/><stop offset="1" stop-color="#B8A6FF"/></linearGradient>
-<linearGradient id="hB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF9ED8"/><stop offset="1" stop-color="#B8A6FF"/></linearGradient>
-<linearGradient id="hC" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8AF2D0"/><stop offset="1" stop-color="#7CC8FF"/></linearGradient>
-<linearGradient id="spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
-<clipPath id="card"><rect width="480" height="260" rx="20"/></clipPath></defs>
-<style>.pg{animation:pg 10s linear infinite}.pnl{animation:pnl 10s linear infinite}.mid{animation:mid 10s linear infinite}.cap{animation:cap 10s linear infinite}.pk{animation:pk 10s linear infinite}.pkop{animation:pkop 10s linear infinite}.lab{animation:lab 10s linear infinite}.hir{animation:hir 10s linear infinite}.ring{animation:ring 10s linear infinite}.mop{animation:mop 10s linear infinite}
-@keyframes pg{0%{transform:scale(0.69,1)}19%{transform:scale(0.69,1)}19.64%{transform:scale(0.77,1)}20.29%{transform:scale(0.88,1)}20.93%{transform:scale(0.92,1)}21.57%{transform:scale(0.9,1)}22.21%{transform:scale(0.88,1)}22.86%{transform:scale(0.87,1)}23.5%{transform:scale(0.87,1)}24.14%{transform:scale(0.87,1)}24.79%{transform:scale(0.88,1)}25.43%{transform:scale(0.88,1)}26.07%{transform:scale(0.88,1)}26.71%{transform:scale(0.87,1)}27.36%{transform:scale(0.87,1)}28%{transform:scale(0.88,1)}43%{transform:scale(0.88,1)}43.64%{transform:scale(0.93,1)}44.29%{transform:scale(1,1)}44.93%{transform:scale(1.03,1)}45.57%{transform:scale(1.02,1)}46.21%{transform:scale(1,1)}46.86%{transform:scale(0.99,1)}47.5%{transform:scale(1,1)}48.14%{transform:scale(1,1)}48.79%{transform:scale(1,1)}49.43%{transform:scale(1,1)}50.07%{transform:scale(1,1)}50.71%{transform:scale(1,1)}51.36%{transform:scale(1,1)}52%{transform:scale(1,1)}84%{transform:scale(1,1)}84.71%{transform:scale(0.84,1)}85.43%{transform:scale(0.66,1)}86.14%{transform:scale(0.62,1)}86.86%{transform:scale(0.66,1)}87.57%{transform:scale(0.7,1)}88.29%{transform:scale(0.7,1)}89%{transform:scale(0.69,1)}89.71%{transform:scale(0.68,1)}90.43%{transform:scale(0.68,1)}91.14%{transform:scale(0.69,1)}91.86%{transform:scale(0.69,1)}92.57%{transform:scale(0.69,1)}93.29%{transform:scale(0.69,1)}94%{transform:scale(0.69,1)}100%{transform:scale(0.69,1)}}
-@keyframes pnl{0%{transform:translate(0px,0)}18%{transform:translate(0px,0)}18.64%{transform:translate(0px,0)}19.29%{transform:translate(0px,0)}19.93%{transform:translate(0px,0)}20.57%{transform:translate(0px,0)}21.21%{transform:translate(0px,0)}21.86%{transform:translate(0px,0)}22.5%{transform:translate(0px,0)}23.14%{transform:translate(0px,0)}23.79%{transform:translate(0px,0)}24.43%{transform:translate(0px,0)}25.07%{transform:translate(0px,0)}25.71%{transform:translate(0px,0)}26.36%{transform:translate(0px,0)}27%{transform:translate(0px,0)}42%{transform:translate(0px,0)}42.57%{transform:translate(-20.17px,0)}43.14%{transform:translate(-48.92px,0)}43.71%{transform:translate(-63.35px,0)}44.29%{transform:translate(-64.01px,0)}44.86%{transform:translate(-59.41px,0)}45.43%{transform:translate(-55.73px,0)}46%{transform:translate(-54.59px,0)}46.57%{transform:translate(-55.03px,0)}47.14%{transform:translate(-55.77px,0)}47.71%{transform:translate(-56.17px,0)}48.29%{transform:translate(-56.21px,0)}48.86%{transform:translate(-56.1px,0)}49.43%{transform:translate(-56px,0)}50%{transform:translate(-56px,0)}69%{transform:translate(-56px,0)}69.1%{transform:translate(-150px,0)}84%{transform:translate(-150px,0)}84.1%{transform:translate(0px,0)}100%{transform:translate(0px,0)}}
-@keyframes mid{0%{transform:scale(88,1)}18%{transform:scale(88,1)}18.64%{transform:scale(56.98,1)}19.29%{transform:scale(18.3,1)}19.93%{transform:scale(4.7,1)}20.57%{transform:scale(8.4,1)}21.21%{transform:scale(14.93,1)}21.86%{transform:scale(17.71,1)}22.5%{transform:scale(17.37,1)}23.14%{transform:scale(16.3,1)}23.79%{transform:scale(15.75,1)}24.43%{transform:scale(15.76,1)}25.07%{transform:scale(15.93,1)}25.71%{transform:scale(16.03,1)}26.36%{transform:scale(16.04,1)}27%{transform:scale(16,1)}42%{transform:scale(16,1)}42.57%{transform:scale(16,1)}43.14%{transform:scale(16,1)}43.71%{transform:scale(16,1)}44.29%{transform:scale(16,1)}44.86%{transform:scale(16,1)}45.43%{transform:scale(16,1)}46%{transform:scale(16,1)}46.57%{transform:scale(16,1)}47.14%{transform:scale(16,1)}47.71%{transform:scale(16,1)}48.29%{transform:scale(16,1)}48.86%{transform:scale(16,1)}49.43%{transform:scale(16,1)}50%{transform:scale(16,1)}69%{transform:scale(16,1)}69.1%{transform:scale(88,1)}84%{transform:scale(88,1)}84.1%{transform:scale(88,1)}100%{transform:scale(88,1)}}
-@keyframes cap{0%{transform:translate(88px,0)}18%{transform:translate(88px,0)}18.64%{transform:translate(56.98px,0)}19.29%{transform:translate(18.3px,0)}19.93%{transform:translate(4.7px,0)}20.57%{transform:translate(8.4px,0)}21.21%{transform:translate(14.93px,0)}21.86%{transform:translate(17.71px,0)}22.5%{transform:translate(17.37px,0)}23.14%{transform:translate(16.3px,0)}23.79%{transform:translate(15.75px,0)}24.43%{transform:translate(15.76px,0)}25.07%{transform:translate(15.93px,0)}25.71%{transform:translate(16.03px,0)}26.36%{transform:translate(16.04px,0)}27%{transform:translate(16px,0)}42%{transform:translate(16px,0)}42.57%{transform:translate(16px,0)}43.14%{transform:translate(16px,0)}43.71%{transform:translate(16px,0)}44.29%{transform:translate(16px,0)}44.86%{transform:translate(16px,0)}45.43%{transform:translate(16px,0)}46%{transform:translate(16px,0)}46.57%{transform:translate(16px,0)}47.14%{transform:translate(16px,0)}47.71%{transform:translate(16px,0)}48.29%{transform:translate(16px,0)}48.86%{transform:translate(16px,0)}49.43%{transform:translate(16px,0)}50%{transform:translate(16px,0)}69%{transform:translate(16px,0)}69.1%{transform:translate(88px,0)}84%{transform:translate(88px,0)}84.1%{transform:translate(88px,0)}100%{transform:translate(88px,0)}}
-@keyframes mop{0%{opacity:1}68%{opacity:1}68.1%{opacity:0}84%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}87%{opacity:1}100%{opacity:1}}
-@keyframes pk{0%{transform:translate(-130px,0)}65%{transform:translate(-130px,0)}65.1%{transform:translate(-130px,0)}66%{transform:translate(-130px,0)}66.64%{transform:translate(-73.98px,0)}67.29%{transform:translate(-4.15px,0)}67.93%{transform:translate(20.4px,0)}68.57%{transform:translate(13.71px,0)}69.21%{transform:translate(1.93px,0)}69.86%{transform:translate(-3.08px,0)}70.5%{transform:translate(-2.48px,0)}71.14%{transform:translate(-0.54px,0)}71.79%{transform:translate(0.44px,0)}72.43%{transform:translate(0.43px,0)}73.07%{transform:translate(0.13px,0)}73.71%{transform:translate(-0.06px,0)}74.36%{transform:translate(-0.07px,0)}75%{transform:translate(0px,0)}100%{transform:translate(0px,0)}}
-@keyframes pkop{0%{opacity:0}65%{opacity:0}65.1%{opacity:1}84%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}87%{opacity:0}100%{opacity:0}}
-@keyframes lab{0%{opacity:1}15%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}18%{opacity:0}88%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}93%{opacity:1}100%{opacity:1}}
-@keyframes hir{0%{opacity:0}19.5%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}23%{opacity:1}39%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}41%{opacity:0}100%{opacity:0}}
-@keyframes ring{0%{opacity:0;transform:scale(0.8)}49%{opacity:0;transform:scale(0.8);animation-timing-function:cubic-bezier(.22,1,.36,1)}53%{opacity:1;transform:scale(1);animation-timing-function:ease-in-out}57%{opacity:1;transform:scale(1.3);animation-timing-function:ease-in-out}61%{opacity:1;transform:scale(1);animation-timing-function:ease-in-out}65%{opacity:1;transform:scale(1.3);animation-timing-function:cubic-bezier(.22,1,.36,1)}68%{opacity:0;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
-@keyframes lb0{0%{opacity:1}15%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}18%{opacity:0}89%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}93%{opacity:1}100%{opacity:1}}.lb0{animation:lb0 10s linear infinite}
-@keyframes lb1{0%{opacity:0}19%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}22%{opacity:1}39%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}42%{opacity:0}100%{opacity:0}}.lb1{animation:lb1 10s linear infinite}
-@keyframes lb2{0%{opacity:0}44%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}47%{opacity:1}65%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}68%{opacity:0}100%{opacity:0}}.lb2{animation:lb2 10s linear infinite}
-@keyframes lb3{0%{opacity:0}69%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}72%{opacity:1}84%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}87%{opacity:0}100%{opacity:0}}.lb3{animation:lb3 10s linear infinite}
-@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
-<g clip-path="url(#card)"><rect width="480" height="260" fill="#0C0E14"/><ellipse cx="70" cy="60" rx="190" ry="130" fill="url(#gb)"/><ellipse cx="430" cy="230" rx="170" ry="120" fill="url(#gm)"/><ellipse cx="420" cy="20" rx="120" ry="80" fill="url(#gg)"/></g>
-<clipPath id="wc"><rect x="48" y="36" width="384" height="188" rx="10"/></clipPath><rect x="40" y="28" width="400" height="204" rx="18" fill="#11131A" stroke="#2A2F3B"/><rect x="48" y="36" width="384" height="188" rx="10" fill="#0A0B10"/><g clip-path="url(#wc)"><g transform="translate(432 36)"><g class="pg" style="transform:scale(.6875,1)"><g transform="translate(-384 0)"><g transform="translate(0 0)"><rect width="384" height="188" rx="10" fill="#141720"/><rect x="10" y="8" width="364" height="10" rx="5" fill="#fff" fill-opacity=".07"/><rect x="10" y="28" width="364" height="64" rx="8" fill="url(#hA)" fill-opacity=".8"/><ellipse cx="26" cy="44" rx="9" ry="4" transform="rotate(-30 26 44)" fill="#fff" fill-opacity=".55"/><rect x="10" y="106" width="254.8" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="118" width="182" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="130" width="225.68" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="142" width="145.6" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="154" width="200.2" height="5" rx="2.5" fill="#2A2F3B"/></g></g></g></g><g transform="translate(48 36)"><g class="mop"><g class="pnl"><rect width="24" height="188" rx="12" fill="#1B1E29"/><g transform="translate(12 0)"><rect class="mid" style="transform:scale(88,1)" width="1" height="188" fill="#1B1E29"/></g><rect class="cap" style="transform:translate(88px,0)" x="0" width="24" height="188" rx="12" fill="#1B1E29"/><rect class="lab" x="4" y="14" width="104" height="28" rx="9" fill="#fff" fill-opacity=".11"/><rect class="hir" opacity="0" x="4" y="14" width="32" height="28" rx="9" fill="#fff" fill-opacity=".11"/><rect x="10" y="18" width="20" height="20" rx="6" fill="#7CC8FF"/><text x="40" y="32.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#F2F4FA" text-anchor="start" class="lab">Notes</text><rect x="10" y="52" width="20" height="20" rx="6" fill="#FF9ED8"/><text x="40" y="66.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start" class="lab">Inbox</text><rect x="10" y="86" width="20" height="20" rx="6" fill="#8AF2D0"/><text x="40" y="100.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start" class="lab">Maps</text><rect x="10" y="120" width="20" height="20" rx="6" fill="#B8A6FF"/><text x="40" y="134.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start" class="lab">Player</text></g></g><g class="pkop" opacity="0"><g class="pk" transform="translate(-130 0)"><rect x=".75" y=".75" width="106.5" height="186.5" rx="12" fill="#20242F" stroke="url(#film)" stroke-width="1.5"/><rect width="108" height="188" rx="12" fill="url(#spec)"/><rect x="4" y="14" width="100" height="28" rx="9" fill="#fff" fill-opacity=".11"/><rect x="10" y="18" width="20" height="20" rx="6" fill="#7CC8FF"/><text x="40" y="32.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#F2F4FA" text-anchor="start">Notes</text><rect x="10" y="52" width="20" height="20" rx="6" fill="#FF9ED8"/><text x="40" y="66.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start">Inbox</text><rect x="10" y="86" width="20" height="20" rx="6" fill="#8AF2D0"/><text x="40" y="100.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start">Maps</text><rect x="10" y="120" width="20" height="20" rx="6" fill="#B8A6FF"/><text x="40" y="134.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#A3A9B8" text-anchor="start">Player</text></g></g></g></g><g transform="translate(60 130)"><g class="ring" opacity="0"><circle r="20" fill="url(#gm)"/><circle r="20" fill="url(#gb)"/><circle r="9" fill="none" stroke="url(#film)" stroke-width="2.5"/></g></g><text x="240" y="254" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#A3A9B8" text-anchor="middle" class="lb0">extended</text><text x="240" y="254" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#A3A9B8" text-anchor="middle" class="lb1" opacity="0">rail</text><text x="240" y="254" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#A3A9B8" text-anchor="middle" class="lb2" opacity="0">hidden</text><text x="240" y="254" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#A3A9B8" text-anchor="middle" class="lb3" opacity="0">peek from the edge</text><rect x=".5" y=".5" width="479" height="259" rx="19.5" fill="none" stroke="#fff" stroke-opacity=".08"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 380" width="840" height="380" role="img" aria-labelledby="t d">
+<title id="t">The sidebar</title>
+<desc id="d">The wubble sidebar smoothly springs between Extended, Rail, Hidden, and Edge Peek (a floating frosted-glass panel over the page).</desc>
+
+  <defs>
+    <clipPath id="card"><rect width="840" height="380" rx="20"/></clipPath>
+    <linearGradient id="film" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7CC8FF"/>
+      <stop offset=".35" stop-color="#B8A6FF"/>
+      <stop offset=".68" stop-color="#FF9ED8"/>
+      <stop offset="1" stop-color="#8AF2D0"/>
+    </linearGradient>
+    <linearGradient id="filmV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7CC8FF"/>
+      <stop offset=".36" stop-color="#B8A6FF"/>
+      <stop offset=".68" stop-color="#FF9ED8"/>
+      <stop offset="1" stop-color="#8AF2D0"/>
+    </linearGradient>
+    <linearGradient id="glassTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".11"/>
+      <stop offset=".45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="glassPanel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#282C3A" stop-opacity=".94"/>
+      <stop offset="1" stop-color="#1A1D28" stop-opacity=".96"/>
+    </linearGradient>
+    <linearGradient id="peekGlass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A2F42" stop-opacity=".92"/>
+      <stop offset="1" stop-color="#1E2230" stop-opacity=".94"/>
+    </linearGradient>
+    <radialGradient id="dyeBlue" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#2F5FC4" stop-opacity=".58"/>
+      <stop offset="1" stop-color="#2F5FC4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeViolet" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#7563D8" stop-opacity=".50"/>
+      <stop offset="1" stop-color="#7563D8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeTeal" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#237E69" stop-opacity=".46"/>
+      <stop offset="1" stop-color="#237E69" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeMagenta" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#A84886" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#A84886" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="heroSky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7CC8FF" stop-opacity=".85"/>
+      <stop offset="1" stop-color="#B8A6FF" stop-opacity=".85"/>
+    </linearGradient>
+    <linearGradient id="heroMint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8AF2D0" stop-opacity=".85"/>
+      <stop offset="1" stop-color="#7CC8FF" stop-opacity=".85"/>
+    </linearGradient>
+    <linearGradient id="heroBlush" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF9ED8" stop-opacity=".82"/>
+      <stop offset="1" stop-color="#B8A6FF" stop-opacity=".82"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity=".48"/>
+    </filter>
+    <filter id="softGlow" x="-120%" y="-180%" width="340%" height="460%">
+      <feGaussianBlur stdDeviation="4.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+<style>
+  .pg{animation:pg 11s linear infinite}
+  .ext{animation:ext 11s linear infinite}
+  .rail{animation:rail 11s linear infinite}
+  .ring{animation:ring 11s linear infinite}
+  .peek{animation:peek 11s linear infinite}
+  .pill{animation:pill 11s linear infinite}
+  @keyframes pg{0%{transform:scale(0.76,1)}17.27%{transform:scale(0.76,1)}17.27%{transform:scale(0.76,1)}17.82%{transform:scale(0.83,1)}18.38%{transform:scale(0.91,1)}18.93%{transform:scale(0.95,1)}19.48%{transform:scale(0.95,1)}20.03%{transform:scale(0.95,1)}20.58%{transform:scale(0.95,1)}21.14%{transform:scale(0.95,1)}21.69%{transform:scale(0.95,1)}22.24%{transform:scale(0.95,1)}22.79%{transform:scale(0.95,1)}23.34%{transform:scale(0.95,1)}23.9%{transform:scale(0.95,1)}24.45%{transform:scale(0.95,1)}25%{transform:scale(0.95,1)}40.91%{transform:scale(0.95,1)}40.91%{transform:scale(0.95,1)}41.48%{transform:scale(0.97,1)}42.05%{transform:scale(0.99,1)}42.61%{transform:scale(1,1)}43.18%{transform:scale(1,1)}43.75%{transform:scale(1,1)}44.32%{transform:scale(1,1)}44.89%{transform:scale(1,1)}45.45%{transform:scale(1,1)}46.02%{transform:scale(1,1)}46.59%{transform:scale(1,1)}47.16%{transform:scale(1,1)}47.73%{transform:scale(1,1)}85.45%{transform:scale(1,1)}85.45%{transform:scale(1,1)}86.04%{transform:scale(0.9,1)}86.62%{transform:scale(0.79,1)}87.21%{transform:scale(0.75,1)}87.79%{transform:scale(0.75,1)}88.38%{transform:scale(0.76,1)}88.96%{transform:scale(0.76,1)}89.55%{transform:scale(0.76,1)}90.13%{transform:scale(0.76,1)}90.71%{transform:scale(0.76,1)}91.3%{transform:scale(0.76,1)}91.88%{transform:scale(0.76,1)}92.47%{transform:scale(0.76,1)}93.05%{transform:scale(0.76,1)}93.64%{transform:scale(0.76,1)}100%{transform:scale(0.76,1)}}
+  @keyframes ext{0%{opacity:1;transform:translateX(0px)}16.36%{opacity:1;transform:translateX(0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}20.45%{opacity:0;transform:translateX(-18px)}85.45%{opacity:0;transform:translateX(-18px);animation-timing-function:cubic-bezier(.22,1,.36,1)}90.91%{opacity:1;transform:translateX(0px)}100%{opacity:1;transform:translateX(0px)}}
+  @keyframes rail{0%,18.64%{opacity:0;transform:translateX(-10px)}22.73%{opacity:1;transform:translateX(0px)}40.45%{opacity:1;transform:translateX(0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}45%{opacity:0;transform:translateX(-38px)}100%{opacity:0;transform:translateX(-38px)}}
+  @keyframes ring{0%,49.09%{opacity:0;transform:scale(.6)}52.73%{opacity:1;transform:scale(1)}56.36%{opacity:.95;transform:scale(1.32)}60%{opacity:1;transform:scale(1)}63.64%{opacity:0;transform:scale(.85)}100%{opacity:0;transform:scale(.85)}}
+  @keyframes peek{0%,60.45%{transform:translateX(-192px);opacity:0}60.45%{transform:translateX(-192px);opacity:0}60.94%{transform:translateX(-130.87px);opacity:0.29}61.43%{transform:translateX(-48.27px);opacity:0.57}61.92%{transform:translateX(-0.72px);opacity:0.86}62.4%{transform:translateX(12.42px);opacity:1}62.89%{transform:translateX(9.7px);opacity:1}63.38%{transform:translateX(4.06px);opacity:1}63.86%{transform:translateX(0.43px);opacity:1}64.35%{transform:translateX(-0.77px);opacity:1}64.84%{transform:translateX(-0.7px);opacity:1}65.32%{transform:translateX(-0.32px);opacity:1}65.81%{transform:translateX(-0.06px);opacity:1}66.3%{transform:translateX(0.05px);opacity:1}66.79%{transform:translateX(0.05px);opacity:1}67.27%{transform:translateX(0px);opacity:1}82.27%{transform:translateX(0px);opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}86.36%{transform:translateX(-192px);opacity:0}100%{transform:translateX(-192px);opacity:0}}
+  @keyframes pill{0%,17.27%{transform:translateX(0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}21.82%{transform:translateX(96px)}40.91%{transform:translateX(96px);animation-timing-function:cubic-bezier(.22,1,.36,1)}45.45%{transform:translateX(192px)}60.91%{transform:translateX(192px);animation-timing-function:cubic-bezier(.22,1,.36,1)}65.45%{transform:translateX(288px)}85.45%{transform:translateX(288px);animation-timing-function:cubic-bezier(.22,1,.36,1)}90.45%{transform:translateX(0px)}100%{transform:translateX(0px)}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}.pg{transform:scale(0.76,1)!important}.ext{opacity:1!important;transform:none!important}.rail,.ring,.peek{opacity:0!important}}
+</style>
+
+  <g clip-path="url(#card)">
+    <rect width="840" height="380" fill="#08090D"/>
+    <ellipse cx="118" cy="68" rx="260" ry="180" fill="url(#dyeBlue)" opacity=".65"/>
+    <ellipse cx="739" cy="319" rx="250" ry="170" fill="url(#dyeMagenta)" opacity=".7"/>
+    <ellipse cx="655" cy="38" rx="190" ry="120" fill="url(#dyeTeal)" opacity=".55"/>
+    <rect width="840" height="380" fill="url(#glassTop)" opacity=".35"/>
+  </g>
+
+<!-- Authentic Wubble Window (720x304) -->
+<g filter="url(#shadow)">
+  
+    <clipPath id="sbWin"><rect x="60" y="22" width="720" height="304" rx="15"/></clipPath>
+    <g clip-path="url(#sbWin)">
+      <rect x="60" y="22" width="720" height="304" fill="#171C30"/>
+      <ellipse cx="130" cy="62" rx="252" ry="167" fill="url(#dyeBlue)"/>
+      <ellipse cx="185" cy="168" rx="216" ry="152" fill="url(#dyeViolet)"/>
+      <ellipse cx="95" cy="271" rx="202" ry="137" fill="url(#dyeTeal)"/>
+    </g>
+</g>
+
+<g clip-path="url(#sbWin)">
+  <!-- Extended Sidebar -->
+  <g transform="translate(60 22)">
+    <g class="ext">
+    
+    <circle cx="14" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="24" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="34" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <g stroke="#C6CCE0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".82">
+      <rect x="102" y="9.5" width="10" height="8.5" rx="2"/>
+      <path d="M105.5 9.5V18"/>
+      <path d="M122 11L119 13.8L122 16.6"/>
+      <path d="M135 11L138 13.8L135 16.6" opacity=".45"/>
+      <path d="M153 14a3.3 3.3 0 1 1-1-2.4M152 10.6v1.6h-1.6"/>
+    </g>
+    
+    <g transform="translate(10 30)">
+      <rect width="148" height="24" rx="8" fill="#0B0D16" fill-opacity=".46" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="1"/>
+      <g transform="translate(8 7.5)" stroke="#7CC8FF" stroke-width="1.1" fill="none" opacity=".85">
+        <rect x="0.8" y="3.8" width="6.4" height="4.8" rx="1.2"/>
+        <path d="M2.2 3.8V2.5a1.8 1.8 0 0 1 3.6 0v1.3"/>
+      </g>
+      <text x="21" y="15.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
+      
+      <g transform="translate(114 7.5)" opacity=".75">
+        <path d="M4 0.5L7.5 2v2.8c0 2-1.5 3.4-3.5 4.2C2 8.2 0.5 6.8 0.5 4.8V2L4 0.5Z" fill="none" stroke="#8AF2D0" stroke-width="1"/>
+        <text x="11" y="7.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8.5" font-weight="600" fill="#A3A9B8">14</text>
+      </g>
+    </g>
+    <text x="14" y="69" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="600" fill="#A3A9B8" fill-opacity=".85">Personal</text>
+    <rect x="10" y="77" width="148" height="27" rx="8" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".16"/>
+    <g transform="translate(19 85)" stroke="#7CC8FF" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="94" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="500" fill="#F2F4FA">Disjoining pressure</text>
+    <g transform="translate(17 111) scale(0.135)">
+    <path d="M61 9C89 8 112 30 111 59C110 90 90 112 60 111C29 110 9 92 9 61C9 31 32 10 61 9Z" fill="#12141C" stroke="url(#film)" stroke-width="4.5"/>
+    <path d="M32 48Q38 82 46 82Q53 82 60 60Q67 82 74 82Q82 82 88 48" fill="none" stroke="url(#film)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="36" cy="30" rx="11" ry="5.2" transform="rotate(-35 36 30)" fill="#FFFFFF" opacity=".8"/>
+  </g>
+    <text x="38" y="123" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Start</text>
+    <g transform="translate(19 141)" stroke="#8AF2D0" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="150" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Rust reference</text>
+    <g transform="translate(19 169)" stroke="#B8A6FF" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="178" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Settings</text>
+    <text x="19" y="206" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#A3A9B8" fill-opacity=".8">+  New tab</text>
+    
+    <g transform="translate(10 274)">
+      <rect width="22" height="22" rx="7" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".10"/>
+      <path d="M7.5 11.5L11 8.2L14.5 11.5V15.2H12.2V12.8H9.8V15.2H7.5Z" fill="none" stroke="#F2F4FA" stroke-width="1.15" stroke-linejoin="round"/>
+      <path d="M30 12.5L32.8 9.8L35.6 12.5" fill="none" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <g transform="translate(116 5)" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" fill="none">
+        <path d="M4 1v7M1.5 5.5L4 8l2.5-2.5M1 10.5h6"/>
+        <path d="M16 3h7M16 8h7"/>
+        <circle cx="18.5" cy="3" r="1.4" fill="#1B2238"/>
+        <circle cx="21" cy="8" r="1.4" fill="#1B2238"/>
+      </g>
+    </g>
+  </g>
+  </g>
+
+  <!-- Rail Sidebar (46px wide, matches 02-sidebar-rail.png) -->
+  <g transform="translate(60 22)">
+    <g class="rail" opacity="0">
+      <circle cx="13" cy="14" r="2.4" fill="#FFFFFF" fill-opacity=".22"/>
+      <circle cx="22" cy="14" r="2.4" fill="#FFFFFF" fill-opacity=".22"/>
+      <circle cx="31" cy="14" r="2.4" fill="#FFFFFF" fill-opacity=".22"/>
+      <!-- search icon -->
+      <circle cx="22" cy="40" r="4.2" fill="none" stroke="#C6CCE0" stroke-width="1.2"/>
+      <line x1="25.2" y1="43.2" x2="27.5" y2="45.5" stroke="#C6CCE0" stroke-width="1.2" stroke-linecap="round"/>
+      <!-- active tab icon pill -->
+      <rect x="9" y="58" width="28" height="28" rx="8" fill="#FFFFFF" fill-opacity=".14" stroke="#FFFFFF" stroke-opacity=".18"/>
+      <g transform="translate(17.5 66.5)" stroke="#7CC8FF" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+      <g transform="translate(15 95) scale(0.13)">
+    <path d="M61 9C89 8 112 30 111 59C110 90 90 112 60 111C29 110 9 92 9 61C9 31 32 10 61 9Z" fill="#12141C" stroke="url(#film)" stroke-width="4.5"/>
+    <path d="M32 48Q38 82 46 82Q53 82 60 60Q67 82 74 82Q82 82 88 48" fill="none" stroke="url(#film)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="36" cy="30" rx="11" ry="5.2" transform="rotate(-35 36 30)" fill="#FFFFFF" opacity=".8"/>
+  </g>
+      <g transform="translate(17.5 123)" stroke="#8AF2D0" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+      <text x="23" y="158" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#A3A9B8" text-anchor="middle">+</text>
+      <!-- rail bottom dock -->
+      <rect x="11" y="232" width="24" height="24" rx="7" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".1"/>
+      <path d="M19.5 244.5L23 241.2L26.5 244.5V248.2H24.2V245.8H21.8V248.2H19.5Z" fill="none" stroke="#F2F4FA" stroke-width="1.15" stroke-linejoin="round"/>
+      <path d="M20.2 269L23 266.2L25.8 269" fill="none" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round"/>
+      <path d="M23 279v6M20.8 283l2.2 2.2 2.2-2.2" fill="none" stroke="#A3A9B8" stroke-width="1.1" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- Web Page Viewport (right-anchored so it springs smoothly as sidebar width changes) -->
+  <g transform="translate(772 30)">
+    <g class="pg" transform="scale(0.76 1)">
+      <g transform="translate(-704 0)">
+        <rect width="704" height="288" rx="11" fill="#F7F8FC"/>
+        <!-- realistic Wikipedia / editorial article matching 31-white-sidebar.png -->
+        <text x="38" y="48" font-family="Georgia, 'Times New Roman', serif" font-size="23" font-weight="400" fill="#141720">Disjoining pressure</text>
+        <line x1="38" y1="60" x2="666" y2="60" stroke="#D5DAE6" stroke-width="1.2"/>
+        <rect x="38" y="78" width="590" height="7" rx="3.5" fill="#2B3040" fill-opacity=".72"/>
+        <rect x="38" y="94" width="540" height="7" rx="3.5" fill="#2B3040" fill-opacity=".56"/>
+        <rect x="38" y="110" width="470" height="7" rx="3.5" fill="#2B3040" fill-opacity=".44"/>
+        <!-- subtle diagram card inside article -->
+        <rect x="38" y="134" width="376" height="94" rx="10" fill="#EDF1FA" stroke="#D5DAE6"/>
+        <rect x="52" y="148" width="110" height="66" rx="7" fill="url(#heroSky)" fill-opacity=".55"/>
+        <rect x="176" y="152" width="180" height="8" rx="4" fill="#1A1D26" fill-opacity=".68"/>
+        <rect x="176" y="170" width="214" height="6" rx="3" fill="#464E64" fill-opacity=".45"/>
+        <rect x="176" y="184" width="196" height="6" rx="3" fill="#464E64" fill-opacity=".38"/>
+        <rect x="176" y="198" width="142" height="6" rx="3" fill="#464E64" fill-opacity=".32"/>
+        <!-- right callout -->
+        <rect x="430" y="134" width="236" height="94" rx="10" fill="#F0F2F9" stroke="#D5DAE6"/>
+        <rect x="446" y="150" width="96" height="7" rx="3.5" fill="#2F5FC4" fill-opacity=".75"/>
+        <rect x="446" y="168" width="196" height="6" rx="3" fill="#464E64" fill-opacity=".42"/>
+        <rect x="446" y="182" width="174" height="6" rx="3" fill="#464E64" fill-opacity=".36"/>
+        <rect x="446" y="196" width="188" height="6" rx="3" fill="#464E64" fill-opacity=".30"/>
+        <rect x="38" y="246" width="560" height="7" rx="3.5" fill="#2B3040" fill-opacity=".46"/>
+        <rect x="38" y="262" width="420" height="7" rx="3.5" fill="#2B3040" fill-opacity=".34"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Floating Frosted-Glass Peek Sidebar (matches 38-white-sidebar-peek.png!) -->
+  <g transform="translate(68 30)">
+    <g class="peek" filter="url(#shadow)" opacity="0">
+      <rect width="168" height="288" rx="12" fill="url(#peekGlass)" stroke="url(#film)" stroke-opacity=".7" stroke-width="1.3"/>
+      <rect width="168" height="288" rx="12" fill="url(#glassTop)"/>
+      
+    
+    <circle cx="14" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="24" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="34" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <g stroke="#C6CCE0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".82">
+      <rect x="102" y="9.5" width="10" height="8.5" rx="2"/>
+      <path d="M105.5 9.5V18"/>
+      <path d="M122 11L119 13.8L122 16.6"/>
+      <path d="M135 11L138 13.8L135 16.6" opacity=".45"/>
+      <path d="M153 14a3.3 3.3 0 1 1-1-2.4M152 10.6v1.6h-1.6"/>
+    </g>
+    
+    <g transform="translate(10 30)">
+      <rect width="148" height="24" rx="8" fill="#0B0D16" fill-opacity=".46" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="1"/>
+      <g transform="translate(8 7.5)" stroke="#7CC8FF" stroke-width="1.1" fill="none" opacity=".85">
+        <rect x="0.8" y="3.8" width="6.4" height="4.8" rx="1.2"/>
+        <path d="M2.2 3.8V2.5a1.8 1.8 0 0 1 3.6 0v1.3"/>
+      </g>
+      <text x="21" y="15.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
+      
+      <g transform="translate(114 7.5)" opacity=".75">
+        <path d="M4 0.5L7.5 2v2.8c0 2-1.5 3.4-3.5 4.2C2 8.2 0.5 6.8 0.5 4.8V2L4 0.5Z" fill="none" stroke="#8AF2D0" stroke-width="1"/>
+        <text x="11" y="7.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8.5" font-weight="600" fill="#A3A9B8">14</text>
+      </g>
+    </g>
+    <text x="14" y="69" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="600" fill="#A3A9B8" fill-opacity=".85">Personal</text>
+    <rect x="10" y="77" width="148" height="27" rx="8" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".16"/>
+    <g transform="translate(19 85)" stroke="#7CC8FF" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="94" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="500" fill="#F2F4FA">Disjoining pressure</text>
+    <g transform="translate(17 111) scale(0.135)">
+    <path d="M61 9C89 8 112 30 111 59C110 90 90 112 60 111C29 110 9 92 9 61C9 31 32 10 61 9Z" fill="#12141C" stroke="url(#film)" stroke-width="4.5"/>
+    <path d="M32 48Q38 82 46 82Q53 82 60 60Q67 82 74 82Q82 82 88 48" fill="none" stroke="url(#film)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <ellipse cx="36" cy="30" rx="11" ry="5.2" transform="rotate(-35 36 30)" fill="#FFFFFF" opacity=".8"/>
+  </g>
+    <text x="38" y="123" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Start</text>
+    <g transform="translate(19 141)" stroke="#8AF2D0" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="150" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Rust reference</text>
+    <g transform="translate(19 169)" stroke="#B8A6FF" stroke-width="1.1" fill="none">
+    <circle cx="5.5" cy="5.5" r="4.8"/>
+    <ellipse cx="5.5" cy="5.5" rx="2.2" ry="4.8"/>
+    <path d="M0.9 5.5H10.1"/>
+  </g>
+    <text x="38" y="178" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#B8C0D4">Settings</text>
+    <text x="19" y="206" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" fill="#A3A9B8" fill-opacity=".8">+  New tab</text>
+    
+    <g transform="translate(10 274)">
+      <rect width="22" height="22" rx="7" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".10"/>
+      <path d="M7.5 11.5L11 8.2L14.5 11.5V15.2H12.2V12.8H9.8V15.2H7.5Z" fill="none" stroke="#F2F4FA" stroke-width="1.15" stroke-linejoin="round"/>
+      <path d="M30 12.5L32.8 9.8L35.6 12.5" fill="none" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <g transform="translate(116 5)" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" fill="none">
+        <path d="M4 1v7M1.5 5.5L4 8l2.5-2.5M1 10.5h6"/>
+        <path d="M16 3h7M16 8h7"/>
+        <circle cx="18.5" cy="3" r="1.4" fill="#1B2238"/>
+        <circle cx="21" cy="8" r="1.4" fill="#1B2238"/>
+      </g>
+    </g>
+  
+    </g>
+  </g>
+</g>
+
+<!-- Window crisp border -->
+<rect x="60.5" y="22.5" width="719" height="303" rx="14.5" fill="none" stroke="#FFFFFF" stroke-opacity=".14"/>
+
+<!-- Edge peek glowing ring indicator -->
+<g transform="translate(68 174)">
+  <g class="ring" opacity="0">
+    <circle r="22" fill="url(#dyeBlue)" opacity=".9"/>
+    <circle r="11" fill="none" stroke="url(#film)" stroke-width="2.4"/>
+    <circle r="3.5" fill="#FFFFFF"/>
+  </g>
+</g>
+
+<!-- Mode Segmented Pill Bar -->
+<g transform="translate(228 338)">
+  <rect width="384" height="28" rx="14" fill="#121520" stroke="#FFFFFF" stroke-opacity=".09"/>
+  <g class="pill"><rect x="3" y="3" width="90" height="22" rx="11" fill="#FFFFFF" fill-opacity=".13" stroke="url(#film)" stroke-opacity=".55"/></g>
+  <text x="48" y="17.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" fill="#E6EAF6" text-anchor="middle">Extended</text>
+  <text x="144" y="17.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" fill="#E6EAF6" text-anchor="middle">Rail</text>
+  <text x="240" y="17.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" fill="#E6EAF6" text-anchor="middle">Hidden</text>
+  <text x="336" y="17.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="600" fill="#E6EAF6" text-anchor="middle">Edge Peek</text>
+</g>
+<rect x=".5" y=".5" width="839" height="379" rx="19.5" fill="none" stroke="#FFFFFF" stroke-opacity=".09"/>
+</svg>

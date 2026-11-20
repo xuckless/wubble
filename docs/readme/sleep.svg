@@ -1,24 +1,278 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" width="480" height="260" role="img" aria-labelledby="t d">
-<title id="t">Tabs that sleep</title><desc id="d">In a vertical tab list, hidden tabs fade to asleep with small z marks. Selecting a sleeping tab moves the highlight to it, the tab wakes with a small squash and bounce, and its page comes back.</desc>
-<defs><radialGradient id="gb"><stop offset="0" stop-color="#2F5FC4" stop-opacity=".5"/><stop offset="1" stop-color="#2F5FC4" stop-opacity="0"/></radialGradient>
-<radialGradient id="gm"><stop offset="0" stop-color="#A84886" stop-opacity=".42"/><stop offset="1" stop-color="#A84886" stop-opacity="0"/></radialGradient>
-<radialGradient id="gg"><stop offset="0" stop-color="#237E69" stop-opacity=".4"/><stop offset="1" stop-color="#237E69" stop-opacity="0"/></radialGradient>
-<linearGradient id="film" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7CC8FF"/><stop offset=".36" stop-color="#B8A6FF"/><stop offset=".68" stop-color="#FF9ED8"/><stop offset="1" stop-color="#8AF2D0"/></linearGradient>
-<linearGradient id="hA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7CC8FF"/><stop offset="1" stop-color="#B8A6FF"/></linearGradient>
-<linearGradient id="hB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF9ED8"/><stop offset="1" stop-color="#B8A6FF"/></linearGradient>
-<linearGradient id="hC" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8AF2D0"/><stop offset="1" stop-color="#7CC8FF"/></linearGradient>
-<linearGradient id="spec" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
-<clipPath id="card"><rect width="480" height="260" rx="20"/></clipPath></defs>
-<style>.ind{animation:ind 9s linear infinite}.r0{animation:r0 9s linear infinite}.r2{animation:r2 9s linear infinite}.b0{animation:b0 9s linear infinite}.b2{animation:b2 9s linear infinite}.z0{animation:z0 9s linear infinite}.z2{animation:z2 9s linear infinite}.p1{animation:p1 9s linear infinite}.p3{animation:p3 9s linear infinite}.zb{animation:zb 2.4s ease-in-out infinite}.zb2{animation-delay:-1.2s}@keyframes zb{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
-@keyframes ind{0%{transform:translate(0,0px)}15.56%{transform:translate(0,0px)}16.34%{transform:translate(0,44.18px)}17.14%{transform:translate(0,95.77px)}17.93%{transform:translate(0,106.75px)}18.73%{transform:translate(0,94.92px)}19.52%{transform:translate(0,85.21px)}20.32%{transform:translate(0,84.2px)}21.11%{transform:translate(0,87px)}21.9%{transform:translate(0,88.79px)}22.7%{transform:translate(0,88.73px)}23.49%{transform:translate(0,88.11px)}24.29%{transform:translate(0,87.8px)}25.08%{transform:translate(0,87.86px)}25.88%{transform:translate(0,88px)}26.67%{transform:translate(0,88px)}60%{transform:translate(0,88px)}60.79%{transform:translate(0,43.82px)}61.59%{transform:translate(0,-7.77px)}62.38%{transform:translate(0,-18.75px)}63.18%{transform:translate(0,-6.92px)}63.97%{transform:translate(0,2.79px)}64.77%{transform:translate(0,3.8px)}65.56%{transform:translate(0,1px)}66.34%{transform:translate(0,-0.79px)}67.14%{transform:translate(0,-0.73px)}67.93%{transform:translate(0,-0.11px)}68.73%{transform:translate(0,0.2px)}69.52%{transform:translate(0,0.14px)}70.32%{transform:translate(0,0px)}71.11%{transform:translate(0,0px)}100%{transform:translate(0,0px)}}
-@keyframes r0{0%{opacity:1}35.56%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}42.22%{opacity:0.4}60%{opacity:0.4;animation-timing-function:cubic-bezier(.22,1,.36,1)}64.44%{opacity:1}100%{opacity:1}}
-@keyframes r2{0%{opacity:0.4}15.56%{opacity:0.4;animation-timing-function:cubic-bezier(.22,1,.36,1)}20%{opacity:1}80%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}86.67%{opacity:0.4}100%{opacity:0.4}}
-@keyframes z0{0%{opacity:0}35.56%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}42.22%{opacity:1}60%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}64.44%{opacity:0}100%{opacity:0}}
-@keyframes z2{0%{opacity:1}15.56%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}20%{opacity:0}80%{opacity:0;animation-timing-function:cubic-bezier(.22,1,.36,1)}86.67%{opacity:1}100%{opacity:1}}
-@keyframes b0{0%{transform:scale(1,1)}60.44%{transform:scale(1,1)}60.56%{transform:scale(1.07,0.9)}61.11%{transform:scale(1.04,0.94)}61.67%{transform:scale(1,1)}62.22%{transform:scale(0.98,1.03)}62.78%{transform:scale(0.98,1.03)}63.33%{transform:scale(1,1)}63.89%{transform:scale(1.01,0.99)}64.44%{transform:scale(1.01,0.99)}65%{transform:scale(1,1)}65.56%{transform:scale(1,1)}66.11%{transform:scale(1,1)}66.67%{transform:scale(1,1)}67.22%{transform:scale(1,1)}67.78%{transform:scale(1,1)}68.33%{transform:scale(1,1)}68.89%{transform:scale(1,1)}69.44%{transform:scale(1,1)}70%{transform:scale(1,1)}70.56%{transform:scale(1,1)}100%{transform:scale(1,1)}}
-@keyframes b2{0%{transform:scale(1,1)}16%{transform:scale(1,1)}16.11%{transform:scale(1.07,0.9)}16.67%{transform:scale(1.04,0.94)}17.22%{transform:scale(1,1)}17.78%{transform:scale(0.98,1.03)}18.33%{transform:scale(0.98,1.03)}18.89%{transform:scale(1,1)}19.44%{transform:scale(1.01,0.99)}20%{transform:scale(1.01,0.99)}20.56%{transform:scale(1,1)}21.11%{transform:scale(1,1)}21.67%{transform:scale(1,1)}22.22%{transform:scale(1,1)}22.78%{transform:scale(1,1)}23.33%{transform:scale(1,1)}23.89%{transform:scale(1,1)}24.44%{transform:scale(1,1)}25%{transform:scale(1,1)}25.56%{transform:scale(1,1)}26.11%{transform:scale(1,1)}100%{transform:scale(1,1)}}
-@keyframes p1{0%{opacity:1;transform:translate(0,0px)}15.56%{opacity:1;transform:translate(0,0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}21.11%{opacity:0;transform:translate(0,7px)}60%{opacity:0;transform:translate(0,7px);animation-timing-function:cubic-bezier(.22,1,.36,1)}65.56%{opacity:1;transform:translate(0,0px)}100%{opacity:1;transform:translate(0,0px)}}
-@keyframes p3{0%{opacity:0;transform:translate(0,7px)}15.56%{opacity:0;transform:translate(0,7px);animation-timing-function:cubic-bezier(.22,1,.36,1)}21.11%{opacity:1;transform:translate(0,0px)}60%{opacity:1;transform:translate(0,0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}65.56%{opacity:0;transform:translate(0,7px)}100%{opacity:0;transform:translate(0,7px)}}
-@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
-<g clip-path="url(#card)"><rect width="480" height="260" fill="#0C0E14"/><ellipse cx="70" cy="60" rx="190" ry="130" fill="url(#gb)"/><ellipse cx="430" cy="230" rx="170" ry="120" fill="url(#gm)"/><ellipse cx="420" cy="20" rx="120" ry="80" fill="url(#gg)"/></g>
-<rect x="28" y="24" width="160" height="200" rx="14" fill="#1B1E29" /><rect x="28" y="24" width="160" height="200" rx="14" fill="url(#spec)"/><g class="ind"><rect x="36" y="44" width="144" height="36" rx="10" fill="#fff" fill-opacity=".12" stroke="#fff" stroke-opacity=".06"/></g><g transform="translate(36 62)"><g class="r0" opacity="1"><g class="b0"><rect y="-4" width="144" height="8" fill="none"/><rect x="10" y="-10" width="20" height="20" rx="6" fill="#7CC8FF"/><text x="40" y="4" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#F2F4FA" text-anchor="start">Notes</text></g></g><g class="z0" opacity="0"><g class="zb"><text x="124" y="-1" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g><g class="zb zb2"><text x="134" y="-9" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g></g></g><g transform="translate(36 106)"><g class="" opacity=".4"><g class=""><rect y="-4" width="144" height="8" fill="none"/><rect x="10" y="-10" width="20" height="20" rx="6" fill="#FF9ED8"/><text x="40" y="4" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#DADDE6" text-anchor="start">Inbox</text></g></g><g class="" opacity="1"><g class="zb"><text x="124" y="-1" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g><g class="zb zb2"><text x="134" y="-9" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g></g></g><g transform="translate(36 150)"><g class="r2" opacity=".4"><g class="b2"><rect y="-4" width="144" height="8" fill="none"/><rect x="10" y="-10" width="20" height="20" rx="6" fill="#8AF2D0"/><text x="40" y="4" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#DADDE6" text-anchor="start">Maps</text></g></g><g class="z2" opacity="1"><g class="zb"><text x="124" y="-1" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g><g class="zb zb2"><text x="134" y="-9" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g></g></g><g transform="translate(36 194)"><g class="" opacity=".4"><g class=""><rect y="-4" width="144" height="8" fill="none"/><rect x="10" y="-10" width="20" height="20" rx="6" fill="#B8A6FF"/><text x="40" y="4" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" fill="#DADDE6" text-anchor="start">Player</text></g></g><g class="" opacity="1"><g class="zb"><text x="124" y="-1" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g><g class="zb zb2"><text x="134" y="-9" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8" font-weight="700" fill="#B8A6FF" text-anchor="middle">z</text></g></g></g><rect x="200" y="24" width="252" height="200" rx="14" fill="#11131A" stroke="#2A2F3B"/><g class="p1" opacity="1"><g transform="translate(204 28)"><rect width="244" height="192" rx="10" fill="#141720"/><rect x="10" y="8" width="224" height="10" rx="5" fill="#fff" fill-opacity=".07"/><rect x="10" y="28" width="224" height="65" rx="8" fill="url(#hA)" fill-opacity=".8"/><ellipse cx="26" cy="44" rx="9" ry="4" transform="rotate(-30 26 44)" fill="#fff" fill-opacity=".55"/><rect x="10" y="107" width="179.2" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="119" width="134.4" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="131" width="156.8" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="143" width="112" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="155" width="145.6" height="5" rx="2.5" fill="#2A2F3B"/></g></g><g class="p3" opacity="0"><g transform="translate(204 28)"><rect width="244" height="192" rx="10" fill="#141720"/><rect x="10" y="8" width="224" height="10" rx="5" fill="#fff" fill-opacity=".07"/><rect x="10" y="28" width="224" height="65" rx="8" fill="url(#hC)" fill-opacity=".8"/><ellipse cx="26" cy="44" rx="9" ry="4" transform="rotate(-30 26 44)" fill="#fff" fill-opacity=".55"/><rect x="10" y="107" width="156.8" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="119" width="190.4" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="131" width="112" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="143" width="168" height="5" rx="2.5" fill="#2A2F3B"/><rect x="10" y="155" width="134.4" height="5" rx="2.5" fill="#2A2F3B"/></g></g><text x="240" y="250" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#7E8496" text-anchor="middle">Hidden tabs sleep. Selecting one wakes it.</text><rect x=".5" y=".5" width="479" height="259" rx="19.5" fill="none" stroke="#fff" stroke-opacity=".08"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 380" width="840" height="380" role="img" aria-labelledby="t d">
+<title id="t">Tabs that sleep</title>
+<desc id="d">Inactive tabs in wubble's vertical sidebar softly dim and sleep to free memory. Selecting a sleeping tab glides the glass highlight with spring physics, wakes the tab with a tactile bounce, and restores its page.</desc>
+
+  <defs>
+    <clipPath id="card"><rect width="840" height="380" rx="20"/></clipPath>
+    <linearGradient id="film" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7CC8FF"/>
+      <stop offset=".35" stop-color="#B8A6FF"/>
+      <stop offset=".68" stop-color="#FF9ED8"/>
+      <stop offset="1" stop-color="#8AF2D0"/>
+    </linearGradient>
+    <linearGradient id="filmV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7CC8FF"/>
+      <stop offset=".36" stop-color="#B8A6FF"/>
+      <stop offset=".68" stop-color="#FF9ED8"/>
+      <stop offset="1" stop-color="#8AF2D0"/>
+    </linearGradient>
+    <linearGradient id="glassTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".11"/>
+      <stop offset=".45" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="glassPanel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#282C3A" stop-opacity=".94"/>
+      <stop offset="1" stop-color="#1A1D28" stop-opacity=".96"/>
+    </linearGradient>
+    <linearGradient id="peekGlass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A2F42" stop-opacity=".92"/>
+      <stop offset="1" stop-color="#1E2230" stop-opacity=".94"/>
+    </linearGradient>
+    <radialGradient id="dyeBlue" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#2F5FC4" stop-opacity=".58"/>
+      <stop offset="1" stop-color="#2F5FC4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeViolet" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#7563D8" stop-opacity=".50"/>
+      <stop offset="1" stop-color="#7563D8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeTeal" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#237E69" stop-opacity=".46"/>
+      <stop offset="1" stop-color="#237E69" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dyeMagenta" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#A84886" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#A84886" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="heroSky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7CC8FF" stop-opacity=".85"/>
+      <stop offset="1" stop-color="#B8A6FF" stop-opacity=".85"/>
+    </linearGradient>
+    <linearGradient id="heroMint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8AF2D0" stop-opacity=".85"/>
+      <stop offset="1" stop-color="#7CC8FF" stop-opacity=".85"/>
+    </linearGradient>
+    <linearGradient id="heroBlush" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF9ED8" stop-opacity=".82"/>
+      <stop offset="1" stop-color="#B8A6FF" stop-opacity=".82"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity=".48"/>
+    </filter>
+    <filter id="softGlow" x="-120%" y="-180%" width="340%" height="460%">
+      <feGaussianBlur stdDeviation="4.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+<style>
+  .ind{animation:ind 9.5s linear infinite}
+  .r0{animation:r0 9.5s linear infinite}
+  .r2{animation:r2 9.5s linear infinite}
+  .z0{animation:z0 9.5s linear infinite}
+  .z2{animation:z2 9.5s linear infinite}
+  .b0{animation:b0 9.5s linear infinite;transform-origin:90px 0px}
+  .b2{animation:b2 9.5s linear infinite;transform-origin:90px 0px}
+  .p0{animation:p0 9.5s linear infinite}
+  .p2{animation:p2 9.5s linear infinite}
+  .zb{animation:zb 2.2s ease-in-out infinite}
+  .zb2{animation-delay:-1.1s}
+  @keyframes zb{0%,100%{transform:translateY(0)}50%{transform:translateY(-3.2px)}}
+  @keyframes ind{0%,15.79%{transform:translateY(0px)}15.79%{transform:translateY(0px)}16.41%{transform:translateY(25.32px)}17.04%{transform:translateY(63.45px)}17.66%{transform:translateY(81.71px)}18.29%{transform:translateY(80.33px)}18.91%{transform:translateY(71.85px)}19.54%{transform:translateY(65.92px)}20.16%{transform:translateY(64.83px)}20.79%{transform:translateY(66.43px)}21.41%{transform:translateY(68.09px)}22.04%{transform:translateY(68.71px)}22.66%{transform:translateY(68.51px)}23.29%{transform:translateY(68.09px)}23.91%{transform:translateY(67.87px)}24.54%{transform:translateY(67.86px)}25.16%{transform:translateY(67.95px)}25.79%{transform:translateY(68px)}61.05%{transform:translateY(68px)}61.05%{transform:translateY(68px)}61.68%{transform:translateY(42.68px)}62.3%{transform:translateY(4.55px)}62.93%{transform:translateY(-13.71px)}63.55%{transform:translateY(-12.33px)}64.18%{transform:translateY(-3.85px)}64.8%{transform:translateY(2.08px)}65.43%{transform:translateY(3.17px)}66.05%{transform:translateY(1.57px)}66.68%{transform:translateY(-0.09px)}67.3%{transform:translateY(-0.71px)}67.93%{transform:translateY(-0.51px)}68.55%{transform:translateY(-0.09px)}69.18%{transform:translateY(0.13px)}69.8%{transform:translateY(0.14px)}70.43%{transform:translateY(0.05px)}71.05%{transform:translateY(0px)}100%{transform:translateY(0px)}}
+  @keyframes r0{0%,35.79%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}42.11%{opacity:.42}61.05%{opacity:.42;animation-timing-function:cubic-bezier(.22,1,.36,1)}65.26%{opacity:1}100%{opacity:1}}
+  @keyframes r2{0%,15.79%{opacity:.42;animation-timing-function:cubic-bezier(.22,1,.36,1)}20%{opacity:1}80%{opacity:1;animation-timing-function:cubic-bezier(.22,1,.36,1)}86.32%{opacity:.42}100%{opacity:.42}}
+  @keyframes z0{0%,35.79%{opacity:0}42.11%{opacity:1}61.05%{opacity:1}64.74%{opacity:0}100%{opacity:0}}
+  @keyframes z2{0%,15.79%{opacity:1}19.47%{opacity:0}80%{opacity:0}86.32%{opacity:1}100%{opacity:1}}
+  @keyframes b0{0%,61.58%{transform:scale(1,1)}62.84%{transform:scale(1.06,0.89)}64.53%{transform:scale(0.97,1.04)}66%{transform:scale(1.01,0.99)}67.47%{transform:scale(1,1)}100%{transform:scale(1,1)}}
+  @keyframes b2{0%,16.32%{transform:scale(1,1)}17.58%{transform:scale(1.06,0.89)}19.26%{transform:scale(0.97,1.04)}20.74%{transform:scale(1.01,0.99)}22.21%{transform:scale(1,1)}100%{transform:scale(1,1)}}
+  @keyframes p0{0%,16.32%{opacity:1;transform:translateY(0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}21.05%{opacity:0;transform:translateY(8px)}61.58%{opacity:0;transform:translateY(8px);animation-timing-function:cubic-bezier(.22,1,.36,1)}66.32%{opacity:1;transform:translateY(0px)}100%{opacity:1;transform:translateY(0px)}}
+  @keyframes p2{0%,16.32%{opacity:0;transform:translateY(8px);animation-timing-function:cubic-bezier(.22,1,.36,1)}21.05%{opacity:1;transform:translateY(0px)}61.58%{opacity:1;transform:translateY(0px);animation-timing-function:cubic-bezier(.22,1,.36,1)}66.32%{opacity:0;transform:translateY(8px)}100%{opacity:0;transform:translateY(8px)}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}.r0{opacity:1!important}.r2{opacity:.42!important}.z0{opacity:0!important}.z2{opacity:1!important}.p0{opacity:1!important}.p2{opacity:0!important}}
+</style>
+
+  <g clip-path="url(#card)">
+    <rect width="840" height="380" fill="#08090D"/>
+    <ellipse cx="118" cy="68" rx="260" ry="180" fill="url(#dyeBlue)" opacity=".65"/>
+    <ellipse cx="739" cy="319" rx="250" ry="170" fill="url(#dyeMagenta)" opacity=".7"/>
+    <ellipse cx="655" cy="38" rx="190" ry="120" fill="url(#dyeTeal)" opacity=".55"/>
+    <rect width="840" height="380" fill="url(#glassTop)" opacity=".35"/>
+  </g>
+
+<!-- Authentic Wubble Window (720x304) -->
+<g filter="url(#shadow)">
+  
+    <clipPath id="slWin"><rect x="60" y="22" width="720" height="304" rx="15"/></clipPath>
+    <g clip-path="url(#slWin)">
+      <rect x="60" y="22" width="720" height="304" fill="#171C30"/>
+      <ellipse cx="130" cy="62" rx="252" ry="167" fill="url(#dyeBlue)"/>
+      <ellipse cx="185" cy="168" rx="216" ry="152" fill="url(#dyeViolet)"/>
+      <ellipse cx="95" cy="271" rx="202" ry="137" fill="url(#dyeTeal)"/>
+    </g>
+</g>
+
+<!-- Left Dyed Sidebar (204px wide) -->
+<g transform="translate(60 22)">
+  
+    <circle cx="14" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="24" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <circle cx="34" cy="14" r="3" fill="#FFFFFF" fill-opacity=".22"/>
+    <g stroke="#C6CCE0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".82">
+      <rect x="132" y="9.5" width="10" height="8.5" rx="2"/>
+      <path d="M135.5 9.5V18"/>
+      <path d="M152 11L149 13.8L152 16.6"/>
+      <path d="M165 11L168 13.8L165 16.6" opacity=".45"/>
+      <path d="M183 14a3.3 3.3 0 1 1-1-2.4M182 10.6v1.6h-1.6"/>
+    </g>
+  
+    <g transform="translate(10 30)">
+      <rect width="178" height="24" rx="8" fill="#0B0D16" fill-opacity=".46" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="1"/>
+      <g transform="translate(8 7.5)" stroke="#7CC8FF" stroke-width="1.1" fill="none" opacity=".85">
+        <rect x="0.8" y="3.8" width="6.4" height="4.8" rx="1.2"/>
+        <path d="M2.2 3.8V2.5a1.8 1.8 0 0 1 3.6 0v1.3"/>
+      </g>
+      <text x="21" y="15.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wubble.dev/docs</text>
+      
+      <g transform="translate(144 7.5)" opacity=".75">
+        <path d="M4 0.5L7.5 2v2.8c0 2-1.5 3.4-3.5 4.2C2 8.2 0.5 6.8 0.5 4.8V2L4 0.5Z" fill="none" stroke="#8AF2D0" stroke-width="1"/>
+        <text x="11" y="7.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="8.5" font-weight="600" fill="#A3A9B8">8</text>
+      </g>
+    </g>
+  <text x="14" y="69" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="600" fill="#A3A9B8" fill-opacity=".85">Personal</text>
+  <rect x="122" y="58" width="66" height="16" rx="8" fill="#8AF2D0" fill-opacity=".12" stroke="#8AF2D0" stroke-opacity=".28"/>
+  <text x="155" y="69" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="8" font-weight="600" fill="#8AF2D0" text-anchor="middle">4 SLEEPING</text>
+
+  <!-- Gliding glass highlight pill -->
+  <g class="ind">
+    <rect x="10" y="80" width="178" height="29" rx="9" fill="#FFFFFF" fill-opacity=".14" stroke="#FFFFFF" stroke-opacity=".18"/>
+  </g>
+
+  <!-- Tab 0: Wubble Docs -->
+  <g transform="translate(10 94.5)">
+    <g class="r0"><g class="b0">
+      <rect x="9" y="-8" width="16" height="16" rx="5" fill="#7CC8FF" fill-opacity=".24" stroke="#7CC8FF" stroke-opacity=".5"/>
+      <circle cx="17" cy="0" r="3.2" fill="#7CC8FF"/>
+      <text x="34" y="3.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.8" font-weight="500" fill="#F2F4FA">Wubble Docs</text>
+    </g></g>
+    <g class="z0" opacity="0">
+    <g class="zb"><text x="158" y="1" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#B8A6FF">z</text></g>
+    <g class="zb zb2"><text x="166" y="-6" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="7.8" font-weight="700" fill="#7CC8FF">z</text></g></g>
+  </g>
+
+  <!-- Tab 1: Inbox (always sleeping) -->
+  <g transform="translate(10 128.5)">
+    <g opacity=".42">
+      <rect x="9" y="-8" width="16" height="16" rx="5" fill="#FF9ED8" fill-opacity=".22" stroke="#FF9ED8" stroke-opacity=".45"/>
+      <circle cx="17" cy="0" r="3.2" fill="#FF9ED8"/>
+      <text x="34" y="3.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.8" fill="#DADDE6">Inbox</text>
+    </g>
+    
+    <g class="zb"><text x="158" y="1" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#B8A6FF">z</text></g>
+    <g class="zb zb2"><text x="166" y="-6" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="7.8" font-weight="700" fill="#7CC8FF">z</text></g>
+  </g>
+
+  <!-- Tab 2: Maps (wakes up!) -->
+  <g transform="translate(10 162.5)">
+    <g class="r2" opacity=".42"><g class="b2">
+      <rect x="9" y="-8" width="16" height="16" rx="5" fill="#8AF2D0" fill-opacity=".24" stroke="#8AF2D0" stroke-opacity=".5"/>
+      <circle cx="17" cy="0" r="3.2" fill="#8AF2D0"/>
+      <text x="34" y="3.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.8" font-weight="500" fill="#F2F4FA">City Maps</text>
+    </g></g>
+    <g class="z2">
+    <g class="zb"><text x="158" y="1" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#B8A6FF">z</text></g>
+    <g class="zb zb2"><text x="166" y="-6" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="7.8" font-weight="700" fill="#7CC8FF">z</text></g></g>
+  </g>
+
+  <!-- Tab 3: Music (sleeping) -->
+  <g transform="translate(10 196.5)">
+    <g opacity=".42">
+      <rect x="9" y="-8" width="16" height="16" rx="5" fill="#B8A6FF" fill-opacity=".22" stroke="#B8A6FF" stroke-opacity=".45"/>
+      <circle cx="17" cy="0" r="3.2" fill="#B8A6FF"/>
+      <text x="34" y="3.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.8" fill="#DADDE6">Music</text>
+    </g>
+    
+    <g class="zb"><text x="158" y="1" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#B8A6FF">z</text></g>
+    <g class="zb zb2"><text x="166" y="-6" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="7.8" font-weight="700" fill="#7CC8FF">z</text></g>
+  </g>
+
+  <!-- Tab 4: GitHub (sleeping) -->
+  <g transform="translate(10 230.5)">
+    <g opacity=".42">
+      <rect x="9" y="-8" width="16" height="16" rx="5" fill="#FFD98A" fill-opacity=".22" stroke="#FFD98A" stroke-opacity=".45"/>
+      <circle cx="17" cy="0" r="3.2" fill="#FFD98A"/>
+      <text x="34" y="3.8" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.8" fill="#DADDE6">GitHub</text>
+    </g>
+    
+    <g class="zb"><text x="158" y="1" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="700" fill="#B8A6FF">z</text></g>
+    <g class="zb zb2"><text x="166" y="-6" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="7.8" font-weight="700" fill="#7CC8FF">z</text></g>
+  </g>
+
+  
+    <g transform="translate(10 274)">
+      <rect width="22" height="22" rx="7" fill="#FFFFFF" fill-opacity=".13" stroke="#FFFFFF" stroke-opacity=".10"/>
+      <path d="M7.5 11.5L11 8.2L14.5 11.5V15.2H12.2V12.8H9.8V15.2H7.5Z" fill="none" stroke="#F2F4FA" stroke-width="1.15" stroke-linejoin="round"/>
+      <path d="M30 12.5L32.8 9.8L35.6 12.5" fill="none" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <g transform="translate(146 5)" stroke="#A3A9B8" stroke-width="1.2" stroke-linecap="round" fill="none">
+        <path d="M4 1v7M1.5 5.5L4 8l2.5-2.5M1 10.5h6"/>
+        <path d="M16 3h7M16 8h7"/>
+        <circle cx="18.5" cy="3" r="1.4" fill="#1B2238"/>
+        <circle cx="21" cy="8" r="1.4" fill="#1B2238"/>
+      </g>
+    </g>
+</g>
+
+<!-- Right Page Viewport (x=262, y=30, w=510, h=288) -->
+<clipPath id="slVp"><rect x="262" y="30" width="510" height="288" rx="11"/></clipPath>
+<g clip-path="url(#slVp)">
+  <rect x="262" y="30" width="510" height="288" fill="#0E1016"/>
+
+  <!-- Page 0: Wubble Docs -->
+  <g transform="translate(262 30)">
+    <g class="p0">
+      <rect width="510" height="288" fill="#0E1016"/>
+      <rect x="24" y="22" width="118" height="20" rx="10" fill="#7CC8FF" fill-opacity=".14"/>
+      <text x="83" y="35.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9" font-weight="600" fill="#7CC8FF" text-anchor="middle">ACTIVE · AWAKE</text>
+      <text x="24" y="72" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="700" fill="#F2F4FA">Zero-copy architecture</text>
+      <rect x="24" y="88" width="440" height="6" rx="3" fill="#A3A9B8" fill-opacity=".45"/>
+      <rect x="24" y="102" width="388" height="6" rx="3" fill="#A3A9B8" fill-opacity=".35"/>
+      <rect x="24" y="124" width="462" height="92" rx="11" fill="#151925" stroke="#FFFFFF" stroke-opacity=".07"/>
+      <rect x="40" y="142" width="140" height="8" rx="4" fill="url(#heroSky)"/>
+      <rect x="40" y="162" width="390" height="6" rx="3" fill="#C6CCE0" fill-opacity=".42"/>
+      <rect x="40" y="176" width="340" height="6" rx="3" fill="#C6CCE0" fill-opacity=".32"/>
+      <rect x="40" y="190" width="290" height="6" rx="3" fill="#C6CCE0" fill-opacity=".24"/>
+      <rect x="24" y="236" width="410" height="6" rx="3" fill="#A3A9B8" fill-opacity=".26"/>
+      <rect x="24" y="250" width="320" height="6" rx="3" fill="#A3A9B8" fill-opacity=".2"/>
+    </g>
+  </g>
+
+  <!-- Page 2: City Maps (wakes up!) -->
+  <g transform="translate(262 30)">
+    <g class="p2" opacity="0">
+      <rect width="510" height="288" fill="#101824"/>
+      <!-- stylized vector map -->
+      <path d="M-10 190 Q120 130 240 168 T520 112" fill="none" stroke="#1E466E" stroke-width="34" stroke-linecap="round"/>
+      <path d="M-10 190 Q120 130 240 168 T520 112" fill="none" stroke="#2F6DA6" stroke-width="18" stroke-linecap="round" opacity=".55"/>
+      <g stroke="#263348" stroke-width="4" fill="none">
+        <path d="M70 -10 L130 300"/>
+        <path d="M210 -10 L175 300"/>
+        <path d="M350 -10 L395 300"/>
+        <path d="M-10 74 L520 118"/>
+        <path d="M-10 232 L520 202"/>
+      </g>
+      <path d="M128 84 L298 118 L352 178" fill="none" stroke="#8AF2D0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- location pin -->
+      <circle cx="298" cy="118" r="16" fill="#8AF2D0" fill-opacity=".22"/>
+      <circle cx="298" cy="118" r="7" fill="#8AF2D0" stroke="#0E1016" stroke-width="2.5"/>
+      <!-- floating map card -->
+      <rect x="22" y="22" width="136" height="22" rx="11" fill="#121826" fill-opacity=".9" stroke="#8AF2D0" stroke-opacity=".45"/>
+      <text x="90" y="36" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9" font-weight="600" fill="#8AF2D0" text-anchor="middle">RESTORED · AWAKE</text>
+      <rect x="22" y="218" width="210" height="48" rx="11" fill="#141926" fill-opacity=".92" stroke="#FFFFFF" stroke-opacity=".12"/>
+      <text x="38" y="239" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#F2F4FA">Harborfront Station</text>
+      <text x="38" y="255" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" fill="#8AF2D0">12 min · Route ready</text>
+    </g>
+  </g>
+</g>
+
+<rect x="60.5" y="22.5" width="719" height="303" rx="14.5" fill="none" stroke="#FFFFFF" stroke-opacity=".14"/>
+
+<text x="420" y="358" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="500" fill="#A3A9B8" text-anchor="middle">Hidden tabs go to sleep to save memory · selecting one wakes it with a spring</text>
+<rect x=".5" y=".5" width="839" height="379" rx="19.5" fill="none" stroke="#FFFFFF" stroke-opacity=".09"/>
+</svg>

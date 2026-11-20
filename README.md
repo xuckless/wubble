@@ -11,6 +11,10 @@
 
 [Install](#install) · [Build](#build) · [What works](#what-works-today) · [How it works](#how-it-works) · [Roadmap](TODO.md)
 
+<br/>
+
+<img src="docs/readme/hero.png" alt="wubble showing the Start page with its live iridescent soap bubble, Space-dyed glass sidebar, and native rounded window frame" width="820"/>
+
 </div>
 
 wubble is an open-source web browser for Linux and macOS, written in Rust. It has vertical tabs, Spaces, split view, a built-in content blocker and password manager, and it is built on Chromium (CEF) with a [Slint](https://slint.dev) shell drawn on the GPU with [wgpu](https://wgpu.rs).
@@ -46,7 +50,7 @@ Needs stable Rust, CMake and Ninja. Developed on Linux (Wayland, Vulkan). macOS 
 
 Chromium renders each page off-screen. The shell, written in [Slint](https://slint.dev), composites those pages as GPU textures next to its own glass, so the sidebar, the page and every animation are drawn in the same frame.
 
-<img src="docs/readme/one-scene.svg" alt="A page texture slides from Chromium's off-screen surface into the wubble window, behind the glass sidebar, and the window is drawn as one frame" width="480"/>
+<img src="docs/readme/one-scene.svg" alt="Chromium renders a web page off-screen to a GPU texture that slides zero-copy into the wubble window beside the dyed glass sidebar, while a frosted command bar pops over the live page in the same frame" width="780"/>
 
 - **Zero copy.** Page frames travel from Chromium to the screen as GPU textures. Nothing is read back to the CPU on the frame path.
 - **Native chrome.** Menus, dialogs, downloads, permissions and settings are Slint, not web pages. DevTools and Chromium's own diagnostic pages are the exceptions.
@@ -56,9 +60,11 @@ Chromium renders each page off-screen. The shell, written in [Slint](https://sli
 
 It has three modes: extended, a narrow rail, and hidden. When hidden, moving to the edge of the window peeks it back over the page.
 
-<img src="docs/readme/sidebar.svg" alt="The sidebar cycling through extended, rail and hidden. Its width springs and settles each time, and a glowing ring at the window edge marks where the hidden sidebar peeks back in" width="480"/>
+<img src="docs/readme/sidebar.svg" alt="The wubble sidebar springing through extended, rail, hidden, and a floating frosted-glass edge peek over the page" width="780"/>
 
 ## What works today
+
+<img src="docs/readme/showcase-surfaces.png" alt="Four real wubble surfaces: Start Page, 3-Pane Split View, Command Bar and Glass Overlays, and Native Slint Settings" width="820"/>
 
 On Linux, checked by the smoke runs in [docs/smokes.md](docs/smokes.md):
 
@@ -82,17 +88,17 @@ Not there yet: extensions, sync, HDR output, a macOS release, Windows. The order
 
 Up to three pages side by side.
 
-<img src="docs/readme/split.svg" alt="One page becoming two and then three panes. As each seam slides in, the line between panes bows like a rubber string and settles straight" width="480"/>
+<img src="docs/readme/split.svg" alt="A wubble window splitting from one page into two and then three panes side by side, with elastic soap-film seams bowing like rubber strings and settling straight" width="780"/>
 
 ### Tabs that sleep
 
 Tabs you are not looking at go to sleep, and selecting one restores it.
 
-<img src="docs/readme/sleep.svg" alt="A vertical tab list where hidden tabs fade to asleep with small z marks. Selecting a sleeping tab moves the highlight to it, wakes the tab with a small bounce and brings its page back" width="480"/>
+<img src="docs/readme/sleep.svg" alt="Inactive tabs in wubble's dyed vertical sidebar dim to asleep with floating z marks; selecting one glides the glass highlight with spring physics, wakes the tab with a bounce, and restores its page" width="780"/>
 
 ## How it works
 
-<img src="docs/readme/pipeline.svg" alt="Frames travel as dots from Chromium through a shared GPU texture and a wgpu import into Slint. Below, the model emits effects that the engine and gfx crates carry out" width="480"/>
+<img src="docs/readme/pipeline.svg" alt="Frames travel on the GPU from Chromium through a shared GPU texture and wgpu import into Slint, above the pure wubble-core state machine emitting effects to engine and gfx" width="780"/>
 
 ```
 Chromium (CEF, windowless) -> shared GPU texture -> wgpu import -> Slint image
