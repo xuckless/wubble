@@ -9,15 +9,26 @@ fn at(needle: &str) -> usize {
         .unwrap_or_else(|| panic!("{needle:?} not in app.slint"))
 }
 
+const SIDE_PEEK: &str = include_str!("../ui/kit/chrome/sidebar.slint");
+
 #[test]
 fn the_peek_glass_is_under_the_peek_panel_and_the_sidebar() {
-    // the peek panel (its key) and the sidebar's content after it
-    let panel = at("key: GlassKeys.peek;");
-    let sidebar = at("sidebar := Sidebar {");
-    let glass = at("source: root.over-peek;");
+    // in the kit's SidePeek: the scene's glass, then the peek panel (its key), then the children
+    let find = |needle: &str| {
+        SIDE_PEEK
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not in kit/chrome/sidebar.slint"))
+    };
+    let glass = find("source: root.over-peek;");
+    let panel = find("key: GlassKeys.peek;");
+    let children = find("@children");
     // the scene's glass of the peek is opaque inside the panel: drawn after them, it hides them
     assert!(
-        glass < panel && glass < sidebar,
+        glass < panel && panel < children,
         "the over-peek image is drawn over the peek panel or the sidebar"
     );
+    // and the sidebar is SidePeek's child in app.slint
+    let zone = at("zone := SidePeek {");
+    let sidebar = at("sidebar := Sidebar {");
+    assert!(zone < sidebar, "the sidebar sits in the peek's zone");
 }

@@ -1706,12 +1706,18 @@ impl Host {
 
     // ----- command bar
 
-    /// Ctrl+T or the new-tab row: the bar is opening on an empty query.
+    /// The new-tab row: the bar is opening on an empty query. On a start page (already a new
+    /// tab) its capsule takes the keys instead, for the start tab.
     pub fn bar_for_new_tab(&mut self, window: &AppWindow) {
+        if self.shown_page() == Some(InternalPage::Start) {
+            return self.bar_for_address(window);
+        }
         self.open_bar(window, BarMode::NewTab, String::new());
     }
 
-    /// Ctrl+L or the address pill: the bar opens on the visible tab's URL.
+    /// Ctrl+L or the address pill: the bar opens on the visible tab's URL. On a start page the
+    /// bar is its capsule (app.slint, wubble_core::chrome::Placement): it goes to the start tab
+    /// on an empty query, or keeps what was typed there (Ctrl+L again selects it).
     pub fn bar_for_address(&mut self, window: &AppWindow) {
         // a Little or Popup window's address is read-only
         if self.w.kind != wubble_core::window::WindowKind::Main {
@@ -1719,11 +1725,16 @@ impl Host {
         }
         let visible = self.shown();
         match visible.and_then(|t| self.model.tabs.get(&t)) {
+            Some(tab) if InternalPage::from_url(&tab.url) == Some(InternalPage::Start) => {
+                if self.bar.mode != BarMode::Navigate(tab.id) {
+                    self.open_bar(window, BarMode::Navigate(tab.id), String::new());
+                }
+            }
             Some(tab) => {
                 let url = tab.url.clone();
                 self.open_bar(window, BarMode::Navigate(tab.id), url);
             }
-            None => self.bar_for_new_tab(window),
+            None => self.open_bar(window, BarMode::NewTab, String::new()),
         }
     }
 
@@ -1845,6 +1856,13 @@ impl Host {
     pub fn perform(&mut self, action: Action) {
         match perform::plan(action, &self.model) {
             Plan::Model(command) => self.dispatch(command),
+            // added last: shown at once (an empty Space opens its start page)
+            Plan::NewSpace(command) => {
+                self.dispatch(command);
+                if let Some(space) = self.model.spaces.last().map(|s| s.id) {
+                    self.dispatch(Command::SwitchSpace(space));
+                }
+            }
             Plan::View(op) => {
                 if let Some(tab) = self.shown() {
                     self.typed_nav.ended(tab);
@@ -2481,8 +2499,8 @@ impl Host {
                 };
                 let height = window.get_content_height();
                 match self.w.panes.seams(height.into()).first() {
-                    Some(&(x, _, _)) => {
-                        let (x, y) = (x as f32, height / 2.0);
+                    Some(seam) => {
+                        let (x, y) = (seam.x as f32, height / 2.0);
                         self.split_grab(0, x, y);
                         self.split_drag(x - by, y);
                     }
@@ -2869,16 +2887,17 @@ impl Host {
                 self.input.pointer = None;
                 self.w.glass.borrow_mut().pointer_leave();
             }
-            // A left press on the shell sends a wave through the scene: through the glass under
-            // it, else through the liquid. Not over the page, which covers the scene (the
-            // design's web view never ripples the backdrop). Raw, so the side buttons navigate
-            // over the shell too, without a wave.
+            // A left press on a favourite sends a wave through its glass (chrome.tsx `Fav`
+            // onPointerDown: the design's only wave in the window). Not over the page, which
+            // covers the scene. Raw, so the side buttons navigate over the shell too, without a
+            // wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
                 if input::taps_backdrop(*button)
+                    && window.get_fav_hovered()
                     && !self
                         .input
                         .pointer
@@ -2905,6 +2924,8 @@ impl Host {
                 self.tab_drag_pointer(at.0, at.1, true);
             }
             WindowEvent::Focused(focused) => {
+                // before Slint sees it: the start page's capsule keeps the bar through it
+                window.set_window_active(*focused);
                 let current = self.model.focused() == self.w.id;
                 if let Some(focused) = input::window_focus(current, *focused) {
                     self.input.window_focused = focused;
@@ -2982,7 +3003,10 @@ impl Host {
         let focus = if window.get_web_focused() {
             KeyFocus::Page
         } else if window.get_command_bar_state() != CommandBarState::Closed {
-            KeyFocus::Field
+            match window.get_command_placement() {
+                wubble_ui::CommandPlacement::InPage => KeyFocus::Address,
+                wubble_ui::CommandPlacement::Overlay => KeyFocus::Field,
+            }
         } else {
             KeyFocus::Shell
         };

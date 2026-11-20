@@ -170,19 +170,19 @@ fn page_scenarios() {
     app.set_page(InternalPageKind::None);
     app.set_address_host("a.test".into());
     pump();
-    assert_eq!(count(&app, "AddressPill::star-area"), 0);
-    assert_eq!(count(&app, "AddressPill::badge-area"), 0);
+    assert_eq!(count(&app, "AddressPill::star"), 0);
+    assert_eq!(count(&app, "AddressPill::badge"), 0);
     app.set_address_bookmarkable(true);
     app.set_address_blocker_visible(true);
     app.set_address_blocked(3);
     pump();
-    assert_eq!(count(&app, "AddressPill::star-area"), 1);
-    assert_eq!(count(&app, "AddressPill::badge-area"), 1);
+    assert_eq!(count(&app, "AddressPill::star"), 1);
+    assert_eq!(count(&app, "AddressPill::badge"), 1);
     let seen = Rc::new(RefCell::new(vec![]));
     let (s1, s2) = (seen.clone(), seen.clone());
     app.on_address_bookmark_requested(move || s1.borrow_mut().push("star"));
     app.on_address_blocker_requested(move |_, _| s2.borrow_mut().push("badge"));
-    click(&app, "AddressPill::star-area", PointerEventButton::Left);
-    click(&app, "AddressPill::badge-area", PointerEventButton::Left);
+    click(&app, "AddressPill::star", PointerEventButton::Left);
+    click(&app, "AddressPill::badge", PointerEventButton::Left);
     assert_eq!(*seen.borrow(), ["star", "badge"]);
 }

@@ -40,6 +40,11 @@ slint::slint! {
         }
         r0 := MenuRow { shown: root.on; index: 0; width: 200px; label: "a"; }
         r3 := MenuRow { shown: root.on; index: 3; width: 200px; label: "d"; }
+        // a row with an icon, one without in a menu that has icons, one in a menu without
+        ri := MenuRow { y: 100px; width: 200px; label: "i"; icon: "M4 4h16"; }
+        rk := MenuRow { y: 140px; width: 200px; label: "k"; icon-column: true; }
+        rn := MenuRow { y: 180px; width: 200px; label: "n"; }
+        out property <[length]> label-xs: [ri.label-x, rk.label-x, rn.label-x];
         hl := MenuHighlight { on: root.hl-on; jump: root.jump; top: root.top; panel-width: 236px; }
         sc := SearchCapsule { width: 300px; text: root.on ? "q" : ""; }
         trig := MenuTrigger { open: root.on; text: "x"; }
@@ -184,6 +189,12 @@ fn kit_menu_follows_the_web_curves() {
     g.on_acquire(|_, _| 0);
     p.show().unwrap();
     let mut report = Vec::new();
+
+    // A menu with icons keeps the icon's column on a row without one (16 px and the 10 gap),
+    // as the web's rows all carry one; a menu without icons starts its labels at the padding.
+    let xs: Vec<f32> = p.get_label_xs().iter().collect();
+    assert_eq!(xs[0], xs[1], "the icon-less row lines up with the icon row");
+    assert_eq!(xs[0] - xs[2], 16.0 + 10.0);
 
     for (pairs, on) in [(IN, true), (OUT, false)] {
         for (name, props) in pairs {

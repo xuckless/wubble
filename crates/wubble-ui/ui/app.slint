@@ -5,6 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Space } from "kit/gen/tokens.slint";
 import { Calm } from "kit/motion/calm.slint";
 import { Shell } from "kit/derived.slint";
+import { SidePeek, SideMode, PeekCue } from "kit/chrome/sidebar.slint";
 import { Seam } from "kit/controls/seam.slint";
 import { GlassPanel } from "kit/material/glass.slint";
 import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
@@ -13,11 +14,11 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
-import { CommandBar } from "components/command-bar.slint";
+import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
 import { GlanceView } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
@@ -55,7 +56,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -182,6 +183,9 @@ export component AppWindow inherits Window {
 
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
+    in property <bool> address-secure <=> sidebar.address-secure;
+    // A favourite is under the pointer: a press waves its glass (chrome.tsx `Fav` onPointerDown).
+    out property <bool> fav-hovered: sidebar.fav-hover >= 0;
     in property <bool> address-bookmarkable <=> sidebar.address-bookmarkable;
     in property <bool> address-bookmarked <=> sidebar.address-bookmarked;
     in property <bool> address-blocker-visible <=> sidebar.address-blocker-visible;
@@ -311,6 +315,10 @@ export component AppWindow inherits Window {
     }
     changed active-tab-id => {
         root.shell-model-changed();
+        // another start tab: its capsule takes the keys as a new start page's does
+        if root.page == InternalPageKind.start {
+            root.settle-focus();
+        }
     }
     changed spaces => {
         root.shell-model-changed();
@@ -334,16 +342,46 @@ export component AppWindow inherits Window {
     in property <TipView> tip;
     // A row was dragged to a new slot: (tab id, its new index in `tabs`).
     callback tab-moved(int, int);
-    out property <CommandBarState> command-bar-state <=> bar.state;
-    // Where the bar grows from (window coordinates); set when it opens.
-    in-out property <Origin> command-origin <=> bar.origin;
+    // The command bar's life: wubble_core::chrome::CommandBar, run by the driver from the cues
+    // below; its state, mode, origin and placement are written back here. In the page
+    // (`command-placement`), the start page's capsule is its field and the overlay stays shut.
+    in property <CommandBarState> command-bar-state;
+    in property <CommandPlacement> command-placement;
+    // The OS window has the keyboard (the host, from winit, before Slint sees the change): a
+    // text field loses its focus while the window is inactive, which is not leaving it.
+    in property <bool> window-active: true;
+    property <CommandBarState> overlay-state: root.command-placement == CommandPlacement.overlay ? root.command-bar-state : CommandBarState.closed;
+    property <CommandBarState> in-page-state: root.command-placement == CommandPlacement.in-page ? root.command-bar-state : CommandBarState.closed;
+    in property <CommandMode> command-mode <=> bar.mode;
+    // Where the bar grows from (window coordinates).
+    in property <Origin> command-origin <=> bar.origin;
+    callback command-open(CommandMode, Origin);
+    // how long the exit runs (`wb-pop-out`): the driver's timer settles the machine after it
+    out property <duration> command-exit: bar.exit;
+    callback command-close();
+    callback command-pick();
+    // the driver's effects (CommandEffect::FocusInput, RestoreFocus), to the field in use
+    public function command-focus-input() {
+        if root.command-placement == CommandPlacement.in-page {
+            StartBridge.focus-serial += 1;
+        } else {
+            bar.focus-input();
+        }
+    }
+    public function command-release-keys() {
+        if root.command-placement == CommandPlacement.in-page {
+            StartBridge.release-serial += 1;
+        } else {
+            bar.release-keys();
+        }
+    }
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
     // The command bar's beam while you type (the driver; wubble_core::beam::Thinking).
     in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
-    callback command-result-chosen <=> bar.result-chosen;
-    callback command-dismissed <=> bar.dismissed;
+    callback command-result-chosen(int);
+    callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
@@ -352,8 +390,7 @@ export component AppWindow inherits Window {
     callback beside-requested();
 
     public function request-new-tab() {
-        root.command-origin = sidebar.new-tab-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.new, sidebar.new-tab-origin);
         root.new-tab-requested();
     }
 
@@ -365,14 +402,12 @@ export component AppWindow inherits Window {
     callback sidebar-mode-requested(SidebarMode);
 
     public function request-address-focus() {
-        root.command-origin = sidebar.address-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.here, sidebar.address-origin);
         root.address-focus-requested();
     }
 
     public function request-beside() {
-        root.command-origin = sidebar.address-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.split, sidebar.address-origin);
         root.beside-requested();
     }
 
@@ -385,7 +420,7 @@ export component AppWindow inherits Window {
             return;
         }
         if root.command-bar-state != CommandBarState.closed {
-            bar.dispatch(CommandBarEvent.close);
+            root.command-close();
         }
         if region == FocusRegion.sidebar {
             sidebar.take-focus();
@@ -396,7 +431,7 @@ export component AppWindow inherits Window {
 
     // Closes the bar as Esc does (`--smoke windows`, before it reads the page's pixels).
     public function dismiss-command-bar() {
-        bar.dispatch(CommandBarEvent.close);
+        root.command-close();
     }
 
     // ── The page's own UI (wubble surface.rs, menu.rs, screen.rs): the visible tab's surfaces,
@@ -600,6 +635,9 @@ export component AppWindow inherits Window {
             passwords-ui.take-focus();
         } else if root.page == InternalPageKind.tasks {
             tasks-ui.take-focus();
+        } else if root.page == InternalPageKind.start {
+            // the start page's capsule is the address field: it holds the keys
+            StartBridge.focus-serial += 1;
         } else {
             web-focus.focus();
         }
@@ -614,6 +652,10 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed page => {
+        // the bar in the start page goes with the page
+        if root.page != InternalPageKind.start && root.in-page-state == CommandBarState.open {
+            root.command-close();
+        }
         root.settle-focus();
     }
     changed bookmark-open => {
@@ -643,26 +685,36 @@ export component AppWindow inherits Window {
     }
 
     // Peek (chrome.tsx): a hidden sidebar slides in over the page, on thick glass at its saved
-    // width, once the pointer has rested in the edge strip; it leaves once the pointer has been
-    // off it for a while. Presentation only: `peek` never outlives the hidden mode.
-    in-out property <bool> peek: false;
+    // width, when the pointer reaches the edge strip; it leaves once the pointer has been off it
+    // for a while. The machine is wubble_core::chrome::Peek, run by the driver from the cues
+    // below; `peek` is its one output (shown or leaving). It never outlives the hidden mode.
+    in property <bool> peek: false;
+    callback peek-cue(PeekCue);
+    callback sidebar-mode-changed(SidebarMode);
     out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
     out property <SideEdges> side-edges <=> sidebar.edges;
     changed sidebar-mode => {
-        if (root.sidebar-mode != SidebarMode.hidden) {
-            root.peek = false;
+        root.sidebar-mode-changed(root.sidebar-mode);
+    }
+    // The pointer is in the strip a hidden sidebar peeks from: `.wb-peek-edge` (shows at once),
+    // or the window's west resize strip over its first pixels (the design's `onMove` strip: 60 ms).
+    property <bool> at-edge: !root.page-fullscreen && !root.pip && (edge.has-hover || edges.west-hovered);
+    property <bool> at-west: !root.page-fullscreen && !root.pip && root.sidebar-mode == SidebarMode.hidden && edges.west-hovered;
+    changed at-west => {
+        if self.at-west {
+            root.peek-cue(PeekCue.strip-moved);
         }
     }
-    // The pointer is in the strip a hidden sidebar peeks from.
-    property <bool> at-edge: !root.page-fullscreen && !root.pip && (edge.has-hover || edges.west-hovered);
+    // over the panel or the strip: leaving both starts the peek's way out
+    property <bool> over-side: zone.has-hover || root.at-edge;
+    changed over-side => {
+        root.peek-cue(self.over-side ? PeekCue.panel-entered : PeekCue.panel-left);
+    }
     // Hidden and closed, or peeking (chrome.tsx: the peek panel shows at once, even mid-close).
     property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && (root.peek || root.sidebar-width <= Shell.sidebar-open);
-    property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
-    property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
-    animate peek-offset, peek-alpha {
-        duration: Calm.ms(Shell.peek-slide);
-        easing: Motion.ease-out;
-    }
+    // the look the sidebar takes (chrome.tsx `sideMode`); compact is the driver's (core `compact`)
+    property <SideMode> side-mode: root.peeking ? SideMode.peek : root.sidebar-rail ? SideMode.rail
+        : root.sidebar-mode == SidebarMode.hidden ? SideMode.hidden : SideMode.extended;
 
     // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
     // out of range shows the default.
@@ -850,11 +902,30 @@ export component AppWindow inherits Window {
                 sites: StartBridge.sites;
                 shortcut: StartBridge.shortcut;
                 grabbing: StartBridge.grabbing;
-                // the command bar grows from the capsule (E-179); the host gives it the tab
-                search-clicked(x, y) => {
-                    root.command-origin = { x: x, y: y };
-                    bar.dispatch(CommandBarEvent.open);
-                    StartBridge.search-clicked(x, y);
+                // the command bar in the page: the capsule is its field (the host gives it the tab)
+                state: root.in-page-state;
+                query <=> root.command-query;
+                results: root.command-results;
+                focus-serial: StartBridge.focus-serial;
+                release-serial: StartBridge.release-serial;
+                query-changed(q) => {
+                    root.command-query-changed(q);
+                }
+                result-chosen(i) => {
+                    root.command-result-chosen(i);
+                    root.command-pick();
+                }
+                // the capsule taking the keys opens the bar in it; losing them closes it
+                focus-changed(on) => {
+                    if on || root.window-active {
+                        StartBridge.search-focused = on;
+                    }
+                    if on && root.in-page-state != CommandBarState.open {
+                        root.request-address-focus();
+                    } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
+                        root.command-dismissed();
+                        root.command-close();
+                    }
                 }
                 site-activated(url) => {
                     StartBridge.site-activated(url);
@@ -872,6 +943,8 @@ export component AppWindow inherits Window {
                     StartBridge.stage-leave();
                 }
                 init => {
+                    // a start page shown: its capsule takes the keys
+                    StartBridge.focus-serial += 1;
                     StartBridge.search-x = self.search-x;
                     StartBridge.search-y = self.search-y;
                 }
@@ -1209,6 +1282,17 @@ export component AppWindow inherits Window {
                 }
             }
             bar := CommandBar {
+                state: root.overlay-state;
+                // `here` shows the open site's host (chrome.tsx: a site, not wubble's own pages)
+                here-host: root.address-host == "wubble" || root.address-host == "data" ? "" : root.address-host;
+                result-chosen(i) => {
+                    root.command-result-chosen(i);
+                    root.command-pick();
+                }
+                dismissed => {
+                    root.command-dismissed();
+                    root.command-close();
+                }
                 closed => {
                     web-focus.focus();
                 }
@@ -1223,57 +1307,27 @@ export component AppWindow inherits Window {
             width: Chrome.peekEdge + Chrome.inset;
             height: parent.height;
             enabled: root.sidebar-mode == SidebarMode.hidden && !root.page-fullscreen && !root.pip;
-        }
-        Timer {
-            interval: Shell.peek-in;
-            running: root.at-edge && root.sidebar-mode == SidebarMode.hidden && !root.peek;
-            triggered => {
-                root.peek = true;
-            }
-        }
-        Timer {
-            interval: Shell.peek-out;
-            running: root.peeking && !zone.has-hover && !root.at-edge;
-            triggered => {
-                root.peek = false;
+            changed has-hover => {
+                if self.has-hover {
+                    root.peek-cue(PeekCue.edge-entered);
+                }
             }
         }
 
         // The sidebar sits inside its hover zone, so the zone keeps has-hover
         // while the pointer is over a child row.
-        zone := TouchArea {
+        zone := SidePeek {
             visible: !root.page-fullscreen;
-            x: root.hidden-at-rest ? root.peek-offset : 0px;
-            y: 0px;
+            mode: root.side-mode;
+            floating: root.hidden-at-rest;
             width: Chrome.inset + sidebar.width;
             height: parent.height;
-
-            // The scene's glass of the peek (GlassOver.peek), over the page, under the peek panel
-            // (no fill of its own then) and the sidebar's content: window-sized, so placed back at
-            // the window's origin.
-            if root.over-on && root.over-peek.width > 0: Image {
-                x: -zone.x;
-                y: -zone.y;
-                width: root.width;
-                height: root.height;
-                source: root.over-peek;
-                image-fit: fill;
-            }
-
-            // the peek's own glass (.wb-side-peek: thick, radius 20)
-            GlassPanel {
-                x: sidebar.x;
-                y: sidebar.y;
-                width: sidebar.width;
-                height: sidebar.height;
-                tier: GlassTier.thick;
-                radius: Radius.lg;
-                over-content: true;
-                key: GlassKeys.peek;
-                over-layer: GlassOver.peek;
-                visible: root.hidden-at-rest;
-                opacity: root.peek-alpha;
-            }
+            panel-width: sidebar.width;
+            panel-height: sidebar.height;
+            over-on: root.over-on;
+            over-peek: root.over-peek;
+            window-width: root.width;
+            window-height: root.height;
 
             sidebar := Sidebar {
                 x: Chrome.inset;
@@ -1281,11 +1335,11 @@ export component AppWindow inherits Window {
                 width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-width;
                 content-width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-contents;
                 height: parent.height - 2 * Chrome.inset;
-                opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
-                compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                opacity: root.hidden-at-rest ? zone.alpha : root.sidebar-opacity;
+                compact: root.sidebar-rail;
                 // Over the peek's Slint glass (and the page) the scene cannot show: Slint draws.
                 glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
-                floating: root.hidden-at-rest;
+                mode: root.side-mode;
                 // the peek floats off the seam: its sections hold still
                 ride: root.hidden-at-rest ? [] : root.seam-edge;
                 ride-step: root.seam-edge-step;
@@ -1462,6 +1516,7 @@ export component AppWindow inherits Window {
         anchor-x: root.menu.x;
         anchor-y: root.menu.y;
         entries: root.menu.entries;
+        icon-column: root.menu.icons;
         chosen(i) => {
             root.menu-chosen(i);
         }

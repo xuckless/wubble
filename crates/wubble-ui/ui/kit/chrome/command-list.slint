@@ -1,0 +1,121 @@
+// design: browser/command.tsx:127-145, browser/browser.css:166-180, core/wubble.css:55-56 @598f814
+// The command bar's panel and list, shared by the overlay bar (command-bar.slint) and the start
+// page's results (kit/pages/start.slint), so both show the same rows the same way.
+// `CommandPanel` (`.wb-cmd wb-thick wb-glass`): the thick glass, radius 20, growing from
+// `grow-from` on `wb-pop-in` (.22 s ease-out from .95, clear by 60 % of the way) and shrinking
+// back on `wb-pop-out` (.176 s) while `open` is false.
+// `CommandList` (`.wb-cmd-list`, padding-top 4): at most 7 rows (`CMD.rows`) under the one
+// selection (`.wb-cmd-sel`: 44 high, radius 12, white .08, gliding .18 s ease-out to the selected
+// row, gone with no rows); the pointer selects a row, `step` moves the selection and stops at
+// the ends, `choose` picks it; no rows: the empty line (`.wb-cmd-empty`, 13 mist, margin 8 12 6).
+
+import { Tsx } from "../gen/tokens.slint";
+import { BrowserCss, WubbleCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Calm } from "../motion/calm.slint";
+import { CommandRow } from "command-row.slint";
+import { CommandResult, GlassTier, Origin } from "../../components/model.slint";
+
+export component CommandPanel inherits GlassPanel {
+    in property <bool> open;
+    // where it grows from, in the panel (`transform-origin`)
+    in property <Origin> grow-from: { x: 0px, y: 0px };
+    tier: GlassTier.thick;
+    radius: BrowserCss.wb-cmd--border-radius;
+    transform-origin: { x: root.grow-from.x, y: root.grow-from.y };
+    // `wb-pop-in` / `wb-pop-out`: the scale over the whole run, the fade and blur done by
+    // 60 % of the way in
+    scale: root.open ? 1 : WubbleCss.wb-pop-in-k-from--transform-scale;
+    animate scale {
+        duration: Calm.ms(root.open ? BrowserCss.wb-cmd--animation-duration : BrowserCss.wb-cmd-out--animation-duration);
+        easing: root.open ? BrowserCss.wb-cmd--animation-easing : BrowserCss.wb-cmd-out--animation-easing;
+    }
+    opacity: root.open ? WubbleCss.wb-pop-in-k-60pct--opacity : WubbleCss.wb-pop-out-k-to--opacity;
+    animate opacity {
+        duration: Calm.ms(root.open ? BrowserCss.wb-cmd--animation-duration * WubbleCss.wb-pop-in-k-60pct--at : BrowserCss.wb-cmd-out--animation-duration);
+        easing: root.open ? BrowserCss.wb-cmd--animation-easing : BrowserCss.wb-cmd-out--animation-easing;
+    }
+    // swallow clicks, so they do not reach what is under the panel
+    TouchArea { }
+
+    @children
+}
+
+export component CommandList inherits Rectangle {
+    in property <[CommandResult]> results;
+    // the panel is open: each opening plays the rows' entrance again
+    in property <bool> shown;
+    // a row was picked (Enter or a click)
+    callback chosen(int);
+
+    // the selection; `current` is it inside the list
+    in-out property <int> selected: 0;
+    out property <int> count: min(root.results.length, Tsx.cmd-rows);
+    out property <int> current: max(0, min(root.selected, root.count - 1));
+    out property <bool> empty-shown: root.count == 0;
+    property <length> pitch: BrowserCss.wb-cmd-row--height;
+    // `.wb-cmd-empty`: its line box and margins
+    property <length> empty-h: BrowserCss.wb-cmd-empty--margin-top + Role.wb-cmd-empty.size * Role.wb-cmd-empty.line-height + BrowserCss.wb-cmd-empty--margin-bottom;
+
+    // Up (-1) / Down (+1): clamped at both ends (`Math.min` / `Math.max`), no wrap
+    public function step(d: int) {
+        if root.count > 0 {
+            root.selected = max(0, min(root.count - 1, root.current + d));
+        }
+    }
+    // Enter: the selected row, if there is one
+    public function choose-current() {
+        if root.count > 0 {
+            root.chosen(root.current);
+        }
+    }
+
+    height: BrowserCss.wb-cmd-list--padding-top + (root.count > 0 ? root.count * root.pitch : root.empty-h);
+
+    // `.wb-cmd-sel`
+    Rectangle {
+        x: BrowserCss.wb-cmd-sel--left;
+        y: BrowserCss.wb-cmd-sel--top + root.current * root.pitch;
+        width: parent.width - BrowserCss.wb-cmd-sel--left - BrowserCss.wb-cmd-sel--right;
+        height: BrowserCss.wb-cmd-sel--height;
+        border-radius: BrowserCss.wb-cmd-sel--border-radius;
+        background: BrowserCss.wb-cmd-sel--background;
+        opacity: root.count > 0 ? 1 : 0;
+        animate y {
+            duration: Calm.ms(BrowserCss.wb-cmd-sel--transition-transform-duration);
+            easing: BrowserCss.wb-cmd-sel--transition-transform-easing;
+        }
+        animate opacity {
+            duration: Calm.ms(BrowserCss.wb-cmd-sel--transition-opacity-duration);
+            easing: ease;
+        }
+    }
+    for r[i] in root.results: CommandRow {
+        visible: i < root.count;
+        y: BrowserCss.wb-cmd-list--padding-top + i * root.pitch;
+        width: parent.width;
+        item: r;
+        index: i;
+        shown: root.shown;
+        active: i == root.current;
+        hovered => {
+            root.selected = i;
+        }
+        activated => {
+            if i < root.count {
+                root.chosen(i);
+            }
+        }
+    }
+    if root.empty-shown: KitText {
+        x: BrowserCss.wb-cmd-empty--margin-left;
+        y: BrowserCss.wb-cmd-list--padding-top + BrowserCss.wb-cmd-empty--margin-top;
+        width: parent.width - BrowserCss.wb-cmd-empty--margin-left - BrowserCss.wb-cmd-empty--margin-right;
+        height: Role.wb-cmd-empty.size * Role.wb-cmd-empty.line-height;
+        role: Role.wb-cmd-empty;
+        text: "Nothing matches. Press Enter to search.";
+        color: BrowserCss.wb-cmd-empty--color;
+    }
+}

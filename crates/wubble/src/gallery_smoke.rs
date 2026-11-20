@@ -207,12 +207,20 @@ pub const SCENES: &[Scene] = &[
     // the new-tab page: under `--frozen-backdrop` its liquid holds and its bubble steps on the
     // harness's fixed clock (backdrop.rs), so it is shot at rest the same way every run
     on("start", InternalPage::Start),
+    // the rail with its tab hovered: the close badge on the icon's corner (derived)
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_TAB_ROW),
+        ..on("sidebar-rail-hover", InternalPage::Start)
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
 const TAB_ROW: (u16, u16) = (130, 248);
 const NEW_TAB_ROW: (u16, u16) = (130, 408);
+/// The first tab of the rail on the gallery's own profile (one tab), logical px.
+const RAIL_TAB_ROW: (u16, u16) = (36, 122);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
 // autofill menu's first login.
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);
@@ -251,6 +259,8 @@ pub enum Stage {
     Scrolled(usize),
     /// Scene `i` took its second click; waiting for it to settle again.
     Clicked(usize),
+    /// Scene `i` settled and the pointer was put on it again; waiting for the hover look.
+    Pointed(usize),
     /// Scene `i` was written.
     Shot(usize),
     /// Frame `k` of scene `i`'s burst was asked for.
@@ -267,6 +277,10 @@ pub enum Action {
     Scroll(usize),
     /// Scene `i`'s second click (`Scene::then`).
     Click(usize),
+    /// Puts the pointer where scene `i` says, on the settled layout: a hover is only worked out
+    /// on a pointer event, and the one sent with the show met the layout the scene started from
+    /// (the sidebar still springing out of the previous scene's mode).
+    Point(usize),
     Shoot(usize),
     /// Frame `k` of scene `i`'s burst.
     ShootFrame(usize, u32),
@@ -296,9 +310,13 @@ pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
         (Stage::Scrolled(i), Event::Settled) if SCENES[i].then.is_some() => {
             (Stage::Clicked(i), Some(Action::Click(i)))
         }
-        (Stage::Shown(i) | Stage::Scrolled(i) | Stage::Clicked(i), Event::Settled) => {
-            (Stage::Shot(i), Some(Action::Shoot(i)))
+        (Stage::Shown(i), Event::Settled) if SCENES[i].pointer.is_some() => {
+            (Stage::Pointed(i), Some(Action::Point(i)))
         }
+        (
+            Stage::Shown(i) | Stage::Scrolled(i) | Stage::Clicked(i) | Stage::Pointed(i),
+            Event::Settled,
+        ) => (Stage::Shot(i), Some(Action::Shoot(i))),
         (Stage::Burst(i, k), Event::Shot) if k + 1 < SCENES[i].frames => {
             (Stage::Burst(i, k + 1), Some(Action::ShootFrame(i, k + 1)))
         }
@@ -321,9 +339,11 @@ mod tests {
             let a = action.unwrap_or_else(|| panic!("stuck at {stage:?}"));
             out.push(a);
             event = match a {
-                Action::Seed | Action::Show(_) | Action::Scroll(_) | Action::Click(_) => {
-                    Event::Settled
-                }
+                Action::Seed
+                | Action::Show(_)
+                | Action::Scroll(_)
+                | Action::Click(_)
+                | Action::Point(_) => Event::Settled,
                 _ => Event::Shot,
             };
         }
@@ -387,9 +407,31 @@ mod tests {
 
     #[test]
     fn a_scene_is_shot_only_once_it_settled() {
-        for stage in [Stage::Shown(3), Stage::Scrolled(3), Stage::Clicked(3)] {
+        for stage in [
+            Stage::Shown(3),
+            Stage::Scrolled(3),
+            Stage::Clicked(3),
+            Stage::Pointed(3),
+        ] {
             for event in [Event::Ready, Event::Shot] {
                 assert_eq!(next(stage, event), (stage, None));
+            }
+        }
+    }
+
+    #[test]
+    fn a_hover_scene_puts_the_pointer_again_once_settled() {
+        let actions = walk();
+        for (i, scene) in SCENES.iter().enumerate() {
+            let point = actions.iter().position(|a| *a == Action::Point(i));
+            assert_eq!(point.is_some(), scene.pointer.is_some(), "{}", scene.name);
+            if let Some(p) = point {
+                assert_eq!(
+                    actions.get(p + 1),
+                    Some(&Action::Shoot(i)),
+                    "{}",
+                    scene.name
+                );
             }
         }
     }

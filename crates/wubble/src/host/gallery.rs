@@ -88,6 +88,10 @@ impl Host {
                     click(&window, at);
                 }
             }
+            Some(Action::Point(i)) => {
+                self.gallery_wait(SETTLE);
+                gallery_point(&window, &SCENES[i]);
+            }
             Some(Action::ShootFrame(i, k)) => {
                 let ms = self.gallery_burst_start.elapsed().as_secs_f64() * 1000.0;
                 match shot::take_frame(&window, i, SCENES[i].name, k, ms) {
@@ -259,14 +263,7 @@ impl Host {
         } else {
             shell_view(&autofill)
         });
-        // The pointer rests where the scene says (a hover state), or leaves the window.
-        let pointer = match scene.pointer {
-            Some((x, y)) => slint::platform::WindowEvent::PointerMoved {
-                position: slint::LogicalPosition::new(f32::from(x), f32::from(y)),
-            },
-            None => slint::platform::WindowEvent::PointerExited,
-        };
-        window.window().dispatch_event(pointer);
+        gallery_point(window, scene);
         // The shell's own callbacks call back into the host: later, outside it.
         let (sidebar, overlay) = (scene.sidebar, scene.overlay);
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
@@ -421,4 +418,15 @@ fn rgb(hex: &str) -> Result<wubble_core::space::Rgb, String> {
         (v >> 8) as u8,
         v as u8,
     ))
+}
+
+/// The pointer rests where the scene says (a hover state), or leaves the window.
+fn gallery_point(window: &AppWindow, scene: &Scene) {
+    let pointer = match scene.pointer {
+        Some((x, y)) => slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(f32::from(x), f32::from(y)),
+        },
+        None => slint::platform::WindowEvent::PointerExited,
+    };
+    window.window().dispatch_event(pointer);
 }

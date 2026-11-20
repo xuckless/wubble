@@ -46,6 +46,8 @@ pub enum Plan {
     Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
+    /// Add this Space (a `Command::NewSpace`), then show it.
+    NewSpace(Command),
     /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
     CycleRegion(bool),
     /// Take the newest entry off the store's recently-closed list and open it.
@@ -210,8 +212,9 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                 to: WindowTarget::New,
             })
         }),
-        // "Space N" in the next swatch; renamed in Settings (or the sidebar)
-        Action::NewSpace => Plan::Model(model.new_space()),
+        // "Space N" in the next unworn swatch (`Model::new_space`), then shown; Settings' Spaces
+        // list adds one the same way without switching
+        Action::NewSpace => Plan::NewSpace(model.new_space()),
         Action::ToggleCompactMode => Plan::NotYet,
     }
 }
@@ -228,7 +231,7 @@ pub fn not_yet(action: Action) -> Option<&'static str> {
 mod tests {
     use super::*;
     use wubble_core::model::apply;
-    use wubble_core::space::{ContainerId, Rgb, SpaceId};
+    use wubble_core::space::{ContainerId, Rgb};
     use wubble_core::tab::TabId;
 
     fn with_tabs(n: usize) -> Model {
@@ -424,8 +427,8 @@ mod tests {
         assert_eq!(plan(Action::PrevSpace, &m), switch(1));
         assert_eq!(
             plan(Action::NewSpace, &m),
-            Plan::Model(m.new_space()),
-            "a Space with the next name and swatch"
+            Plan::NewSpace(m.new_space()),
+            "a Space with the next name and swatch, then shown"
         );
     }
 

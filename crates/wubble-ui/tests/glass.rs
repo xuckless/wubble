@@ -93,11 +93,12 @@ fn glass_panels_report_their_items() {
         favicon: Default::default(),
         ..Default::default()
     };
-    app.set_pinned_tabs(ModelRc::from([tab].as_slice()));
+    app.set_pinned_tabs(ModelRc::from([tab.clone()].as_slice()));
     pump(1);
     let fav_key = keys.get_favourites() + 5;
     let fav = item(&seen, fav_key);
     assert!(fav.present && !fav.pressed);
+    assert!(!app.get_fav_hovered(), "the pointer is elsewhere");
 
     // Pressed, it shrinks to 0.97 about its centre, and the item says so.
     let (cx, cy) = (fav.x + fav.width / 2.0, fav.y + fav.height / 2.0);
@@ -121,6 +122,15 @@ fn glass_panels_report_their_items() {
     press(&app, cx, cy, false);
     pump(500);
     assert!(near(item(&seen, fav_key).width, fav.width));
+
+    // Under the pointer it is the favourite a press waves; once its tab is no longer pinned (the
+    // tiles gone with it), nothing is.
+    assert!(app.get_fav_hovered());
+    app.set_pinned_tabs(ModelRc::default());
+    pump(1);
+    assert!(!app.get_fav_hovered());
+    app.set_pinned_tabs(ModelRc::from([tab].as_slice()));
+    pump(1);
 
     // A generation bump makes every live panel report again.
     seen.borrow_mut().clear();

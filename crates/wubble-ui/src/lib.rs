@@ -126,9 +126,12 @@ mod tests {
         let app = AppWindow::new().unwrap();
         // the kit menu keeps its highlight and keys in the controls registry
         let _controls = crate::controls::wire(&app);
+        // the command bar's machine runs in the driver
+        let _driver = crate::driver::wire(&app, wubble_core::seam::Seam::new());
         app.window()
             .set_size(slint::LogicalSize::new(1280.0, 800.0));
         command_bar_lifecycle(&app);
+        start_page_bar(&app);
         page_surfaces(&app);
     }
 
@@ -180,6 +183,7 @@ mod tests {
         let open_menu = |x: f32| {
             app.set_menu(MenuView {
                 open: true,
+                icons: true,
                 x,
                 y: 40.0,
                 entries: ModelRc::from(entries.as_slice()),
@@ -356,6 +360,111 @@ mod tests {
         assert!(app.get_content_x() > 0.0);
     }
 
+    /// The start page's capsule is the command bar's field (wubble_core::chrome::Placement):
+    /// the page takes the keys into it, typing and the results go through the bar's own query
+    /// and rows, Ctrl+L keeps the keys there, and the overlay never opens on the page.
+    fn start_page_bar(app: &AppWindow) {
+        let asked = Rc::new(Cell::new(0));
+        app.on_address_focus_requested(count(&asked));
+        let queries = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let q = queries.clone();
+        app.on_command_query_changed(move |text| q.borrow_mut().push(text.into()));
+        let chosen = Rc::new(std::cell::RefCell::new(vec![]));
+        let c = chosen.clone();
+        app.on_command_result_chosen(move |i| c.borrow_mut().push(i));
+        let focused = || app.global::<StartBridge>().get_search_focused();
+        let in_page = |state| {
+            assert_eq!(app.get_command_placement(), CommandPlacement::InPage);
+            assert_eq!(app.get_command_bar_state(), state);
+        };
+        app.set_command_query("".into());
+        app.set_command_results(ModelRc::from(Vec::<CommandResult>::new().as_slice()));
+
+        // A start page shown: its capsule holds the keys, the bar is open in it, for the tab.
+        app.set_page(InternalPageKind::Start);
+        settle();
+        assert!(focused(), "the new start page's capsule takes the keys");
+        in_page(CommandBarState::Open);
+        assert_eq!(asked.get(), 1, "the host gives the bar the start tab");
+        assert!(!app.get_web_focused());
+
+        // Typed keys land in the capsule, as the bar's query.
+        press(app, "w");
+        assert_eq!(app.get_command_query(), "w");
+        assert_eq!(*queries.borrow(), ["w"]);
+        let rows: Vec<_> = (0..3).map(|i| result(&format!("s{i}"))).collect();
+        app.set_command_results(ModelRc::from(rows.as_slice()));
+        settle();
+
+        // Ctrl+L again (the focus-address action): the keys stay in the capsule, the text is
+        // selected, and the overlay stays shut.
+        app.invoke_request_address_focus();
+        settle();
+        in_page(CommandBarState::Open);
+        assert!(focused());
+        press(app, "x");
+        assert_eq!(app.get_command_query(), "x", "Ctrl+L selected the text");
+
+        // The arrows move the selection; Enter picks it and the bar goes at once.
+        press(app, Key::DownArrow);
+        press(app, Key::Return);
+        assert_eq!(*chosen.borrow(), [1]);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+        settle();
+        assert!(!focused(), "a pick lets go of the keys");
+
+        // A click on the capsule takes the keys again; Escape clears, then lets go.
+        let (x, y) = (
+            app.global::<StartBridge>().get_search_x(),
+            app.global::<StartBridge>().get_search_y(),
+        );
+        click(app, x, y);
+        settle();
+        assert!(focused());
+        in_page(CommandBarState::Open);
+        press(app, "abc");
+        press(app, Key::Escape);
+        assert_eq!(app.get_command_query(), "");
+        in_page(CommandBarState::Open);
+        press(app, Key::Escape);
+        settle();
+        assert!(!focused());
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+
+        // The window losing the keyboard (another app in front) is not leaving the capsule:
+        // the bar stays open in it, and the keys come back to it.
+        app.invoke_request_address_focus();
+        settle();
+        in_page(CommandBarState::Open);
+        app.set_window_active(false);
+        app.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        settle();
+        in_page(CommandBarState::Open);
+        app.set_window_active(true);
+        app.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        settle();
+        in_page(CommandBarState::Open);
+        assert!(focused());
+        press(app, Key::Escape);
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+
+        // Every other page: Ctrl+L opens the overlay bar as before.
+        app.set_page(InternalPageKind::None);
+        settle();
+        app.invoke_request_address_focus();
+        settle();
+        assert_eq!(app.get_command_placement(), CommandPlacement::Overlay);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
+        press(app, Key::Escape);
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+        app.set_command_results(ModelRc::from(Vec::<CommandResult>::new().as_slice()));
+        app.set_command_query("".into());
+    }
+
     fn command_bar_lifecycle(app: &AppWindow) {
         let rows: Vec<_> = (0..3).map(|i| result(&format!("r{i}"))).collect();
         app.set_command_results(ModelRc::from(rows.as_slice()));
@@ -377,19 +486,45 @@ mod tests {
         assert_eq!(app.get_command_results().row_count(), 3);
         assert_eq!(app.get_command_shown_rows(), 3);
 
-        // A second Enter while closing must not choose again.
+        // A pick closes the bar at once (command.tsx `go`: `d.command = null`); a second
+        // Enter chooses nothing.
         press(app, "\n");
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
         press(app, "\n");
         assert_eq!(chosen.get(), 1);
-        // The close timer is the dropdown's out duration (176 ms).
-        mock_elapsed_time(Duration::from_millis(170));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
-        mock_elapsed_time(Duration::from_millis(10));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
-        // A second Escape while closing must not dismiss again.
+        // The opener prefills the query after the open (the host's `open_bar` on the URL): the
+        // input selects that text, so typing replaces all of it, whatever it held before.
+        app.set_command_query("news".into());
+        let w = app.as_weak();
+        app.on_address_focus_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("https://example.com/".into());
+            }
+        });
+        app.invoke_request_address_focus();
+        settle();
+        press(app, "x");
+        assert_eq!(app.get_command_query(), "x");
+        // the same for New tab with a prefilled query (`search_for`: the bar on the text)
+        press(app, Key::Escape);
+        settle();
+        let w = app.as_weak();
+        app.on_new_tab_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("some words".into());
+            }
+        });
+        app.invoke_request_new_tab();
+        settle();
+        press(app, "y");
+        assert_eq!(app.get_command_query(), "y");
+        press(app, Key::Escape);
+        settle();
+        dismissed.set(0);
+
+        // Escape runs the exit: the dropdown's out duration (176 ms); a second Escape while it
+        // closes does not dismiss again.
         app.invoke_request_address_focus();
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
@@ -398,9 +533,12 @@ mod tests {
         app.set_command_results(ModelRc::from(nine.as_slice()));
         assert_eq!(app.get_command_shown_rows(), 7);
         press(app, Key::Escape);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
         press(app, Key::Escape);
         assert_eq!(dismissed.get(), 1);
-        settle();
+        mock_elapsed_time(Duration::from_millis(170));
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        mock_elapsed_time(Duration::from_millis(10));
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
     }
 }

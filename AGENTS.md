@@ -80,7 +80,8 @@ hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.tx
 (empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
 menu and save prompt, dialog sheet, toast, link status bubble, error and certificate error pages,
 Settings (four scroll positions; its list editors: rules with a row selected, a draft, Spaces,
-Sites), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page.
+Sites), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page,
+the rail with its tab hovered (the close badge).
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
 properties: the host rewrites those). Size and scale come from the environment:
 `WUBBLE_SHOT_SIZE=900x600` (logical; the design's 1360x880 by default) and

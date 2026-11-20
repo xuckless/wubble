@@ -1,0 +1,88 @@
+// design: browser/chrome.tsx:250-269, browser/browser.css:15-21, browser/browser.css:148 @598f814
+// The sidebar's frame (`aside.wb-side`): its mode is the design's `sideMode` class, the look the
+// sidebar takes: `extended` (padding 6), `rail` (`.wb-side-rail`: padding 6 0), `hidden`, and
+// `peek` (`.wb-side-peek`: floating 8 from the left, radius 20, padding 10 8 10 10, thick glass,
+// sliding in over .34 s ease-out from `translateX(-100% - 16px)` at .2 opacity; going, it is
+// simply gone, as the design drops the class). Whether it peeks is wubble_core::chrome::Peek's,
+// run by the host; compact (the rail look) is wubble_core::chrome::compact. The peek's glass is
+// the scene's (GlassOver.peek, frosted and still over the live page: the owner's override, no
+// moving liquid), registered while the peek shows; Slint draws the fallback.
+
+import { Chrome } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Calm } from "../motion/calm.slint";
+import { GlassTier, GlassKeys, GlassOver } from "../../components/model.slint";
+
+export enum SideMode { extended, rail, hidden, peek }
+
+// What the pointer did that the peek machine (wubble_core::chrome::PeekEvent) hears.
+export enum PeekCue { edge-entered, strip-moved, panel-entered, panel-left }
+
+// The padding of each mode (`.wb-side`, `.wb-side-rail`, `.wb-side-peek`).
+export global SidePad {
+    public pure function left(m: SideMode) -> length {
+        return m == SideMode.peek ? BrowserCss.wb-side-peek--padding-left : m == SideMode.rail ? BrowserCss.wb-side-rail--padding-left : BrowserCss.wb-side--padding;
+    }
+    public pure function right(m: SideMode) -> length {
+        return m == SideMode.peek ? BrowserCss.wb-side-peek--padding-right : m == SideMode.rail ? BrowserCss.wb-side-rail--padding-right : BrowserCss.wb-side--padding;
+    }
+    public pure function top(m: SideMode) -> length {
+        return m == SideMode.peek ? BrowserCss.wb-side-peek--padding-top : m == SideMode.rail ? BrowserCss.wb-side-rail--padding-top : BrowserCss.wb-side--padding;
+    }
+    public pure function bottom(m: SideMode) -> length {
+        return m == SideMode.peek ? BrowserCss.wb-side-peek--padding-bottom : m == SideMode.rail ? BrowserCss.wb-side-rail--padding-bottom : BrowserCss.wb-side--padding;
+    }
+}
+
+// The hover zone the sidebar sits in, with the peek's glass and slide. The child (the sidebar's
+// content) is placed by the caller at (inset, inset), `panel-width` wide.
+export component SidePeek inherits TouchArea {
+    in property <SideMode> mode;
+    // the sidebar is hidden and floats (peeking, or closed and still)
+    in property <bool> floating;
+    in property <length> panel-width;
+    in property <length> panel-height;
+    // the scene's frost of the peek, window-sized (empty: Slint's glass shows)
+    in property <bool> over-on;
+    in property <image> over-peek;
+    in property <length> window-width;
+    in property <length> window-height;
+    property <bool> shown: root.mode == SideMode.peek;
+    // `wb-peek-in`: from `translateX(-100% - 16px)` and .2 opacity, over .34 s ease-out; out at once
+    out property <length> slide: root.shown ? 0px : root.panel-width * BrowserCss.wb-peek-in-k-from--transform-translatex-pct + BrowserCss.wb-peek-in-k-from--transform-translatex - Chrome.inset;
+    out property <float> alpha: root.shown ? 1 : BrowserCss.wb-peek-in-k-from--opacity;
+    animate slide, alpha {
+        duration: Calm.ms(root.shown ? BrowserCss.wb-side-peek--animation-duration : 0ms);
+        easing: BrowserCss.wb-side-peek--animation-easing;
+    }
+    x: root.floating ? root.slide : 0px;
+    y: 0px;
+
+    // The scene's glass of the peek (GlassOver.peek), over the page, under the panel (no fill of
+    // its own then) and the sidebar's content: window-sized, so placed back at the window's origin.
+    if root.over-on && root.over-peek.width > 0: Image {
+        x: -root.x;
+        y: -root.y;
+        width: root.window-width;
+        height: root.window-height;
+        source: root.over-peek;
+        image-fit: fill;
+    }
+    // `.wb-side-peek`: thick glass, radius 20
+    GlassPanel {
+        x: Chrome.inset;
+        y: Chrome.inset;
+        width: root.panel-width;
+        height: root.panel-height;
+        tier: GlassTier.thick;
+        radius: BrowserCss.wb-side-peek--border-radius;
+        over-content: true;
+        key: GlassKeys.peek;
+        over-layer: GlassOver.peek;
+        visible: root.floating;
+        present: root.shown;
+        opacity: root.alpha;
+    }
+    @children
+}

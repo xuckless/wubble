@@ -123,11 +123,8 @@ fn peek(app: &AppWindow, driver: &Shared) {
     pump(1);
     assert!(!app.get_peeking());
 
-    // Into the edge strip: it peeks 60 ms later.
+    // Into the edge strip (`.wb-peek-edge` onPointerEnter): it peeks at once.
     pointer(app, 10.0, 300.0);
-    pump(30);
-    assert!(!app.get_peeking());
-    pump(40);
     assert!(app.get_peeking());
     // The slide (340 ms), then over a child row: still peeking.
     pump(400);
@@ -146,7 +143,8 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(!app.get_peeking());
     pump(400);
 
-    // Pushed against the window's edge, over the west resize strip: it peeks too.
+    // Pushed against the window's edge, over the west resize strip (the design's `onMove`
+    // strip): it peeks 60 ms later.
     pump(400);
     pointer(app, 2.0, 300.0);
     pump(100);
@@ -407,18 +405,16 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
         );
         assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
         assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
-        // the dev tools button (the design's Source) between them, all three side by side;
-        // at the minimum there is no room for it beside downloads, and it gives way
-        let tools = if raw == SIDEBAR_DEFAULT as f32 {
-            36.0
-        } else {
-            0.0
-        };
+        // the dev tools button (the design's Source) between them, all three side by side,
+        // when the row has room for them after the Spaces and their "+" (`spaces_end`); else
+        // it gives way (at the minimum, or with three Spaces at the default width)
+        let room = e.settings_end - e.spaces_end >= 3.0 * 36.0;
+        let tools = if room { 36.0 } else { 0.0 };
         assert_eq!(e.downloads_end, e.settings - tools, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,
-            "at {raw}: tiles under downloads"
+            "at {raw}: the tiles and their \"+\" clear of downloads"
         );
     }
 }

@@ -110,6 +110,16 @@ fn model_changed_syncs_rows(app: &AppWindow, driver: &Shared) {
     settle(app, driver);
 }
 
+/// A resting pointer over a row hovers it (.wb-tab:hover; the gallery's `tab-row-hover`), and
+/// leaving the window un-hovers it.
+fn tab_hover_reaches_row(app: &AppWindow, driver: &Shared, log: &Log) {
+    moved(app, ROW_X, row_centre(1));
+    assert_eq!(log.borrow().hovered.last(), Some(&(11, true)));
+    dispatch(app, WindowEvent::PointerExited);
+    assert_eq!(log.borrow().hovered.last(), Some(&(11, false)));
+    settle(app, driver);
+}
+
 fn tab_click_activates(app: &AppWindow, driver: &Shared, log: &Log) {
     let y = row_centre(1);
     press(app, ROW_X, y, PointerEventButton::Left);
@@ -300,6 +310,7 @@ struct Calls {
     activated: Vec<i32>,
     closed: Vec<i32>,
     moved: Vec<(i32, i32)>,
+    hovered: Vec<(i32, bool)>,
 }
 
 type Log = Rc<RefCell<Calls>>;
@@ -368,8 +379,11 @@ fn tab_list_scenarios() {
     app.on_tab_closed(move |id| l.borrow_mut().closed.push(id));
     let l = log.clone();
     app.on_tab_moved(move |id, to| l.borrow_mut().moved.push((id, to)));
+    let l = log.clone();
+    app.on_tab_hovered(move |id, on, _| l.borrow_mut().hovered.push((id, on)));
     let driver = driver::wire(&app, wubble_core::seam::Seam::new()).driver;
     model_changed_syncs_rows(&app, &driver);
+    tab_hover_reaches_row(&app, &driver, &log);
     tab_click_activates(&app, &driver, &log);
     tab_close_middle_click(&app, &driver, &log);
     tab_drag_emits_tab_moved(&app, &driver, &log);

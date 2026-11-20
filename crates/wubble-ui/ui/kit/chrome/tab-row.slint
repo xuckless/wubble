@@ -11,6 +11,7 @@ import { Calm } from "../motion/calm.slint";
 import { BrowserCss } from "../gen/css.slint";
 import { KitText } from "../text.slint";
 import { Role } from "../gen/text.slint";
+import { RailClose } from "rail-close.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -75,7 +76,7 @@ export component TabRow inherits Rectangle {
     // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)
     // wubble change: .wb-tab-drag on the dragged row, over the hover
     background: root.dragging ? BrowserCss.wb-tab-drag--background
-        : touch.has-hover && !root.selected ? BrowserCss.wb-tab-hover--background : transparent;
+        : root.row-hovered && !root.selected ? BrowserCss.wb-tab-hover--background : transparent;
     drop-shadow-offset-x: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-x : 0;
     drop-shadow-offset-y: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-y : 0;
     drop-shadow-blur: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-blur : 0;
@@ -204,6 +205,19 @@ export component TabRow inherits Rectangle {
             path: Glyph.close;
             // .wb-tab-x mist, ink on its own hover
             tint: close-touch.has-hover ? BrowserCss.wb-tab-x-hover--color : BrowserCss.wb-tab-x--color;
+        }
+    }
+    // wubble change: on the rail, the close badge on the icon's top-left corner (kit RailClose,
+    // derived), while the row or the badge is hovered; the rest of the icon still picks the tab.
+    property <bool> row-hovered: touch.has-hover || rail-close.hovered;
+    out property <bool> rail-close-shown: root.compact && root.row-hovered && !root.dragging;
+    rail-close := RailClose {
+        visible: root.compact;
+        shown: root.rail-close-shown;
+        x: (root.width - Shell.tab-icon) / 2 - self.width / 2;
+        y: (root.height - Shell.tab-icon) / 2 - self.height / 2;
+        clicked => {
+            root.close();
         }
     }
     // wubble change: the keyboard focus ring, inside the row (.wb-tab outline-offset -2px)

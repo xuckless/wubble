@@ -1,4 +1,4 @@
-// design: browser/seam.ts:1-101, browser/browser.css:138-148, browser/chrome.tsx:189-248, browser/chrome.tsx:312-335 @598f814
+// design: browser/seam.ts:1-101, browser/browser.css:138-148, browser/browser.css:114-116, browser/chrome.tsx:119-146, browser/chrome.tsx:189-248, browser/chrome.tsx:312-335, browser/webview.tsx:123-126 @598f814
 // The seam (`browser/seam.ts`; owner decision 10: this, not the Room page's seam): the string
 // between the sidebar (or a split pane, or the DevTools panel) and the page. The string is
 // always drawn: white .1 at 1.25 at rest, sky 1.6 while held, transparent when the sidebar is
@@ -12,6 +12,10 @@
 // carries the value range); no `:focus-visible` (a Tab focus only shows the held pill); no
 // `:has()` (one pure function picks the pill's state, and each animation takes the timing of
 // the state it goes to, as CSS takes the destination rule's transition).
+// A split seam (`kind: split`) is not that string: the web draws nothing between two panes at
+// rest (their 8 px gap is the seam) and only the held seam's `.wb-split-line` (sky 1.6), which
+// fades in over .2 s ease-out and out over .15 s ease-in (browser.css:114-115); its grab is
+// full height and its pill is the same `.wb-pill`, at the string's bend and the grab height.
 
 import { Radius, Chrome } from "../gen/tokens.slint";
 import { BrowserCss } from "../gen/css.slint";
@@ -19,6 +23,9 @@ import { Shell } from "../derived.slint";
 import { Calm } from "../motion/calm.slint";
 
 export enum PillState { rest, hover, held }
+
+// which seam a strip is: the sidebar's string (`.wb-seam path`) or a split seam (`.wb-split-line`)
+export enum SeamKind { sidebar, split }
 
 export global PillStates {
     // `.wb-pill i`'s rules: held (or the grab keyboard-focused) wins over the grab's hover.
@@ -77,6 +84,7 @@ export component Pill inherits Rectangle {
 // One seam: the string, its grab strip and its pill, in its parent's coordinates (fill the
 // parent). The sidebar's `Seam`, each split seam and the DevTools seam are instances.
 export component SeamStrip inherits Rectangle {
+    in property <SeamKind> kind: SeamKind.sidebar;
     // the string's x
     in property <length> seam-x;
     // the bowed string (Seam::clip / split::string_line, this element's coordinates); "" straight
@@ -123,9 +131,43 @@ export component SeamStrip inherits Rectangle {
     property <length> stroke: (root.taut ? BrowserCss.wb-held-wb-seam-path--stroke-width : BrowserCss.wb-seam-path--stroke-width) * Shell.px;
     out property <color> string-colour: root.ink;
     out property <length> string-width: root.stroke;
+    property <bool> split: root.kind == SeamKind.split;
+    // `.wb-split-line`: shown only while held; each way takes its destination rule's timing
+    property <float> line-fade: root.taut ? BrowserCss.wb-split-held-wb-split-line--opacity : BrowserCss.wb-split-line--opacity;
+    animate line-fade {
+        duration: Calm.ms(root.taut ? BrowserCss.wb-split-held-wb-split-line--transition-opacity-duration : BrowserCss.wb-split-line--transition-opacity-duration);
+        easing: root.taut ? BrowserCss.wb-split-held-wb-split-line--transition-opacity-easing : BrowserCss.wb-split-line--transition-opacity-easing;
+    }
+    // what the tests read: the sidebar's string is always drawn, a split seam's only as its line
+    out property <bool> rest-string: !root.split;
+    out property <float> line-opacity: root.split ? root.line-fade : 0;
 
+    // `.wb-split-line`: straight while held with no bow, else the bowed string
+    if root.split: Rectangle {
+        x: root.seam-x - self.width / 2;
+        y: root.string-top;
+        width: BrowserCss.wb-split-line--stroke-width * Shell.px;
+        height: Math.max(0px, root.string-bottom - root.string-top);
+        background: BrowserCss.wb-split-line--stroke;
+        opacity: root.line-fade;
+        visible: root.path == "" && root.line-fade > 0;
+    }
+    if root.split: Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / Shell.px;
+        viewbox-height: root.height / Shell.px;
+        commands: root.path;
+        visible: root.path != "" && root.line-fade > 0;
+        fill: transparent;
+        stroke: BrowserCss.wb-split-line--stroke;
+        stroke-width: BrowserCss.wb-split-line--stroke-width * Shell.px;
+        opacity: root.line-fade;
+    }
     // `.wb-seam path`: the straight string
-    Rectangle {
+    if !root.split: Rectangle {
         x: root.seam-x - root.stroke / 2;
         y: root.string-top;
         width: root.stroke;
@@ -134,7 +176,7 @@ export component SeamStrip inherits Rectangle {
         visible: root.path == "";
     }
     // the bowed string while held or twanging
-    Path {
+    if !root.split: Path {
         width: root.width;
         height: root.height;
         viewbox-x: 0;

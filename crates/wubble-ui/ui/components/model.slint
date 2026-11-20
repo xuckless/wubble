@@ -64,17 +64,25 @@ export struct CommandResult {
     icon: image,
 }
 
-// Lifecycle of the command bar overlay. Written only by CommandBar.dispatch.
+// The command bar's life (mirrors wubble_core::chrome::CommandBar; the driver writes it).
 export enum CommandBarState {
     closed,
     open,
     closing,
 }
 
-export enum CommandBarEvent {
-    open,
-    close,
-    settle,
+// Where the command bar's field is (mirrors wubble_core::chrome::Placement; the driver writes
+// it): the overlay panel, or the start page's capsule.
+export enum CommandPlacement {
+    overlay,
+    in-page,
+}
+
+// What the command bar opens for (mirrors wubble_core::chrome::CommandMode).
+export enum CommandMode {
+    here,
+    new,
+    split,
 }
 
 // Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.
@@ -219,6 +227,8 @@ export struct MenuView {
     x: length,
     y: length,
     entries: [MenuEntry],
+    // some row has an icon: the rows without one keep the icon's column, so labels line up
+    icons: bool,
 }
 
 // A JS dialog or the HTTP sign-in as a sheet. `cancel` empty: no cancel button (an alert).
