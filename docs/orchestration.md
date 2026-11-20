@@ -30,3 +30,7 @@ the lanes into one integration branch and runs the full check round.
 - A kit `GlassPanel` registered with the scene inside a fading wrapper must set `present:` from the wrapper's progress.
 - Slint's `color.alpha` is 0..255: mix with `transparentize`, not `with-alpha(alpha * t)`.
 - Keep at most about four building lanes and one CPU-heavy job at a time on the Linux box.
+- Window tests run through `scripts/headless.sh`, never on the owner's desktop; the owner's runnable binary is rebuilt only when they allow it.
+- A finished agent can leave wait loops running (`until ! pgrep -f ...` matches itself): after each report, list them and kill them by PID.
+- An agent's "it measured fine" is one run: the lead re-measures on the merged result (the idle-redraw loop of 2026-11-20 showed 1 frame once, 240 the next run).
+- When a lane conflicts with main, send it back to the agent that wrote it to merge and re-verify; do not hand-merge its files.

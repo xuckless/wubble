@@ -5,13 +5,13 @@ Decisions: [docs/decisions.md](docs/decisions.md) · numbers: [docs/measurements
 fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/research/](docs/research/) · commands: [docs/smokes.md](docs/smokes.md)
 Legend: `[ ]` open · `[~]` in progress · `[x]` done, with the commit that brought it to `main` (`git show <hash>`).
 
-## Status (2026-11-19, night)
-`main` is at 6d70c9e and builds, lints and passes 1871 tests; all 25 window smokes pass on the invisible test
-display (`scripts/headless.sh`). M0 to M5 and the built-ins work on Linux. The design-fidelity phase has every
-surface on kit components (kit, generated values, glass, motion, icons, controls, chrome, start page, Settings,
-list pages, overlays) and has been through one outside QA round (26 findings: 20 fixed, 3 not reproduced, 3 not
-bugs). The phase ends with the owner's sign-off. macOS has not been run since batch eight (the Mac is driven only
-from its own session); Windows is not green in CI. The owner's runnable binary is rebuilt only on their word.
+## Status (2026-11-20)
+`main` builds, lints and passes 1922 tests; every window smoke passes on the invisible test display
+(`scripts/headless.sh`), and an idle window draws nothing. M0 to M5 and the built-ins work on Linux. The
+design-fidelity phase has every surface on kit components and has been through one outside QA round (26 findings)
+plus the owner's own bug reports; it ends with the owner's sign-off. The auto-updater and the release tooling are
+in; the first Linux preview release (`0.1.0-preview.1`, with codecs) follows the last two fixes on `qa4/tabs`.
+macOS is driven only from the owner's own session and has not been run since batch eight; Windows is not green in CI.
 
 ## Now: design-fidelity phase
 Done today, after the kit merges listed under "Design fidelity":
@@ -24,8 +24,11 @@ Done today, after the kit merges listed under "Design fidelity":
 - [x] QA: address pill elision, menus fit their rows, sidebar collapse clip, task manager columns, "Start" tab title,
       sidebar empty-area menu, start-page hover card (b2b7f68)
 - [x] Invisible test display with focus, clipboard and GPU; save prompt lost when a sign-in beats page load (6d70c9e)
-
 - [x] Paste (Ctrl+V) in shell fields: one clipboard path through the host's Wayland worker (6885c31)
+- [x] Menu glass lost while Settings' closed Selects shared its key: the glass list is rebuilt each frame (3a9ac6e)
+- [x] Sidebar footer: current Space + "^" Spaces popup with a pinned New Space, drag a tab onto it; DevTools button
+      removed; Settings links the built-in pages in its nav and its search (2c3a366)
+- [~] Spaces popup reopens when its "v" is clicked; a closed tab returns to the tab that opened it (branch `qa4/tabs`)
 
 Open, for the owner's eye:
 - [ ] Glass over white: faint ink (disabled rows, shortcuts, counts) sits near 2:1; glass reads flat grey
@@ -34,6 +37,10 @@ Open, for the owner's eye:
 - [ ] Rail close badge size; video strip: should a collapse carry over to later pages
 - [ ] Find bar closes on reload (Chromium keeps it); Escape does not dismiss the SponsorBlock question
 - [ ] Compact mode duplicates the hide-sidebar toggle (or make it sidebar <-> rail)
+- [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
+      Passwords/Sites share the lock, Updates/Downloads the arrow
+- [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
+- [ ] Video strip button reads "Save video"; a second click mid-download re-enters the downloader
 - [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md)); the sign-off that ends the phase
 
 Open, to build or check:
@@ -47,6 +54,10 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
+- [ ] Extensions button in the sidebar footer (the free place before Downloads); needs extensions (M6)
+- [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
+- [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
+- [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
 - [ ] `qa-report/` is untracked: commit it or keep it out (owner)
 
 ## M0: Frame path
@@ -155,12 +166,14 @@ Open, to build or check:
 ## M7: Ship
 - [x] Auto-updater (signed manifest, check on open, apply on next launch, rollback), `install.sh`, packaging scripts,
       signing workflow, `docs/release.md` (4ccd853); inert until the public key is set
-- [ ] Release, owner's steps: key and secrets, public key into the binary and `install.sh`, version, tag ([docs/release.md](docs/release.md))
-- [ ] Release gaps: macOS paths and `release-sign.yml` never run; no macOS codec CEF; camera/microphone usage strings in the
-      bundle; Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load; shellcheck not run
+- [~] First preview release, Linux: key made (kept outside the repo), dist build warm; left: secrets, public key into
+      the binary and `install.sh`, version `0.1.0-preview.1`, tag, package, release, sign, install test ([docs/release.md](docs/release.md))
+- [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
+      usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
+- [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
+      shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
 - [x] Video strip save button: enters the media downloader, absent on DRM, progress and saved states (4b4c9f1)
-- [ ] First preview release: Linux tarball + `install.sh`; macOS DMG signed on the owner's Mac; release workflow
-- [ ] MCP server (after the release): [docs/research/mcp-server.md](docs/research/mcp-server.md)
+- [ ] MCP server, after the release: the basic version first (plan section 0), guardrails after: [docs/research/mcp-server.md](docs/research/mcp-server.md)
 - [x] Import readers (f83b314) and store-side apply (e6f826a)
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
 - [ ] Import: Zen legacy tables, Arc history, Little Arc, Helium/Chromium; verify Zen macOS and Arc Windows paths

@@ -232,11 +232,17 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Own CEF build | `scripts/build-cef.sh` builds CEF 156.0.30 with codecs locally; recipe in [research/cef-codec-build.md](research/cef-codec-build.md). | 2026-11-19 |
 | Build runners | Builds stay local for now: no rented runners ([research/build-runners.md](research/build-runners.md)). | 2026-11-19 |
 | Auto-update | wubble checks GitHub Releases for a new version when it opens; on by default with a Settings switch, the one explicit exception to "nothing phones home". | 2026-11-19 |
-| Update signing | Releases and the update manifest are signed; the private key is a GitHub Actions secret (CI signs on a tag), the public key is in the binary. | 2026-11-19 |
+| Update signing | Releases are built, packaged and signed on the owner's Linux box (key kept outside the repo, never on GitHub); the public key is in the binary. `release-sign.yml` stays as an unused alternative. Supersedes signing in CI. | 2026-11-20 |
 | Release codecs | The downloadable builds ship the own CEF build with H.264 and AAC (owner accepts the patent exposure). | 2026-11-19 |
 | Release form | Linux: tarball + `install.sh` (curl script); macOS: DMG signed and notarised on the owner's Mac + the same script; first releases are previews. | 2026-11-19 |
+| Release hosting | Archives and update manifests are GitHub release assets (not Packages; under 2 GiB per file); an R2 bucket is the fallback, which would need the manifest address changed in a release. | 2026-11-20 |
 | Update mechanics | Rolling `updates` prerelease holds `preview.json`/`stable.json`; check at most every 6 h; Linux versions under `~/.local/share/wubble/versions/` behind a `current` symlink; 3 failed starts roll back. | 2026-11-20 |
 | Shell clipboard | Shell text fields read and write the clipboard through the host's Wayland worker (a wrapper around Slint's winit platform): GNOME offers the clipboard to one device per client. | 2026-11-19 |
+| Spaces popup | The sidebar footer shows the current Space and a "^" that opens a popup of all Spaces with a pinned New Space (agent sessions later); a tab dragged onto it drops into a Space; no per-Space footer icons. | 2026-11-20 |
+| Footer buttons | DevTools left the sidebar footer (page menu, F12, command bar keep it); the place is kept for an extensions button. | 2026-11-20 |
+| Built-in pages in Settings | Settings links History, Bookmarks, Downloads, Passwords, Archive and Task manager from its nav and its search; nothing is rebuilt inside Settings. | 2026-11-20 |
+| Glass list | The scene's glass list is rebuilt from the panels on screen every rendered frame (not patched by add/remove reports); panels may share a key. | 2026-11-20 |
+| Tab opener | A tab opened from a page returns to its opener when closed, by Chromium's rules (forgotten once the user selects another tab). | 2026-11-20 |
 | MCP server | Planned after the first release: wubble as an MCP server, sessions bound to a Space; plan in [research/mcp-server.md](research/mcp-server.md). | 2026-11-19 |
 | MCP build order | Basic version first (secrets as variables, strict containers, headless, full control incl. script), experimental and off by default; guardrails added where use shows the need. | 2026-11-19 |
 
