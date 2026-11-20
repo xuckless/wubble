@@ -1,0 +1,105 @@
+// derived: Popover (overlay/a/a-popover.slint), the glance card's page frame (overlay/a/a-glance-card.slint), Scrim (controls/menu.slint)
+import { Space, Radius, Palette } from "../../gen/tokens.slint";
+import { ExtensionPopup } from "../../../components/model.slint";
+import { APopover } from "a-popover.slint";
+import { Scrim } from "../../controls/menu.slint";
+
+// An extension action's popup: its page, a windowless view, in a card under the footer's
+// button, as big as the page asked (the host keeps it between Chromium's 25 x 25 and 800 x 600).
+// Fills its parent (the window): a press outside the card closes it (Escape does, through the
+// overlays). Derived from the kit (docs/fidelity/wubble-only.md, derived-review.md "Extensions
+// popover"): the Popover (kit/overlay/a/a-popover.slint) round the page, the page in the glance
+// card's frame (`kit/overlay/a/a-glance-card.slint`). The host hands the page's last frame here;
+// pointer events on it go back as the page's own (`pane` = the popup's), and the keys follow it
+// (the host routes them to the popup's view). `dismissed` is the intent; the host closes it.
+export component APopupCard inherits Rectangle {
+    in property <ExtensionPopup> popup;
+    // the scene's glass for the card (GlassKeys)
+    in property <int> key: -1;
+    in property <MouseCursor> cursor;
+    // The card's top left, in this element's coordinates.
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    callback dismissed();
+    callback pointer-moved(int, length, length);
+    callback pointer-left(int, length, length);
+    callback pointer-pressed(int, PointerEventButton, length, length);
+    callback pointer-released(int, PointerEventButton, length, length);
+    callback pointer-cancelled(int);
+    callback scrolled(int, length, length, length, length);
+
+    property <bool> open: root.popup.open;
+    // What the card shows: the open popup's, kept while it leaves.
+    property <ExtensionPopup> held;
+    changed popup => {
+        if root.popup.open {
+            root.held = root.popup;
+        }
+    }
+    property <ExtensionPopup> p: root.open ? root.popup : root.held;
+
+    visible: card.mounted;
+
+    Scrim {
+        on: root.open;
+        outside => {
+            root.dismissed();
+        }
+        scroll-event(e) => {
+            accept
+        }
+    }
+
+    card := APopover {
+        open: root.open;
+        key: root.key;
+        width: root.p.width + 2 * Space.s2;
+        height: root.p.height + 2 * Space.s2;
+        x: max(Space.s2, min(root.anchor-x, root.width - self.width - Space.s2));
+        y: max(Space.s2, min(root.anchor-y, root.height - self.height - Space.s2));
+        origin-x: max(0px, min(root.anchor-x - self.x, self.width));
+        origin-y: max(0px, min(root.anchor-y - self.y, self.height));
+
+        Rectangle {
+            x: Space.s2;
+            y: Space.s2;
+            width: root.p.width;
+            height: root.p.height;
+            border-radius: Radius.md;
+            clip: true;
+            background: Palette.web;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.p.frame;
+                source-clip-width: root.p.clip-width;
+                source-clip-height: root.p.clip-height;
+                image-fit: fill;
+            }
+            TouchArea {
+                enabled: root.open;
+                mouse-cursor: root.cursor;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down {
+                        root.pointer-pressed(root.p.id, event.button, self.mouse-x, self.mouse-y);
+                    } else if event.kind == PointerEventKind.up {
+                        root.pointer-released(root.p.id, event.button, self.mouse-x, self.mouse-y);
+                    } else if event.kind == PointerEventKind.move {
+                        root.pointer-moved(root.p.id, self.mouse-x, self.mouse-y);
+                    } else {
+                        root.pointer-cancelled(root.p.id);
+                    }
+                }
+                scroll-event(event) => {
+                    root.scrolled(root.p.id, self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                    accept
+                }
+                changed has-hover => {
+                    if !self.has-hover {
+                        root.pointer-left(root.p.id, self.mouse-x, self.mouse-y);
+                    }
+                }
+            }
+        }
+    }
+}

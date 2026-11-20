@@ -126,6 +126,55 @@ fn new_tab_goes_after_opener_else_last() {
 }
 
 #[test]
+fn open_in_space_puts_a_hidden_tab_in_that_space_and_its_container() {
+    let m = Model::new(t0());
+    let (m, _) = run(m, Command::NewContainer { name: "A".into() });
+    let c = m.containers.last().unwrap().id;
+    let (m, s) = add_space(m, c);
+    let before = m.active_space();
+    let (m, fx) = run_all(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "u".into(),
+        },
+    );
+    let t = *m.order(s).last().unwrap();
+    assert_eq!(m.tabs[&t].container, c);
+    assert_eq!(m.active_space(), before, "the user's Space stays shown");
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].active, Some(t));
+    assert!(!m.visible_tabs().contains(&t));
+    assert_eq!(
+        core_effects(fx),
+        vec![Effect::CreateTab {
+            tab: t,
+            url: "u".into(),
+            container: c
+        }]
+    );
+    // A second tab goes last and leaves the active one.
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "v".into(),
+        },
+    );
+    assert_eq!(m.order(s).len(), 2);
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].active, Some(t));
+    // An unknown Space: nothing.
+    let (m2, fx) = run(
+        m.clone(),
+        Command::OpenInSpace {
+            space: SpaceId(99),
+            url: "w".into(),
+        },
+    );
+    assert_eq!(m2, m);
+    assert!(fx.is_empty());
+}
+
+#[test]
 fn new_tab_container_override_and_unknown() {
     let (m, _) = run(
         Model::new(t0()),
@@ -772,12 +821,64 @@ fn a_peek_becomes_a_tab_or_a_pane() {
 fn a_peek_is_no_part_of_a_session() {
     let (m, ids) = with_tabs(2);
     let (m, g) = peek(m, ids[1]);
-    let saved = m.for_session();
+    let saved = m.for_session(&[]);
     assert!(saved.glances.is_empty());
     assert!(!saved.tabs.contains_key(&g));
     assert!(!saved.order(s0()).contains(&g));
     saved.check().expect("a saved model holds");
     assert!(m.tabs.contains_key(&g), "the live model keeps it");
+}
+
+#[test]
+fn a_transient_space_is_no_part_of_a_session() {
+    let (m, ids) = with_tabs(1);
+    let (m, _) = run(m, Command::NewContainer { name: "A".into() });
+    let c = m.containers.last().unwrap().id;
+    let (m, s) = add_space(m, c);
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "https://b.test".into(),
+        },
+    );
+    let (m, _) = run(m, Command::SwitchSpace(s));
+    let agent_tab = *m.order(s).first().unwrap();
+    let saved = m.for_session(&[s]);
+    saved.check().expect("a saved model holds");
+    assert!(saved.space_idx(s).is_none());
+    assert!(!saved.has_container(c));
+    assert!(!saved.tabs.contains_key(&agent_tab));
+    assert!(saved.tabs.contains_key(&ids[0]), "the user's tab stays");
+    assert_eq!(saved.active_space(), s0());
+    assert!(m.space_idx(s).is_some(), "the live model keeps it");
+}
+
+#[test]
+fn a_tab_moved_into_a_space_is_not_held_by_its_container() {
+    let (m, ids) = with_tabs(1);
+    let (m, _) = run(m, Command::NewContainer { name: "A".into() });
+    let c = m.containers.last().unwrap().id;
+    let (m, s) = add_space(m, c);
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "https://b.test".into(),
+        },
+    );
+    let own = *m.order(s).first().unwrap();
+    assert!(m.holds(s, c, own));
+    let (m, _) = run(
+        m,
+        Command::MoveTab {
+            tab: ids[0],
+            to: Dest::Normal { space: s, index: 0 },
+        },
+    );
+    assert_eq!(m.location(ids[0]).map(|(sp, _)| sp), Some(s));
+    assert!(!m.holds(s, c, ids[0]), "the user's tab keeps Default");
+    assert!(!m.holds(s0(), D, own));
 }
 
 // ----- random sequences
@@ -3415,4 +3516,54 @@ fn shell_tabs_have_no_opener_and_close_to_their_neighbour() {
     assert_eq!(m.tabs[&t].opener, None);
     let (m, _) = run(m, Command::CloseTab(t));
     assert_eq!(active(&m), Some(ids[2]));
+}
+
+fn extension_tab(container: ContainerId, space: Option<SpaceId>, show: bool) -> Command {
+    Command::ExtensionTab {
+        url: "https://ext.test".into(),
+        container,
+        space,
+        show,
+    }
+}
+
+#[test]
+fn an_extension_tab_takes_the_asking_extensions_container_not_the_shown_tabs() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::NewContainer { name: "W".into() });
+    let work = m.containers[1].id;
+    let (m, fx) = run(m, extension_tab(work, None, false));
+    let [Effect::CreateTab { tab, container, .. }] = fx[..] else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(container, work);
+    // Last in the active Space (tabs.create's default index), the shown tab still shown.
+    let space = &m.spaces[m.space_idx(m.active_space()).unwrap()];
+    assert_eq!(space.items.last(), Some(&Item::Tab(tab)));
+    assert_eq!(active(&m), Some(ids[1]));
+    assert_eq!(m.tabs[&tab].opener, None);
+}
+
+#[test]
+fn a_shown_extension_tab_goes_to_its_space_and_becomes_its_active_tab() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, fx) = run(m, extension_tab(D, Some(s1), true));
+    let Some(Effect::CreateTab { tab, .. }) = fx.first().cloned() else {
+        panic!("{fx:?}")
+    };
+    assert!(fx.contains(&Effect::ActivateTab(tab)));
+    let space = &m.spaces[m.space_idx(s1).unwrap()];
+    assert_eq!(space.active, Some(tab));
+    assert!(space.items.contains(&Item::Tab(tab)));
+}
+
+#[test]
+fn an_extension_tab_in_a_gone_container_or_space_opens_nothing() {
+    let (m, _) = with_tabs(1);
+    let (m2, fx) = run(m.clone(), extension_tab(ContainerId(99), None, true));
+    assert!(fx.is_empty());
+    assert_eq!(m2.tabs.len(), m.tabs.len());
+    let (_, fx) = run(m, extension_tab(D, Some(SpaceId(99)), true));
+    assert!(fx.is_empty());
 }

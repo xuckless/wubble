@@ -31,6 +31,9 @@ export component Sheet inherits Rectangle {
     // key (GlassKeys) and overlay layer (GlassOver). A sheet inside a page keeps the Slint glass.
     in property <int> glass-key: -1;
     in property <int> glass-layer: 0;
+    // wubble: Enter accepts; a sheet that must not be approved by a stray key (an agent's
+    // approval, which may appear while the user types) turns it off and takes its button only.
+    in property <bool> enter-accepts: true;
     callback accepted();
     callback cancelled();
     // the entrance's progress (tests)
@@ -73,7 +76,7 @@ export component Sheet inherits Rectangle {
                 root.cancelled();
                 return accept;
             }
-            if event.text == Key.Return {
+            if event.text == Key.Return && root.enter-accepts {
                 root.accepted();
                 return accept;
             }

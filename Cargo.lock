@@ -8673,6 +8673,7 @@ dependencies = [
  "opener",
  "png",
  "pollster 0.4.0",
+ "rand 0.8.8",
  "rfd",
  "serde_json",
  "sha2 0.11.1",
@@ -8691,6 +8692,7 @@ dependencies = [
  "wubble-core",
  "wubble-engine",
  "wubble-gfx",
+ "wubble-mcp",
  "wubble-release",
  "wubble-store",
  "wubble-sysmem",
@@ -8734,6 +8736,7 @@ name = "wubble-core"
 version = "0.1.0-preview.1"
 dependencies = [
  "aes 0.9.4",
+ "base64 0.22.1",
  "cbc",
  "chrono",
  "dash-mpd-core",
@@ -8757,6 +8760,7 @@ dependencies = [
  "cbc",
  "cef",
  "dpi",
+ "libloading 0.9.1",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "serde_json",
@@ -8800,6 +8804,13 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "wubble-core",
+]
+
+[[package]]
+name = "wubble-mcp"
+version = "0.1.0-preview.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

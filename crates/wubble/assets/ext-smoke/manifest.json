@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "wubble smoke",
+  "version": "1.0",
+  "description": "--smoke extensions: a content script marks loopback pages, the service worker answers it; on a patched CEF it also drives the tab, window and action APIs.",
+  "permissions": ["tabs"],
+  "action": { "default_title": "wubble smoke" },
+  "background": { "service_worker": "worker.js" },
+  "content_scripts": [
+    { "matches": ["http://127.0.0.1/*"], "js": ["content.js"], "run_at": "document_start" }
+  ]
+}

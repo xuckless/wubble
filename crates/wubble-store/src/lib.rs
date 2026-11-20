@@ -10,6 +10,7 @@
 //! password vault adapts its storage trait to the plain byte-row functions in `logins.rs`;
 //! both drive the futures with whatever executor they have (`pollster::block_on` is enough).
 
+mod agent;
 mod archive;
 mod bookmarks;
 mod boosts;
@@ -51,6 +52,8 @@ pub use settings::{
     SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed, VideoControls,
     VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
+
+pub use settings::InstalledExtensions;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -41,6 +41,8 @@ pub struct TabRow {
     pub blocked: u32,
     /// The tab is a pane of its Space's split, shown or not (the design's `split?.includes`).
     pub in_split: bool,
+    /// An agent session drives the tab (`host/agent.rs` marks it).
+    pub agent: bool,
 }
 
 /// Whether a tab's page is muted, as its view last reported (`PageEvent::MutedChanged`). Gone
@@ -61,6 +63,8 @@ pub struct SpaceRow {
     pub name: String,
     pub tint: Rgb,
     pub icon: SpaceIcon,
+    /// An agent session's Space (`host/agent.rs` marks it).
+    pub agent: bool,
 }
 
 /// The sidebar for one model. Ids that do not fit Slint's `int` are
@@ -156,6 +160,7 @@ pub fn view_model(
                 name: s.name.clone(),
                 tint: s.tint,
                 icon: s.icon,
+                agent: false,
             })
         })
         .collect();

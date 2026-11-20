@@ -70,6 +70,7 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
             depth: i32::from(r.depth),
             count: i32::try_from(r.count).unwrap_or(i32::MAX),
             collapsed: r.collapsed,
+            agent: r.agent,
         })
         .collect()
 }
@@ -91,6 +92,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             name: s.name.as_str().into(),
             tint: color(s.tint),
             icon: s.icon.id().into(),
+            agent: s.agent,
         })
         .collect();
     sync(window.get_spaces(), spaces, |m| window.set_spaces(m));

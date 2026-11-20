@@ -35,6 +35,9 @@ impl Host {
         if let Sheet::Open { tab, .. } | Sheet::Working { tab, .. } = &self.print {
             add(Kind::PrintSheet, Some(*tab));
         }
+        if self.agent_sheet_open() {
+            add(Kind::AgentSheet, None);
+        }
         if let Some(tab) = self.region_tab() {
             add(Kind::Region, Some(tab));
         }
@@ -49,6 +52,12 @@ impl Host {
         }
         if window.get_downloads_open() {
             add(Kind::Downloads, None);
+        }
+        if self.ext_ui_prompt_open() {
+            add(Kind::ExtensionSheet, None);
+        }
+        if self.ext_ui_panel_open() {
+            add(Kind::Extensions, None);
         }
         if window.get_spaces_open() {
             add(Kind::Spaces, None);
@@ -148,6 +157,7 @@ impl Host {
             }
             (Kind::BookmarkSheet, _) => self.bookmark_sheet_answered(false, false, "", -1),
             (Kind::PrintSheet, _) => self.print_event(wubble_core::print::Event::Cancel),
+            (Kind::AgentSheet, _) => self.agent_sheet_answered(false, false),
             (Kind::Region, _) => self.shot_cancelled(),
             (Kind::Hints, _) => self.hints_cancel(),
             // later, outside the host: closing the bar calls back into it
@@ -159,6 +169,8 @@ impl Host {
             }
             (Kind::Downloads, _) => window.set_downloads_open(false),
             (Kind::Spaces, _) => window.set_spaces_open(false),
+            (Kind::Extensions, _) => self.extensions_dismissed(),
+            (Kind::ExtensionSheet, _) => self.extension_prompt_answered(false),
             (Kind::Menu, _) => {
                 if let Some(tab) = shown {
                     self.apply_menu(tab, MenuEvent::Dismiss);

@@ -390,6 +390,16 @@ mod cef_backed {
             }
         }
 
+        /// wubble change (52): makes CEF's plain C functions (a zip reader,
+        /// say) callable before [`Self::initialize`]: loads the framework on
+        /// macOS and pins the API version, as `initialize` does first. Safe to
+        /// call again, and `initialize` after it.
+        pub fn prepare_api(cef_path: &std::path::Path) -> Result<(), WeldError> {
+            maybe_load_library(cef_path)?;
+            pin_cef_api_version();
+            Ok(())
+        }
+
         /// Initialise CEF. Call after [`Self::execute_process_from`] confirms
         /// this is the browser process.
         pub fn initialize(config: CefRuntimeConfig) -> Result<Self, WeldError> {
@@ -676,6 +686,16 @@ mod cef_backed {
         #[cfg(target_os = "macos")]
         {
             use std::os::unix::ffi::OsStrExt;
+            use std::sync::atomic::{AtomicBool, Ordering};
+
+            // wubble change (52): `cef_load_library` refuses a second load
+            // (`libcef_dll_dylib.cc`: `if (g_libcef_handle) return 0;`), so a
+            // load before `initialize` ([`CefRuntime::prepare_api`]) is
+            // remembered here. One process, one framework path.
+            static LOADED: AtomicBool = AtomicBool::new(false);
+            if LOADED.load(Ordering::Acquire) {
+                return Ok(());
+            }
 
             const FRAMEWORK: &str =
                 "Chromium Embedded Framework.framework/Chromium Embedded Framework";
@@ -692,6 +712,7 @@ mod cef_backed {
                     path: lib_path.display().to_string(),
                 });
             }
+            LOADED.store(true, Ordering::Release);
         }
         #[cfg(target_os = "windows")]
         {
@@ -736,6 +757,10 @@ mod stub {
             _cef_path: &std::path::Path,
             _sandbox: CefSandboxMode,
         ) -> Result<Option<i32>, WeldError> {
+            Err(WeldError::FeatureRequired("cef-runtime"))
+        }
+
+        pub fn prepare_api(_cef_path: &std::path::Path) -> Result<(), WeldError> {
             Err(WeldError::FeatureRequired("cef-runtime"))
         }
 

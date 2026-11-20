@@ -20,6 +20,8 @@ export struct TabItem {
     depth: int,
     count: int,
     collapsed: bool,
+    // wubble: an agent session's tab (an MCP session drives it); the row shows the mark.
+    agent: bool,
 }
 
 // The border beam this frame (wubble_core::beam::Shape): head and tail length as fractions of
@@ -45,6 +47,8 @@ export struct SpaceItem {
     tint: color,
     // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
     icon: string,
+    // wubble: an agent session's Space (`SpaceName` shows the mark).
+    agent: bool,
 }
 
 // One line of the sidebar's Spaces popup (wubble_core::spacemenu: its groups' rows, a rule
@@ -210,6 +214,7 @@ export global GlassKeys {
     out property <int> error: 1000080;
     out property <int> bookmark-sheet: 1000090;
     out property <int> print-sheet: 1000091;
+    out property <int> agent-sheet: 1000092;
     out property <int> glance: 1000100;
     out property <int> dialog: 1000110;
     out property <int> command-bar: 1000120;
@@ -219,6 +224,10 @@ export global GlassKeys {
     out property <int> autofill-prompt: 1000311;
     out property <int> downloads: 1000320;
     out property <int> spaces: 1000325;
+    // the footer's extensions popover and the action popup under it
+    out property <int> extensions: 1000326;
+    // the install prompt (a sheet, after the print sheet)
+    out property <int> extension-sheet: 1000092;
     out property <int> menu: 1000330;
 }
 
@@ -541,6 +550,8 @@ export enum InternalPageKind {
     passwords,
     archive,
     tasks,
+    // wubble://agent: the agent activity log
+    agent-log,
     // the new-tab page (wubble://start)
     start,
 }
@@ -642,6 +653,28 @@ export struct PrintSheetView {
     scale: int,
     background: bool,
     copies: int,
+}
+
+// An agent session's approval sheet (`wubble_core::agent::Request` and the session's sites): who asks and for what.
+export struct AgentSheetView {
+    open: bool,
+    // Changes with each sheet: the window choice restarts from `headless`.
+    serial: int,
+    // The calling program's name.
+    client: string,
+    // The secrets it asks for, by name (never a value).
+    secrets: [string],
+    // The sites it limits itself to; none: any site.
+    sites: [string],
+    // The client asks to run without showing its window.
+    headless: bool,
+}
+
+// One line of the agent activity log page (`wubble_core::agent::log::Row`).
+export struct AgentLogItem {
+    title: string,
+    note: string,
+    failed: bool,
 }
 
 // What the bookmark sheet asks (Ctrl+D, rename, move, new folder).
@@ -781,6 +814,52 @@ export struct GlanceView {
     x: length,
     card-y: length,
     y: length,
+    width: length,
+    height: length,
+}
+
+// One installed extension of the settings page's "Extensions" section (extensions-section.slint).
+// `note`: its version and what it asks for; `options`: it has an options page.
+export struct ExtensionItem {
+    id: string,
+    name: string,
+    note: string,
+    enabled: bool,
+    options: bool,
+}
+
+// One enabled extension's action on the footer's extensions popover (extensions-popover.slint):
+// the icon it sets (a PNG decoded, else the manifest's), the badge and the title it shows on the
+// visible tab. `usable`: the action is on for that tab.
+export struct ExtensionAction {
+    id: string,
+    title: string,
+    icon: image,
+    has-icon: bool,
+    badge: string,
+    badge-bg: color,
+    badge-fg: color,
+    usable: bool,
+}
+
+// The install prompt (extension-sheet.slint): the extension's name, what it asks for.
+// `serial` is bumped per prompt.
+export struct ExtensionPrompt {
+    open: bool,
+    title: string,
+    message: string,
+    serial: int,
+}
+
+// The action popup (kit/overlay/a/a-popup-card.slint): the popup page's last frame in a card under the
+// footer's button, `width` x `height` as the page asked (between Chromium's limits). `id` is
+// the pane its pointer events return as.
+export struct ExtensionPopup {
+    open: bool,
+    id: int,
+    frame: image,
+    clip-width: int,
+    clip-height: int,
     width: length,
     height: length,
 }

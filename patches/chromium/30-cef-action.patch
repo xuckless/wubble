@@ -1,0 +1,230 @@
+# What: chrome.action for wubble's action buttons: action_click runs
+#   ExtensionActionRunner::RunAction(extension, grant_tab_permissions=true)
+#   on the tab (activeTab, blocked scripts, then the popup URL or
+#   action.onClicked); action_state reads title, badge text and colours,
+#   enabled, popup URL, the extension-set icon as PNG and the manifest's
+#   default icon path; an ExtensionActionDispatcher observer per profile calls
+#   delegate.action_changed.
+# Why: Chrome's toolbar does this from its ExtensionsToolbar views, which
+#   wubble (a windowless embedder) does not have.
+# Applies in: chromium/src/cef (git apply -p1), after 10-cef-tabs-windows.
+diff --git a/libcef/browser/chrome/extensions/wubble_ext_action.cc b/libcef/browser/chrome/extensions/wubble_ext_action.cc
+new file mode 100644
+index 000000000..337fcc419
+--- /dev/null
++++ b/libcef/browser/chrome/extensions/wubble_ext_action.cc
+@@ -0,0 +1,214 @@
++// wubble change: chrome.action for wubble's own action buttons: a click runs
++// Chromium's ExtensionActionRunner::RunAction (activeTab grant, blocked
++// scripts, then the popup or action.onClicked), the state is read from
++// ExtensionAction's getters, and ExtensionActionDispatcher's change
++// notifications go to wubble's delegate (see wubble_ext.h).
++
++#include <cstdlib>
++#include <cstring>
++#include <map>
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/ref_counted_memory.h"
++#include "base/no_destructor.h"
++#include "cef/libcef/browser/chrome/extensions/wubble_ext_impl.h"
++#include "chrome/browser/extensions/extension_action_dispatcher.h"
++#include "chrome/browser/extensions/extension_action_runner.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/browser/extension_action.h"
++#include "extensions/browser/extension_action_manager.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/icons/extension_icon_set.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/image/image.h"
++#include "url/gurl.h"
++
++namespace cef::wubble {
++
++namespace {
++
++// The extension |extension_id| and its action, for the tab |browser_id|.
++struct Target {
++  raw_ptr<content::WebContents> contents = nullptr;
++  raw_ptr<const extensions::Extension> extension = nullptr;
++  raw_ptr<extensions::ExtensionAction> action = nullptr;
++  int tab_id = -1;
++};
++
++bool Find(const char* extension_id, int browser_id, Target* out) {
++  content::WebContents* contents = impl::ContentsOf(browser_id);
++  if (!contents || !extension_id) {
++    return false;
++  }
++  content::BrowserContext* context = contents->GetBrowserContext();
++  const extensions::Extension* extension =
++      extensions::ExtensionRegistry::Get(context)
++          ->enabled_extensions()
++          .GetByID(extension_id);
++  if (!extension) {
++    return false;
++  }
++  extensions::ExtensionAction* action =
++      extensions::ExtensionActionManager::Get(context)->GetExtensionAction(
++          *extension);
++  if (!action) {
++    return false;
++  }
++  out->contents = contents;
++  out->extension = extension;
++  out->action = action;
++  out->tab_id = sessions::SessionTabHelper::IdForTab(contents).id();
++  return true;
++}
++
++class ActionWatch : public extensions::ExtensionActionDispatcher::Observer {
++ public:
++  explicit ActionWatch(Profile* profile)
++      : dispatcher_(extensions::ExtensionActionDispatcher::Get(profile)) {
++    if (dispatcher_) {
++      dispatcher_->AddObserver(this);
++    }
++  }
++  ActionWatch(const ActionWatch&) = delete;
++  ActionWatch& operator=(const ActionWatch&) = delete;
++  ~ActionWatch() override {
++    if (dispatcher_) {
++      dispatcher_->RemoveObserver(this);
++    }
++  }
++
++  void OnExtensionActionUpdated(
++      extensions::ExtensionAction* extension_action,
++      content::WebContents* web_contents,
++      content::BrowserContext* browser_context) override {
++    if (const cef_wubble_ext_delegate_t* delegate = impl::Delegate()) {
++      delegate->action_changed(delegate->ctx,
++                               extension_action->extension_id().c_str());
++    }
++  }
++
++  void OnShuttingDown() override {
++    dispatcher_->RemoveObserver(this);
++    dispatcher_ = nullptr;
++  }
++
++ private:
++  raw_ptr<extensions::ExtensionActionDispatcher> dispatcher_;
++};
++
++std::map<Profile*, std::unique_ptr<ActionWatch>>& watches() {
++  static base::NoDestructor<std::map<Profile*, std::unique_ptr<ActionWatch>>>
++      instance;
++  return *instance;
++}
++
++// Chrome's own pick for a toolbar button: an icon set by the extension for
++// the tab (setIcon), else one from declarativeContent.
++gfx::Image IconOf(const extensions::ExtensionAction& action, int tab_id) {
++  gfx::Image icon = action.GetExplicitlySetIcon(tab_id);
++  return icon.IsEmpty() ? action.GetDeclarativeIcon(tab_id) : icon;
++}
++
++}  // namespace
++
++namespace impl {
++
++int ActionClick(const char* extension_id, int browser_id, char** popup_url) {
++  Target target;
++  if (!Find(extension_id, browser_id, &target) ||
++      !target.action->GetIsVisible(target.tab_id)) {
++    return 0;
++  }
++  auto* runner =
++      extensions::ExtensionActionRunner::GetForWebContents(target.contents);
++  if (!runner) {
++    return 0;
++  }
++  switch (runner->RunAction(target.extension, /*grant_tab_permissions=*/true)) {
++    case extensions::ExtensionAction::ShowAction::kShowPopup:
++      if (popup_url) {
++        *popup_url = CopyString(target.action->GetPopupUrl(target.tab_id).spec());
++      }
++      return 2;
++    case extensions::ExtensionAction::ShowAction::kToggleSidePanel:
++      return 0;
++    case extensions::ExtensionAction::ShowAction::kNone:
++      return 1;
++  }
++  return 0;
++}
++
++int ActionState(const char* extension_id,
++                int browser_id,
++                cef_wubble_ext_action_t* out) {
++  Target target;
++  if (!out || !Find(extension_id, browser_id, &target)) {
++    return 0;
++  }
++  const extensions::ExtensionAction& action = *target.action;
++  const int tab = target.tab_id;
++  memset(out, 0, sizeof(*out));
++  out->title = CopyString(action.GetTitle(tab));
++  out->badge = CopyString(action.GetDisplayBadgeText(tab));
++  out->badge_bg = action.GetBadgeBackgroundColor(tab);
++  out->badge_fg = action.GetBadgeTextColor(tab);
++  out->enabled = action.GetIsVisible(tab) ? 1 : 0;
++  out->popup_url =
++      CopyString(action.HasPopup(tab) ? action.GetPopupUrl(tab).spec() : "");
++  gfx::Image icon = IconOf(action, tab);
++  if (!icon.IsEmpty()) {
++    scoped_refptr<base::RefCountedMemory> png = icon.As1xPNGBytes();
++    if (png && png->size()) {
++      out->icon_png = static_cast<uint8_t*>(malloc(png->size()));
++      memcpy(out->icon_png, png->data(), png->size());
++      out->icon_png_len = png->size();
++    }
++  }
++  std::string icon_path;
++  if (const ExtensionIconSet* set = action.default_icon()) {
++    const std::string& relative =
++        set->Get(extension_misc::EXTENSION_ICON_BITTY * 2,
++                 ExtensionIconSet::Match::kBigger);
++    const std::string& any =
++        relative.empty() ? set->Get(0, ExtensionIconSet::Match::kBigger)
++                         : relative;
++    if (!any.empty()) {
++      icon_path = target.extension->path().AppendASCII(any).AsUTF8Unsafe();
++    }
++  }
++  out->icon_path = CopyString(icon_path);
++  return 1;
++}
++
++void FreeAction(cef_wubble_ext_action_t* action) {
++  if (!action) {
++    return;
++  }
++  free(action->title);
++  free(action->badge);
++  free(action->popup_url);
++  free(action->icon_png);
++  free(action->icon_path);
++  memset(action, 0, sizeof(*action));
++}
++
++void WatchActions(Profile* profile) {
++  auto& all = watches();
++  if (!all.count(profile)) {
++    all[profile] = std::make_unique<ActionWatch>(profile);
++  }
++}
++
++void UnwatchActions(Profile* profile) {
++  watches().erase(profile);
++}
++
++}  // namespace impl
++
++}  // namespace cef::wubble

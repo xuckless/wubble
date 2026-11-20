@@ -1,0 +1,28 @@
+import { SheetFrame } from "sheet-frame.slint";
+import { ExtensionPrompt } from "model.slint";
+
+// The extension install prompt: "Add <name>?", what it can do (the host's words,
+// `wubble_core::extensions::shell::permission_lines`), Cancel and Add extension. A sheet over
+// the page, as the JS dialog is: the scrim holds the page while it waits; Enter adds, Escape
+// cancels. Derived from the kit's Sheet (SheetFrame; docs/fidelity/derived-review.md "Extensions
+// popover"). `answered` is the intent; the host installs or drops the pick.
+export component ExtensionSheet inherits SheetFrame {
+    in property <ExtensionPrompt> prompt;
+    callback answered(bool);
+
+    open: root.prompt.open;
+    title: root.prompt.title;
+    message: root.prompt.message;
+    accept-text: "Add extension";
+    cancel-text: "Cancel";
+    accepted => {
+        root.answered(true);
+    }
+    cancelled => {
+        root.answered(false);
+    }
+
+    public function focus-sheet() {
+        root.take-focus();
+    }
+}

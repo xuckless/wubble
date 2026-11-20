@@ -16,6 +16,11 @@ macOS is driven only from the owner's own session and has not been run since bat
 ## Now (2026-11-20): extensions, password managers, the MCP server
 - [ ] Extensions on our own Chromium build (M6), far enough that third-party password managers (Bitwarden, 1Password) work as extensions
 - [ ] The MCP server, basic version (M7, [docs/research/mcp-server.md](docs/research/mcp-server.md) section 0)
+  - [x] `wubble-mcp`: the protocol, pure (framing, discover, tools/list, tools/call, v0 tool table, `AgentCall`)
+  - [x] Agent sessions in `wubble-core::agent`: one state machine, named secrets, activity log (`agent_log` table), `agent.mcp_enabled`
+  - [x] Transport and execution: the profile's MCP socket, `wubble mcp` relay, a Space and container per session, the tools through the engine paths, `--smoke mcp` (92a726b)
+  - [x] Shell UI: the approval sheet (one modal, Escape denies), the agent mark on tab rows and the Space header, "Stop All Agents" (command bar, mark), the activity page `wubble://agent` linked from Settings, gallery scenes, `--smoke mcp` drives the real sheet
+  - [ ] Bind a requested secret name to a vault login on the sheet (the sheet shows the names; a grant holds none until then)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 - Then the "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 
@@ -63,7 +68,8 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Extensions button in the sidebar footer (the free place before Downloads); needs extensions (M6)
+- [x] Extensions button in the sidebar footer (the free place before Downloads): the puzzle button, shown once an extension is installed, opens the popover of enabled extensions' actions
+- [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -166,7 +172,19 @@ Open, to build or check:
 - [ ] Build with `enable_widevine` and codecs; ship no CDM; a CDM loader (installed CDM, else opt-in download)
 - [ ] Document DRM limits (Linux L3 around 720p; services that need a VMP-signed browser refuse us)
 - [ ] Build infrastructure: Linux and macOS local; Windows on a runner large enough for Chromium
+- [x] Extensions research ([docs/research/extensions.md](docs/research/extensions.md)); the extension system on only when one is installed; install from a directory or a .crx (no UI yet; `--smoke extensions`) (669c29b)
+- [ ] Extensions: patches P1 (tabs.query, tab events, windows), P2 (extension-opened tabs and windows), P3 (action button and popup), P4 (permission prompts); then the install page with permissions and "restart to apply"
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
+- [x] Extensions: P1 to P3 as the patch queue `patches/chromium` (`scripts/build-cef.sh patch`, `cef_wubble_ext_v1`): `chrome.tabs`, `chrome.windows`, `chrome.action` (engine API) and extension-opened tabs on wubble's model; `--smoke extensions` checks them on a patched CEF, Linux (21af397)
+- [x] Extensions review fixes: opened tabs in the asking container and the named window's Space, the global profile's opens refused, `tabs.create({})` opens the start page, onActivated for a tab created active, `--smoke extensions` through the host's own request code
+- [x] Extensions shell UI (derived from the kit; the design repo has none, so the pieces are on [derived-review.md](docs/fidelity/derived-review.md) "Extensions popover"): Settings section (list, switch, remove, Options, install from file or folder, restart note), the install prompt with permissions through the overlay stack, the footer popover with action icon and badge, the action popup as a windowless view in a card (25x25 to 800x600, Escape or an outside press closes, keys go to it), options page as a tab, gallery scenes; popup and action rows are untested live (need the patched CEF)
+- [ ] Extensions shell: shrink-to-fit popup sizing (today the page's body decides, a body without a width fills 800), a tooltip on the footer button (needs an `Action`), the popup's own pointer origin for `<select>` lists, `chrome.action` popups of the global profile, screenshots by the owner's eye
+- [ ] Extensions (acceptance gap): `__MSG_name__` names show raw in the install prompt, the list and the popover; resolve them from `_locales` ([docs/research/extensions.md](docs/research/extensions.md) "Acceptance", gap 1)
+- [ ] Extensions (acceptance gap): `chrome.tabs.getCurrent()` in an action popup returns a tab (Chrome: undefined), so Bitwarden's popup lays out 57 px wide; patch `TabsGetCurrentFunction` and `getViews` for views that are not wubble tabs (gap 2)
+- [ ] Extensions (acceptance gap): `chrome.permissions.request` rejects with "Could not find an active window." (P4: answer it in wubble's UI), which Bitwarden's first-run "default password manager" step calls (gap 3)
+- [ ] Extensions (acceptance gap): Bitwarden's inline menu and autofill icon need an account: hand check with a test vault on a loopback login form (gap 4)
+- [ ] Extensions: the patch queue on macOS and Windows builds, and in the release's CEF (owner go)
+- [ ] Extensions: `tabs.onReplaced` when a sleeping tab wakes, `onMoved`/`onAttached`/`onDetached`, window bounds; `windows.create` is refused for now
 - [ ] Swap in behind `wubble-engine`, shell unchanged
 - [ ] CEF OSR patch: hide a view's compositor on `Hide()` (frees each hidden tab's backbuffer)
 - [ ] Skia cache hygiene in Slint's renderer (Chromium's cache controller: a limit, deferred cleanup, free when idle)

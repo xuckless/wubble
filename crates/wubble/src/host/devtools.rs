@@ -237,36 +237,11 @@ impl Host {
         }
     }
 
-    /// The panel's page events: nothing of the page's own UI applies to it, but every request
-    /// must be answered or CEF waits on it (the engine is in ask-the-host mode): all are refused.
+    /// The panel's page events: nothing of the page's own UI applies to it (see
+    /// [`refuse_requests`]).
     pub(super) fn on_panel_page_event(&mut self, event: wubble_engine::page::PageEvent) {
-        use wubble_engine::page::PageEvent;
-        let Some(view) = self.panel_view() else {
-            return;
-        };
-        match event {
-            PageEvent::ContextMenuRequested { id, .. } => {
-                view.answer_context_menu(id, None);
-            }
-            PageEvent::DialogRequested { id, .. } => {
-                view.answer_dialog(id, false, "");
-            }
-            PageEvent::PermissionRequested { id, .. } => {
-                view.answer_permission(id, &[]);
-            }
-            PageEvent::FileChooserRequested { id, .. } => {
-                view.answer_file_chooser(id, None);
-            }
-            PageEvent::AuthRequested { id, .. } => {
-                view.answer_auth(id, None);
-            }
-            PageEvent::CertificateError { id, .. } => {
-                view.answer_certificate(id, false);
-            }
-            PageEvent::DownloadRequested { id, .. } => {
-                view.answer_download_path(id, None);
-            }
-            _ => {}
+        if let Some(view) = self.panel_view() {
+            refuse_requests(view, event);
         }
     }
 
@@ -333,5 +308,39 @@ impl Host {
             f64::from(window.get_content_x() + x),
             f64::from(window.get_content_y() + y),
         )
+    }
+}
+
+/// A host-only view's page events (the DevTools panel's, an extension popup's): nothing of the
+/// page's own UI applies, but every request must be answered or CEF waits on it (the engine is
+/// in ask-the-host mode): all are refused.
+pub(super) fn refuse_requests(
+    view: &mut wubble_engine::view::View,
+    event: wubble_engine::page::PageEvent,
+) {
+    use wubble_engine::page::PageEvent;
+    match event {
+        PageEvent::ContextMenuRequested { id, .. } => {
+            view.answer_context_menu(id, None);
+        }
+        PageEvent::DialogRequested { id, .. } => {
+            view.answer_dialog(id, false, "");
+        }
+        PageEvent::PermissionRequested { id, .. } => {
+            view.answer_permission(id, &[]);
+        }
+        PageEvent::FileChooserRequested { id, .. } => {
+            view.answer_file_chooser(id, None);
+        }
+        PageEvent::AuthRequested { id, .. } => {
+            view.answer_auth(id, None);
+        }
+        PageEvent::CertificateError { id, .. } => {
+            view.answer_certificate(id, false);
+        }
+        PageEvent::DownloadRequested { id, .. } => {
+            view.answer_download_path(id, None);
+        }
+        _ => {}
     }
 }

@@ -477,6 +477,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    setter; a drag back into the window re-enters with the held clone,
    change 48). The three platforms' render handlers pass their scale.
    Test: `drag::tests`.
+52. **CEF's C API before `initialize`.** `runtime.rs`: new
+   `CefRuntime::prepare_api(cef_path)` loads the framework (macOS) and pins
+   the API version, so plain C functions such as `cef_zip_reader_create` can
+   run before `initialize`; `maybe_load_library` remembers a macOS load in a
+   static, since `cef_load_library` returns 0 on a second call
+   (`libcef_dll_dylib.cc`) and `initialize` would then fail. The stub returns
+   `FeatureRequired`. Used by wubble-engine's .crx unpacker.
 
 ## Not changed, on purpose
 

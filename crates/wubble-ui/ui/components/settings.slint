@@ -13,7 +13,7 @@
 
 import { Shell } from "../kit/derived.slint";
 import { Mark } from "../kit/chrome/mark.slint";
-import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem, PageLinkItem } from "model.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem, PageLinkItem, ExtensionItem } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
@@ -30,6 +30,7 @@ import { PageTitle, SearchCount, PageScroller, SettingsLayout } from "../kit/set
 import { NavRow, NavIndicator, NavGroup } from "../kit/settings/nav.slint";
 import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours, PageLinkRow } from "../kit/settings/section.slint";
 import { ResetButton } from "../kit/settings/reset.slint";
+import { ExtensionsCard } from "extensions-section.slint";
 
 export { Field, SectionHeader, Card }
 
@@ -378,6 +379,9 @@ export component SettingsPage inherits Rectangle {
     // the Filter lists section: every list, and whether one is rebuilding or downloading
     in property <[FilterListItem]> filter-lists;
     in property <bool> filter-busy;
+    // the Extensions section: the installed list, and whether it differs from what this run loaded
+    in property <[ExtensionItem]> extensions;
+    in property <bool> extensions-restart;
     in property <AboutView> about;
     in property <UpdatesView> updates;
     // the search box has text: only the matching rows show, the other sections are left out
@@ -403,6 +407,11 @@ export component SettingsPage inherits Rectangle {
     callback site-permission-removed(string);
     callback filter-list-toggled(string, bool);
     callback filter-lists-update();
+    callback extension-install-file();
+    callback extension-install-folder();
+    callback extension-toggled(string, bool);
+    callback extension-removed(string);
+    callback extension-options(string);
     // the Updates group: its switch, "Check now", "Restart to update"
     callback updates-toggled(bool);
     callback updates-check();
@@ -442,8 +451,9 @@ export component SettingsPage inherits Rectangle {
     property <int> spaces-at: root.table + 1;
     property <int> sites-at: root.table + 2;
     property <int> lists-at: root.table + 3;
-    property <int> updates-at: root.table + 4;
-    property <int> about-at: root.table + 5;
+    property <int> extensions-at: root.table + 4;
+    property <int> updates-at: root.table + 5;
+    property <int> about-at: root.table + 6;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
     property <int> matches: root.rows.length + root.bindings.length;
     // what the search leaves: "N settings", then ", M pages" when it names pages
@@ -832,6 +842,44 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if !root.searching: Section {
+                    index: root.extensions-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    below: Shell.section-below;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    SectionHead {
+                        text: "Extensions";
+                    }
+                    ExtensionsCard {
+                        items: root.extensions;
+                        accent: root.accent;
+                        restart: root.extensions-restart;
+                        install-file => {
+                            root.extension-install-file();
+                        }
+                        install-folder => {
+                            root.extension-install-folder();
+                        }
+                        toggled(id, on) => {
+                            root.extension-toggled(id, on);
+                        }
+                        removed(id) => {
+                            root.extension-removed(id);
+                        }
+                        options(id) => {
+                            root.extension-options(id);
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
                     index: root.updates-at;
                     top: self.y + root.main-top;
                     scroll: page.scroll;
@@ -1033,6 +1081,7 @@ export component SettingsPage inherits Rectangle {
                         { title: "Spaces", icon: Glyph.stack, shown: !root.searching },
                         { title: "Sites", icon: Glyph.lock, shown: !root.searching },
                         { title: "Filter lists", icon: Glyph.shield, shown: !root.searching },
+                        { title: "Extensions", icon: Glyph.puzzle, shown: !root.searching },
                         { title: "Updates", icon: Glyph.download, shown: !root.searching },
                         { title: "About", icon: Glyph.bubble, shown: !root.searching },
                     ]: Rectangle {

@@ -246,7 +246,8 @@ pub fn descendants(root: u32, table: &[(u32, Option<u32>)]) -> Vec<u32> {
 }
 
 /// A Chromium process's role from its command line (`--type=`, and `--utility-sub-type=` for
-/// the network and storage services). The root process is the browser.
+/// the network and storage services). The root process is the browser. A renderer hosting an
+/// extension (`--extension-process`, Chromium `extensions/common/switches.cc`) is an Extension.
 pub fn label(args: &[String], root: bool) -> String {
     let value = |key: &str| {
         args.iter()
@@ -256,6 +257,7 @@ pub fn label(args: &[String], root: bool) -> String {
         return "Browser".into();
     }
     match value("--type") {
+        Some("renderer") if args.iter().any(|a| a == "--extension-process") => "Extension".into(),
         Some("renderer") => "Renderer".into(),
         Some("gpu-process") => "GPU".into(),
         Some("zygote") => "Zygote".into(),
@@ -302,6 +304,10 @@ mod tests {
             "Renderer"
         );
         assert_eq!(label(&args("h --type=gpu-process"), false), "GPU");
+        assert_eq!(
+            label(&args("h --type=renderer --extension-process"), false),
+            "Extension"
+        );
         assert_eq!(
             label(
                 &args("h --type=utility --utility-sub-type=network.mojom.NetworkService"),

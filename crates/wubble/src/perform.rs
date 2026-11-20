@@ -66,6 +66,8 @@ pub enum Plan {
     DockNudge(i8),
     /// A built-in on the visible page (`host/builtins.rs`).
     Builtin(Builtin),
+    /// End every agent session (`host/agent.rs`).
+    StopAgents,
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -170,6 +172,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             }
         }
         Action::OpenTasks => Plan::Model(Command::OpenInternal(InternalPage::Tasks)),
+        Action::OpenAgentLog => Plan::Model(Command::OpenInternal(InternalPage::AgentLog)),
+        Action::StopAgents => Plan::StopAgents,
         Action::BookmarkPage => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))
@@ -230,6 +234,16 @@ mod tests {
             )
             .0
         })
+    }
+
+    #[test]
+    fn the_agent_actions_are_planned() {
+        let m = with_tabs(1);
+        assert_eq!(plan(Action::StopAgents, &m), Plan::StopAgents);
+        assert_eq!(
+            plan(Action::OpenAgentLog, &m),
+            Plan::Model(Command::OpenInternal(InternalPage::AgentLog))
+        );
     }
 
     #[test]

@@ -65,6 +65,7 @@ export global Glyph {
     out property <string> clock: Derived.clock;
     out property <string> pin: Derived.pin;
     out property <string> awake: Derived.awake;
+    out property <string> puzzle: Derived.puzzle;
 
     // A tab's glyph when it has no favicon: a wubble:// page's own stroke icon (icons.tsx
     // PAGE_ICON: never a letter), else the globe. The URLs are wubble_core's `InternalPage::url`.
@@ -77,6 +78,8 @@ export global Glyph {
         // the design's stacked trays (settings.tsx `spaces`): History keeps the clock (owner)
         if url == "wubble://archive" { return self.stack; }
         if url == "wubble://tasks" { return self.gauge; }
+        // wubble-only (derived-review.md, Agent sessions): the generated set has no agent glyph
+        if url == "wubble://agent" { return self.zap; }
         return self.globe;
     }
 

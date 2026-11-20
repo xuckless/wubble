@@ -51,6 +51,11 @@ pub fn container_dir(root: &Path, container: ContainerId) -> PathBuf {
     root.join(format!("{PREFIX}{}", container.0))
 }
 
+/// The container whose directory is named `name` ([`container_dir`]'s last part).
+pub(crate) fn container_of_dir_name(name: &str) -> Option<ContainerId> {
+    name.strip_prefix(PREFIX)?.parse().ok().map(ContainerId)
+}
+
 /// The marker that `container`'s storage is to go: written when the container
 /// is deleted (its context may still have files open), acted on at the next
 /// start, before CEF opens anything ([`sweep`]).

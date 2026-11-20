@@ -11,6 +11,8 @@ mod chooser;
 mod cli;
 mod clipboard;
 mod codecs_smoke;
+mod extensions;
+mod extensions_smoke;
 mod gallery_smoke;
 mod host;
 mod ime;
@@ -18,6 +20,8 @@ mod input;
 mod instance;
 mod load_run;
 mod load_server;
+mod mcp;
+mod mcp_smoke;
 mod measure;
 mod media_keys;
 mod media_smoke;
@@ -173,6 +177,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Mcp { profile } => match mcp_relay(profile) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("wubble mcp: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::Boot) => match with_smoke_dir(|config, _| smoke_boot(config)) {
             Ok(()) => {
                 println!("smoke: cef boot ok {}", app::version());
@@ -208,6 +219,15 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("smoke: codecs FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Extensions { installed }) => {
+            match with_smoke_dir(|config, dir| extensions_smoke::run(config, dir, installed)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("smoke: extensions FAILED: {e}");
                     ExitCode::FAILURE
                 }
             }
@@ -310,6 +330,7 @@ fn main() -> ExitCode {
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
                 Smoke::Ax => Mode::Ax,
+                Smoke::Mcp => Mode::Mcp,
                 Smoke::Overlay { dark, dir } => {
                     if let Some(dir) = dir {
                         shot::request_dir(dir);
@@ -325,6 +346,7 @@ fn main() -> ExitCode {
                 | Smoke::Update
                 | Smoke::Quit
                 | Smoke::Codecs { .. }
+                | Smoke::Extensions { .. }
                 | Smoke::Session
                 | Smoke::SessionPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
@@ -445,6 +467,18 @@ fn browse(
     let code = report_run(mode, config, &profile.dir);
     updater::relaunch_if_requested();
     Ok(code)
+}
+
+/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile` (`mcp.rs`). It
+/// opens nothing else: no store, GPU or CEF.
+fn mcp_relay(profile: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
+    let socket = instance::path_of(
+        instance::Socket::Mcp,
+        &profile.dir,
+        &instance::runtime_dir(),
+    );
+    Ok(mcp::relay(&socket)?)
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
@@ -581,6 +615,8 @@ struct Outcome {
     video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     ax_passed: Option<usize>,
+    /// `--smoke mcp` passed, with its step count.
+    mcp_passed: Option<usize>,
     /// `--smoke overlay` reached its end.
     overlay_passed: bool,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
@@ -633,6 +669,8 @@ enum Mode {
     Boost,
     /// `--smoke ax`.
     Ax,
+    /// `--smoke mcp`.
+    Mcp,
     /// `--smoke overlay` (`dark`: the dark page).
     Overlay { dark: bool },
     /// One phase of `--smoke session`.
@@ -1018,6 +1056,20 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_download_action(move |id, action| {
         with_host_in(win, |host| host.download_action(i64::from(id), action))
     });
+    window.on_extensions_requested(move || with_host_in(win, Host::extensions_requested));
+    window.on_extension_pressed(move |id| with_host_in(win, |host| host.extension_pressed(&id)));
+    window.on_extensions_manage(move || with_host_in(win, Host::extensions_manage));
+    window.on_extensions_dismissed(move || with_host_in(win, Host::extensions_dismissed));
+    window.on_extension_prompt_answered(move |accept| {
+        with_host_in(win, |host| host.extension_prompt_answered(accept))
+    });
+    window.on_extension_install_file(move || with_host_in(win, Host::extension_install_file));
+    window.on_extension_install_folder(move || with_host_in(win, Host::extension_install_folder));
+    window.on_extension_toggled(move |id, on| {
+        with_host_in(win, |host| host.extension_toggled(&id, on))
+    });
+    window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
+    window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
     window.on_find_edited(move |q| {
         with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
     });
@@ -1131,6 +1183,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
             })
         },
     );
+    window.on_agent_sheet_answered(move |allow, headless| {
+        with_host_in(win, |host| host.agent_sheet_answered(allow, headless))
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });
@@ -1215,7 +1270,10 @@ fn run(
             ..
         }
     );
-    let autofill_port = (matches!(mode, Mode::Autofill | Mode::Block | Mode::Parity) || memory_run)
+    let autofill_port = (matches!(
+        mode,
+        Mode::Autofill | Mode::Block | Mode::Parity | Mode::Mcp
+    ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
@@ -1276,6 +1334,7 @@ fn run(
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
+        mcp_smoke: false,
         overlay_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
@@ -1428,6 +1487,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Mcp => (
+            Some(bundled()),
+            Checks {
+                mcp_smoke: true,
+                ..none
+            },
+        ),
         Mode::Overlay { dark } => (
             Some(page_url(OVERLAY_PAGE) + if *dark { "#dark" } else { "" }),
             Checks {
@@ -1499,6 +1565,17 @@ fn run(
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.
     let mut loaded = loaded;
+    // `--smoke mcp` runs the MCP server, off by default.
+    if matches!(mode, Mode::Mcp) {
+        loaded.settings.stored.insert(
+            wubble_core::settings::AGENT_MCP_ENABLED.key.into(),
+            "1".into(),
+        );
+    }
+    let mcp_on = wubble_core::apply::value_of(
+        &wubble_core::settings::AGENT_MCP_ENABLED,
+        &loaded.settings.stored,
+    ) == "1";
     if smoke_page {
         loaded.settings.stored.insert(
             wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
@@ -1530,6 +1607,13 @@ fn run(
             "0".into(),
         );
     }
+    let installed = loaded.settings.extensions();
+    // Before CEF starts, when no Chromium can still be reading a copy the list dropped.
+    let extensions_root = Profile {
+        dir: profile.into(),
+    }
+    .extensions_dir();
+    extensions::sweep(&extensions_root, &installed);
     let mut engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
         content_filter: filter
@@ -1539,6 +1623,7 @@ fn run(
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
+        extensions: wubble_core::extensions::load_paths(&installed),
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);
@@ -1596,7 +1681,7 @@ fn run(
     measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);
-    let host = Host::new(
+    let mut host = Host::new(
         engine,
         first,
         factory,
@@ -1608,6 +1693,7 @@ fn run(
         blocking,
         media_observer,
     );
+    host.set_extensions_root(extensions_root);
     HOST.set(Some(host));
     // The browser checks for an update as it opens (the setting and the policy permitting) and
     // counts the start as healthy after a while (`update::install`); smokes do neither.
@@ -1619,6 +1705,28 @@ fn run(
             Duration::from_secs(wubble_core::update::install::HEALTHY_AFTER_SECS),
             || with_host(Host::updates_healthy),
         );
+    }
+    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, only when on.
+    if mcp_on {
+        let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
+        match mcp::bind(&socket) {
+            Ok(mcp) => {
+                mcp::listen(mcp, |event| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.mcp_event(event))
+                    });
+                });
+                if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
+                    mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
+                }
+            }
+            Err(e) => {
+                eprintln!("wubble: no MCP server: {}: {e}", socket.display());
+                if matches!(mode, Mode::Mcp) {
+                    with_host(|host| host.fail(format!("the MCP socket: {e}")));
+                }
+            }
+        }
     }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {
@@ -1721,6 +1829,7 @@ fn run(
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
         ax_passed: host.ax_passed,
+        mcp_passed: host.mcp_passed,
         overlay_passed: host.overlay_passed,
         measured,
     };

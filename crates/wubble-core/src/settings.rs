@@ -524,6 +524,17 @@ pub const DEVTOOLS_REMOTE_PORT: SettingDef = SettingDef {
     restart: true,
 };
 
+/// The MCP server for agent sessions (`agent`). Off by default: with it off nothing listens.
+/// A session is also refused while `devtools.remote_port` is set.
+pub const AGENT_MCP_ENABLED: SettingDef = SettingDef {
+    key: "agent.mcp_enabled",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Let agents drive wubble over MCP (experimental): each session needs your approval",
+    section: Section::Privacy,
+    restart: true,
+};
+
 /// The port `DEVTOOLS_REMOTE_PORT`'s value asks for: `None` for 0 (off) and for the privileged
 /// ports 1 to 1023, and for anything past 65535.
 pub fn remote_port(raw: u32) -> Option<u16> {
@@ -793,6 +804,17 @@ pub const UPDATE_LAST_CHECK: SettingDef = SettingDef {
     restart: false,
 };
 
+/// The installed extensions (`extensions::Installed`, a JSON array): its own page edits it, and
+/// it is read as CEF starts (`--load-extension`), so a change applies at the next start.
+pub const EXTENSIONS_INSTALLED: SettingDef = SettingDef {
+    key: "extensions.installed",
+    kind: SettingKind::Text,
+    default: "[]",
+    label: "Installed extensions",
+    section: Section::Hidden,
+    restart: true,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -830,6 +852,7 @@ pub const ALL: &[&SettingDef] = &[
     &PROCESS_SPARE_RENDERER,
     &VIDEO_HARDWARE_DECODE,
     &DEVTOOLS_REMOTE_PORT,
+    &AGENT_MCP_ENABLED,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
     &MEDIA_ENABLED,
@@ -865,6 +888,7 @@ pub const ALL: &[&SettingDef] = &[
     &BOOSTS_ENABLED,
     &UPDATE_CHECK_ON_OPEN,
     &UPDATE_LAST_CHECK,
+    &EXTENSIONS_INSTALLED,
 ];
 
 /// The definition of `key`, if it is a setting.

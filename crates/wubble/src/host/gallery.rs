@@ -180,6 +180,11 @@ impl Host {
         if !matches!(self.print, wubble_core::print::Sheet::Closed) {
             self.print_event(wubble_core::print::Event::Cancel);
         }
+        // an agent session of the last scene ends (its sheet, its Space)
+        self.agents_stop();
+        if scene.page == Some(wubble_core::pages::InternalPage::AgentLog) {
+            self.gallery_agent_log();
+        }
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
         }
@@ -198,6 +203,7 @@ impl Host {
                 self.dispatch(command);
             }
         }
+        self.gallery_extensions(scene.overlay);
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
         let mut autofill = View::default();
@@ -301,6 +307,8 @@ impl Host {
                     });
                 }
             }
+            Overlay::AgentSheet => self.gallery_agent(false),
+            Overlay::AgentTabs => self.gallery_agent(true),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -345,6 +353,7 @@ impl Host {
                 self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
+            Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt => {}
             Overlay::None
             | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)

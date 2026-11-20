@@ -14,6 +14,7 @@ off-screen; Slint composites it as GPU textures, so the whole UI is one scene. R
 | `wubble-gfx` | Native texture handle → `wgpu::Texture` → `slint::Image` | wgpu, welding, slint |
 | `wubble-engine` | The only crate that names CEF types | core, gfx, cef |
 | `wubble-ui` | Slint shell (`ui/*.slint`) | slint |
+| `wubble-mcp` | MCP protocol for agent sessions: framing, tool table, parsed calls (`AgentCall`). Pure, no I/O | core |
 | `wubble-ax` | A page's accessibility tree (CEF's values) mapped to AccessKit. Pure | accesskit |
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
@@ -98,6 +99,7 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - [docs/research/ocr.md](docs/research/ocr.md): on-device OCR for live text in images.
 - [docs/research/motion-audit.md](docs/research/motion-audit.md): every design motion against wubble (pre-kit audit).
 - [docs/research/mcp-server.md](docs/research/mcp-server.md): wubble as an MCP server: Space-bound agent sessions, named secrets, airlocks (plan, after the release).
+- [docs/research/extensions.md](docs/research/extensions.md): extensions on CEF 156 windowless: what works unpatched (loading, service workers, content scripts), the patches P1 to P4.
 
 ## Batches
 

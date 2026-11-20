@@ -24,6 +24,11 @@ impl Profile {
         self.dir.join(DB_FILE)
     }
 
+    /// wubble's unpacked copies of .crx extensions (`wubble_engine::extensions::unpack_crx`).
+    pub fn extensions_dir(&self) -> PathBuf {
+        self.dir.join("extensions")
+    }
+
     /// CEF's cache: the same place the engine uses without a profile.
     pub fn cef_cache(&self) -> PathBuf {
         self.dir.join(CEF_CACHE)

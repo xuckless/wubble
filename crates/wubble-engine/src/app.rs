@@ -25,6 +25,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
+use crate::ext_api::{ActionClick, ActionState, ExtApi, ExtRequest, ExtViewTab, TabOpened};
 use crate::filter::{ContentFilter, ResponseObserver};
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
@@ -78,6 +79,10 @@ pub struct EngineConfig {
     /// (`storage`): the session's. Others come up when a view first needs
     /// them.
     pub containers: Vec<ContainerId>,
+    /// Unpacked extension directories Chromium loads at start
+    /// (`wubble_core::extensions::load_paths`); empty keeps the extension system off
+    /// ([`extension_switches`]). Read only here: a change applies at the next start.
+    pub extensions: Vec<PathBuf>,
 }
 
 /// Whose profile CEF runs on.
@@ -286,15 +291,12 @@ impl EngineConfig {
     /// Config for the running executable's directory and the per-user cache; the sandbox
     /// is off only when this process's command line has `--no-sandbox`.
     pub fn from_current_exe() -> Result<Self, EngineError> {
-        let exe = std::env::current_exe().map_err(|e| EngineError::ExeDir(e.to_string()))?;
-        let exe_dir = exe
-            .parent()
-            .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))?;
+        let exe_dir = current_exe_dir()?;
         let cache_dir = user_data_dir()
             .map(|dir| dir.join(CEF_CACHE))
             .ok_or(EngineError::CacheDir)?;
         Ok(Self {
-            exe_dir: exe_dir.to_path_buf(),
+            exe_dir,
             cache_dir,
             pump_scheduler: None,
             clipboard_bridge: false,
@@ -304,6 +306,7 @@ impl EngineConfig {
             profile: ProfileKind::User,
             no_sandbox: no_sandbox_requested(std::env::args_os()),
             containers: vec![],
+            extensions: vec![],
         })
     }
 
@@ -325,6 +328,7 @@ impl EngineConfig {
             profile: ProfileKind::Throwaway,
             no_sandbox: false,
             containers: vec![],
+            extensions: vec![],
         })
     }
 }
@@ -374,6 +378,21 @@ pub const CEF_CACHE: &str = "cef";
 /// [`CEF_CACHE`], CEF's cache. `None` when the environment names none.
 pub fn user_data_dir() -> Option<PathBuf> {
     Current::user_data_dir(&|key| std::env::var_os(key))
+}
+
+/// The running executable's directory.
+fn current_exe_dir() -> Result<PathBuf, EngineError> {
+    let exe = std::env::current_exe().map_err(|e| EngineError::ExeDir(e.to_string()))?;
+    exe.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))
+}
+
+/// Makes CEF's plain C functions (its zip reader) callable before [`Engine::start`]: on macOS
+/// the framework must be loaded first, from where the running executable's CEF is.
+pub(crate) fn prepare_cef_api() -> Result<(), EngineError> {
+    CefRuntime::prepare_api(&Current::framework_dir(&current_exe_dir()?))
+        .map_err(|e| EngineError::Init(e.to_string()))
 }
 
 /// What differs per OS. One impl per OS, chosen by cfg into [`Current`].
@@ -479,15 +498,42 @@ fn nvidia_vaapi(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -
 /// switch, each with the reason. A switch given twice keeps one value, so a
 /// platform table must not add its own `enable-features`: merge it here.
 /// The `enable-features` switch is not here: [`PageFeatures::switches`] writes it, from the
-/// user's settings.
+/// user's settings, nor the extension system's: [`extension_switches`] writes those, from the
+/// installed list. Empty now; the table stays for the next switch every OS needs.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+
+/// The extension system's switches for the installed, enabled extensions `paths`.
 ///
-/// `disable-extensions`: CEF 156's Chrome runtime otherwise starts the extension system with
-/// two extension renderers and two helper processes of its own before any tab opens: about
-/// 60 MiB PSS (`--measure memory`, Linux, 1 and 10 tabs). wubble runs no extensions before M6
-/// (TODO.md Decided "Extensions"); Chromium's PDF viewer, a component extension, still opens
-/// (`--smoke builtins`), and DevTools still docks (`--smoke page`). Remove it with the M6
-/// extension pass.
-const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("disable-extensions", None)];
+/// None: `disable-extensions`. CEF 156's Chrome runtime otherwise starts the extension system
+/// with two extension renderers and two helper processes of its own before any tab opens:
+/// about 60 MiB PSS (`--measure memory`, Linux, 1 and 10 tabs). Chromium's PDF viewer, a
+/// component extension, still opens (`--smoke builtins`), and DevTools still docks
+/// (`--smoke page`).
+///
+/// Some: `load-extension` with the directories joined by `,` (Chromium splits on it, so the
+/// core list refuses paths with one; `extension_service.cc`, unbranded builds only), and
+/// `disable-component-extensions-with-background-pages`, which keeps Chromium's own background
+/// component extensions (likely the two extension renderers of those 60 MiB; some may use
+/// Google's component updater) from starting; the PDF viewer is not one of them (`component_loader.cc`). Extensions loaded
+/// this way are never auto-updated (`Manifest::IsAutoUpdateableLocation`), so nothing asks an
+/// update server (docs/research/extensions.md).
+fn extension_switches(paths: &[PathBuf]) -> Vec<(String, Option<String>)> {
+    if paths.is_empty() {
+        return vec![("disable-extensions".into(), None)];
+    }
+    let list: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    vec![
+        ("load-extension".into(), Some(list.join(","))),
+        (
+            "disable-component-extensions-with-background-pages".into(),
+            None,
+        ),
+        ("disable-default-apps".into(), None),
+    ]
+}
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) struct Linux;
@@ -639,6 +685,8 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     cef.browser_subprocess_path = Current::helper_path(&config.exe_dir);
     cef.cache_path = Some(config.cache_dir.clone());
     cef.command_line_switches = config.features.switches();
+    cef.command_line_switches
+        .extend(extension_switches(&config.extensions));
     let throwaway = match config.profile {
         ProfileKind::User => &[][..],
         ProfileKind::Throwaway => Current::THROWAWAY_SWITCHES,
@@ -703,6 +751,14 @@ fn linux_sandbox_warning(read: &dyn Fn(&str) -> Option<String>) -> Option<String
 
 /// The CEF version wubble is built against (the bundled libcef comes from the
 /// same `cef-dll-sys` release).
+/// `view`'s browser id while it is open.
+fn open_browser(views: &[(ViewId, View)], view: ViewId) -> Option<i32> {
+    views
+        .iter()
+        .find(|(id, v)| *id == view && v.is_open())
+        .map(|(_, v)| v.browser_id())
+}
+
 pub fn version() -> &'static str {
     nul_terminated(cef::sys::CEF_VERSION)
 }
@@ -729,6 +785,13 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 /// Identifies one view owned by the [`Engine`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(usize);
+
+impl ViewId {
+    #[cfg(test)]
+    pub(crate) fn for_test(n: usize) -> Self {
+        Self(n)
+    }
+}
 
 /// What the host must do with its single-shot pump timer after a pump call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -787,6 +850,8 @@ pub struct Engine {
     /// One CEF request context per container in use (`storage`), released
     /// when the shutdown begins.
     profiles: Profiles,
+    /// The extension tab APIs of a patched CEF (`ext_api`); inert on a stock one.
+    ext: ExtApi,
 }
 
 impl Engine {
@@ -835,6 +900,7 @@ impl Engine {
             content_filter: config.content_filter,
             response_observer: config.response_observer,
             profiles: Profiles::new(config.cache_dir),
+            ext: ExtApi::find(),
         };
         engine.apply(Event::Initialised);
         // Outside any host callback: bringing a context up pumps CEF, which a
@@ -869,6 +935,8 @@ impl Engine {
 
     /// Starts an orderly shutdown; keep calling [`Self::tick`] until [`Self::is_stopped`].
     pub fn request_shutdown(&mut self) {
+        // Extensions ask nothing more of the host; their pending tab openings fail.
+        self.ext.release();
         // Open browsers keep their own context references until they close,
         // which the shutdown waits for; none outlives `cef::shutdown`.
         self.profiles.release();
@@ -1018,6 +1086,67 @@ impl Engine {
             .count()
     }
 
+    /// This CEF carries wubble's patches (`patches/chromium`): extensions see wubble's tabs and
+    /// windows through [`Self::set_ext_projection`], ask through [`Self::take_ext_requests`].
+    pub fn ext_apis(&self) -> bool {
+        self.ext.available()
+    }
+
+    /// wubble's windows and tabs as extensions are to see them (a projection of the host's
+    /// model, `wubble_core::extensions::project`, its tabs by view). Kept, and sent to CEF now
+    /// and whenever a view's browser comes or goes; nothing is sent while it stays the same.
+    pub fn set_ext_projection(
+        &mut self,
+        windows: Vec<wubble_core::extensions::ExtWindow>,
+        tabs: Vec<ExtViewTab>,
+    ) {
+        self.ext.set_projection(windows, tabs);
+        self.sync_ext();
+    }
+
+    /// What extensions asked of the host's model since the last call.
+    pub fn take_ext_requests(&mut self) -> Vec<ExtRequest> {
+        let views = &self.views;
+        let view_of = |browser: i32| {
+            views
+                .iter()
+                .find(|(_, v)| v.browser_id() == browser)
+                .map(|(id, _)| *id)
+        };
+        self.ext.take(view_of, self.profiles.root())
+    }
+
+    /// Answers [`ExtRequest::OpenTab`] `request` with what the host did. The projection is
+    /// sent first, so the tab extensions get back has its place.
+    pub fn answer_open_tab(&mut self, request: i32, answer: TabOpened) {
+        self.sync_ext();
+        let browser = match answer {
+            TabOpened::View(v) => open_browser(&self.views, v).unwrap_or(0),
+            TabOpened::Page => -1,
+            TabOpened::Refused => 0,
+        };
+        self.ext.tab_opened(request, browser);
+    }
+
+    /// Clicks extension `extension`'s action on `view`'s page.
+    pub fn action_click(&self, extension: &str, view: ViewId) -> ActionClick {
+        match open_browser(&self.views, view) {
+            Some(browser) => self.ext.action_click(extension, browser),
+            None => ActionClick::None,
+        }
+    }
+
+    /// Extension `extension`'s action as `view`'s page sees it; `None` without one.
+    pub fn action_state(&self, extension: &str, view: ViewId) -> Option<ActionState> {
+        self.ext
+            .action_state(extension, open_browser(&self.views, view)?)
+    }
+
+    fn sync_ext(&mut self) {
+        let views = &self.views;
+        self.ext.sync(|view| open_browser(views, view));
+    }
+
     /// CPU `OnPaint` frames across every view so far, closed ones included;
     /// `None` where welding does not count them.
     pub fn cpu_fallback_frames(&self) -> Option<u64> {
@@ -1071,7 +1200,9 @@ impl Engine {
             runtime.do_message_loop_work();
         }
         self.apply_extra();
-        self.reap_closed_views()
+        let events = self.reap_closed_views();
+        self.sync_ext();
+        events
     }
 
     /// Reports the extra browsers created or closed to the lifecycle.
@@ -1155,7 +1286,48 @@ mod tests {
             profile: ProfileKind::User,
             no_sandbox: false,
             containers: vec![],
+            extensions: vec![],
         }
+    }
+
+    #[test]
+    fn extensions_are_off_until_one_is_installed() {
+        assert_eq!(
+            extension_switches(&[]),
+            [("disable-extensions".to_string(), None)]
+        );
+        let two = [PathBuf::from("/p/a"), PathBuf::from("/home/x/my ext")];
+        assert_eq!(
+            extension_switches(&two),
+            [
+                (
+                    "load-extension".to_string(),
+                    Some("/p/a,/home/x/my ext".to_string())
+                ),
+                (
+                    "disable-component-extensions-with-background-pages".to_string(),
+                    None
+                ),
+                ("disable-default-apps".to_string(), None),
+            ]
+        );
+        let cef = cef_config(&EngineConfig {
+            extensions: two.to_vec(),
+            ..config("/opt/wubble", "/c")
+        });
+        let names: Vec<&str> = cef
+            .command_line_switches
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect();
+        assert!(names.contains(&"load-extension"));
+        assert!(!names.contains(&"disable-extensions"));
+        let off = cef_config(&config("/opt/wubble", "/c"));
+        assert!(
+            off.command_line_switches
+                .iter()
+                .any(|(n, _)| n == "disable-extensions")
+        );
     }
 
     #[test]
@@ -1551,6 +1723,7 @@ mod tests {
             features: PageFeatures::default(),
             clipboard_bridge: false,
             containers: vec![],
+            extensions: vec![],
             profile: ProfileKind::Throwaway,
             no_sandbox: false,
         })

@@ -73,6 +73,10 @@ pub enum Overlay {
     Bookmark,
     /// The print sheet.
     Print,
+    /// An agent session's approval sheet (a client asking, the secret named).
+    AgentSheet,
+    /// An approved agent session in the window: its tab rows and Space header carry the mark.
+    AgentTabs,
     LoadError,
     CertError,
     AutofillMenu,
@@ -99,6 +103,12 @@ pub enum Overlay {
     SpacesDrag,
     /// Settings' search with this typed into it.
     SettingsSearch(&'static str),
+    /// Two extensions installed (in memory only): Settings' Extensions section.
+    ExtensionsList,
+    /// The footer's extensions popover over two extensions' actions.
+    ExtensionsPopover,
+    /// The install prompt over an extension that asks for several things.
+    ExtensionPrompt,
     /// The first web tab shown again at a long address, with the blocker's count and the
     /// reader in the pill (wubble's layout cases: QA HIGH-01, CRIT-05, HIGH-03, MED-05).
     Long(Long),
@@ -209,6 +219,14 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(DOWNLOAD_ROW),
         ..over("downloads-popover-hover", Overlay::Downloads)
     },
+    // the footer's puzzle button: the popover over two actions (one with a badge, one off on the
+    // page), and the install prompt
+    over("extensions-popover", Overlay::ExtensionsPopover),
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("extensions-popover-rail", Overlay::ExtensionsPopover)
+    },
+    over("extension-prompt", Overlay::ExtensionPrompt),
     over("find-bar", Overlay::Find),
     over("permission-prompt", Overlay::Permission),
     Scene {
@@ -286,6 +304,12 @@ pub const SCENES: &[Scene] = &[
         click: Some(NAV_SITES),
         ..on_lists("settings-sites")
     },
+    // Settings' Extensions section, picked in the section list
+    Scene {
+        click: Some(NAV_EXTENSIONS),
+        overlay: Overlay::ExtensionsList,
+        ..on("settings-extensions", InternalPage::Settings)
+    },
     // a search that names built-in pages: their redirect rows over the settings it leaves
     Scene {
         overlay: Overlay::SettingsSearch("tabs"),
@@ -334,11 +358,16 @@ pub const SCENES: &[Scene] = &[
         wheel: 20_000,
         ..on("settings-updates", InternalPage::Settings)
     },
-    // last: twelve Spaces stay in the profile, the popup's rows scroll over its sticky row
+    // twelve Spaces stay in the profile, the popup's rows scroll over its sticky row
     Scene {
         pointer: Some(SPACES_ROW),
         ..over("spaces-popup-many", Overlay::Spaces(12))
     },
+    // last, for an agent session's Space ends with the scene after it: the activity page, the
+    // approval sheet, the marks of an approved session's tabs and Space (wubble-only, derived)
+    on("agent-activity", InternalPage::AgentLog),
+    over("agent-sheet", Overlay::AgentSheet),
+    over("agent-tabs", Overlay::AgentTabs),
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
@@ -359,7 +388,8 @@ const AUTOFILL_ROW: (u16, u16) = (120, 162);
 const NAV_GENERAL: (u16, u16) = (420, 197);
 const NAV_SPACES: (u16, u16) = (420, 387);
 const NAV_SITES: (u16, u16) = (420, 425);
-const NAV_UPDATES: (u16, u16) = (420, 501);
+const NAV_EXTENSIONS: (u16, u16) = (420, 501);
+const NAV_UPDATES: (u16, u16) = (420, 539);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);

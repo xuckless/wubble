@@ -14,6 +14,7 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+mod agent;
 mod autofill;
 mod autoscroll;
 mod ax;
@@ -23,6 +24,8 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+pub(crate) mod ext_tabs;
+mod ext_ui;
 mod external;
 mod gallery;
 mod gesture;
@@ -72,6 +75,7 @@ use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
 use wubble_core::busy::Reason;
 use wubble_core::devtools::PANEL_TAB;
+use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -295,6 +299,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
+    /// `--smoke mcp`: agent sessions are approved without the sheet (`host/agent.rs`).
+    pub mcp_smoke: bool,
     /// `--smoke overlay` (`host/overlay.rs`).
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
@@ -514,10 +520,17 @@ pub struct Host {
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
+    /// The extensions' shell: the list, the footer popover, the popup, the install prompt
+    /// (`host/ext_ui.rs`).
+    ext_ui: ext_ui::ExtUi,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     pub ax_passed: Option<usize>,
+    /// Agent sessions over MCP (`host/agent.rs`).
+    agents: agent::Agents,
+    /// `--smoke mcp` passed, with its step count.
+    pub mcp_passed: Option<usize>,
     /// `--smoke overlay` passed.
     pub overlay_passed: bool,
     overlay_timer: slint::Timer,
@@ -563,6 +576,7 @@ impl Host {
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
         let dock_port = settings.page_features().remote_debugging_port;
+        let installed = settings.extensions();
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
@@ -702,10 +716,13 @@ impl Host {
             ax: ax::WebAx::default(),
             video_passed: None,
             ax_passed: None,
+            agents: agent::Agents::default(),
+            mcp_passed: None,
             overlay_passed: false,
             overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
+            ext_ui: ext_ui::ExtUi::new(installed),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -1002,6 +1019,10 @@ impl Host {
                 }
             }
             Call::SetVisible { tab, visible } => {
+                // An agent session's page is never shown, yet must lay out, keep its
+                // accessibility tree and paint for screenshots: visible to CEF, in no window
+                // (`host/agent.rs`).
+                let visible = visible || self.agent_drives(tab);
                 if let Some(view) = self.tab_view(tab) {
                     view.set_visible(visible);
                 }
@@ -1045,6 +1066,7 @@ impl Host {
         self.enter_focused();
         // once per change, not per window: a tab switch is picture-in-picture's cue
         self.media_after_change();
+        self.ext_push();
     }
 
     /// The open windows, the one the host is in first.
@@ -1083,11 +1105,9 @@ impl Host {
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
         let blocked = self.blocked_counts();
-        crate::bind::render(
-            &window,
-            &crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked),
-            &self.favicons,
-        );
+        let mut view = crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked);
+        self.agent_marks(&mut view);
+        crate::bind::render(&window, &view, &self.favicons);
         crate::bind::render_spaces_menu(
             &window,
             &self.spaces_popup(),
@@ -1120,6 +1140,7 @@ impl Host {
             nav.as_ref().is_some_and(|n| n.1),
         );
         self.render_pages();
+        self.render_extensions_in(&window);
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -1180,6 +1201,9 @@ impl Host {
         if tab == PANEL_TAB {
             return self.panel_view();
         }
+        if tab == POPUP_TAB {
+            return self.popup_view();
+        }
         let id = *self.views.get(&tab)?;
         self.engine.view(id)
     }
@@ -1220,6 +1244,9 @@ impl Host {
         if self.keys_to_panel().is_some() {
             return self.panel_view();
         }
+        if self.keys_to_popup().is_some() {
+            return self.popup_view();
+        }
         self.tab_view(self.key_page()?)
     }
 
@@ -1236,6 +1263,9 @@ impl Host {
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
         if self.devtools.view == Some(view) {
             return Some(PANEL_TAB);
+        }
+        if self.popup_view_is(view) {
+            return Some(POPUP_TAB);
         }
         self.views
             .iter()
@@ -1275,8 +1305,11 @@ impl Host {
                 self.on_page_event(&window, view, event);
             }
         }
+        self.ext_requests();
         self.media_pump();
+        self.agent_check();
         self.enter_focused();
+        self.agent_sheet_pump();
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
@@ -1353,6 +1386,8 @@ impl Host {
             self.devtools.view = None;
             self.panel_closed();
         }
+        // the popup's page closed itself
+        self.popup_view_gone();
     }
 
     /// Presents the new frames of every window's panes; whether any window got one. Ends in
@@ -1507,6 +1542,9 @@ impl Host {
         if tab == PANEL_TAB {
             return self.on_panel_event(event);
         }
+        if tab == POPUP_TAB {
+            return self.on_popup_web_event(event);
+        }
         crate::load_run::web_event(&event);
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
@@ -1515,6 +1553,7 @@ impl Host {
             self.ax_smoke_step(crate::ax_smoke::Input::Title(title));
         }
         self.parity_web(&event);
+        self.agent_web(tab, &event);
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         if self.checks.video_smoke.is_some() {
@@ -1981,6 +2020,7 @@ impl Host {
                     self.dispatch(Command::CloseTab(tab));
                 }
             }
+            Plan::StopAgents => self.agents_stop(),
             Plan::Quit => quit(),
             Plan::Nothing => {}
         }
@@ -2138,6 +2178,9 @@ impl Host {
         if self.archiving.contains_key(&tab) {
             return; // filed in the Archive instead
         }
+        if self.agent_drives(tab) {
+            return; // an agent session's tab is none of the user's
+        }
         let Some(t) = self.model.tabs.get(&tab) else {
             return;
         };
@@ -2159,7 +2202,8 @@ impl Host {
     fn record_visit(&mut self, tab: TabId, url: &str) {
         let previous = self.committed.insert(tab, url.to_string());
         let typed = self.typed_nav.committed(tab);
-        if persist::visit_to_record(previous.as_deref(), url) {
+        // an agent session's loads are none of the user's history
+        if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
             let transition = if typed {
                 Transition::Typed
             } else {
@@ -2172,16 +2216,18 @@ impl Host {
     fn save_now(&mut self) {
         self.record_geometry();
         let ui = self.ui_state();
-        self.store.save(&self.model, ui);
+        self.store.save(&self.model, &self.agents.spaces(), ui);
         self.save = SaveState::default();
     }
 
     /// Orderly shutdown: the final save, then the store thread finishes and
     /// closes the database. `ui` was read before the window went away.
     pub fn shutdown(&mut self, ui: UiState) {
+        // agent sessions end with the browser, their Spaces closed before the last save
+        self.agents_quit();
         self.media_shutdown();
         self.save_download_progress();
-        self.store.save(&self.model, ui);
+        self.store.save(&self.model, &self.agents.spaces(), ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
     }
 
@@ -2721,6 +2767,7 @@ impl Host {
             Some(InternalPage::Passwords) => window.get_logins().row_count(),
             Some(InternalPage::Archive) => window.get_archive_lines().row_count(),
             Some(InternalPage::Tasks) => window.get_tasks().row_count(),
+            Some(InternalPage::AgentLog) => window.get_agent_log().row_count(),
             Some(InternalPage::Settings | InternalPage::Start) | None => 0,
         };
         let seen = pages_smoke::Seen {
@@ -2740,6 +2787,7 @@ impl Host {
                 InternalPage::Passwords => Action::OpenPasswords,
                 InternalPage::Archive => Action::OpenArchive,
                 InternalPage::Tasks => Action::OpenTasks,
+                InternalPage::AgentLog => Action::OpenAgentLog,
                 InternalPage::Settings => Action::OpenSettings,
                 InternalPage::Start => Action::NewTab,
             }),
@@ -2927,7 +2975,7 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = if let Some(panel) = self.keys_to_panel() {
+        let target = if let Some(panel) = self.keys_to_panel().or_else(|| self.keys_to_popup()) {
             Some(panel)
         } else {
             self.key_page().and_then(|t| self.views.get(&t)).copied()
@@ -3306,7 +3354,8 @@ impl Host {
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
             // keys follow the pane that was pressed: the DevTools panel, the peek or a page
-            let to = (tab == PANEL_TAB || self.model.is_glance(tab)).then_some(tab);
+            let to =
+                (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
             if self.key_pane != to && self.shown_tabs().contains(&tab) {
                 self.key_pane = to;
                 if let Some(window) = self.w.window.upgrade() {
@@ -3460,7 +3509,7 @@ fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
         Command::Navigate { tab, url } => (Some(*tab), url),
         Command::NewTab { url, opener, .. } => (*opener, url),
         Command::BackgroundTab { url, opener } => (Some(*opener), url),
-        Command::OpenBeside { url } => (None, url),
+        Command::OpenBeside { url } | Command::ExtensionTab { url, .. } => (None, url),
         _ => return None,
     };
     let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);

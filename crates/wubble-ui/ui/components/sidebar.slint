@@ -158,12 +158,20 @@ export component Sidebar inherits Rectangle {
     out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
     // There are downloads to list: the download button shows in the footer.
     in property <bool> has-downloads: false;
+    // The footer's extensions button: shown once an extension is installed; on while its
+    // popover (or an action's popup) is open.
+    in property <bool> has-extensions: false;
+    in property <bool> extensions-open: false;
+    callback extensions-requested();
     callback downloads-requested();
     // The footer's settings button: opens wubble://settings.
     callback settings-requested();
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
     out property <Origin> downloads-anchor: { x: switcher.downloads-x + switcher.downloads-w + Shell.prompt-gap, y: switcher.downloads-y };
+    // Right of the extensions button, level with its top, in window coordinates: the popover
+    // opens there as the downloads one does.
+    out property <Origin> extensions-anchor: { x: switcher.extensions-x + switcher.extensions-w + Shell.prompt-gap, y: switcher.extensions-y };
     // the tab list's scroller
     in property <length> scroll-y;
     in property <length> thumb-top;
@@ -379,6 +387,10 @@ export component Sidebar inherits Rectangle {
                     SpaceName {
                         text: root.spaces[root.space-index].name;
                         enter: root.space-enter;
+                        agent: root.spaces[root.space-index].agent;
+                        agent-stop => {
+                            root.action("stop-agents");
+                        }
                     }
                 }
 
@@ -529,6 +541,9 @@ export component Sidebar inherits Rectangle {
                                             mute => {
                                                 root.tab-mute-toggled(tab.id);
                                             }
+                                            agent-stop => {
+                                                root.action("stop-agents");
+                                            }
                                             context(x, y) => {
                                                 root.tab-context(tab.id, x, y);
                                             }
@@ -571,6 +586,11 @@ export component Sidebar inherits Rectangle {
                     active: root.space-index;
                     vertical: root.compact;
                     has-downloads: root.has-downloads;
+                    has-extensions: root.has-extensions;
+                    extensions-open: root.extensions-open;
+                    extensions-requested => {
+                        root.extensions-requested();
+                    }
                     spaces-open: root.spaces-open;
                     spaces-requested => {
                         root.spaces-requested();

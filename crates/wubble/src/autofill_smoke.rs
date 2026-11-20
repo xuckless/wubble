@@ -196,6 +196,8 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         // a `data:` page is not), and the copy button it frames from another origin.
         "/parity" => crate::PARITY_PAGE.to_owned(),
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
+        // `--smoke mcp`'s page: an agent session navigates to it on loopback.
+        "/mcp" => crate::mcp_smoke::PAGE.to_owned(),
         _ => {
             return stream.write_all(
                 b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",

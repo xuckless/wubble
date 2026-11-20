@@ -4,7 +4,12 @@
 # version string and API hashes), and installs it where cef-dll-sys finds it through CEF_PATH.
 # Linux x64 only; the macOS arm64 recipe is in TODO.md Decided "Video codecs".
 #
-#   scripts/build-cef.sh WORK [STEP...]   # steps: fetch hook build distrib install (default: all)
+#   scripts/build-cef.sh WORK [STEP...]   # steps: fetch hook patch build distrib install (default: all)
+#
+# `patch` applies wubble's own queue, patches/chromium/*.patch in name order, after CEF's hook
+# (patches/README.md); a patch already applied is skipped, so the step can run again. `install`
+# writes to CEF_INSTALL (default WORK/cef_path), so a patched build can sit beside a CEF_PATH in use:
+#   CEF_INSTALL=DIR scripts/build-cef.sh WORK patch build distrib install
 #
 # WORK ends up at ~38 GB: depot_tools 1.3, the Chromium + CEF checkout 29, the build output 7,
 # the distribution 0.7, the installed copy 0.6. On 28 cores / 31 GB: fetch 8 min, hook 1 min,
@@ -15,7 +20,9 @@
 set -eu
 mkdir -p "${1:?usage: build-cef.sh WORK [STEP...]}"
 work=$(cd "$1" && pwd); shift
-steps=${*:-fetch hook build distrib install}
+steps=${*:-fetch hook patch build distrib install}
+install_to=${CEF_INSTALL:-$work/cef_path}
+queue="$(cd "$(dirname "$0")/.." && pwd)/patches/chromium"
 jobs=${CEF_BUILD_JOBS:-16} # compile jobs; 31 GB RAM held 16 with the desktop in use
 
 # The cef crate's version (Cargo.lock: cef-dll-sys 156.6.0+156.0.30), its CEF commit and branch.
@@ -50,6 +57,22 @@ for step in $steps; do
   hook) # applies CEF's patches to Chromium and runs gn gen with GN_DEFINES
     (cd "$src/cef" && nice -n 10 python3 tools/gclient_hook.py)
     ;;
+  patch) # reverse check, check, apply: CEF tools/git_util.py git_apply_patch_file (BSD-3-Clause)
+    for p in "$queue"/*.patch; do
+      case $(basename "$p") in
+      *-src-*) dir=$src ;;
+      *-cef-*) dir=$src/cef ;;
+      *) echo "$p: name it NN-src-... or NN-cef-..."; exit 2 ;;
+      esac
+      if git -C "$dir" apply -p1 --ignore-whitespace --reverse --check "$p" 2>/dev/null; then
+        echo "$(basename "$p"): already applied"
+      elif git -C "$dir" apply -p1 --ignore-whitespace --check "$p"; then
+        git -C "$dir" apply -p1 --ignore-whitespace "$p" && echo "$(basename "$p"): applied"
+      else
+        echo "$(basename "$p"): does not apply"; exit 1
+      fi
+    done
+    ;;
   build) # not CEF's `cef` group: its sample apps include gtk.h, absent with the sysroot
     (cd "$src" && nice -n 10 autoninja -j "$jobs" -C out/Release_GN_x64 libcef chrome_sandbox)
     ;;
@@ -60,7 +83,7 @@ for step in $steps; do
   install) # the layout download-cef's extract_target_archive makes, plus its archive.json
     archive=$(ls "$work"/distrib/cef_binary_${cef_version}+*_linux64_minimal.tar.bz2)
     name=$(basename "$archive" .tar.bz2)
-    dest="$work/cef_path/$cef_version"
+    dest="$install_to/$cef_version"
     rm -rf "$dest" && mkdir -p "$dest"
     tar -xjf "$archive" -C "$dest"
     mv "$dest/$name/Release" "$dest/cef_linux_x86_64"
@@ -71,7 +94,7 @@ for step in $steps; do
     rm -rf "${dest:?}/$name"
     printf '{\n  "type": "minimal",\n  "name": "%s",\n  "sha1": "%s"\n}' "$(basename "$archive")" \
       "$(sha1sum "$archive" | cut -d' ' -f1)" > "$dest/cef_linux_x86_64/archive.json"
-    echo "CEF_PATH=$work/cef_path"
+    echo "CEF_PATH=$install_to"
     ;;
   *) echo "unknown step $step"; exit 2 ;;
   esac

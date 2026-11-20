@@ -98,6 +98,22 @@ pub enum Command {
         url: String,
         opener: TabId,
     },
+    /// A tab an extension opened (tabs.create, runtime.openOptionsPage, clients.openWindow):
+    /// last in `space` (`None`: the active Space), in the asking extension's `container` (its
+    /// Chrome profile, so the tab is the extension's to see), shown when `show`.
+    ExtensionTab {
+        url: String,
+        container: ContainerId,
+        space: Option<SpaceId>,
+        show: bool,
+    },
+    /// A tab at the end of `space`, in its container, never shown: an agent session's tab
+    /// (`agent`), which lives in a Space no window may show. The Space's active tab when it
+    /// has none, so showing the Space shows it.
+    OpenInSpace {
+        space: SpaceId,
+        url: String,
+    },
     CloseTab(TabId),
     /// Closes each of these tabs (the tab menu's "Close Tabs Below", a folder's "Close Folder").
     CloseTabs(Vec<TabId>),
@@ -540,6 +556,16 @@ impl Model {
         self.place_of(tab).map(|(si, p)| (self.spaces[si].id, p))
     }
 
+    /// Whether `tab` is in `space` and lives in `container`: what an agent session reaches (a
+    /// tab moved into its Space keeps its own container, so stays out of reach).
+    pub fn holds(&self, space: SpaceId, container: ContainerId, tab: TabId) -> bool {
+        self.location(tab).is_some_and(|(s, _)| s == space)
+            && self
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| t.container == container)
+    }
+
     /// Visual order of a Space's tabs: pinned, then items with folder tabs inline.
     pub fn order(&self, space: SpaceId) -> Vec<TabId> {
         self.space_idx(space)
@@ -923,6 +949,24 @@ impl Model {
         fx
     }
 
+    fn extension_tab(
+        &mut self,
+        url: String,
+        container: ContainerId,
+        space: Option<SpaceId>,
+        show: bool,
+    ) -> Vec<Effect> {
+        let Some((id, si, create)) = self.place_new_tab(url, Some(container), None, space) else {
+            return vec![];
+        };
+        let mut fx = vec![create];
+        if show {
+            self.spaces[si].active = Some(id);
+            fx.push(Effect::ActivateTab(id));
+        }
+        fx
+    }
+
     /// A new tab, placed but not shown: after its live `opener`, else last in `space` (`None`:
     /// the active Space). Returns it, its Space and its `CreateTab` effect.
     fn place_new_tab(
@@ -1078,15 +1122,23 @@ impl Model {
         self.glances.iter().any(|g| g.tab == tab)
     }
 
-    /// The model as a session keeps it: without the peeks and their tabs (a restart never
-    /// brings one back).
-    pub fn for_session(&self) -> Model {
+    /// The model as a session keeps it: without the peeks and their tabs, and without the
+    /// `transient` Spaces (an agent session's), their tabs and their own containers (a restart
+    /// never brings one back).
+    pub fn for_session(&self, transient: &[SpaceId]) -> Model {
         let mut m = self.clone();
         let gone: Vec<TabId> = m.glances.drain(..).map(|g| g.tab).collect();
         for &t in &gone {
             m.detach(t);
         }
         m.forget(&gone);
+        for &space in transient {
+            let Some(container) = m.space_idx(space).map(|si| m.spaces[si].container) else {
+                continue;
+            };
+            m = apply(m, Command::DeleteSpace(space)).0;
+            m = apply(m, Command::DeleteContainer(container)).0;
+        }
         m
     }
 
@@ -1833,6 +1885,20 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::BackgroundTab { url, opener } => m
             .place_new_tab(url, None, Some(opener), None)
             .map(|(_, _, create)| create)
+            .into_iter()
+            .collect(),
+        Command::ExtensionTab {
+            url,
+            container,
+            space,
+            show,
+        } => m.extension_tab(url, container, space, show),
+        Command::OpenInSpace { space, url } => m
+            .place_new_tab(url, None, None, Some(space))
+            .map(|(id, si, create)| {
+                m.spaces[si].active.get_or_insert(id);
+                create
+            })
             .into_iter()
             .collect(),
         Command::CloseTab(t) => m.close_tab(t),
