@@ -4,10 +4,13 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::call::{AgentCall, Args, ButtonKind, NavTarget, WaitCondition};
+
 #[derive(Clone, Copy, Debug)]
 pub enum Ty {
     Str,
-    Int,
+    /// An integer in `min..=max`.
+    Int(u32, u32),
     Bool,
     StrList,
     Enum(&'static [&'static str]),
@@ -38,6 +41,8 @@ pub struct Tool {
     pub annotations: Annotations,
     /// Groups of argument names of which exactly one must be present (e.g. `navigate`'s target).
     pub one_of: &'static [&'static str],
+    /// Builds the call from arguments `validate` has accepted.
+    pub(crate) build: fn(&Args) -> Result<AgentCall, String>,
 }
 
 const fn arg(name: &'static str, ty: Ty, required: bool, doc: &'static str) -> Arg {
@@ -117,6 +122,14 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: UI,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::StartSession {
+                purpose: a.req("purpose")?,
+                sites: a.list("sites"),
+                secrets: a.list("secrets"),
+                headless: a.bool("headless"),
+            })
+        },
     },
     Tool {
         name: "stop_session",
@@ -129,6 +142,11 @@ pub static TOOLS: &[Tool] = &[
             open_world: false,
         },
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::StopSession {
+                session: a.session()?,
+            })
+        },
     },
     Tool {
         name: "navigate",
@@ -146,6 +164,18 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &["url", "action"],
+        build: |a| {
+            Ok(AgentCall::Navigate {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: match (a.str("url"), a.str("action").as_deref()) {
+                    (Some(u), _) => NavTarget::Url(u),
+                    (_, Some("back")) => NavTarget::Back,
+                    (_, Some("forward")) => NavTarget::Forward,
+                    _ => NavTarget::Reload,
+                },
+            })
+        },
     },
     Tool {
         name: "read_page",
@@ -154,10 +184,23 @@ pub static TOOLS: &[Tool] = &[
             SESSION,
             TAB,
             arg("ref", Ty::Str, false, "Limit to this element's subtree."),
-            arg("max_items", Ty::Int, false, "Cap on returned items."),
+            arg(
+                "max_items",
+                Ty::Int(1, 10_000),
+                false,
+                "Cap on returned items.",
+            ),
         ],
         annotations: READ_WEB,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::ReadPage {
+                session: a.session()?,
+                tab: a.tab()?,
+                within: a.eref("ref"),
+                max_items: a.int("max_items"),
+            })
+        },
     },
     Tool {
         name: "click",
@@ -174,13 +217,26 @@ pub static TOOLS: &[Tool] = &[
             ),
             arg(
                 "count",
-                Ty::Int,
+                Ty::Int(1, 3),
                 false,
                 "Click count (2 for a double click). Default 1.",
             ),
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Click {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                button: match a.str("button").as_deref() {
+                    Some("right") => ButtonKind::Right,
+                    Some("middle") => ButtonKind::Middle,
+                    _ => ButtonKind::Left,
+                },
+                count: a.int("count").unwrap_or(1),
+            })
+        },
     },
     Tool {
         name: "type",
@@ -194,6 +250,15 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Type {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                text: a.req("text")?,
+                submit: a.bool("submit"),
+            })
+        },
     },
     Tool {
         name: "press_key",
@@ -205,6 +270,13 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::PressKey {
+                session: a.session()?,
+                tab: a.tab()?,
+                key: a.req("key")?,
+            })
+        },
     },
     Tool {
         name: "screenshot",
@@ -219,6 +291,13 @@ pub static TOOLS: &[Tool] = &[
             ..READ_WEB
         },
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Screenshot {
+                session: a.session()?,
+                tab: a.tab()?,
+                crop: a.eref("ref"),
+            })
+        },
     },
     Tool {
         name: "list_tabs",
@@ -226,6 +305,11 @@ pub static TOOLS: &[Tool] = &[
         args: &[SESSION],
         annotations: READ,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::ListTabs {
+                session: a.session()?,
+            })
+        },
     },
     Tool {
         name: "open_tab",
@@ -236,6 +320,12 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::OpenTab {
+                session: a.session()?,
+                url: a.str("url"),
+            })
+        },
     },
     Tool {
         name: "close_tab",
@@ -246,6 +336,12 @@ pub static TOOLS: &[Tool] = &[
             ..ACT
         },
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::CloseTab {
+                session: a.session()?,
+                tab: a.tab()?,
+            })
+        },
     },
     Tool {
         name: "wait_for",
@@ -261,10 +357,27 @@ pub static TOOLS: &[Tool] = &[
                 false,
                 "Wait for the load to finish (true).",
             ),
-            arg("timeout_ms", Ty::Int, false, "Give up after this long."),
+            arg(
+                "timeout_ms",
+                Ty::Int(1, 120_000),
+                false,
+                "Give up after this long.",
+            ),
         ],
         annotations: READ,
         one_of: &["text", "ref", "load"],
+        build: |a| {
+            Ok(AgentCall::WaitFor {
+                session: a.session()?,
+                tab: a.tab()?,
+                condition: match (a.str("text"), a.eref("ref")) {
+                    (Some(t), _) => WaitCondition::Text(t),
+                    (_, Some(r)) => WaitCondition::Element(r),
+                    _ => WaitCondition::Load,
+                },
+                timeout_ms: a.int("timeout_ms"),
+            })
+        },
     },
     Tool {
         name: "evaluate",
@@ -281,6 +394,13 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Evaluate {
+                session: a.session()?,
+                tab: a.tab()?,
+                script: a.req("script")?,
+            })
+        },
     },
     Tool {
         name: "fill_secret",
@@ -293,6 +413,14 @@ pub static TOOLS: &[Tool] = &[
         ],
         annotations: ACT,
         one_of: &[],
+        build: |a| {
+            Ok(AgentCall::FillSecret {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                secret: a.req("secret")?,
+            })
+        },
     },
 ];
 
@@ -304,7 +432,7 @@ impl Ty {
     fn schema(self, doc: &str) -> Value {
         let mut m = match self {
             Ty::Str => json!({"type": "string"}),
-            Ty::Int => json!({"type": "integer", "minimum": 0}),
+            Ty::Int(lo, hi) => json!({"type": "integer", "minimum": lo, "maximum": hi}),
             Ty::Bool => json!({"type": "boolean"}),
             Ty::StrList => json!({"type": "array", "items": {"type": "string"}}),
             Ty::Enum(vs) => json!({"type": "string", "enum": vs}),
@@ -316,7 +444,9 @@ impl Ty {
     fn accepts(self, v: &Value) -> bool {
         match self {
             Ty::Str => v.is_string(),
-            Ty::Int => v.is_u64(),
+            Ty::Int(lo, hi) => v
+                .as_u64()
+                .is_some_and(|n| (u64::from(lo)..=u64::from(hi)).contains(&n)),
             Ty::Bool => v.is_boolean(),
             Ty::StrList => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
             Ty::Enum(vs) => v.as_str().is_some_and(|s| vs.contains(&s)),
@@ -392,11 +522,11 @@ impl Tool {
             let n = self
                 .one_of
                 .iter()
-                .filter(|k| args.contains_key(**k))
+                .filter(|k| args.get(**k).is_some_and(|v| *v != Value::Bool(false)))
                 .count();
             if n != 1 {
                 return Err(format!(
-                    "exactly one of {} is required",
+                    "exactly one of {} is required (a boolean counts only when true)",
                     self.one_of.join(", ")
                 ));
             }

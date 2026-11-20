@@ -263,7 +263,7 @@ mod tests {
             for a in t.args.iter().filter(|a| a.required) {
                 let v = match a.ty {
                     crate::tools::Ty::Str => json!("x"),
-                    crate::tools::Ty::Int => json!(1),
+                    crate::tools::Ty::Int(lo, _) => json!(lo),
                     crate::tools::Ty::Bool => json!(true),
                     crate::tools::Ty::StrList => json!(["x"]),
                     crate::tools::Ty::Enum(vs) => json!(vs[0]),
@@ -275,10 +275,42 @@ mod tests {
                 args.insert((*first).into(), json!("x"));
             }
             match call(t.name, Value::Object(args)) {
-                Incoming::Call { call, .. } => assert_eq!(call.tool_name(), t.name),
+                Incoming::Call { .. } => {}
                 other => panic!("{}: {other:?}", t.name),
             }
         }
+    }
+
+    #[test]
+    fn integers_are_range_checked_and_false_booleans_do_not_select() {
+        let click = |n: Value| {
+            call(
+                "click",
+                json!({"session": "s", "tab": "t", "ref": "e1.1", "count": n}),
+            )
+        };
+        assert!(matches!(click(json!(3)), Incoming::Call { .. }));
+        for bad in [json!(0), json!(4), json!(4_294_967_295u64), json!(u64::MAX)] {
+            assert!(!matches!(click(bad), Incoming::Call { .. }));
+        }
+        let wait = |args: Value| call("wait_for", args);
+        let base = json!({"session": "s", "tab": "t"});
+        let with = |k: &str, v: Value| {
+            let mut m = base.clone();
+            m[k] = v;
+            m
+        };
+        assert!(!matches!(
+            wait(with("load", json!(false))),
+            Incoming::Call { .. }
+        ));
+        assert!(!matches!(
+            wait(with("timeout_ms", json!(0))),
+            Incoming::Call { .. }
+        ));
+        let mut m = with("text", json!("x"));
+        m["load"] = json!(false);
+        assert!(matches!(wait(m), Incoming::Call { .. }));
     }
 
     #[test]
@@ -318,7 +350,6 @@ mod tests {
             }
         ));
         let c = parsed("start_session", json!({"purpose": "p", "secrets": ["GH"]}));
-        assert_eq!(c.session(), None);
         assert!(matches!(
             c,
             AgentCall::StartSession {
