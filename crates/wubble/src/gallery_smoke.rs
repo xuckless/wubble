@@ -73,6 +73,22 @@ pub enum Overlay {
     /// Settings' lists filled: routing rules, sites never put to sleep, zoom levels, remembered
     /// permissions (the list editors with rows).
     Lists,
+    /// The first web tab shown again at a long address, with the blocker's count and the
+    /// reader in the pill (wubble's layout cases: QA HIGH-01, CRIT-05, HIGH-03, MED-05).
+    Long(Long),
+}
+
+/// What a [`Overlay::Long`] scene opens over the long address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Long {
+    /// Nothing: the pill and its trailing chips.
+    Pill,
+    /// The tab row's menu (its rows that name the Space and the site).
+    TabMenu,
+    /// The blocker's menu under the pill's badge.
+    SiteMenu,
+    /// Enough tabs in the Space that the list scrolls.
+    Crowd,
 }
 
 const fn scene(name: &'static str) -> Scene {
@@ -225,6 +241,18 @@ pub const SCENES: &[Scene] = &[
         sidebar: SidebarMode::Rail,
         pointer: Some(RAIL_TAB_ROW),
         ..on("sidebar-rail-hover", InternalPage::Start)
+    },
+    // wubble's layout cases: a long address and its chips, menus with long rows, a crowded
+    // Space (extended and rail). The sidebar mid-collapse is crates/wubble-ui/tests/
+    // layout_shot.rs's (the seam moves only on presented frames, which a headless run lacks).
+    over("long-url-badge", Overlay::Long(Long::Pill)),
+    over("long-menu-rows", Overlay::Long(Long::TabMenu)),
+    over("site-popover-long-host", Overlay::Long(Long::SiteMenu)),
+    over("tabs-crowded", Overlay::Long(Long::Crowd)),
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_TAB_ROW),
+        ..over("tabs-crowded-rail", Overlay::Long(Long::Crowd))
     },
 ];
 
