@@ -254,6 +254,10 @@ export global Shell {
     // 8 below it, 320 wide; the downloads popover: the same surface, 360 wide, rows 60 high with
     // a 3 px progress track; the error panel's column is 440 wide.
     out property <length> prompt-width: 320px;
+    // wubble: the shell's menus at a point (tab row, site, page, sidebar) grow past the design's
+    // 236 (`.tp-menu`) to fit their widest row whole, up to the prompt's surface, then cut it
+    // with an ellipsis
+    out property <length> menu-max: self.prompt-width;
     out property <length> prompt-gap: 8px;
     out property <length> downloads-width: 360px;
     out property <length> download-row: 60px;
