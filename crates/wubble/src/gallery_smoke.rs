@@ -33,6 +33,12 @@ pub struct Scene {
     pub pointer: Option<(u16, u16)>,
     /// Shoot this many frames back to back from the show instead of one settled shot.
     pub frames: u32,
+    /// Once it settled, a click here (logical px in the window), then it settles again: a row
+    /// selected, a section picked in a page's list. Before `wheel`.
+    pub click: Option<(u16, u16)>,
+    /// A second click after the first settled (a row selected in the section the first
+    /// picked).
+    pub then: Option<(u16, u16)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +62,11 @@ pub enum Overlay {
     Unlock,
     /// The notice a saved video frame or screenshot brings up.
     Toast,
+    /// The link status bubble on the web page, for this address.
+    Status(&'static str),
+    /// Settings' lists filled: routing rules, sites never put to sleep, zoom levels, remembered
+    /// permissions (the list editors with rows).
+    Lists,
 }
 
 const fn scene(name: &'static str) -> Scene {
@@ -66,6 +77,8 @@ const fn scene(name: &'static str) -> Scene {
         overlay: Overlay::None,
         wheel: 0,
         pointer: None,
+        click: None,
+        then: None,
         frames: 0,
     }
 }
@@ -74,6 +87,13 @@ const fn on(name: &'static str, page: InternalPage) -> Scene {
     Scene {
         page: Some(page),
         ..scene(name)
+    }
+}
+
+const fn on_lists(name: &'static str) -> Scene {
+    Scene {
+        overlay: Overlay::Lists,
+        ..on(name, InternalPage::Settings)
     }
 }
 
@@ -132,6 +152,12 @@ pub const SCENES: &[Scene] = &[
     over("autofill-save", Overlay::AutofillSave),
     over("dialog-sheet", Overlay::Dialog),
     over("toast", Overlay::Toast),
+    over(
+        "status-bubble",
+        Overlay::Status(
+            "https://github.com/xuckless/the-wallpaper-project/blob/main/src/wubble/pages/settings.tsx",
+        ),
+    ),
     over("error-page", Overlay::LoadError),
     over("cert-error-page", Overlay::CertError),
     on("settings", InternalPage::Settings),
@@ -146,6 +172,27 @@ pub const SCENES: &[Scene] = &[
     Scene {
         wheel: 700,
         ..on("settings-4", InternalPage::Settings)
+    },
+    // the list editors: General's routing rules (a row selected, then a new rule's draft), the
+    // Spaces section (its second Space selected), the Sites lists
+    Scene {
+        click: Some(NAV_GENERAL),
+        then: Some(ROUTING_RULE),
+        ..on_lists("settings-lists")
+    },
+    Scene {
+        click: Some(NAV_GENERAL),
+        then: Some(ROUTING_ADD),
+        ..on_lists("settings-list-draft")
+    },
+    Scene {
+        click: Some(NAV_SPACES),
+        then: Some(SECOND_SPACE),
+        ..on_lists("settings-spaces")
+    },
+    Scene {
+        click: Some(NAV_SITES),
+        ..on_lists("settings-sites")
     },
     on("history", InternalPage::History),
     on("bookmarks", InternalPage::Bookmarks),
@@ -171,6 +218,14 @@ const NEW_TAB_ROW: (u16, u16) = (130, 408);
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
+// Settings at the design's 1360x880 (extended sidebar): a routing rule's row in General, the
+// section list's Spaces and Sites, the Spaces list's second row.
+const NAV_GENERAL: (u16, u16) = (420, 197);
+const NAV_SPACES: (u16, u16) = (420, 387);
+const NAV_SITES: (u16, u16) = (420, 425);
+const ROUTING_RULE: (u16, u16) = (900, 560);
+const ROUTING_ADD: (u16, u16) = (632, 656);
+const SECOND_SPACE: (u16, u16) = (900, 185);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 
@@ -194,6 +249,8 @@ pub enum Stage {
     Shown(usize),
     /// Scene `i` was scrolled; waiting for it to settle again.
     Scrolled(usize),
+    /// Scene `i` took its second click; waiting for it to settle again.
+    Clicked(usize),
     /// Scene `i` was written.
     Shot(usize),
     /// Frame `k` of scene `i`'s burst was asked for.
@@ -206,7 +263,10 @@ pub enum Action {
     /// Seed the profile (the design's Spaces and tabs with `--parity`; nothing without).
     Seed,
     Show(usize),
+    /// Click (`Scene::click`) and scroll (`Scene::wheel`) scene `i`.
     Scroll(usize),
+    /// Scene `i`'s second click (`Scene::then`).
+    Click(usize),
     Shoot(usize),
     /// Frame `k` of scene `i`'s burst.
     ShootFrame(usize, u32),
@@ -230,10 +290,13 @@ pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
         (Stage::Shown(i), Event::Settled) if SCENES[i].frames > 0 => {
             (Stage::Burst(i, 0), Some(Action::ShootFrame(i, 0)))
         }
-        (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 => {
+        (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 || SCENES[i].click.is_some() => {
             (Stage::Scrolled(i), Some(Action::Scroll(i)))
         }
-        (Stage::Shown(i) | Stage::Scrolled(i), Event::Settled) => {
+        (Stage::Scrolled(i), Event::Settled) if SCENES[i].then.is_some() => {
+            (Stage::Clicked(i), Some(Action::Click(i)))
+        }
+        (Stage::Shown(i) | Stage::Scrolled(i) | Stage::Clicked(i), Event::Settled) => {
             (Stage::Shot(i), Some(Action::Shoot(i)))
         }
         (Stage::Burst(i, k), Event::Shot) if k + 1 < SCENES[i].frames => {
@@ -258,7 +321,9 @@ mod tests {
             let a = action.unwrap_or_else(|| panic!("stuck at {stage:?}"));
             out.push(a);
             event = match a {
-                Action::Seed | Action::Show(_) | Action::Scroll(_) => Event::Settled,
+                Action::Seed | Action::Show(_) | Action::Scroll(_) | Action::Click(_) => {
+                    Event::Settled
+                }
                 _ => Event::Shot,
             };
         }
@@ -322,7 +387,7 @@ mod tests {
 
     #[test]
     fn a_scene_is_shot_only_once_it_settled() {
-        for stage in [Stage::Shown(3), Stage::Scrolled(3)] {
+        for stage in [Stage::Shown(3), Stage::Scrolled(3), Stage::Clicked(3)] {
             for event in [Event::Ready, Event::Shot] {
                 assert_eq!(next(stage, event), (stage, None));
             }
@@ -355,13 +420,24 @@ mod tests {
     }
 
     #[test]
-    fn only_scenes_that_ask_are_scrolled() {
+    fn only_scenes_that_ask_are_scrolled_or_clicked() {
         let actions = walk();
         for (i, scene) in SCENES.iter().enumerate() {
             assert_eq!(
                 actions.contains(&Action::Scroll(i)),
-                scene.wheel > 0,
+                scene.wheel > 0 || scene.click.is_some(),
                 "{}",
+                scene.name
+            );
+            assert_eq!(
+                actions.contains(&Action::Click(i)),
+                scene.then.is_some(),
+                "{}",
+                scene.name
+            );
+            assert!(
+                scene.then.is_none() || scene.click.is_some(),
+                "{}: a second click comes after a first",
                 scene.name
             );
         }

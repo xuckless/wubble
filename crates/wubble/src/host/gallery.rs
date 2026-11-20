@@ -75,7 +75,18 @@ impl Host {
             }
             Some(Action::Scroll(i)) => {
                 self.gallery_wait(SETTLE);
-                shot::wheel(&window, SCENES[i].wheel as f32);
+                if let Some(at) = SCENES[i].click {
+                    click(&window, at);
+                }
+                if SCENES[i].wheel > 0 {
+                    shot::wheel(&window, SCENES[i].wheel as f32);
+                }
+            }
+            Some(Action::Click(i)) => {
+                self.gallery_wait(SETTLE);
+                if let Some(at) = SCENES[i].then {
+                    click(&window, at);
+                }
             }
             Some(Action::ShootFrame(i, k)) => {
                 let ms = self.gallery_burst_start.elapsed().as_secs_f64() * 1000.0;
@@ -224,7 +235,20 @@ impl Host {
                     wubble_core::shot::saved_text(Some(true), Some(true)),
                 );
             }
-            Overlay::None | Overlay::CommandBar(_) | Overlay::Downloads | Overlay::Unlock => {}
+            Overlay::Lists => self.gallery_lists(),
+            Overlay::None
+            | Overlay::CommandBar(_)
+            | Overlay::Downloads
+            | Overlay::Unlock
+            | Overlay::Status(_) => {}
+        }
+        // the link status bubble: shown for its scene, gone for the others
+        if let Some(tab) = shown {
+            match scene.overlay {
+                Overlay::Status(url) => self.link_status(tab, url.to_owned()),
+                _ if self.status.shown().is_some() => self.link_status(tab, String::new()),
+                _ => {}
+            }
         }
         if let Some(tab) = shown {
             self.surfaces.insert(tab, surfaces);
@@ -261,6 +285,44 @@ impl Host {
                 _ => {}
             }
         });
+    }
+
+    /// Settings' list editors with rows: two routing rules, two sites never put to sleep, two
+    /// zoom levels, two remembered permissions (in memory only), three Spaces.
+    fn gallery_lists(&mut self) {
+        use wubble_core::settings as defs;
+        use wubble_core::site::{Decision, Permission};
+        for (key, text) in [
+            (
+                defs::ROUTING_RULES.key,
+                r#"["github.com -> Work","*.bank.example -> Personal, Banking"]"#,
+            ),
+            (
+                defs::SLEEP_NEVER_SITES.key,
+                r#"["music.example","mail.example"]"#,
+            ),
+            (
+                defs::SITE_ZOOM.key,
+                r#"{"docs.example":125,"news.example":90}"#,
+            ),
+        ] {
+            if self.settings.stored.get(key).map(String::as_str) != Some(text) {
+                self.write_setting(key, text);
+            }
+        }
+        // three Spaces, the two new ones as "+" makes them
+        while self.model.spaces.len() < 3 {
+            let command = self.model.new_space();
+            self.dispatch(command);
+        }
+        self.site_permissions
+            .set("https://meet.example", Permission::Camera, Decision::Allow);
+        self.site_permissions.set(
+            "https://ads.example",
+            Permission::Notifications,
+            Decision::Block,
+        );
+        self.render_settings();
     }
 
     /// `--parity`: the design's Spaces (name, tint, icon), their favourites and tabs, from the
@@ -335,6 +397,22 @@ impl Host {
 }
 
 /// `#RRGGBB` to [`wubble_core::space::Rgb`].
+/// A left click at `(x, y)`, logical px in the window.
+fn click(window: &AppWindow, (x, y): (u16, u16)) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let position = slint::LogicalPosition::new(f32::from(x), f32::from(y));
+    let w = window.window();
+    w.dispatch_event(WindowEvent::PointerMoved { position });
+    w.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    w.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+}
+
 fn rgb(hex: &str) -> Result<wubble_core::space::Rgb, String> {
     let v =
         u32::from_str_radix(hex.trim_start_matches('#'), 16).map_err(|e| format!("{hex}: {e}"))?;
