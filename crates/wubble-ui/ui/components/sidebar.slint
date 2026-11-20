@@ -196,7 +196,6 @@ export component Sidebar inherits Rectangle {
     // tab id, whether the pointer is on its row, and the row's top in window px (hover preview)
     callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
-    callback new-tab-requested();
     // F6 to the sidebar: keyboard focus to the active tab's row (the rows take it), else, when
     // the active tab is no row (a favourite, or none), the new-tab row.
     property <int> focus-serial: 0;
@@ -556,8 +555,9 @@ export component Sidebar inherits Rectangle {
 
                         new-tab := NewTabRow {
                             compact: root.compact;
+                            // Ctrl+T's action: the start page (decisions.md "Start page")
                             activated => {
-                                root.new-tab-requested();
+                                root.action("new-tab");
                             }
                         }
                     }

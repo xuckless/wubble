@@ -6,6 +6,8 @@
 
 use std::collections::BTreeSet;
 
+use slint::ComponentHandle;
+
 use wubble_core::snapshot::Book;
 use wubble_core::stretch::{PaneSprings, PaneView};
 use wubble_core::tab::TabId;
@@ -97,6 +99,8 @@ impl Host {
             Ok(Some((image, _))) => {
                 if let Some(window) = self.w.window.upgrade() {
                     window.set_exit_page(image);
+                    // the driver plays it, or drops it at once when no switch hid the tab
+                    window.window().request_redraw();
                 }
             }
             Ok(None) => {}

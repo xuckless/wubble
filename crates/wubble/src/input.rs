@@ -163,11 +163,11 @@ pub fn chord_of(unmodified: &Key, mods: ModifiersState, text: Option<&str>) -> O
         return None;
     }
     let key = match unmodified {
-        Key::Character(text) => {
-            let mut chars = text.chars();
+        Key::Character(key) => {
+            let mut chars = key.chars();
             match (chars.next(), chars.next()) {
                 (Some(' '), None) => ChordKey::Space,
-                (Some(c), None) => ChordKey::Char(c),
+                (Some(c), None) => ChordKey::Char(shifted_symbol(c, mods, text).unwrap_or(c)),
                 _ => return None,
             }
         }
@@ -200,6 +200,22 @@ pub fn chord_of(unmodified: &Key, mods: ModifiersState, text: Option<&str>) -> O
         }
         .normalize(),
     )
+}
+
+/// The symbol Shift makes of a symbol key, which the keymap names instead of the key:
+/// Ctrl+Shift+\\ on a US layout is `Ctrl+|`, never `Ctrl+\\` with Shift dropped (QA CRIT-04,
+/// which split instead of unsplitting). Letters and digits keep their key and Shift, so
+/// Ctrl+Shift+1 stays itself. winit's text ignores Ctrl, so it is the shifted character; without
+/// one (no text) the key stands, as before.
+fn shifted_symbol(key: char, mods: ModifiersState, text: Option<&str>) -> Option<char> {
+    if !mods.shift_key() || key.is_alphanumeric() {
+        return None;
+    }
+    let mut chars = text?.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !c.is_alphanumeric() && !c.is_control() && !c.is_whitespace() => Some(c),
+        _ => None,
+    }
 }
 
 /// F1 to F24.
@@ -523,6 +539,79 @@ mod tests {
             Some((Action::FocusAddress, Route::PageFirst))
         );
         assert_eq!(action(ch("a"), ModifiersState::empty()), None);
+    }
+
+    /// The chord the host makes of a key press the parity smoke builds for `chord` (US layout).
+    fn pressed(chord: Chord) -> Option<Chord> {
+        let keys = crate::parity::key_inputs(chord)?;
+        let key = keys
+            .iter()
+            .find(|k| k.pressed && !is_modifier(&k.unmodified))?;
+        chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref())
+    }
+
+    /// Every default row, on every platform, is reached by the keys a US layout presses for it
+    /// and by no other: a row naming a shifted symbol (`Mod+|`, `Mod+Plus`) is reached with
+    /// Shift held on its key, and Shift on a symbol key runs the shifted symbol's row (or
+    /// nothing), never the key's own (QA CRIT-04: Ctrl+Shift+\\ split instead of unsplitting).
+    #[test]
+    fn every_default_chord_is_reached_by_its_own_keys_only() {
+        for platform in [Platform::Linux, Platform::Windows, Platform::Mac] {
+            let map = Keymap::defaults(platform);
+            let run = |c: Chord| map.action_for(c).map(|(a, _)| a);
+            for (chord, action, _) in keys::default_rows(platform) {
+                if let Some(got) = pressed(chord) {
+                    // The first row of a chord wins (a duplicate is a conflict, tested apart).
+                    assert_eq!(run(got), run(chord), "{platform:?} {chord} ({action:?})");
+                }
+                let ChordKey::Char(c) = chord.key else {
+                    continue;
+                };
+                if c.is_alphanumeric() || chord.shift {
+                    continue;
+                }
+                let with_shift = Chord {
+                    shift: true,
+                    ..chord
+                };
+                // A shifted symbol's own row (`Mod+Plus`) holds Shift already.
+                let Some(got) = pressed(with_shift).filter(|&g| Some(g) != pressed(chord)) else {
+                    continue;
+                };
+                let ChordKey::Char(typed) = got.key else {
+                    panic!("{got}");
+                };
+                let shifted_row = Chord {
+                    key: ChordKey::Char(typed),
+                    ..chord
+                };
+                assert_eq!(run(got), run(shifted_row), "{platform:?} Shift+{chord}");
+            }
+        }
+    }
+
+    #[test]
+    fn unsplit_and_split_chords_differ() {
+        let map = keymap(Platform::Linux, &[]);
+        let shift = ctrl() | ModifiersState::SHIFT;
+        let action = |key: &str, mods, text: &str| {
+            chord_of(&ch(key), mods, Some(text)).and_then(|c| map.action_for(c))
+        };
+        assert_eq!(
+            action("\\", shift, "|"),
+            Some((Action::Unsplit, Route::Shell))
+        );
+        assert_eq!(
+            action("\\", ctrl(), "\\"),
+            Some((Action::SplitNext, Route::Shell))
+        );
+        // Without text (a platform that gives none with Ctrl) the key stands, as before.
+        assert_eq!(chord_of(&ch("\\"), shift, None), chord("Ctrl+\\"));
+        // Ctrl+Shift+= types '+': still zoom in.
+        assert_eq!(
+            action("=", shift, "+"),
+            Some((Action::ZoomIn, Route::PageFirst))
+        );
     }
 
     #[test]

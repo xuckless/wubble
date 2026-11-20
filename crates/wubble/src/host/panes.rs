@@ -931,6 +931,9 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
+        if !self.overlay_open(wubble_core::overlay::Kind::Menu, None) {
+            return;
+        }
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

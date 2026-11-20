@@ -80,7 +80,10 @@ export component GlassPanel inherits Rectangle {
     // Slint limit (kit-plan section 6, L2-2): Slint scales a drop shadow by its own fill's alpha,
     // so this outer shadow is fainter than the CSS one over a translucent fill.
     border-radius: root.radius;
-    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell.thick-unblurred-fill over content until the scene blurs the page (owner decision 3)
+    // wubble change: over content without the scene's glass (a panel above the page: an overlay
+    // layer, or `over-content`) every tier takes Shell.thick-unblurred-fill (owner decision 3):
+    // the tiers' translucent fills, unblurred, left the light ink on a white page.
+    background: root.over-wgpu ? transparent : root.over-content || root.over-layer > 0 ? Shell.thick-unblurred-fill : root.t.fill;
     drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadow-y;
     drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadow-blur;
     drop-shadow-color: root.over-wgpu ? transparent : root.t.shadow-color;

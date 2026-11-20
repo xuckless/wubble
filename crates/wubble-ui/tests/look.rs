@@ -174,9 +174,13 @@ fn look_scenarios() {
     let list_end = general.absolute_position().x + general.size().width;
     assert_eq!(row.absolute_position().x - list_end, 48.0);
     assert_eq!(general.size().width, 232.0);
-    // picking a section in the list is harmless when the page cannot scroll
+    // picking a section in the list glides the page there (it scrolls: the scroller measures
+    // the page's size as the pick arrives, not the size of before its layout)
     privacy[0].invoke_accessible_default_action();
     pump(500);
+    settle(&app, &driver);
+    assert!(app.global::<PageScroll>().get_y() > 0.0);
+    app.global::<PageScroll>().invoke_reset();
 
     // A page that scrolls: picking the last section glides there (scroller.tsx `to`) on the
     // driver's page scroller, not in one jump.

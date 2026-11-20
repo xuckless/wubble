@@ -32,7 +32,7 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
     cargo run -p wubble -- --smoke ax   # a11y.web on: the page's accessible items, a click and a field's value through them, exits; run by hand only
     cargo run -p wubble-engine --example ax_smoke   # windowless: CEF's accessibility tree of a bundled page, mapped and printed (`-- --dump FILE` writes the JSON), exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
-    cargo run -p wubble -- --smoke overlay   # green/red page: menu, command bar and peek glass frost the page, the gutter takes its light, no page blur while nothing is over it; `overlay=dark`, `--shot-dir DIR` for one PNG a step; exits; run by hand only
+    cargo run -p wubble -- --smoke overlay   # green/red page: menu, command bar and peek glass frost the page, the gutter takes its light, no page blur while nothing is over it; then the overlays' rules (Print replaces Add bookmark, Escape closes each kind topmost first, a tab switch closes the sheet and keeps the find bar on its own tab, a navigation closes it); `overlay=dark`, `--shot-dir DIR` for one PNG a step; exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line, the Pip window opened, returned and closed; exits; run by hand only
     cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only
@@ -61,7 +61,9 @@ a tab row and the new-tab row hovered; the command bar opening (a burst: `DIR/NN
 `times.txt`), empty and with results; tab-row menu; site menu; downloads popover (and a row hovered);
 find bar; permission prompt (and Block hovered); autofill menu (and a login hovered) and save prompt;
 dialog sheet and prompt; bookmark sheet; print sheet; toast; link status bubble; error and certificate
-error pages; Settings at four scroll positions; Settings' list editors (routing rules with a row
+error pages; over a plain white page (`assets/ground.html`) the sidebar, page menu, tab menu, command bar,
+find bar, bookmark sheet, reload tooltip and peeking sidebar, and over its dark variant the menus, command
+bar and find bar (the glass's contrast); Settings at four scroll positions; Settings' list editors (routing rules with a row
 selected, a new rule's draft, Spaces with the second selected, Sites); history, bookmarks, downloads,
 passwords (locked, unlocked), archive, task manager; the start page; a history row hovered (its
 actions shown); the rail with its tab hovered (the close badge).
