@@ -61,7 +61,9 @@ a tab row and the new-tab row hovered; the command bar opening (a burst: `DIR/NN
 `times.txt`), empty and with results; tab-row menu; site menu; downloads popover (and a row hovered);
 find bar; permission prompt (and Block hovered); autofill menu (and a login hovered) and save prompt;
 dialog sheet and prompt; bookmark sheet; print sheet; toast; link status bubble; error and certificate
-error pages; Settings at four scroll positions; Settings' list editors (routing rules with a row
+error pages; over a plain white page (`assets/ground.html`) the sidebar, page menu, tab menu, command bar,
+find bar, bookmark sheet, reload tooltip and peeking sidebar, and over its dark variant the menus, command
+bar and find bar (the glass's contrast); Settings at four scroll positions; Settings' list editors (routing rules with a row
 selected, a new rule's draft, Spaces with the second selected, Sites); history, bookmarks, downloads,
 passwords (locked, unlocked), archive, task manager; the start page; a history row hovered (its
 actions shown); the rail with its tab hovered (the close badge).

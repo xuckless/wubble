@@ -100,6 +100,9 @@ const SMOKE_PAGE: &str = include_str!("../assets/smoke.html");
 /// `--smoke overlay`'s page: green on top, red below (`#dark`: dark).
 const OVERLAY_PAGE: &str = include_str!("../assets/overlay.html");
 
+/// `--smoke gallery`'s plain white page (`#dark`: near-black), for the glass over it.
+pub const GROUND_PAGE: &str = include_str!("../assets/ground.html");
+
 /// The page `--smoke nav` navigates to.
 pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
 
