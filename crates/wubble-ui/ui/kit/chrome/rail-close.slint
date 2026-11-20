@@ -1,4 +1,4 @@
-// derived: window-lights.slint (the close light: a round `.wb-light`, white .18, coral with its dark glyph on hover), tab-row.slint (`.wb-tab-x`: the close glyph in mist, fading in over .15 s and growing from .8 over .2 s ease-out while the row is hovered)
+// derived: window-lights.slint (the close light: a round `.wb-light`, white .18, coral with its dark glyph on hover), tab-row.slint (`.wb-tab-x`: the close glyph (in its hover ink, to read on the small badge), fading in over .15 s and growing from .8 over .2 s ease-out while the row is hovered)
 // The close badge of a tab on the sidebar's rail (owner, 2026-11-19: "on these icons I'd like
 // to see a (x) mark that closes the tab … on the top left corner"): the window's close light at
 // its own size, centred on the tab icon's top-left corner; it shows while the row or the badge
@@ -47,7 +47,7 @@ export component RailClose inherits Rectangle {
             size: Shell.light-glyph;
             weight: Shell.light-stroke;
             path: Glyph.close;
-            tint: ta.has-hover ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-tab-x--color;
+            tint: ta.has-hover ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-tab-x-hover--color;
             animate tint {
                 duration: Calm.ms(BrowserCss.wb-light--transition-color-duration);
                 easing: ease;
