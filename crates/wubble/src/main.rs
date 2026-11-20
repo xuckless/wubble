@@ -949,6 +949,7 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     window.on_command_result_chosen(move |index| with_host_in(win, |host| host.bar_chosen(index)));
     window.on_tab_hovered(move |id, on, y| with_host_in(win, |host| host.tab_hovered(id, on, y)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
+    window.on_sidebar_context(move |x, y| with_host_in(win, |host| host.sidebar_context(x, y)));
     window.on_tab_track(move |id, kind, x, y| {
         with_host_in(win, |host| host.tab_track(id, kind, x, y))
     });

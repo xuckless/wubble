@@ -26,8 +26,13 @@ component Zone inherits TouchArea {
 export component MoveArea inherits TouchArea {
     callback begin-move();
     callback toggle-maximise();
+    // a right click, pointer in window px
+    callback context(length, length);
     property <bool> armed;
     pointer-event(event) => {
+        if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
+            root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+        }
         if event.kind == PointerEventKind.down {
             self.armed = event.button == PointerEventButton.left;
         } else if event.kind != PointerEventKind.move {

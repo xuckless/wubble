@@ -192,6 +192,7 @@ export component Sidebar inherits Rectangle {
     callback tab-closed(int);        // tab id
     callback tab-mute-toggled(int);  // tab id: the speaker glyph
     callback tab-context(int, length, length);  // tab id, pointer in window px: right click
+    callback empty-context(length, length);  // pointer in window px: right click on the glass
     // tab id, whether the pointer is on its row, and the row's top in window px (hover preview)
     callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
@@ -253,6 +254,9 @@ export component Sidebar inherits Rectangle {
                 }
                 toggle-maximise => {
                     root.window-maximise-requested();
+                }
+                context(x, y) => {
+                    root.empty-context(x, y);
                 }
             }
 

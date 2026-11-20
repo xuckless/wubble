@@ -631,6 +631,44 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
     out
 }
 
+/// The sidebar's own menu, a right click on its empty glass (QA LOW-02): what the sidebar
+/// already offers, a tab, a Space and a folder in the active Space, with their keys.
+pub fn sidebar_entries(model: &Model, keymap: &Keymap) -> Vec<Entry> {
+    let key = |a: Action| {
+        keymap
+            .shortcut_for(a)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    };
+    let entry = |label: &str, command, shortcut| Entry {
+        label: label.into(),
+        command,
+        enabled: true,
+        icon: "",
+        shortcut,
+        danger: false,
+    };
+    vec![
+        entry(
+            "New Tab",
+            Command::Perform(Action::NewTab),
+            key(Action::NewTab),
+        ),
+        entry(
+            "New Space",
+            Command::Perform(Action::NewSpace),
+            key(Action::NewSpace),
+        ),
+        entry(
+            "New Folder",
+            Command::Model(TabCommand(ModelCommand::NewFolder {
+                space: model.active_space(),
+                name: "New Folder".into(),
+            })),
+            String::new(),
+        ),
+    ]
+}
 
 /// A folder header's menu (`tabmenu::folder_entries`).
 pub fn folder_entries(model: &Model, folder: wubble_core::space::FolderId) -> Vec<Entry> {
@@ -1291,6 +1329,17 @@ mod tests {
         assert_eq!(off[1].label, "Turn on blocking on a.test");
     }
 
+    /// The sidebar's empty glass offers what the sidebar already does, nothing new.
+    #[test]
+    fn the_sidebar_menu_offers_a_tab_a_space_and_a_folder() {
+        let m = Model::new(std::time::Instant::now());
+        let e = sidebar_entries(&m, &Keymap::defaults(wubble_core::keys::Platform::Linux));
+        let labels: Vec<_> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["New Tab", "New Space", "New Folder"]);
+        assert_eq!(e[0].command, Command::Perform(Action::NewTab));
+        assert_eq!(e[1].command, Command::Perform(Action::NewSpace));
+        assert!(e.iter().all(|e| e.enabled && !e.danger));
+    }
 
     /// A long host is cut in its middle, so the row keeps its start and its domain on one line
     /// (QA HIGH-03); the command still names the whole host.

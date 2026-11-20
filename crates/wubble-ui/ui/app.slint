@@ -335,6 +335,7 @@ export component AppWindow inherits Window {
     callback tab-mute-toggled <=> sidebar.tab-mute-toggled;
     // A tab row's right click: (tab id, pointer in window px).
     callback tab-context <=> sidebar.tab-context;
+    callback sidebar-context <=> sidebar.empty-context;
     callback tab-hovered <=> sidebar.tab-hovered;
     // The tab hover preview (`PreviewCard`); the host is its one writer.
     in property <PreviewView> preview;

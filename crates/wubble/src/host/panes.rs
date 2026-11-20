@@ -901,15 +901,6 @@ impl Host {
     /// menu on the focused page.
     /// A folder header's right click opens the folder's menu.
     pub fn tab_context(&mut self, id: i32, x: f32, y: f32) {
-        self.hover_dismiss();
-        let Some(focused) = self.shown() else {
-            return;
-        };
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
-        let scale = window.window().scale_factor();
-        let at = ((x * scale).round() as i32, (y * scale).round() as i32);
         let entries = if let Some(folder) = crate::shell::folder_of_row(id) {
             menu::folder_entries(&self.model, folder)
         } else if let Some(tab) = crate::shell::tab_id(id) {
@@ -920,6 +911,26 @@ impl Host {
         } else {
             return;
         };
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// A right click on the sidebar's empty glass at `x, y` (window, logical): its own menu.
+    pub fn sidebar_context(&mut self, x: f32, y: f32) {
+        let entries = menu::sidebar_entries(&self.model, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// The shell's menu at `x, y` (window, logical), on the focused page.
+    fn sidebar_menu(&mut self, entries: Vec<menu::Entry>, x: f32, y: f32) {
+        self.hover_dismiss();
+        let Some(focused) = self.shown() else {
+            return;
+        };
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let scale = window.window().scale_factor();
+        let at = ((x * scale).round() as i32, (y * scale).round() as i32);
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }
