@@ -28,7 +28,8 @@ Done today, after the kit merges listed under "Design fidelity":
 - [x] Menu glass lost while Settings' closed Selects shared its key: the glass list is rebuilt each frame (3a9ac6e)
 - [x] Sidebar footer: current Space + "^" Spaces popup with a pinned New Space, drag a tab onto it; DevTools button
       removed; Settings links the built-in pages in its nav and its search (2c3a366)
-- [~] Spaces popup reopens when its "v" is clicked; a closed tab returns to the tab that opened it (branch `qa4/tabs`)
+- [x] A press that closes a popup is consumed (Spaces popup reopened on its "v"); a closed tab returns to its opener by
+      Chromium's rules (8523faf); `--smoke video` waits for the strip and needs Slint debug info in dist builds (b3c12e1)
 
 Open, for the owner's eye:
 - [ ] Glass over white: faint ink (disabled rows, shortcuts, counts) sits near 2:1; glass reads flat grey
@@ -165,8 +166,8 @@ Open, to build or check:
 ## M7: Ship
 - [x] Auto-updater (signed manifest, check on open, apply on next launch, rollback), `install.sh`, packaging scripts,
       signing workflow, `docs/release.md` (4ccd853); inert until the public key is set
-- [~] First preview release, Linux: key made (kept outside the repo), dist build warm; left: secrets, public key into
-      the binary and `install.sh`, version `0.1.0-preview.1`, tag, package, release, sign, install test ([docs/release.md](docs/release.md))
+- [x] First preview release, Linux: `v0.1.0-preview.1`, built, packed and signed locally, on GitHub Releases with
+      `install.sh`; README install section
 - [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
       usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;

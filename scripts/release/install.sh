@@ -16,7 +16,7 @@ set -eu
 
 # The key the releases are signed with: the same as the app's (crates/wubble-core/src/update/key.rs;
 # `cargo test -p wubble-release` checks they agree). The all-zero value means no key yet.
-PUBLIC_KEY='RWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+PUBLIC_KEY='RWTnFx9Fhg43QcjvADtCopb89Q392ewf5ZLKBmzS8072IWc0OJVlL0lK'
 PLACEHOLDER='RWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 RELEASES=${WUBBLE_RELEASES:-https://github.com/xuckless/wubble/releases/download}

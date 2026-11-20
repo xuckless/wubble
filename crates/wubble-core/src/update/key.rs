@@ -10,7 +10,7 @@
 pub const PLACEHOLDER: &str = "RWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 /// The trusted key: minisign's base64 public key line.
-pub const PUBLIC_KEY: &str = PLACEHOLDER;
+pub const PUBLIC_KEY: &str = "RWTnFx9Fhg43QcjvADtCopb89Q392ewf5ZLKBmzS8072IWc0OJVlL0lK";
 
 /// The compiled-in key, or `None` while it is the placeholder (or not a key at all).
 pub fn trusted() -> Option<minisign_verify::PublicKey> {
