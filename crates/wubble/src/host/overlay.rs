@@ -5,13 +5,18 @@
 use std::time::Duration;
 
 use slint::ComponentHandle;
+use wubble_core::action::Action;
+use wubble_core::keys::{Chord, Key};
+use wubble_core::model::Command;
+use wubble_core::overlay::Kind;
 use wubble_core::seam::SidebarMode;
+use wubble_core::tab::TabId;
 use wubble_gfx::scene::AMBIENCE_STRENGTH;
-use wubble_ui::{AppWindow, GlassKeys, GlassLayer};
+use wubble_ui::{AppWindow, CommandBarState, GlassKeys, GlassLayer};
 
-use super::{Host, snapshot};
+use super::{Host, new_tab, snapshot};
 use crate::menu::{self, Menu};
-use crate::overlay_smoke::{self, Notes, Panel, STEPS, Seen, Setup};
+use crate::overlay_smoke::{self, Notes, Panel, STEPS, Seen, Setup, Shown};
 use crate::pixels::{self, Region};
 use crate::{physical, quit, shot, with_host};
 
@@ -27,6 +32,8 @@ const READY_FRAMES: u64 = 30;
 pub struct Run {
     step: Option<usize>,
     notes: Notes,
+    /// The tab the run started on.
+    first: Option<TabId>,
 }
 
 impl Host {
@@ -45,8 +52,10 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
+        let shown = self.shown();
         if let Some(run) = &mut self.checks.overlay_smoke {
             run.step = Some(i);
+            run.first = run.first.or(shown);
         }
         let ambience = |host: &mut Host, on: bool| {
             let strength = if on { AMBIENCE_STRENGTH } else { 0.0 };
@@ -55,7 +64,9 @@ impl Host {
         match STEPS[i].setup {
             Setup::Ambience(on) => ambience(self, on),
             Setup::Menu => {
-                if let Some(tab) = self.shown() {
+                if let Some(tab) = self.shown()
+                    && self.overlay_open(Kind::Menu, None)
+                {
                     let scale = window.window().scale_factor();
                     let (x, y) = (
                         window.get_content_x() + 40.0,
@@ -79,6 +90,43 @@ impl Host {
                 ambience(self, false);
             }
             Setup::Wait => {}
+            Setup::Bookmark => self.gallery_bookmark_sheet(),
+            Setup::Print => self.perform(Action::Print),
+            Setup::Find => self.perform(Action::Find),
+            Setup::Region => self.perform(Action::ScreenshotRegion),
+            Setup::Escape => {
+                let escape = Chord {
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                    cmd: false,
+                    key: Key::Escape,
+                };
+                for key in crate::parity::key_inputs(escape).unwrap_or_default() {
+                    self.key(&window, &key);
+                }
+            }
+            Setup::OtherTab => {
+                let url = self.shown().and_then(|t| self.model.tabs.get(&t));
+                if let Some(url) = url.map(|t| t.url.clone()) {
+                    self.dispatch(new_tab(url, None));
+                }
+            }
+            Setup::FirstTab => {
+                let first = self.checks.overlay_smoke.and_then(|r| r.first);
+                if let Some(tab) = first {
+                    self.dispatch(Command::ActivateTab(tab));
+                }
+            }
+            Setup::Navigate => {
+                let tab = self.shown();
+                let url = tab
+                    .and_then(|t| self.model.tabs.get(&t))
+                    .map(|t| t.url.clone());
+                if let (Some(tab), Some(url)) = (tab, url) {
+                    self.dispatch(Command::Navigate { tab, url });
+                }
+            }
         }
         // The shell's own callbacks call back into the host: later, outside it.
         let setup = STEPS[i].setup;
@@ -127,6 +175,7 @@ impl Host {
         let Some(Run {
             step: Some(i),
             notes,
+            ..
         }) = self.checks.overlay_smoke
         else {
             return;
@@ -222,6 +271,14 @@ impl Host {
             panel,
             layer_image,
             builds: self.w.glass.borrow().pages_built().unwrap_or(0),
+            overlays: Shown {
+                bookmark: window.get_bookmark_sheet_view().open,
+                print: window.get_print_sheet_view().open,
+                find: window.get_find().open,
+                menu: window.get_menu().open,
+                bar: window.get_command_bar_state() == CommandBarState::Open,
+                region: window.get_shot_picking(),
+            },
         })
     }
 }
