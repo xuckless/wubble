@@ -6,20 +6,29 @@
 //! reporting `present: false` took the open context menu's glass out). Testing backend, mock
 //! time, explicit frames through `Wired::frame` (what the rendering notifier calls); one test,
 //! one platform per process.
+//!
+//! And an idle shell asks for no frame: the notifier runs inside the window's redraw tracking
+//! (Slint's `draw_contents`), so a frame that reads a property and then writes it asks for the
+//! next frame, forever (the per-frame glass sweep once read `GlassLayer.generation` back to bump
+//! it: 60 renders a second on a still page). Every frame here runs inside such a tracker, and
+//! once settled none may leave it dirty or ask for another: a count, not a clock.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use i_slint_backend_testing::{
     ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
+use slint::private_unstable_api::re_exports::PropertyTracker;
 use slint::{ComponentHandle, LogicalSize, ModelRc, VecModel};
 use wubble_core::pages::settings_page;
 use wubble_ui::driver::{self, Wired};
 use wubble_ui::settings::setting_items;
 use wubble_ui::{
     AppWindow, GlassItem, GlassKeys, GlassLayer, InternalPageKind, MenuEntry, MenuView, TabItem,
+    VideoView,
 };
 
 /// The glass the scene holds and the frame clock.
@@ -28,18 +37,39 @@ struct Rig {
     wired: Wired,
     scene: Vec<GlassItem>,
     now: Instant,
+    /// The window's redraw tracking, as `draw_contents` wraps the rendering notifier in it.
+    redraw: Pin<Box<PropertyTracker>>,
 }
 
 impl Rig {
-    /// One rendered frame `dt` after the last.
+    /// One rendered frame `dt` after the last, inside the redraw tracking. Returns whether it
+    /// asks for another: the driver says so, or the frame dirtied what it read.
     fn frame(&mut self, dt: Duration) -> bool {
         mock_elapsed_time(dt);
         self.now += dt;
-        let (again, out) = self.wired.frame(&self.app, self.now);
+        let (wired, app, now) = (&self.wired, &self.app, self.now);
+        let redraw = self.redraw.as_ref();
+        // `draw_contents` asks for a redraw the moment the tracker turns dirty, and the tracker
+        // forgets that when the evaluation ends: read it inside
+        let ((again, out), dirtied) = redraw.evaluate_as_dependency_root(|| {
+            let r = wired.frame(app, now);
+            (r, redraw.is_dirty())
+        });
         if let Some(glass) = out {
             self.scene = glass;
         }
-        again
+        again || dirtied
+    }
+
+    /// Settled, the shell stays still: 60 more frames at 60 Hz, none asking for another.
+    fn idle(&mut self, what: &str) {
+        self.settle();
+        for frame in 0..60 {
+            assert!(
+                !self.frame(Duration::from_micros(16_667)),
+                "{what}: idle frame {frame} asks for another"
+            );
+        }
     }
 
     /// Frames at 120 Hz until nothing asks for another and every curve is over.
@@ -57,7 +87,7 @@ impl Rig {
                 return;
             }
         }
-        panic!("never settled");
+        panic!("never settled: every frame asks for the next (an idle shell redrawing)");
     }
 
     /// The invariant, at rest: every overlay rect the scene holds is a glass panel Slint shows
@@ -169,9 +199,37 @@ fn every_glass_has_its_panel_and_every_panel_its_glass() {
         wired,
         scene: vec![],
         now: Instant::now(),
+        redraw: Box::pin(PropertyTracker::default()),
     };
     rig.settle();
     rig.check("at start");
+
+    // Idle with Settings open, with no page, with the video strip and with a toast up.
+    rig.idle("settings open");
+    rig.app.set_page(InternalPageKind::None);
+    rig.idle("settings closed");
+    rig.app.set_video(VideoView {
+        open: true,
+        pane_right: 1260.0,
+        pane_bottom: 780.0,
+        x: 400.0,
+        y: 200.0,
+        w: 640.0,
+        h: 360.0,
+        rate: "1×".into(),
+        ..Default::default()
+    });
+    rig.idle("video strip");
+    rig.app.set_video(VideoView::default());
+    rig.app.set_toast_text("Link copied".into());
+    rig.app.set_toast_sticky(true);
+    rig.app.set_toast_serial(rig.app.get_toast_serial() + 1);
+    rig.idle("toast");
+    rig.app.set_toast_sticky(false);
+    rig.app
+        .set_toast_hide_serial(rig.app.get_toast_hide_serial() + 1);
+    rig.app.set_page(InternalPageKind::Settings);
+    rig.idle("settings again");
 
     type Seq = (&'static str, fn(&mut Rig, &mut dyn FnMut() -> Duration));
     let sequences: [Seq; 6] = [

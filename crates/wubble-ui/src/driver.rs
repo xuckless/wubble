@@ -528,9 +528,11 @@ impl Wired {
         if bump {
             crate::controls::bump(window);
         }
-        self.glass.borrow_mut().begin();
-        let layer = window.global::<GlassLayer>();
-        layer.set_generation(layer.get_generation().wrapping_add(1));
+        // The generation comes from the registry, never read back from Slint: this runs inside
+        // the window's redraw tracking (the rendering notifier), where reading the property and
+        // then writing it made every frame ask for the next, an idle shell redrawing forever.
+        let generation = self.glass.borrow_mut().begin();
+        window.global::<GlassLayer>().set_generation(generation);
         slint::private_unstable_api::re_exports::ChangeTracker::run_change_handlers();
         let glass = self.glass.borrow_mut().end();
         (moving, glass)

@@ -23,6 +23,8 @@ pub struct GlassRegistry {
     /// The list the host was last handed: a sweep that finds the same glass hands nothing, so it
     /// does not wake a frozen scene.
     sent: Option<Vec<GlassItem>>,
+    /// The last sweep's number, `GlassLayer.generation`'s one owner.
+    generation: i32,
 }
 
 impl GlassRegistry {
@@ -51,9 +53,12 @@ impl GlassRegistry {
         self.items.iter().find(|i| i.key == key)
     }
 
-    /// Start a frame's sweep: until [`Self::end`], reports build the list from nothing.
-    pub fn begin(&mut self) {
+    /// Start a frame's sweep: until [`Self::end`], reports build the list from nothing. Returns
+    /// the sweep's number, for `GlassLayer.generation` (its change asks the panels to report).
+    pub fn begin(&mut self) -> i32 {
         self.sweep = Some(Vec::new());
+        self.generation = self.generation.wrapping_add(1);
+        self.generation
     }
 
     /// End the sweep: its reports are the list. Returns the list when it differs from the one
