@@ -2,7 +2,8 @@
 //! controls registry after the window is built), driven by pointer events through the window:
 //! the Window choice shows the client's choice and follows a press; the Secrets list removes a
 //! name, the Sites list removes, adds and edits a site (the host's answers are the callbacks
-//! here); Allow and Deny answer with the choice shown. Mock time only, nothing timed.
+//! here); Allow and Deny answer with the choice shown, in a window of the least size too (the
+//! fields scroll). Mock time only, nothing timed.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -205,4 +206,14 @@ fn the_sheet_answers_to_the_pointer() {
     assert_eq!(chosen(&app).as_deref(), Some("Headless"));
     press(&app, AccessibleRole::Button, "Deny", 0);
     assert_eq!(said.borrow().as_slice(), [Said::Answered(false, true)]);
+
+    // the window at its least size: the fields scroll, the buttons stay in reach
+    said.borrow_mut().clear();
+    app.set_agent_sheet_view(AgentSheetView::default());
+    settle();
+    app.window().set_size(LogicalSize::new(560.0, 380.0));
+    app.set_agent_sheet_view(view(3, false));
+    settle();
+    press(&app, AccessibleRole::Button, "Allow", 0);
+    assert_eq!(said.borrow().as_slice(), [Said::Answered(true, false)]);
 }
