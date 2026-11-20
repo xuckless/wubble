@@ -241,6 +241,15 @@ pub fn search_label(engine: Option<&str>, text: &str) -> String {
     )
 }
 
+/// How many characters of a host a menu row names (QA CRIT-05, HIGH-03): a longer one is cut in
+/// its middle, so the row keeps both the start and the domain and stays on one line.
+const MENU_HOST_CHARS: usize = 20;
+
+/// A host as a menu row names it: whole when short, else cut in the middle (`elide_middle`).
+pub fn menu_host(host: &str) -> std::borrow::Cow<'_, str> {
+    wubble_core::url::elide_middle(host, MENU_HOST_CHARS)
+}
+
 /// The script that does `op` to the video or audio element the menu was opened on, run in
 /// the frame that holds it (`View::run_script_in`). CEF has no media-player API, so this is
 /// Chromium's `MediaPlayerAction` done from the page's side. In the main frame the element is
@@ -622,6 +631,45 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
     out
 }
 
+/// The sidebar's own menu, a right click on its empty glass (QA LOW-02): what the sidebar
+/// already offers, a tab, a Space and a folder in the active Space, with their keys.
+pub fn sidebar_entries(model: &Model, keymap: &Keymap) -> Vec<Entry> {
+    let key = |a: Action| {
+        keymap
+            .shortcut_for(a)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    };
+    let entry = |label: &str, command, shortcut| Entry {
+        label: label.into(),
+        command,
+        enabled: true,
+        icon: "",
+        shortcut,
+        danger: false,
+    };
+    vec![
+        entry(
+            "New Tab",
+            Command::Perform(Action::NewTab),
+            key(Action::NewTab),
+        ),
+        entry(
+            "New Space",
+            Command::Perform(Action::NewSpace),
+            key(Action::NewSpace),
+        ),
+        entry(
+            "New Folder",
+            Command::Model(TabCommand(ModelCommand::NewFolder {
+                space: model.active_space(),
+                name: "New Folder".into(),
+            })),
+            String::new(),
+        ),
+    ]
+}
+
 /// A folder header's menu (`tabmenu::folder_entries`).
 pub fn folder_entries(model: &Model, folder: wubble_core::space::FolderId) -> Vec<Entry> {
     tabmenu::folder_entries(model, folder)
@@ -688,11 +736,11 @@ pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
             .find(|s| wubble_core::routing::host_in(&[s.as_str()], &host));
         out.push(match listed {
             Some(site) => entry(
-                format!("Let {site} Sleep"),
+                format!("Let {} Sleep", menu_host(site)),
                 Command::ToggleNeverSleepSite(site.clone()),
             ),
             None => entry(
-                format!("Never Sleep {host}"),
+                format!("Never Sleep {}", menu_host(&host)),
                 Command::ToggleNeverSleepSite(host),
             ),
         });
@@ -780,7 +828,7 @@ pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
         danger: false,
     }];
     out.extend(site.map(|site| Entry {
-        label: format!("Always Allow Pop-ups on {site}"),
+        label: format!("Always Allow Pop-ups on {}", menu_host(site)),
         command: Command::AllowPopups(site.to_owned()),
         enabled: true,
         icon: "shield",
@@ -852,7 +900,7 @@ pub fn blocker_entries(
         hosts
             .iter()
             .take(BLOCKER_MENU_HOSTS)
-            .map(|(h, n)| info(format!("{h} \u{2014} {n}"))),
+            .map(|(h, n)| info(format!("{} \u{2014} {n}", menu_host(h)))),
     );
     let rest = hosts.get(BLOCKER_MENU_HOSTS..).unwrap_or_default();
     if !rest.is_empty() {
@@ -865,9 +913,9 @@ pub fn blocker_entries(
     }
     out.push(Entry {
         label: if allowed {
-            format!("Turn on blocking on {host}")
+            format!("Turn on blocking on {}", menu_host(host))
         } else {
-            format!("Turn off blocking on {host}")
+            format!("Turn off blocking on {}", menu_host(host))
         },
         command: Command::ToggleBlocker(host.to_owned()),
         enabled: true,
@@ -914,7 +962,7 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
     if let Some(origin) = origin.filter(|_| container.is_some()) {
         let site = origin.split_once("://").map_or(origin, |(_, h)| h);
         out.push(row(
-            format!("Forget {site} in {name}"),
+            format!("Forget {} in {name}", menu_host(site)),
             Command::ClearData(ClearData::Site(origin.to_owned())),
         ));
     }
@@ -999,7 +1047,7 @@ pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
 /// marked and not chosen again.
 pub fn page_theme_entries(host: &str, current: PageTheme) -> Vec<Entry> {
     let mut out = vec![Entry {
-        label: format!("Page theme on {host}"),
+        label: format!("Page theme on {}", menu_host(host)),
         command: Command::Separator,
         enabled: false,
         icon: "",
@@ -1279,6 +1327,32 @@ mod tests {
         let off = blocker_entries(0, &[], "a.test", true);
         assert_eq!(off[0].label, "Blocked 0 requests");
         assert_eq!(off[1].label, "Turn on blocking on a.test");
+    }
+
+    /// The sidebar's empty glass offers what the sidebar already does, nothing new.
+    #[test]
+    fn the_sidebar_menu_offers_a_tab_a_space_and_a_folder() {
+        let m = Model::new(std::time::Instant::now());
+        let e = sidebar_entries(&m, &Keymap::defaults(wubble_core::keys::Platform::Linux));
+        let labels: Vec<_> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["New Tab", "New Space", "New Folder"]);
+        assert_eq!(e[0].command, Command::Perform(Action::NewTab));
+        assert_eq!(e[1].command, Command::Perform(Action::NewSpace));
+        assert!(e.iter().all(|e| e.enabled && !e.danger));
+    }
+
+    /// A long host is cut in its middle, so the row keeps its start and its domain on one line
+    /// (QA HIGH-03); the command still names the whole host.
+    #[test]
+    fn a_menu_row_cuts_a_long_host_in_its_middle() {
+        let host = "a-very-long-subdomain.of-some-site.example.com";
+        let e = blocker_entries(1, &[], host, false);
+        assert_eq!(
+            e[1].label,
+            "Turn off blocking on a-very-lon\u{2026}ample.com"
+        );
+        assert_eq!(e[1].command, Command::ToggleBlocker(host.into()));
+        assert_eq!(menu_host("en.wikipedia.org"), "en.wikipedia.org");
     }
 
     #[test]

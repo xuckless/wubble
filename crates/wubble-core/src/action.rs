@@ -355,7 +355,7 @@ pub const PALETTE: [ActionInfo; 28] = [
     ActionInfo {
         action: Action::CyclePageTheme,
         title: "Dark Mode for This Site",
-        keywords: "theme light night invert colours",
+        keywords: "page theme light night invert colours colors appearance",
     },
     ActionInfo {
         action: Action::LinkHints,

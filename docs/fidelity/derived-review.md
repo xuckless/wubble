@@ -13,7 +13,7 @@ the design rule each derives from. "was" marks a value L2 changed toward the des
 | `tab-exit-shrink` | `1 - BrowserCss.wb-tab-out-k-to--scale` | components/sidebar.slint | browser/browser.css:72 @keyframes wb-tab-out to scale(.94) |
 | `beam-segments` | `10` | components/border-beam.slint | wubble-only: the Slint border beam stand-in (GLASS beam is scene-drawn in the design); strokes in its tail |
 | `beam-bloom-alpha` | `0.3` | components/border-beam.slint | wubble-only: the stand-in beam's bloom stroke (the design blurs it in the shader) |
-| `thick-unblurred-fill` | `rgba(28, 31, 40, 0.94)` | kit/material/glass.slint | .wb-thick over live content (Glass.over-content .42) is blurred in the design; without the page in the scene the fallback needs body (owner decision 3). Since L1 s2 the scene frosts the page under overlays; this fill is left to the Slint-only glass and a fullscreen page |
+| `thick-unblurred-fill` | `rgba(28, 31, 40, 0.94)` | kit/material/glass.slint | .wb-thick over live content (Glass.over-content .42) is blurred in the design; without the page in the scene the fallback needs body (owner decision 3). Since L1 s2 the scene frosts the page under overlays; this fill is left to the Slint-only glass and a fullscreen page, for every tier above the page since qa1/glass |
 | `window-width` | `1280px` | app.slint | wubble-only: the first window's size (the design is a page in a browser window) |
 | `window-height` | `800px` | app.slint | wubble-only: as window-width |
 | `address-icon-stroke` | `1.9` | components/address-pill.slint | browser/chrome.tsx address lock icon drawn at stroke 1.9 (icons.tsx default 1.7) |
@@ -65,6 +65,33 @@ the design rule each derives from. "was" marks a value L2 changed toward the des
 | `AMBIENCE_STRENGTH` | 0.20 | crates/wubble-gfx/src/scene/render.rs (glass `uAmb`) | owner-requested ambience (2026-11-19, "light from the webpage leaks into the navbar"); no web counterpart; started subtle, owner judges by eye |
 | `AMBIENCE_LEVEL` | 1.0 | render.rs (glass `uAmbLevel`) | which level of the page-inclusive pyramid: 1 = its 1/16 level (σ ≈ 44 CSS px, the frost's own), the falloff knob |
 | `AMBIENCE_HZ` | 8 | render.rs, pages.rs `page_blur` | update rate of the ambience on a changing page; wubble's cost budget, no web counterpart |
+
+## Glass over bright pages: the contrast ceiling (qa1/glass)
+
+The scene's glass over a page now draws the design's CSS tier (`core/wubble.css` `.wb-thin`,
+`.wb-regular`, `.wb-thick`: saturate, brightness, fill), as the web draws its glass over web
+content, instead of the WebGL frost meant for its dark liquid (which lifts a white page to near
+white). That is a translation fix, not a derived value. What is derived:
+
+| Piece | value | used in | derived from |
+|---|---|---|---|
+| Contrast ceiling | relative luminance 0.099 (sRGB grey about #585858): no glass, any tier, over anything (liquid, page, the sidebar's page ambience, a white Space palette), is brighter | `wubble_core::glass::ceiling`, glass.wgsl `ceiling()` (scene and flat fill) | the kit's own inks at WCAG 2's minimums: `ink` (#F2F4FA) 4.5:1 and `mist` (#A3A9B8) 3:1; mist is the binding one. The design's own `.wb-thick` over pure white (#6F7075, L 0.16) gives ink 4.47:1 and mist 2.09:1 |
+| Its knee | half the ceiling (L 0.049) | `wubble_core::glass::knee` | below it the glass is untouched, so the design's glass over its liquid (the sidebar measures L 0.050, at the knee) keeps its look; above it the light eases toward the ceiling, scaled in linear light so the page's hue and saturation stay (darkened, not greyed) |
+| Fallback over content | `Shell.thick-unblurred-fill` for every tier of a panel above the page (an overlay layer, or `over-content`) when the scene does not draw its glass | kit/material/glass.slint | owner decision 3, which applied to thick only: a thin or regular fill (white .09, unblurred) left light ink on a white page |
+
+Measured from the gallery's plain-page scenes (`--smoke gallery`, 27-38), text ink against its
+local glass, before / after. Light ink (`ink`, `mist`, the tab title): page menu row 1.11 / 6.76;
+tab menu row over the page 2.33 / 6.78; command bar row 2.16 / 7.92; find bar query 1.38 / 6.39;
+peeking sidebar tab title 1.14 / 4.93, its Space label 1.51 / 3.17. `haze` (a mid grey, readable
+on near-white glass as dark-on-light): command bar placeholder 1.36 / 2.95, hint 1.60 / 2.28; the
+page menu's disabled row 3.13 / 1.99, the tab menu's shortcut 2.45 / 2.03, the find count 2.42 /
+1.89 (these three were legible before only because the glass had gone white). Over the dark page
+and the liquid nothing changed (sidebar 4.42 / 9.53 both runs; dark page rows 12-14:1).
+
+Owner decision: `haze` (#7E8496: placeholders, shortcuts, disabled rows, counts) stays at about
+2:1 over a white page. Holding it to 3:1 too needs the ceiling at L 0.044 (#3B3B3B), darker than
+the design's own sidebar glass over its liquid (L 0.050), so the design's look would darken
+everywhere a little; one line in `wubble_core::glass::INKS`.
 
 ## Controls kit A (lane L3 press, ui2b/press)
 
@@ -276,3 +303,9 @@ Shots: (screenshots kept outside the repo) (settings-lists, settings-spaces, set
 | Rail close badge (`kit/chrome/rail-close.slint`, used by `tab-row.slint` on the rail) | the window's close light (`.wb-light`: 12 round, white .18, coral `nth-child(1)` on its own hover with its dark glyph, 8 px close at 2.4) centred on the tab icon's top-left corner; the glyph in `.wb-tab-x:hover`'s ink at rest (mist was unreadable at 8 px on white .18); it fades in (.15 s) and grows from .8 (.2 s ease-out) while the row or the badge is hovered, as `.wb-tab-x` does on a full row; "Close tab" to assistive tech; a click closes, the rest of the icon still picks | `.wb-light`, `.wb-tab-x` | ui8-shots/gallery/NN-sidebar-rail-hover.png |
 | Space switcher "+" (`kit/chrome/space-add.slint`, placed by `side-bottom.slint`) | one more `.wb-space` tile after the Spaces on the switcher's pitch (36 square, gap 2): the `plus` glyph at the Space glyph's 17 px in the tile's ink (SpaceTint), the colour moving over .2 s, a click's wobble; no capsule (never active); "New Space" tooltip with its shortcut (the IconButton's Tips path) and label; on the row, developer tools give way first, then the "+" (the command bar and Settings still add a Space); on the rail it heads the column under the Spaces | `.wb-space`, `.wb-spaces` gap, `.wb-ib` tooltip | ui8-shots/gallery/01-sidebar-extended.png, 02-sidebar-rail.png |
 | Menu rows without an icon (`controls/menu.slint` MenuRow `icon-column`) | in a menu where another row has an icon, an icon-less row keeps the icon's 16 px column empty (the web's `.tp-mrow` rows all carry one, so their labels line up); a menu with no icons starts its labels at the padding as before | `.tp-mrow svg` | ui8-shots/gallery/NN-tab-row-menu.png |
+
+## QA layout fixes (qa1/layout)
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Menu width (`controls/menu.slint` Menu `fit-width`, PointMenu) | a menu at a point (tab row, site, page, sidebar) is the design's 236 unless a row needs more; then it grows to its widest row whole, up to `Shell.menu-max` (the prompt surface's 320, `.ur-o-surface`), past which a row is cut on one line with an ellipsis; a host inside a label is cut in its middle past 20 characters (`menu::menu_host`); the Select and the touch menu button keep their fixed widths | `.tp-menu` width, `.tp-mrow` one line, `.ur-o-surface` | gallery NN-long-menu-rows, NN-site-popover-long-host; tests/layout_shot.rs menu-* |

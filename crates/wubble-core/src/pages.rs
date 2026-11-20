@@ -542,7 +542,8 @@ impl InternalPage {
             InternalPage::Passwords => "Passwords",
             InternalPage::Archive => "Archive",
             InternalPage::Tasks => "Task manager",
-            InternalPage::Start => "New tab",
+            // not "New tab": that is the row under the tabs that opens one (QA LOW-01)
+            InternalPage::Start => "Start",
         }
     }
 
@@ -1394,7 +1395,7 @@ mod tests {
             Some(InternalPage::Start)
         );
         assert_eq!(InternalPage::Start.url(), "wubble://start");
-        assert_eq!(InternalPage::Start.title(), "New tab");
+        assert_eq!(InternalPage::Start.title(), "Start");
     }
 
     #[test]

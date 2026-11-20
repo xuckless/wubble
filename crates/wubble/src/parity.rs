@@ -182,8 +182,12 @@ pub enum HostOp {
     HoverFile(Point),
     /// That file dropped at the point (`DroppedFile`).
     DropFile(Point),
-    /// Back to the parity page's tab, closing every other tab.
+    /// Back to the parity page's tab, closing every other tab (and the peek).
     OnlyFirstTab,
+    /// A second Space, from the sidebar's "+" (it is switched to).
+    NewSpace,
+    /// Deletes every Space after the first.
+    OnlyFirstSpace,
     ZoomReset,
     /// The print sheet's Save / Print, as its button.
     AnswerPrint,
@@ -273,6 +277,10 @@ pub enum HostCheck {
     DragPicture,
     /// The print sheet is open (true) or not.
     PrintSheet(bool),
+    /// The window's peek (glance) is open (true) or not.
+    Peek(bool),
+    /// The active Space is the n-th (0-based).
+    Space(usize),
     /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
     /// shifted and scaled, and a click lands where it is drawn, not at its point.
     PageEntered,
@@ -995,6 +1003,34 @@ pub const ITEMS: &[Item] = &[
         ],
         [H(C::Tabs(2)), H(C::Visible(0))]
     ),
+    // QA HIGH-06: a caret first, so a Shift+click that extends the selection shows.
+    item!(
+        "E.shift-click-peek",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
+            Click(Left, NONE, at::WORD),
+            Click(Left, SHIFT, at::LINK),
+            Settle(20)
+        ],
+        [H(C::Peek(true)), J("eq(getSelection().toString(), '')")]
+    ),
+    // QA HIGH-08: Alt+digit picks a Space while the page has the keys.
+    item!(
+        "E.alt-digit-space",
+        [
+            Host(HostOp::NewSpace),
+            Until(H(C::Space(1))),
+            Keys("Alt+1"),
+            Until(H(C::Space(0))),
+            Keys("Alt+2"),
+            Until(H(C::Space(1))),
+            Keys("Alt+1"),
+            Until(H(C::Space(0))),
+            Host(HostOp::OnlyFirstSpace)
+        ],
+        [H(C::Space(0)), J("eq(location.pathname, '/parity')")]
+    ),
     item!(
         "E.shift-wheel-horizontal",
         [
@@ -1288,9 +1324,16 @@ fn input(
 /// X11 and Wayland events do), the key pressed and released, the modifiers
 /// released. winit's Linux `text` ignores Ctrl (Ctrl+C types "c"). The scan
 /// code is this OS's (winit's `to_scancode`).
+///
+/// A chord naming a shifted symbol (`Ctrl+|`, `Ctrl+Plus`) holds Shift on its key, as a hand
+/// types it.
 pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
     let (code, unmodified, chars) = us_key(chord.key)?;
-    let held = [chord.ctrl, chord.alt, chord.shift, chord.cmd];
+    let symbol = chars.is_some_and(|(plain, shifted)| {
+        plain != shifted && chord.key == Key::Char(shifted) && !shifted.is_alphanumeric()
+    });
+    let shift = chord.shift || symbol;
+    let held = [chord.ctrl, chord.alt, shift, chord.cmd];
     let mut state = ModifiersState::empty();
     let mut out = vec![];
     for (on, &(code, named, bit)) in held.iter().zip(&MODIFIER_KEYS) {
@@ -1306,7 +1349,7 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
             ));
         }
     }
-    let text = chars.map(|(plain, shifted)| if chord.shift { shifted } else { plain }.to_string());
+    let text = chars.map(|(plain, shifted)| if shift { shifted } else { plain }.to_string());
     out.push(input(
         true,
         code,
@@ -1398,6 +1441,8 @@ pub const PLATFORM_GAPS: &[(Platform, &str)] = &[
     (Platform::Mac, "B.middle-click-paste"),
     (Platform::Windows, "B.primary-selection"),
     (Platform::Windows, "B.middle-click-paste"),
+    // macOS picks a Space with Ctrl+digit, which no item presses there
+    (Platform::Mac, "E.alt-digit-space"),
 ];
 
 /// `item` is expected to fail on `platform`.

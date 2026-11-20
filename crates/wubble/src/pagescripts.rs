@@ -45,10 +45,34 @@ fn vars_json(vars: &[(&str, String)]) -> Value {
     )
 }
 
-/// Builds the reader in place: `{title, length}`, or `null` when there is no article.
+/// Builds the reader in place: `{title, length, x, y}` (`x`, `y`: where the page was), or
+/// `null` when there is no article.
 pub fn reader_open(vars: &[(&str, String)]) -> String {
     let call = format!("wubbleReader.open({})", vars_json(vars));
     wrap(&[READERABLE, READABILITY, READER], &call)
+}
+
+/// Leaving the reader: Chromium's scroll restore off for the reload that follows (it would take
+/// the reader's offset); `true`.
+pub fn reader_leave() -> String {
+    wrap(&[READER], "wubbleReader.leave()")
+}
+
+/// The page left for the reader, loaded again: back to where it was, `x`, `y` CSS px; `true`.
+pub fn reader_restore(x: i32, y: i32) -> String {
+    wrap(&[READER], &format!("wubbleReader.restore({x}, {y})"))
+}
+
+/// Where the page was when the reader opened, from [`reader_open`]'s answer: `None` when
+/// there was no article.
+pub fn reader_opened(answer: &str) -> Option<(i32, i32)> {
+    let v: Value = serde_json::from_str(answer).ok()?;
+    let at = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_f64)
+            .map_or(0, |n| n.round() as i32)
+    };
+    v.is_object().then(|| (at("x"), at("y")))
 }
 
 /// New typography for the reader on screen: `true`.
@@ -103,7 +127,14 @@ mod tests {
         assert!(READERABLE.contains("function isProbablyReaderable(doc, options = {})"));
         let licence = include_str!("../assets/reader/LICENSE.md");
         assert!(licence.contains("Apache License, Version 2.0"));
-        for entry in ["probe:", "open:", "set:", "var wubbleReader"] {
+        for entry in [
+            "probe:",
+            "open:",
+            "set:",
+            "leave:",
+            "restore:",
+            "var wubbleReader",
+        ] {
             assert!(READER.contains(entry), "reader.js lacks {entry}");
         }
         for entry in ["collect:", "draw:", "clear:", "var wubbleHints"] {
@@ -127,6 +158,17 @@ mod tests {
         let draw = hints_draw(&[((1.0, 2.0), "a\"b".into())], "a", &colors);
         assert!(draw.contains(r#"[{"label":"a\"b","x":1.0,"y":2.0}], "a", {"#));
         assert_eq!(hex(slint::Color::from_rgb_u8(255, 217, 138)), "#ffd98a");
+    }
+
+    #[test]
+    fn the_reader_answers_where_the_page_was() {
+        let answer = r#"{"title":"t","length":900,"x":0,"y":1834.5}"#;
+        assert_eq!(reader_opened(answer), Some((0, 1835)));
+        assert_eq!(reader_opened(r#"{"title":"t"}"#), Some((0, 0)));
+        assert_eq!(reader_opened("null"), None);
+        assert_eq!(reader_opened("nope"), None);
+        assert!(reader_restore(3, 1200).contains("wubbleReader.restore(3, 1200)"));
+        assert!(reader_leave().contains("wubbleReader.leave()"));
     }
 
     #[test]

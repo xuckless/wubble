@@ -1,6 +1,5 @@
 //! What each [`Action`] does, as data: [`plan`] maps an action and the
-//! model to a [`Plan`], which `Host::perform` executes. Actions the app
-//! cannot perform yet are listed once, in [`NOT_YET`], and logged when used.
+//! model to a [`Plan`], which `Host::perform` executes.
 
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
@@ -15,12 +14,6 @@ use wubble_engine::page::EditCommand;
 
 use crate::host::Builtin;
 use crate::surface::FindEvent;
-
-/// Actions with no implementation yet, each with the reason.
-pub const NOT_YET: &[(Action, &str)] = &[(
-    Action::ToggleCompactMode,
-    "the shell's one sidebar toggle is ToggleSidebar",
-)];
 
 /// Engine calls on the visible tab's view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,8 +69,6 @@ pub enum Plan {
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
-    /// In [`NOT_YET`].
-    NotYet,
 }
 
 /// What `action` does to `model`. Exhaustive, without a catch-all: a new
@@ -123,7 +114,9 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         ),
         Action::NextSpace => switch(model.space_step(1)),
         Action::PrevSpace => switch(model.space_step(-1)),
-        Action::ToggleSidebar => Plan::ToggleSidebar,
+        // Zen's compact mode (Mod+Alt+S) hides the sidebar and peeks it at the window edge: the
+        // design's hidden mode, which the sidebar toggle reaches (`SidebarMode::toggled`)
+        Action::ToggleSidebar | Action::ToggleCompactMode => Plan::ToggleSidebar,
         Action::TogglePinTab => match visible {
             Some(t) if model.is_pinned(t) => Plan::Model(Command::UnpinTab(t)),
             Some(t) => Plan::Model(Command::PinTab(t)),
@@ -215,16 +208,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         // "Space N" in the next unworn swatch (`Model::new_space`), then shown; Settings' Spaces
         // list adds one the same way without switching
         Action::NewSpace => Plan::NewSpace(model.new_space()),
-        Action::ToggleCompactMode => Plan::NotYet,
     }
-}
-
-/// Why `action` is not possible yet, if it is in [`NOT_YET`].
-pub fn not_yet(action: Action) -> Option<&'static str> {
-    NOT_YET
-        .iter()
-        .find(|(a, _)| *a == action)
-        .map(|(_, why)| *why)
 }
 
 #[cfg(test)]
@@ -246,26 +230,6 @@ mod tests {
             )
             .0
         })
-    }
-
-    #[test]
-    fn every_action_is_implemented_or_not_yet() {
-        let models = [Model::new(std::time::Instant::now()), with_tabs(2)];
-        for action in Action::all() {
-            let listed = not_yet(action).is_some();
-            for m in &models {
-                assert_eq!(
-                    plan(action, m) == Plan::NotYet,
-                    listed,
-                    "{action:?}: plan and NOT_YET disagree"
-                );
-            }
-        }
-        let mut listed: Vec<String> = NOT_YET.iter().map(|(a, _)| a.id()).collect();
-        let n = listed.len();
-        listed.sort();
-        listed.dedup();
-        assert_eq!(listed.len(), n, "NOT_YET lists an action twice");
     }
 
     #[test]
@@ -309,9 +273,6 @@ mod tests {
             },
         );
         assert_eq!(plan(Action::ViewSource, &source), Plan::Nothing);
-        for action in [Action::DevTools, Action::ViewSource] {
-            assert!(not_yet(action).is_none(), "{action:?}");
-        }
     }
 
     #[test]
@@ -408,6 +369,7 @@ mod tests {
         assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
         assert_eq!(plan(Action::Quit, &m), Plan::Quit);
         assert_eq!(plan(Action::ToggleSidebar, &m), Plan::ToggleSidebar);
+        assert_eq!(plan(Action::ToggleCompactMode, &m), Plan::ToggleSidebar);
     }
 
     #[test]

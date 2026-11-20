@@ -250,7 +250,8 @@ pub fn folder_of_row(id: i32) -> Option<FolderId> {
         .map(FolderId)
 }
 
-/// What a tab is called: its title, else its host, else "New tab".
+/// What a tab is called: its title, else its host, else the start page's name (a tab with no
+/// address shows the start page).
 pub fn tab_title(tab: &Tab) -> String {
     if let Some(page) = InternalPage::from_url(&tab.url) {
         return page.title().to_owned();
@@ -259,8 +260,20 @@ pub fn tab_title(tab: &Tab) -> String {
     [tab.title.trim(), host]
         .into_iter()
         .find(|s| !s.is_empty())
-        .unwrap_or("New tab")
+        .unwrap_or(InternalPage::Start.title())
         .to_string()
+}
+
+/// What the tab's hover preview says: the row's title, and the page's address under it; a
+/// page of wubble's own has no address line (its address only repeats its name, QA MED-03).
+pub fn preview_words(tab: &Tab) -> (String, String) {
+    let address = if InternalPage::from_url(&tab.url).is_some() || tab.url.trim().is_empty() {
+        String::new()
+    } else {
+        let (host, path) = url::address_parts(&tab.url);
+        format!("{host}{path}")
+    };
+    (tab_title(tab), address)
 }
 
 fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
@@ -299,6 +312,24 @@ mod tests {
         let tab = m.visible_tab().expect("new tab is visible");
         assert!(!fx.is_empty());
         (m, tab)
+    }
+
+    /// The preview names a page of wubble's own by its title alone; a site by its title over
+    /// its address (QA MED-03: the start page read `wubble://start` twice).
+    #[test]
+    fn the_preview_of_an_internal_page_has_no_address_line() {
+        let m = Model::new(std::time::Instant::now());
+        let (m, start) = new_tab(m, InternalPage::Start.url());
+        let (mut m, site) = new_tab(m, "https://example.com/a");
+        m.tabs.get_mut(&site).unwrap().title = "Example".into();
+        assert_eq!(
+            preview_words(&m.tabs[&start]),
+            (InternalPage::Start.title().to_string(), String::new())
+        );
+        assert_eq!(
+            preview_words(&m.tabs[&site]),
+            ("Example".to_string(), "example.com/a".to_string())
+        );
     }
 
     fn titles(rows: &[TabRow]) -> Vec<&str> {
@@ -477,7 +508,7 @@ mod tests {
         let (m, _) = new_tab(m, "");
         assert_eq!(
             view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
-            "New tab"
+            InternalPage::Start.title()
         );
     }
 

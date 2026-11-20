@@ -16,7 +16,7 @@ use wubble_ui::{AppWindow, AutofillView};
 
 use super::Host;
 use super::autofill::shell_view;
-use crate::gallery_smoke::{self, Action, Event, Overlay, SCENES, Scene};
+use crate::gallery_smoke::{self, Action, Event, Ground, Long, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
 use crate::page_error::PageError;
 use crate::prompt::{Ask, PermissionPrompt, PermissionRequest};
@@ -40,6 +40,30 @@ const FAKE_2: RequestId = RequestId(i32::MAX.unsigned_abs() - 1);
 /// under the address pill.
 const TAB_MENU_AT: (f32, f32) = (120.0, 150.0);
 const SITE_MENU_AT: (f32, f32) = (560.0, 96.0);
+/// Under the pill's blocker badge, where its click opens the menu.
+const BADGE_MENU_AT: (f32, f32) = (190.0, 92.0);
+
+/// The address the [`Long`] scenes show: a common host with a long path.
+const LONG_URL: &str =
+    "https://en.wikipedia.org/wiki/List_of_longest_words_in_the_English_language";
+/// How many tabs a crowded Space holds: more than the sidebar shows at the gallery's size
+/// (QA MED-05 saw fifteen in a smaller window).
+const CROWD: usize = 22;
+/// Where the page's own menu opens, logical px in the page (over its text).
+const PAGE_MENU_AT: (f32, f32) = (420.0, 120.0);
+
+/// The sidebar's reload button: its centre x, top and bottom (logical px in the window), where
+/// its tooltip hangs.
+const RELOAD_TIP: (f32, f32, f32) = (243.0, 16.0, 42.0);
+
+/// The address of a scene's plain page; `None` keeps whatever page is shown.
+fn ground_url(ground: Ground) -> Option<String> {
+    match ground {
+        Ground::Bundled => None,
+        Ground::White => Some(crate::page_url(crate::GROUND_PAGE)),
+        Ground::Dark => Some(crate::page_url(crate::GROUND_PAGE) + "#dark"),
+    }
+}
 
 impl Host {
     /// One step of the walk: `Ready` each CEF work run once the frame rate is known, `Settled`
@@ -136,17 +160,33 @@ impl Host {
     fn gallery_show(&mut self, window: &AppWindow, scene: &Scene) {
         let scale = window.window().scale_factor();
         let at = |(x, y): (f32, f32)| ((x * scale).round() as i32, (y * scale).round() as i32);
-        // Nothing of the last scene stays: the page's surfaces, the autofill chip's menu.
+        // Nothing of the last scene stays: the page's surfaces, the autofill chip's menu, a
+        // tooltip.
+        self.tip_dismiss();
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
         }
         // The bookmark and print sheets are the host's own state, not the tab's: closed too.
         self.bookmark_sheet_answered(false, false, "", -1);
+        // A waiting notice goes; a new one replaces it by itself (hiding it in the same turn as
+        // showing one races the toast's two serials).
+        if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
+            self.toast_hide();
+        }
         if !matches!(self.print, wubble_core::print::Sheet::Closed) {
             self.print_event(wubble_core::print::Event::Cancel);
         }
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
+        }
+        // a plain page under the scene: loaded once, kept for the scenes after it on the same
+        if let (Some(tab), Some(url)) = (self.shown(), ground_url(scene.ground))
+            && self.model.tabs.get(&tab).is_some_and(|t| t.url != url)
+        {
+            self.dispatch(Command::Navigate { tab, url });
+        }
+        if let Overlay::Long(long) = scene.overlay {
+            self.gallery_long(long);
         }
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
@@ -157,7 +197,7 @@ impl Host {
             .unwrap_or_default();
         let origin = "https://example.com".to_owned();
         match scene.overlay {
-            Overlay::TabMenu => {
+            Overlay::TabMenu | Overlay::Long(Long::TabMenu) => {
                 if let Some(tab) = shown {
                     let facts = wubble_core::tabmenu::Facts { muted: false };
                     surfaces.menu = Menu::Shell {
@@ -166,7 +206,27 @@ impl Host {
                     };
                 }
             }
-            Overlay::SiteMenu => {
+            Overlay::PageMenu => {
+                let menu = wubble_engine::page::ContextMenu {
+                    page_url: page_url.clone(),
+                    ..Default::default()
+                };
+                let nav = menu::NavFlags {
+                    back: true,
+                    forward: false,
+                    search: None,
+                };
+                surfaces.menu = Menu::Open {
+                    id: FAKE,
+                    at: at(PAGE_MENU_AT),
+                    entries: menu::entries(&menu, nav),
+                };
+            }
+            Overlay::Tooltip => {
+                let (x, top, bottom) = RELOAD_TIP;
+                self.shell_tip("reload", x, (top, bottom), true);
+            }
+            Overlay::SiteMenu | Overlay::Long(Long::SiteMenu) => {
                 let hosts = [("ads.example".to_owned(), 9), ("cdn.tracker".to_owned(), 3)];
                 let host = wubble_core::zoom::host_of(&page_url).unwrap_or_default();
                 let mut entries = menu::blocker_entries(12, &hosts, &host, false);
@@ -175,7 +235,11 @@ impl Host {
                     wubble_core::pagetheme::PageTheme::Auto,
                 ));
                 surfaces.menu = Menu::Shell {
-                    at: at(SITE_MENU_AT),
+                    at: at(if scene.overlay == Overlay::SiteMenu {
+                        SITE_MENU_AT
+                    } else {
+                        BADGE_MENU_AT
+                    }),
                     entries,
                 };
             }
@@ -266,8 +330,13 @@ impl Host {
                     wubble_core::shot::saved_text(Some(true), Some(true)),
                 );
             }
+            Overlay::Question => {
+                let (text, action) = super::videos::ASK_SPONSOR;
+                self.toast_with(text, action, true);
+            }
             Overlay::Lists => self.gallery_lists(),
             Overlay::None
+            | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)
             | Overlay::Downloads
             | Overlay::Unlock
@@ -290,6 +359,12 @@ impl Host {
         } else {
             shell_view(&autofill)
         });
+        if let Overlay::Long(_) = scene.overlay {
+            // the blocker's count and the reader, as a page that blocked and reads would have
+            window.set_address_blocker_visible(true);
+            window.set_address_blocked(14);
+            window.set_reader_available(true);
+        }
         gallery_point(window, scene);
         // The shell's own callbacks call back into the host: later, outside it.
         let (sidebar, overlay) = (scene.sidebar, scene.overlay);
@@ -309,6 +384,61 @@ impl Host {
                 _ => {}
             }
         });
+    }
+
+    /// The [`Long`] scenes' state: the active Space's first web tab shown at [`LONG_URL`]
+    /// (the engine keeps its page; only the address changes), and for a crowd, background tabs
+    /// until the Space holds [`CROWD`].
+    fn gallery_long(&mut self, long: Long) {
+        let space = self.model.active_space();
+        let in_space = |model: &wubble_core::model::Model| -> Vec<wubble_core::tab::TabId> {
+            model
+                .tabs
+                .keys()
+                .copied()
+                .filter(|t| model.location(*t).is_some_and(|(s, _)| s == space))
+                .collect()
+        };
+        let Some(web) = in_space(&self.model)
+            .into_iter()
+            .find(|t| !self.model.is_internal(*t))
+        else {
+            return;
+        };
+        if self.shown() != Some(web) {
+            self.dispatch(Command::ActivateTab(web));
+        }
+        if self.model.tabs.get(&web).is_some_and(|t| t.url != LONG_URL) {
+            self.dispatch(Command::UrlChanged {
+                tab: web,
+                url: LONG_URL.into(),
+            });
+            self.dispatch(Command::TitleChanged {
+                tab: web,
+                title: "List of longest words in the English language - Wikipedia".into(),
+            });
+        }
+        if long == Long::Crowd {
+            let mut n = in_space(&self.model).len();
+            while n < CROWD {
+                let before = in_space(&self.model);
+                self.dispatch(Command::BackgroundTab {
+                    url: "about:blank".into(),
+                    opener: web,
+                });
+                let Some(tab) = in_space(&self.model)
+                    .into_iter()
+                    .find(|t| !before.contains(t))
+                else {
+                    break;
+                };
+                self.dispatch(Command::TitleChanged {
+                    tab,
+                    title: format!("Background tab {n}"),
+                });
+                n += 1;
+            }
+        }
     }
 
     /// Settings' list editors with rows: two routing rules, two sites never put to sleep, two

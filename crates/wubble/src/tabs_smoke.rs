@@ -1,9 +1,10 @@
 //! `--smoke tabs`: three tabs on bundled pages, switch between them, put the
 //! hidden ones to sleep, restore one (showing its snapshot until it paints),
 //! close one, then freeze a hidden page and check its timers stop while a
-//! hidden control page's keep running, and run again once thawed. After each
-//! step the model and the engine must agree. Every wait is "until the host
-//! sees X", bounded by a count of CEF work runs, never by time.
+//! hidden control page's keep running, and run again once thawed. Last, two fresh tabs of one
+//! solid colour each: once the switch to the second settles, its card shows none of the first's
+//! pixels (QA HIGH-04). After each step the model and the engine must agree. Every wait is
+//! "until the host sees X", bounded by a count of CEF work runs, never by time.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,6 +14,24 @@ use crate::nav_smoke::MAX_WORK_RUNS;
 
 /// The timers page's titles start with this, then count `setInterval` ticks.
 pub const TIMER_TITLE: &str = "timer ";
+
+/// The solid pages' colours, far from any of the shell's: the first page, then the fresh tab
+/// switched to from it.
+pub const SOLID: [[u8; 3]; 2] = [[0xff, 0x00, 0xff], [0x00, 0xff, 0xff]];
+
+/// Solid page `i`: its colour edge to edge, titled `solid i`.
+pub fn solid_page(i: usize) -> String {
+    let [r, g, b] = SOLID[i];
+    format!(
+        "<!doctype html><meta charset=utf-8><title>{}</title>\
+         <body style=\"margin:0;background:#{r:02x}{g:02x}{b:02x}\">",
+        solid_title(i)
+    )
+}
+
+fn solid_title(i: usize) -> String {
+    format!("solid {i}")
+}
 
 /// What the host sees after a run of CEF work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -35,6 +54,10 @@ pub struct Seen {
     pub restored_from_snapshot: bool,
     /// Each tab's last freeze answer (frozen, ok), in sidebar order.
     pub frozen: Vec<Option<(bool, bool)>>,
+    /// The visible tab's title.
+    pub shown_title: String,
+    /// No tab switch is fading: the entrance and the hidden page's exit are over.
+    pub settled: bool,
 }
 
 impl Seen {
@@ -106,6 +129,8 @@ pub enum Stage {
     Thawing {
         frozen: String,
     },
+    /// Opened solid page `i` as a new tab, waiting for it to show, painted, the switch over.
+    Solid(usize),
     Done,
 }
 
@@ -149,7 +174,11 @@ pub enum Action {
     OpenTimers,
     /// Freeze (true) or thaw tab `i`'s page.
     Freeze(usize, bool),
-    Pass,
+    /// Open solid page `i` ([`solid_page`]) as a new tab.
+    OpenSolid(usize),
+    /// Snapshot the window: the card shows solid page 1 and no pixel of solid page 0; pass or
+    /// fail on it.
+    CheckNoBleed,
     Fail(String),
 }
 
@@ -224,9 +253,23 @@ pub fn next(s: TabsSmoke, seen: &Seen, want: &[&str]) -> (TabsSmoke, Option<Acti
         }
         Thawing { frozen } => match seen.frozen(FROZEN) {
             Some((false, false)) => fail("Page.setWebLifecycleState active was refused".into()),
-            Some((false, true)) if seen.title(FROZEN) != frozen => Some((Done, Some(Action::Pass))),
+            Some((false, true)) if seen.title(FROZEN) != frozen => {
+                Some((Solid(0), Some(Action::OpenSolid(0))))
+            }
             _ => None,
         },
+        Solid(i)
+            if seen.one_visible()
+                && seen.painted
+                && seen.settled
+                && seen.shown_title == solid_title(*i) =>
+        {
+            if *i == 0 {
+                Some((Solid(1), Some(Action::OpenSolid(1))))
+            } else {
+                Some((Done, Some(Action::CheckNoBleed)))
+            }
+        }
         _ => None,
     };
     match step {
@@ -278,6 +321,17 @@ mod tests {
             painted: true,
             restored_from_snapshot: false,
             frozen: vec![],
+            shown_title: String::new(),
+            settled: true,
+        }
+    }
+
+    fn solid(i: usize, painted: bool, settled: bool) -> Seen {
+        Seen {
+            shown_title: solid_title(i),
+            painted,
+            settled,
+            ..seen(&WANT, 3, 3)
         }
     }
 
@@ -341,6 +395,9 @@ mod tests {
             timers("timer 3", "timer 7", Some((true, true))),
             timers("timer 3", "timer 8", Some((false, true))),
             timers("timer 4", "timer 9", Some((false, true))),
+            solid(0, true, true),
+            solid(1, false, false),
+            solid(1, true, true),
         ]);
         assert_eq!(s.stage, Stage::Done);
         assert_eq!(
@@ -355,7 +412,9 @@ mod tests {
                 Action::OpenTimers,
                 Action::Freeze(FROZEN, true),
                 Action::Freeze(FROZEN, false),
-                Action::Pass,
+                Action::OpenSolid(0),
+                Action::OpenSolid(1),
+                Action::CheckNoBleed,
             ]
         );
     }
@@ -407,6 +466,24 @@ mod tests {
         assert!(
             matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("refused")),
             "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn the_bleed_check_waits_for_the_fresh_tab_to_settle() {
+        let (s, actions) = run_from(
+            at(Stage::Solid(1)),
+            &[
+                // still the first page, then the fresh one fading in, then painted mid-fade
+                solid(0, true, true),
+                solid(1, false, false),
+                solid(1, true, false),
+                solid(1, true, true),
+            ],
+        );
+        assert_eq!(
+            (s.stage, actions),
+            (Stage::Done, vec![Action::CheckNoBleed])
         );
     }
 

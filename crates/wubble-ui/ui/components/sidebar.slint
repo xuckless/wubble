@@ -192,10 +192,10 @@ export component Sidebar inherits Rectangle {
     callback tab-closed(int);        // tab id
     callback tab-mute-toggled(int);  // tab id: the speaker glyph
     callback tab-context(int, length, length);  // tab id, pointer in window px: right click
+    callback empty-context(length, length);  // pointer in window px: right click on the glass
     // tab id, whether the pointer is on its row, and the row's top in window px (hover preview)
     callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
-    callback new-tab-requested();
     // F6 to the sidebar: keyboard focus to the active tab's row (the rows take it), else, when
     // the active tab is no row (a favourite, or none), the new-tab row.
     property <int> focus-serial: 0;
@@ -231,348 +231,363 @@ export component Sidebar inherits Rectangle {
     property <length> list-height: max(0px, root.tabs.length * root.pitch - Chrome.rowGap);
 
     background: transparent;   // the glass under it is the scene's (app.slint), or none without it
-    clip: true;
 
-    // Under everything: the glass the controls do not claim moves the window (the design's
-    // `wb-side-top` drag, wider), and a double-click on it maximises.
-    MoveArea {
-        enabled: root.window-movable;
-        begin-move => {
-            root.window-move-requested();
-        }
-        toggle-maximise => {
-            root.window-maximise-requested();
-        }
-    }
+    // The sections ride the bowed string (Ride) and may lean past the sidebar's left edge: the
+    // design does not clip the sidebar, only the window does (QA HIGH-10: the pill and rows were
+    // cut at the left mid-collapse). Past the seam on the right they are cut, where the page
+    // begins.
+    Rectangle {
+        x: -root.absolute-position.x;
+        width: root.absolute-position.x + root.width;
+        clip: true;
+        Rectangle {
+            x: root.absolute-position.x;
+            width: root.width;
 
-    VerticalLayout {
-        width: root.content-width;
-        padding-left: SidePad.left(root.mode);
-        padding-right: SidePad.right(root.mode);
-        padding-top: SidePad.top(root.mode);
-        padding-bottom: SidePad.bottom(root.mode);
-        spacing: Space.s3;
-
-        // .wb-side-top: 30 high, lights 10 in (centred on the rail)
-        Ride {
-            ride: root.ride;
-            step: root.ride-step;
-            Rectangle {
-                height: Shell.side-top;
-                lights := WindowLights {
-                    x: root.compact ? (parent.width - self.width) / 2 : Shell.side-grid;
-                    y: (parent.height - self.height) / 2;
-                    compact: root.compact;
-                    close-requested => {
-                        root.window-close-requested();
-                    }
-                    minimise-requested => {
-                        root.window-minimise-requested();
-                    }
-                    toggle-fullscreen-requested => {
-                        root.window-toggle-fullscreen-requested();
-                    }
+            // Under everything: the glass the controls do not claim moves the window (the design's
+            // `wb-side-top` drag, wider), and a double-click on it maximises.
+            MoveArea {
+                enabled: root.window-movable;
+                begin-move => {
+                    root.window-move-requested();
                 }
-                // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
-                nav := NavButtons {
-                    visible: !root.compact;
-                    // its own width: a bare layout would fill the header and spread the buttons
-                    width: self.preferred-width;
-                    x: parent.width - self.width + Shell.nav-pull;
-                    y: 0px;
-                    height: parent.height;
-                    can-go-back: root.can-go-back;
-                    can-go-forward: root.can-go-forward;
-                    action(id) => {
-                        root.action(id);
-                    }
+                toggle-maximise => {
+                    root.window-maximise-requested();
+                }
+                context(x, y) => {
+                    root.empty-context(x, y);
                 }
             }
-        }
 
-        Ride {
-            ride: root.ride;
-            step: root.ride-step;
-            pill := AddressPill {
-                // the ride's row would otherwise hold it at its hidden glass row's width, wider
-                // than the rail
-                min-width: 0px;
-                over-wgpu: root.glass-over-wgpu;
-                glass-clip-start: root.absolute-position.x;
-                glass-clip-end: root.absolute-position.x + root.width;
-                beam: root.address-beam;
-                host: root.address-host;
-                path: root.address-path;
-                secure: root.address-secure;
-                bookmarkable: root.address-bookmarkable;
-                bookmarked: root.address-bookmarked;
-                blocker-visible: root.address-blocker-visible;
-                blocker-allowed: root.address-blocker-allowed;
-                blocked: root.address-blocked;
-                popups-blocked: root.address-popups-blocked;
-                popups-requested(x, y) => {
-                    root.address-popups-requested(x, y);
-                }
-                bookmark-requested => {
-                    root.address-bookmark-requested();
-                }
-                blocker-requested(x, y) => {
-                    root.address-blocker-requested(x, y);
-                }
-                media-visible: root.address-media-visible;
-                media-requested(x, y) => {
-                    root.address-media-requested(x, y);
-                }
-                reader-available: root.address-reader-available;
-                reader-on: root.address-reader-on;
-                reader-requested => {
-                    root.address-reader-requested();
-                }
-                compact: root.compact;
-                activated => {
-                    root.address-activated();
-                }
-            }
-        }
-
-        if root.pinned-tabs.length > 0: Ride {
-            ride: root.ride;
-            step: root.ride-step;
-            Favs {
-                init => {
-                    root.favs-hover = self.hovered-id;
-                }
-                changed hovered-id => {
-                    root.favs-hover = self.hovered-id;
-                }
-                tabs: root.pinned-tabs;
-                active-tab-id: root.active-tab-id;
-                compact: root.compact;
-                over-wgpu: root.glass-over-wgpu;
-                glass-clip-start: root.absolute-position.x;
-                glass-clip-end: root.absolute-position.x + root.width;
-                activated(id) => {
-                    root.tab-activated(id);
-                }
-            }
-        }
-
-        // .wb-space-name
-        if !root.compact && root.space-index >= 0 && root.space-index < root.spaces.length: Ride {
-            ride: root.ride;
-            step: root.ride-step;
-            // A new Space's name arrives with the Overlap entrance (chrome.tsx keys the span by
-            // the Space: `wb-in`).
-            SpaceName {
-                text: root.spaces[root.space-index].name;
-                enter: root.space-enter;
-            }
-        }
-
-        // .wb-tabs-wrap: the list, then the new-tab row right under it
-        Ride {
-            vertical-stretch: 1;
-            ride: root.ride;
-            step: root.ride-step;
             VerticalLayout {
-                vertical-stretch: 1;
-                spacing: Chrome.rowGap;
-                alignment: start;
+                width: root.content-width;
+                padding-left: SidePad.left(root.mode);
+                padding-right: SidePad.right(root.mode);
+                padding-top: SidePad.top(root.mode);
+                padding-bottom: SidePad.bottom(root.mode);
+                spacing: Space.s3;
 
-                list := WubbleScroller {
-                    // as tall as the rows, less when the sidebar runs out of room (then it scrolls)
-                    min-height: 0px;
-                    preferred-height: root.list-height;
-                    max-height: root.list-height;
+                // .wb-side-top: 30 high, lights 10 in (centred on the rail)
+                Ride {
+                    ride: root.ride;
+                    step: root.ride-step;
+                    Rectangle {
+                        height: Shell.side-top;
+                        lights := WindowLights {
+                            x: root.compact ? (parent.width - self.width) / 2 : Shell.side-grid;
+                            y: (parent.height - self.height) / 2;
+                            compact: root.compact;
+                            close-requested => {
+                                root.window-close-requested();
+                            }
+                            minimise-requested => {
+                                root.window-minimise-requested();
+                            }
+                            toggle-fullscreen-requested => {
+                                root.window-toggle-fullscreen-requested();
+                            }
+                        }
+                        // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
+                        nav := NavButtons {
+                            visible: !root.compact;
+                            // its own width: a bare layout would fill the header and spread the buttons
+                            width: self.preferred-width;
+                            x: parent.width - self.width + Shell.nav-pull;
+                            y: 0px;
+                            height: parent.height;
+                            can-go-back: root.can-go-back;
+                            can-go-forward: root.can-go-forward;
+                            action(id) => {
+                                root.action(id);
+                            }
+                        }
+                    }
+                }
+
+                Ride {
+                    ride: root.ride;
+                    step: root.ride-step;
+                    pill := AddressPill {
+                        // the ride's row would otherwise hold it at its hidden glass row's width, wider
+                        // than the rail
+                        min-width: 0px;
+                        over-wgpu: root.glass-over-wgpu;
+                        glass-clip-end: root.absolute-position.x + root.width;
+                        beam: root.address-beam;
+                        host: root.address-host;
+                        path: root.address-path;
+                        secure: root.address-secure;
+                        bookmarkable: root.address-bookmarkable;
+                        bookmarked: root.address-bookmarked;
+                        blocker-visible: root.address-blocker-visible;
+                        blocker-allowed: root.address-blocker-allowed;
+                        blocked: root.address-blocked;
+                        popups-blocked: root.address-popups-blocked;
+                        popups-requested(x, y) => {
+                            root.address-popups-requested(x, y);
+                        }
+                        bookmark-requested => {
+                            root.address-bookmark-requested();
+                        }
+                        blocker-requested(x, y) => {
+                            root.address-blocker-requested(x, y);
+                        }
+                        media-visible: root.address-media-visible;
+                        media-requested(x, y) => {
+                            root.address-media-requested(x, y);
+                        }
+                        reader-available: root.address-reader-available;
+                        reader-on: root.address-reader-on;
+                        reader-requested => {
+                            root.address-reader-requested();
+                        }
+                        compact: root.compact;
+                        activated => {
+                            root.address-activated();
+                        }
+                    }
+                }
+
+                if root.pinned-tabs.length > 0: Ride {
+                    ride: root.ride;
+                    step: root.ride-step;
+                    Favs {
+                        init => {
+                            root.favs-hover = self.hovered-id;
+                        }
+                        changed hovered-id => {
+                            root.favs-hover = self.hovered-id;
+                        }
+                        tabs: root.pinned-tabs;
+                        active-tab-id: root.active-tab-id;
+                        compact: root.compact;
+                        over-wgpu: root.glass-over-wgpu;
+                        glass-clip-end: root.absolute-position.x + root.width;
+                        activated(id) => {
+                            root.tab-activated(id);
+                        }
+                    }
+                }
+
+                // .wb-space-name
+                if !root.compact && root.space-index >= 0 && root.space-index < root.spaces.length: Ride {
+                    ride: root.ride;
+                    step: root.ride-step;
+                    // A new Space's name arrives with the Overlap entrance (chrome.tsx keys the span by
+                    // the Space: `wb-in`).
+                    SpaceName {
+                        text: root.spaces[root.space-index].name;
+                        enter: root.space-enter;
+                    }
+                }
+
+                // .wb-tabs-wrap: the list, then the new-tab row right under it
+                Ride {
                     vertical-stretch: 1;
-                    content-y: root.scroll-y;
-                    thumb-top: root.thumb-top;
-                    thumb-height: root.thumb-height;
-                    thumb-visible: root.thumb-visible;
-                    wheel(d) => {
-                        root.scroll-wheel(d);
-                    }
-                    wheel-xy(dx, dy) => {
-                        root.space-swipe(dx, dy);
-                    }
-                    touch-down(y) => {
-                        root.scroll-touch-down(y);
-                    }
-                    touch-move(y) => {
-                        root.scroll-touch-move(y);
-                    }
-                    touch-up => {
-                        root.scroll-touch-up();
-                    }
-                    thumb-down(y) => {
-                        root.scroll-thumb-down(y);
-                    }
-                    thumb-move(y) => {
-                        root.scroll-thumb-move(y);
-                    }
-                    thumb-up => {
-                        root.scroll-thumb-up();
-                    }
+                    ride: root.ride;
+                    step: root.ride-step;
+                    VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: Chrome.rowGap;
+                        alignment: start;
 
-                    rows := Rectangle {
-                        height: root.list-height;
-                        accessible-role: AccessibleRole.tab-list;
-                        accessible-label: "Tabs";
-                        opacity: root.list-enter;
-                        // on the rail rows are 40 wide and centred (.wb-tabs-rail)
-                        property <length> row-w: root.compact ? Shell.rail-item : self.width;
-                        property <length> row-x: (self.width - self.row-w) / 2;
-
-                        // the indicator: under the rows, stretched along y about `origin`, squashed along x
-                        property <length> h: Shell.row * root.indicator-stretch;
-                        property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
-                        // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
-                        indicator := Raised {
-                            x: (parent.width - parent.w) / 2;
-                            y: root.indicator-y + (Shell.row - parent.h) * root.indicator-origin;
-                            width: parent.w;
-                            height: parent.h;
-                            radius: Radius.sm;
-                            fill: Shell.selected-fill;
-                            highlight: Shell.selected-highlight;
-                            rim: Shell.selected-rim;
-                            shadow-y: Shell.selected-shadow-y;
-                            shadow-blur: Shell.selected-shadow-blur;
-                            shadow: Shell.selected-shadow;
-                            visible: root.selected >= 0 && root.selected < root.tabs.length;
-                        }
-
-                        for gone in root.leaving-rows: Rectangle {
-                            x: parent.row-x;
-                            y: gone.y;
-                            width: parent.row-w;
-                            height: Shell.row;
-                            opacity: 1 - gone.e;
-                            transform-origin: { x: self.width / 2, y: self.height / 2 };
-                            transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
-                            if gone.tab.kind == 0: TabRow {
-                                x: root.compact ? 0px : gone.tab.depth * Shell.folder-indent;
-                                width: parent.width - self.x;
-                                tab: gone.tab;
-                                compact: root.compact;
+                        list := WubbleScroller {
+                            // as tall as the rows, less when the sidebar runs out of room (then it scrolls)
+                            min-height: 0px;
+                            preferred-height: root.list-height;
+                            max-height: root.list-height;
+                            vertical-stretch: 1;
+                            content-y: root.scroll-y;
+                            thumb-top: root.thumb-top;
+                            thumb-height: root.thumb-height;
+                            thumb-visible: root.thumb-visible;
+                            wheel(d) => {
+                                root.scroll-wheel(d);
                             }
-                            if gone.tab.kind == 1: FolderRow {
-                                width: parent.width;
-                                tab: gone.tab;
-                                compact: root.compact;
+                            wheel-xy(dx, dy) => {
+                                root.space-swipe(dx, dy);
                             }
-                        }
+                            touch-down(y) => {
+                                root.scroll-touch-down(y);
+                            }
+                            touch-move(y) => {
+                                root.scroll-touch-move(y);
+                            }
+                            touch-up => {
+                                root.scroll-touch-up();
+                            }
+                            thumb-down(y) => {
+                                root.scroll-thumb-down(y);
+                            }
+                            thumb-move(y) => {
+                                root.scroll-thumb-move(y);
+                            }
+                            thumb-up => {
+                                root.scroll-thumb-up();
+                            }
 
-                        for tab[i] in root.tabs: Rectangle {
-                            // the spring position from Rust; before the first frame, the slot
-                            x: parent.row-x;
-                            y: i < root.row-y.length ? root.row-y[i] : i * root.pitch;
-                            width: parent.row-w;
-                            height: Shell.row;
-                            transform-origin: { x: self.width / 2, y: self.height / 2 };
-                            transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
-                            Entering {
-                                property <float> row-e: i < root.row-enter.length ? root.row-enter[i] : 1;
-                                e: self.row-e * root.list-enter;
-                                fade: self.row-e;
-                                width: parent.width;
-                                height: parent.height;
-                                if tab.kind == 1: FolderRow {
-                                    width: parent.width;
-                                    tab: tab;
-                                    compact: root.compact;
-                                    press(y) => {
-                                        root.tab-press(i, y);
+                            rows := Rectangle {
+                                height: root.list-height;
+                                accessible-role: AccessibleRole.tab-list;
+                                accessible-label: "Tabs";
+                                opacity: root.list-enter;
+                                // on the rail rows are 40 wide and centred (.wb-tabs-rail)
+                                property <length> row-w: root.compact ? Shell.rail-item : self.width;
+                                property <length> row-x: (self.width - self.row-w) / 2;
+
+                                // the indicator: under the rows, stretched along y about `origin`, squashed along x
+                                property <length> h: Shell.row * root.indicator-stretch;
+                                property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
+                                // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
+                                indicator := Raised {
+                                    x: (parent.width - parent.w) / 2;
+                                    y: root.indicator-y + (Shell.row - parent.h) * root.indicator-origin;
+                                    width: parent.w;
+                                    height: parent.h;
+                                    radius: Radius.sm;
+                                    fill: Shell.selected-fill;
+                                    highlight: Shell.selected-highlight;
+                                    rim: Shell.selected-rim;
+                                    shadow-y: Shell.selected-shadow-y;
+                                    shadow-blur: Shell.selected-shadow-blur;
+                                    shadow: Shell.selected-shadow;
+                                    visible: root.selected >= 0 && root.selected < root.tabs.length;
+                                }
+
+                                for gone in root.leaving-rows: Rectangle {
+                                    x: parent.row-x;
+                                    y: gone.y;
+                                    width: parent.row-w;
+                                    height: Shell.row;
+                                    opacity: 1 - gone.e;
+                                    transform-origin: { x: self.width / 2, y: self.height / 2 };
+                                    transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
+                                    if gone.tab.kind == 0: TabRow {
+                                        x: root.compact ? 0px : gone.tab.depth * Shell.folder-indent;
+                                        width: parent.width - self.x;
+                                        tab: gone.tab;
+                                        compact: root.compact;
                                     }
-                                    release => {
-                                        root.tab-release(i);
-                                    }
-                                    context(x, y) => {
-                                        root.tab-context(tab.id, x, y);
+                                    if gone.tab.kind == 1: FolderRow {
+                                        width: parent.width;
+                                        tab: gone.tab;
+                                        compact: root.compact;
                                     }
                                 }
-                                // a tab in a folder sits one step in (none on the rail)
-                                if tab.kind == 0: TabRow {
-                                    x: root.compact ? 0px : tab.depth * Shell.folder-indent;
-                                    width: parent.width - self.x;
-                                    tab: tab;
-                                    selected: tab.id == root.active-tab-id;
-                                    compact: root.compact;
-                                    press(y) => {
-                                        root.tab-press(i, y);
-                                    }
-                                    track(kind, x, y) => {
-                                        root.tab-track(tab.id, kind, x, y);
-                                    }
-                                    drag(y) => {
-                                        root.tab-drag(y);
-                                    }
-                                    release => {
-                                        root.tab-release(i);
-                                    }
-                                    close => {
-                                        root.tab-closed(tab.id);
-                                    }
-                                    mute => {
-                                        root.tab-mute-toggled(tab.id);
-                                    }
-                                    context(x, y) => {
-                                        root.tab-context(tab.id, x, y);
-                                    }
-                                    hovered(on, y) => {
-                                        root.tab-hovered(tab.id, on, y);
-                                    }
-                                    activate => {
-                                        root.tab-activated(tab.id);
-                                    }
-                                    focus-token: root.focus-serial;
-                                    dragging: i == root.dragged-row;
-                                    focus-to <=> root.focus-to;
-                                    step(down) => {
-                                        let j = root.tab-step(i, down);
-                                        if j != i && j >= 0 && j < root.tabs.length {
-                                            root.focus-to = root.tabs[j].id;
-                                            root.tab-activated(root.tabs[j].id);
+
+                                for tab[i] in root.tabs: Rectangle {
+                                    // the spring position from Rust; before the first frame, the slot
+                                    x: parent.row-x;
+                                    y: i < root.row-y.length ? root.row-y[i] : i * root.pitch;
+                                    width: parent.row-w;
+                                    height: Shell.row;
+                                    transform-origin: { x: self.width / 2, y: self.height / 2 };
+                                    transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
+                                    Entering {
+                                        property <float> row-e: i < root.row-enter.length ? root.row-enter[i] : 1;
+                                        e: self.row-e * root.list-enter;
+                                        fade: self.row-e;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        if tab.kind == 1: FolderRow {
+                                            width: parent.width;
+                                            tab: tab;
+                                            compact: root.compact;
+                                            press(y) => {
+                                                root.tab-press(i, y);
+                                            }
+                                            release => {
+                                                root.tab-release(i);
+                                            }
+                                            context(x, y) => {
+                                                root.tab-context(tab.id, x, y);
+                                            }
+                                        }
+                                        // a tab in a folder sits one step in (none on the rail)
+                                        if tab.kind == 0: TabRow {
+                                            x: root.compact ? 0px : tab.depth * Shell.folder-indent;
+                                            width: parent.width - self.x;
+                                            tab: tab;
+                                            selected: tab.id == root.active-tab-id;
+                                            compact: root.compact;
+                                            press(y) => {
+                                                root.tab-press(i, y);
+                                            }
+                                            track(kind, x, y) => {
+                                                root.tab-track(tab.id, kind, x, y);
+                                            }
+                                            drag(y) => {
+                                                root.tab-drag(y);
+                                            }
+                                            release => {
+                                                root.tab-release(i);
+                                            }
+                                            close => {
+                                                root.tab-closed(tab.id);
+                                            }
+                                            mute => {
+                                                root.tab-mute-toggled(tab.id);
+                                            }
+                                            context(x, y) => {
+                                                root.tab-context(tab.id, x, y);
+                                            }
+                                            hovered(on, y) => {
+                                                root.tab-hovered(tab.id, on, y);
+                                            }
+                                            activate => {
+                                                root.tab-activated(tab.id);
+                                            }
+                                            focus-token: root.focus-serial;
+                                            dragging: i == root.dragged-row;
+                                            focus-to <=> root.focus-to;
+                                            step(down) => {
+                                                let j = root.tab-step(i, down);
+                                                if j != i && j >= 0 && j < root.tabs.length {
+                                                    root.focus-to = root.tabs[j].id;
+                                                    root.tab-activated(root.tabs[j].id);
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+
+                        new-tab := NewTabRow {
+                            compact: root.compact;
+                            // Ctrl+T's action: the start page (decisions.md "Start page")
+                            activated => {
+                                root.action("new-tab");
+                            }
+                        }
                     }
                 }
 
-                new-tab := NewTabRow {
-                    compact: root.compact;
-                    activated => {
-                        root.new-tab-requested();
+                // .wb-side-bottom: the Space switcher and the buttons at the far end (kit SideBottom)
+                switcher := SideBottom {
+                    spaces: root.spaces;
+                    active: root.space-index;
+                    vertical: root.compact;
+                    capsule-offset: root.capsule-offset;
+                    capsule-stretch: root.capsule-stretch;
+                    capsule-origin: root.capsule-origin;
+                    has-downloads: root.has-downloads;
+                    space-picked(id) => {
+                        root.space-switched(id);
+                    }
+                    new-space-requested => {
+                        root.action("new-space");
+                    }
+                    downloads-requested => {
+                        root.downloads-requested();
+                    }
+                    dev-tools-requested => {
+                        root.action("dev-tools");
+                    }
+                    settings-requested => {
+                        root.settings-requested();
                     }
                 }
-            }
-        }
-
-        // .wb-side-bottom: the Space switcher and the buttons at the far end (kit SideBottom)
-        switcher := SideBottom {
-            spaces: root.spaces;
-            active: root.space-index;
-            vertical: root.compact;
-            capsule-offset: root.capsule-offset;
-            capsule-stretch: root.capsule-stretch;
-            capsule-origin: root.capsule-origin;
-            has-downloads: root.has-downloads;
-            space-picked(id) => {
-                root.space-switched(id);
-            }
-            new-space-requested => {
-                root.action("new-space");
-            }
-            downloads-requested => {
-                root.downloads-requested();
-            }
-            dev-tools-requested => {
-                root.action("dev-tools");
-            }
-            settings-requested => {
-                root.settings-requested();
             }
         }
     }

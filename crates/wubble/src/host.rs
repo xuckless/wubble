@@ -28,6 +28,7 @@ mod gallery;
 mod gesture;
 mod gpu;
 mod hover;
+mod layers;
 mod look;
 mod media;
 mod memory;
@@ -1740,6 +1741,15 @@ impl Host {
     }
 
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
+        // the bar takes the place of another overlay, or goes again while a page's dialog waits
+        // (wubble_core::overlay)
+        if !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
+            let _ = self
+                .w
+                .window
+                .upgrade_in_event_loop(|window| window.invoke_dismiss_command_bar());
+            return;
+        }
         self.bar.mode = mode;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
@@ -1956,11 +1966,6 @@ impl Host {
             }
             Plan::Quit => quit(),
             Plan::Nothing => {}
-            Plan::NotYet => eprintln!(
-                "wubble: {} is not available yet: {}",
-                action.id(),
-                perform::not_yet(action).unwrap_or_default()
-            ),
         }
     }
 
@@ -2238,7 +2243,46 @@ impl Host {
             painted,
             restored_from_snapshot: visible.is_some_and(|t| heard.replaced.contains(&t)),
             frozen: order.iter().map(|t| heard.frozen.get(t).copied()).collect(),
+            shown_title: visible
+                .and_then(|t| self.model.tabs.get(&t))
+                .map(|t| t.title.clone())
+                .unwrap_or_default(),
+            settled: self.w.window.upgrade().is_some_and(|w| {
+                w.get_page_enter() >= 1.0
+                    && w.get_exit_t() >= 1.0
+                    && w.get_exit_page().size().width == 0
+            }),
         }
+    }
+
+    /// `--smoke tabs`: the card shows solid page 1 edge to edge, and none of solid page 0, the
+    /// page shown before it (QA HIGH-04).
+    fn check_no_bleed(&self) -> Result<(), String> {
+        let window = self.w.window.upgrade().ok_or("no window")?;
+        let shot = snapshot(&window)?;
+        let scale = window.window().scale_factor();
+        let region = pixels::Region {
+            x: physical(window.get_content_x(), scale),
+            y: physical(window.get_content_y(), scale),
+            width: physical(window.get_content_width(), scale),
+            height: physical(window.get_content_height(), scale),
+        };
+        let [before, shown] = tabs_smoke::SOLID;
+        let bled = pixels::count_near(&shot, region, before);
+        let own = pixels::count_near(&shot, region, shown);
+        let all = (pixels::GRID * pixels::GRID) as usize;
+        if bled > 0 {
+            return Err(format!(
+                "the fresh tab's card shows the page before it: {bled} of {all} samples"
+            ));
+        }
+        if own < all {
+            return Err(format!(
+                "the fresh tab's card does not show its page: {own} of {all} samples"
+            ));
+        }
+        println!("smoke: tabs no bleed ok samples={all}");
+        Ok(())
     }
 
     /// Chromium answered a freeze or thaw of `tab`'s page.
@@ -2393,6 +2437,12 @@ impl Host {
         let want =
             crate::TABS_SMOKE_PAGES.map(|page| nav_smoke::title_of(page).unwrap_or_default());
         let (state, action) = tabs_smoke::next(state, &seen, &want);
+        // the switch's fade runs on frames: a still page asks for none of its own
+        if matches!(state.stage, tabs_smoke::Stage::Solid(_))
+            && let Some(window) = self.w.window.upgrade()
+        {
+            window.window().request_redraw();
+        }
         self.checks.tabs_smoke = Some(state);
         let nth =
             |host: &Self, i: usize| host.model.order(host.model.active_space()).get(i).copied();
@@ -2429,10 +2479,16 @@ impl Host {
                     view.set_frozen(frozen);
                 }
             }
-            Some(tabs_smoke::Action::Pass) => {
-                self.tabs_passed = true;
-                quit();
+            Some(tabs_smoke::Action::OpenSolid(i)) => {
+                self.dispatch(new_tab(page_url(&tabs_smoke::solid_page(i)), None));
             }
+            Some(tabs_smoke::Action::CheckNoBleed) => match self.check_no_bleed() {
+                Ok(()) => {
+                    self.tabs_passed = true;
+                    quit();
+                }
+                Err(e) => self.fail(e),
+            },
             Some(tabs_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
         }
@@ -2512,9 +2568,16 @@ impl Host {
             Some(split_smoke::Action::Resized(left, right)) => {
                 println!("smoke: split resized panes {left}+{right}");
             }
+            // By its chord through the host's key path, as a hand presses it (Ctrl+Shift+\ on
+            // a US layout; QA CRIT-04).
             Some(split_smoke::Action::Unsplit) => {
-                if let Some(tab) = self.shown() {
-                    self.dispatch(Command::Unsplit(tab));
+                match self
+                    .keymap
+                    .shortcut_for(wubble_core::action::Action::Unsplit)
+                    .and_then(crate::parity::key_inputs)
+                {
+                    Some(keys) => self.smoke_keys(keys),
+                    None => self.fail("split: no keys for the unsplit chord".into()),
                 }
             }
             Some(split_smoke::Action::Pass) => {
@@ -2545,6 +2608,7 @@ impl Host {
             views: self.engine.view_count(),
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
+            scroll: window.global::<wubble_ui::PageScroll>().get_y(),
         };
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
@@ -2556,7 +2620,12 @@ impl Host {
                         host.borrow().model.clone()
                     });
                 }
-                self.perform(Action::OpenSettings)
+                self.perform(Action::OpenSettings);
+                // from the event loop, outside the host the shell's callbacks call into
+                let window = self.w.window.clone();
+                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                    wheel_burst(window, settings_smoke::TICKS)
+                });
             }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
@@ -2975,6 +3044,15 @@ impl Host {
         {
             return EventResult::PreventDefault;
         }
+        // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
+        // a menu): wubble_core::overlay.
+        if key.pressed
+            && key.unmodified == Key::Named(NamedKey::Escape)
+            && key.modifiers.keys.is_empty()
+            && self.overlay_escape(window)
+        {
+            return EventResult::PreventDefault;
+        }
         // Esc leaves page fullscreen before anything else sees it; it closes the peek only
         // when no shell field, sheet or menu holds the focus.
         if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) {
@@ -3277,6 +3355,28 @@ pub(crate) fn now_ms() -> i64 {
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 /// The window as it renders now. Smoke only.
+/// `--smoke settings`: `left` wheel ticks down over the window's content, through the window's
+/// input as the pointer would send them, from where it rests (never moved over what opens
+/// there), a tick apart.
+fn wheel_burst(window: slint::Weak<AppWindow>, left: u32) {
+    let Some(w) = window.upgrade() else {
+        return;
+    };
+    if left == 0 {
+        return;
+    }
+    let size = w.window().size().to_logical(w.window().scale_factor());
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(size.width * 0.6, size.height / 2.0),
+            delta_x: 0.0,
+            delta_y: -settings_smoke::TICK,
+        });
+    slint::Timer::single_shot(settings_smoke::TICK_EVERY, move || {
+        wheel_burst(window, left - 1)
+    });
+}
+
 fn snapshot(window: &AppWindow) -> Result<Snapshot, String> {
     window
         .window()

@@ -67,7 +67,8 @@ export component APreviewCard inherits Rectangle {
                     overflow: elide;
                     color: Palette.ink;
                 }
-                KitText {
+                // no address line for a page of wubble's own (the host leaves it empty)
+                if root.address != "": KitText {
                     role: root.address-role;
                     text: root.address;
                     overflow: elide;

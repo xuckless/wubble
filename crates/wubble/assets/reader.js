@@ -8,6 +8,12 @@
 // (Trusted Types), no inline <style> or style attributes (CSP): the stylesheet is adopted through
 // CSSOM, the typography is custom properties set on the root's style. Leaving the reader reloads
 // the page. The colours and sizes come from the host (`wubble_core::reader::css_vars`).
+//
+// The reading position: the reader opens at the passage the page showed at its top, and the
+// page comes back where it was. Chromium would restore the reloaded page to the reader's scroll
+// offset (the reader shared its history entry), so `leave` turns that off before the host
+// reloads (a page may not reload itself to a `data:` URL) and `restore` scrolls the loaded page
+// itself, then turns it back on.
 var wubbleReader = (function () {
   var CSS =
     ":root{background:var(--wb-bg);color-scheme:light dark}" +
@@ -70,6 +76,54 @@ var wubbleReader = (function () {
     return isProbablyReaderable(document);
   }
 
+  var BLOCKS = "p,li,h2,h3,h4,h5,h6,blockquote,pre,figcaption,dd";
+
+  function words(e) {
+    return (e.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  // The first passage of text at or below the top of the view, its opening words; "" at the
+  // top of the page, which the reader opens at anyway.
+  function passageAtTop() {
+    if (scrollY <= 0) return "";
+    var all = document.querySelectorAll(BLOCKS);
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i].getBoundingClientRect();
+      if (r.bottom <= 0 || r.height === 0) continue;
+      if (r.top >= innerHeight) return "";
+      var text = words(all[i]);
+      if (text.length >= 20) return text.slice(0, 60);
+    }
+    return "";
+  }
+
+  // The reader's block that starts with `passage`, scrolled to just below the top.
+  function scrollToPassage(passage) {
+    if (!passage) return;
+    var all = document.querySelectorAll(BLOCKS);
+    for (var i = 0; i < all.length; i++) {
+      if (words(all[i]).indexOf(passage) === 0) {
+        scrollTo(0, Math.max(0, all[i].getBoundingClientRect().top + scrollY - 24));
+        return;
+      }
+    }
+  }
+
+  function leave() {
+    try {
+      history.scrollRestoration = "manual";
+    } catch (e) {}
+    return true;
+  }
+
+  function restore(x, y) {
+    try {
+      history.scrollRestoration = "auto";
+    } catch (e) {}
+    scrollTo(x, y);
+    return true;
+  }
+
   function open(vars) {
     var article = new Readability(document.cloneNode(true), {
       serializer: function (node) {
@@ -77,6 +131,8 @@ var wubbleReader = (function () {
       },
     }).parse();
     if (!article || !article.content) return null;
+    var at = { x: Math.round(scrollX), y: Math.round(scrollY) };
+    var passage = passageAtTop();
     var content = article.content;
     clean(content);
     var title = article.title || document.title;
@@ -112,8 +168,9 @@ var wubbleReader = (function () {
     document.adoptedStyleSheets = [sheet];
     set(vars);
     scrollTo(0, 0);
-    return { title: title, length: article.length };
+    scrollToPassage(passage);
+    return { title: title, length: article.length, x: at.x, y: at.y };
   }
 
-  return { probe: probe, open: open, set: set };
+  return { probe: probe, open: open, set: set, leave: leave, restore: restore };
 })();

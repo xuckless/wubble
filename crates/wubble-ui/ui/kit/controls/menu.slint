@@ -14,6 +14,8 @@
 // derived (docs/fidelity/derived-review.md): the separator, a 1 px rim-top hairline in an 8 px
 // (`Space.s2`) row, inset by the row padding; disabled rows in haze; submenus are not built
 // (the design's "Move to Space" only draws the chevron).
+// wubble: a menu at a point (`PointMenu`, the shell's) grows past 236 to fit its widest row whole,
+// up to `Shell.menu-max`, then cuts a row on one line with an ellipsis (derived-review.md).
 
 import { Palette, Space, Glass, TouchMenu, Motion } from "../gen/tokens.slint";
 import { TouchCss, SettingsCss } from "../gen/css.slint";
@@ -92,6 +94,8 @@ export component MenuRow inherits Rectangle {
     out property <float> e: tw.t;
     // where the label starts in the row (the icon column's test)
     out property <length> label-x: label-text.x;
+    // the row's width with its label whole (a menu that fits its rows reads it)
+    preferred-width: line.preferred-width;
     out property <length> offset: TouchCss.wb-tp-mrow--transform-translatey * (1 - tw.t);
     property <color> ink: !root.enabled ? Palette.haze : root.danger ? TouchCss.tp-mrow-danger--color : TouchCss.wb-tp-mrow--color;
     property <TextRole> kbd-role: {
@@ -103,7 +107,7 @@ export component MenuRow inherits Rectangle {
     Rectangle {
         y: root.offset;
         opacity: tw.t;
-        HorizontalLayout {
+        line := HorizontalLayout {
             padding-left: TouchCss.wb-tp-mrow--padding-left;
             padding-right: TouchCss.wb-tp-mrow--padding-right;
             spacing: TouchCss.wb-tp-mrow--gap;
@@ -189,6 +193,9 @@ export component Menu inherits Rectangle {
     in property <int> start: -1;
     in property <[MenuEntry]> entries;
     in property <length> menu-width: TouchCss.tp-menu--width;
+    // wubble: wider than `menu-width` up to this, to fit the widest row whole (the shell's menus,
+    // whose rows name sites and Spaces); past it a row is cut with an ellipsis
+    in property <length> fit-width: root.menu-width;
     in property <string> label: "Menu";
     // the Select: a check column, the row checked, the accent
     in property <bool> checks;
@@ -198,7 +205,7 @@ export component Menu inherits Rectangle {
     in property <color> accent: Palette.sky;
     in property <length> panel-x;
     in property <length> panel-y;
-    in property <length> origin-x: root.menu-width / 2;
+    in property <length> origin-x: root.panel-width / 2;
     in property <length> origin-y;
     callback chosen(int);
     callback dismissed();
@@ -212,7 +219,9 @@ export component Menu inherits Rectangle {
     // the row the trigger confirms (-1 none)
     out property <int> done: root.v.done;
     out property <length> panel-height: list.preferred-height;
-    out property <length> panel-width: root.menu-width;
+    out property <length> panel-width: root.fit-width > root.menu-width
+        ? clamp(measure.preferred-width + 2 * TouchCss.tp-menu--padding, root.menu-width, root.fit-width)
+        : root.menu-width;
     // the body's look (curve tests)
     out property <float> body-e: body.e;
     out property <float> body-zoom: body.zoom;
@@ -314,10 +323,25 @@ export component Menu inherits Rectangle {
         out-easing: Motion.ease-in-out;
     }
 
+    // the rows at their natural widths, not drawn: the widest is what the panel fits (placed,
+    // so its size does not bound the menu's own)
+    measure := VerticalLayout {
+        x: 0px;
+        y: 0px;
+        visible: false;
+        for entry in root.fit-width > root.menu-width ? root.entries : []: MenuRow {
+            icon: Glyph.named(entry.icon);
+            label: entry.label;
+            kbd: entry.shortcut;
+            check-column: root.checks;
+            icon-column: root.icon-column;
+        }
+    }
+
     body := OverlapLook {
         x: root.panel-x;
         y: root.panel-y;
-        width: root.menu-width;
+        width: root.panel-width;
         height: list.preferred-height;
         e: tween.t;
         entering: root.shown;
@@ -354,7 +378,7 @@ export component Menu inherits Rectangle {
                 hl := MenuHighlight {
                     on: root.v.hl >= 0;
                     jump: root.v.jump;
-                    panel-width: root.menu-width;
+                    panel-width: root.panel-width;
                     danger: root.v.hl >= 0 && root.v.hl < root.entries.length && root.entries[root.v.hl].danger;
                     top: TouchCss.tp-menu--padding + root.v.hl-rows * TouchCss.wb-tp-mrow--height + root.v.hl-rules * Space.s2;
                 }
@@ -465,9 +489,10 @@ export component PointMenu inherits Rectangle {
         open: root.open;
         entries: root.rows;
         icon-column: root.rows-icons;
-        panel-x: root.place(root.at-x, self.menu-width, root.width);
+        fit-width: Shell.menu-max;
+        panel-x: root.place(root.at-x, self.panel-width, root.width);
         panel-y: root.place(root.at-y, self.panel-height, root.height);
-        origin-x: max(0px, min(self.menu-width, root.at-x - self.panel-x));
+        origin-x: max(0px, min(self.panel-width, root.at-x - self.panel-x));
         origin-y: max(0px, min(self.panel-height, root.at-y - self.panel-y));
         chosen(i) => {
             root.chosen(i);
