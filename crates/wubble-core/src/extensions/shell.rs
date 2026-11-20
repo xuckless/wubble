@@ -66,15 +66,24 @@ const API_LINES: &[(&str, &str)] = &[
     ("clipboardWrite", "Modify data you copy and paste"),
     ("geolocation", "Detect your physical location"),
     ("notifications", "Display notifications"),
-    ("nativeMessaging", "Communicate with cooperating native applications"),
+    (
+        "nativeMessaging",
+        "Communicate with cooperating native applications",
+    ),
     ("webRequest", "Block page content"),
     ("declarativeNetRequest", "Block page content"),
     ("management", "Manage your apps, extensions and themes"),
     ("proxy", "Read and change your proxy settings"),
     ("privacy", "Change your privacy-related settings"),
-    ("topSites", "Read a list of your most frequently visited websites"),
+    (
+        "topSites",
+        "Read a list of your most frequently visited websites",
+    ),
     ("desktopCapture", "Capture content of your screen"),
-    ("tabCapture", "Read and change the content of the tabs you capture"),
+    (
+        "tabCapture",
+        "Read and change the content of the tabs you capture",
+    ),
 ];
 
 /// How many sites a line names before it counts them (Chromium: "on N sites").
@@ -107,7 +116,10 @@ pub fn permission_lines(permissions: &[String]) -> Vec<String> {
                 &mut lines,
                 format!("Read and change your data on {}", hosts.join(", ")),
             ),
-            n => add(&mut lines, format!("Read and change your data on {n} sites")),
+            n => add(
+                &mut lines,
+                format!("Read and change your data on {n} sites"),
+            ),
         }
     }
     for p in permissions {
@@ -223,7 +235,10 @@ pub enum PanelEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelEffect {
     /// Open the popup page in a windowless view of the extension's profile.
-    OpenPopup { extension: ExtensionId, url: String },
+    OpenPopup {
+        extension: ExtensionId,
+        url: String,
+    },
     ClosePopup,
 }
 
@@ -248,12 +263,7 @@ pub fn panel_transition(state: Panel, event: PanelEvent) -> (Panel, Vec<PanelEff
         ),
         // the click ran the extension's code: the list has done its work
         (Panel::List, PanelEvent::Clicked(_, Clicked::Ran)) => (Panel::Closed, vec![]),
-        (
-            Panel::Popup {
-                extension, url, ..
-            },
-            PanelEvent::Sized(w, h),
-        ) => (
+        (Panel::Popup { extension, url, .. }, PanelEvent::Sized(w, h)) => (
             Panel::Popup {
                 extension,
                 url,
@@ -305,7 +315,13 @@ mod tests {
 
     #[test]
     fn quiet_permissions_have_no_line() {
-        let p = strings(&["storage", "scripting", "activeTab", "alarms", "contextMenus"]);
+        let p = strings(&[
+            "storage",
+            "scripting",
+            "activeTab",
+            "alarms",
+            "contextMenus",
+        ]);
         assert!(permission_lines(&p).is_empty());
     }
 
@@ -342,7 +358,12 @@ mod tests {
 
     #[test]
     fn two_permissions_with_one_sentence_show_it_once() {
-        let p = strings(&["tabs", "webNavigation", "webRequest", "declarativeNetRequest"]);
+        let p = strings(&[
+            "tabs",
+            "webNavigation",
+            "webRequest",
+            "declarativeNetRequest",
+        ]);
         assert_eq!(
             permission_lines(&p),
             ["Read your browsing history", "Block page content"]
@@ -354,7 +375,10 @@ mod tests {
         let quiet = ext(&manifest(r#","permissions":["storage"]"#));
         assert_eq!(summary(&quiet), "Version 1.0");
         let one = ext(&manifest(r#","permissions":["tabs"]"#));
-        assert_eq!(summary(&one), "Version 1.0 \u{b7} Read your browsing history");
+        assert_eq!(
+            summary(&one),
+            "Version 1.0 \u{b7} Read your browsing history"
+        );
         let more = ext(&manifest(r#","permissions":["tabs","bookmarks"]"#));
         assert_eq!(
             summary(&more),
@@ -445,16 +469,10 @@ mod tests {
 
     #[test]
     fn an_action_without_a_popup_fires_and_closes_the_list() {
-        let (p, fx) = panel_transition(
-            Panel::List,
-            PanelEvent::Clicked(id(), Clicked::Ran),
-        );
+        let (p, fx) = panel_transition(Panel::List, PanelEvent::Clicked(id(), Clicked::Ran));
         assert_eq!((p, fx.len()), (Panel::Closed, 0));
         // a click that ran nothing leaves the list as it was
-        let (p, fx) = panel_transition(
-            Panel::List,
-            PanelEvent::Clicked(id(), Clicked::Nothing),
-        );
+        let (p, fx) = panel_transition(Panel::List, PanelEvent::Clicked(id(), Clicked::Nothing));
         assert_eq!((p, fx.len()), (Panel::List, 0));
     }
 
@@ -490,7 +508,11 @@ mod tests {
                 size: Some((800, 25))
             }
         );
-        for event in [PanelEvent::Dismiss, PanelEvent::Toggle, PanelEvent::PageClosed] {
+        for event in [
+            PanelEvent::Dismiss,
+            PanelEvent::Toggle,
+            PanelEvent::PageClosed,
+        ] {
             let (closed, fx) = panel_transition(p.clone(), event);
             assert_eq!((closed, fx), (Panel::Closed, vec![PanelEffect::ClosePopup]));
         }

@@ -448,6 +448,7 @@ mod tests {
                     dir: "/home/x/ext".into(),
                 },
                 permissions: vec!["storage".into()],
+                options_page: Some("options.html".into()),
             };
             let (list, _) = wubble_core::extensions::transition(
                 Installed::default(),

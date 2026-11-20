@@ -730,6 +730,33 @@ mod tests {
     }
 
     #[test]
+    fn the_options_page_is_kept_and_a_list_stored_without_it_still_loads() {
+        let m = parse_manifest(&MANIFEST.replace(
+            "\"background\"",
+            "\"options_ui\": {\"page\": \"o.html\"}, \"background\"",
+        ))
+        .unwrap();
+        assert_eq!(m.options_page.as_deref(), Some("o.html"));
+        assert_eq!(parse_manifest(MANIFEST).unwrap().options_page, None);
+        let e = Extension::new(
+            id_from_key(b"x"),
+            m,
+            Source::Unpacked {
+                dir: PathBuf::from("/x"),
+            },
+        );
+        let (list, _) = transition(Installed::default(), Event::Install(e.clone()));
+        let back = Installed::from_json(&list.to_json()).unwrap();
+        assert_eq!(back.extensions()[0].options_page.as_deref(), Some("o.html"));
+        // a list stored before the page was read has no such key
+        let old = list.to_json().replace(",\"options_page\":\"o.html\"", "");
+        assert!(!old.contains("options_page"));
+        let back = Installed::from_json(&old).unwrap();
+        assert_eq!(back.extensions()[0].options_page, None);
+        assert_eq!(back.extensions()[0].name, e.name);
+    }
+
+    #[test]
     fn manifests_merge_what_is_granted() {
         let m = parse_manifest(MANIFEST).unwrap();
         assert_eq!((m.name.as_str(), m.version.as_str()), ("Mark", "1.2.0"));
