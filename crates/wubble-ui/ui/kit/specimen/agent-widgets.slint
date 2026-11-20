@@ -1,0 +1,96 @@
+// derived: ThinkingOrb(kit/agent/thinking-orb.slint) + GlassPanel(kit/material/glass.slint) + KitText(kit/text.slint) on Ultra Reactivate's library grounds (library.css `.al` stage and ink, `.al-stage` radius)
+// The agent widgets' specimen for the gallery (`--smoke gallery`, the `agent-orbs*` scenes): every
+// orb state at each size the host lays out, in columns on four grounds: scene glass, the
+// library's dark stage (where the design shows its orbs), its light ink as a paper ground (the
+// orbs' light theme), and nothing at all, so the web page under the window shows through. The
+// host fills `AgentWidgets` (columns of rows of cells) and draws each cell's frame into `frames`
+// at the cell's slot; this file only lays them out. Wubble-only: the design's own page shows
+// one chat pill and a row of picker buttons (alive-orbs.tsx); here everything is shown at once.
+
+import { LibraryCss } from "../gen/css.slint";
+import { Space } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { GlassTier } from "../../components/model.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { KitText } from "../text.slint";
+import { ThinkingOrb, OrbTuned } from "../agent/thinking-orb.slint";
+
+export { OrbTuned }
+
+/// One orb of the specimen: its frame's slot in `AgentWidgets.frames`, its label, its tuned size
+/// and the side it is shown at.
+export struct OrbCell {
+    slot: int,
+    label: string,
+    tuned: OrbTuned,
+    size: length,
+}
+
+/// A row: one state, its orbs left to right.
+export struct OrbRow {
+    name: string,
+    cells: [OrbCell],
+}
+
+export enum OrbGround { glass, stage, paper, page }
+
+export struct OrbColumn {
+    ground: OrbGround,
+    // the orbs' light theme (dark ink): a paper ground, or the page when it is white
+    light: bool,
+    rows: [OrbRow],
+}
+
+export global AgentWidgets {
+    // the gallery's specimen is shown over the window
+    in property <bool> specimen;
+    in property <[OrbColumn]> columns;
+    // every cell's latest frame, by slot (the host's orb painter)
+    in property <[image]> frames;
+}
+
+component Rows inherits VerticalLayout {
+    in property <[OrbRow]> rows;
+    in property <bool> light;
+    padding: Space.s4;
+    spacing: Space.s2;
+    for row in root.rows: HorizontalLayout {
+        spacing: Space.s3;
+        alignment: start;
+        for cell in row.cells: VerticalLayout {
+            alignment: center;
+            ThinkingOrb {
+                frame: AgentWidgets.frames[cell.slot];
+                label: cell.label;
+                tuned: cell.tuned;
+                size: cell.size;
+            }
+        }
+        KitText {
+            vertical-alignment: center;
+            role: Role.label;
+            text: row.name;
+            color: root.light ? LibraryCss.al--var--al-stage : LibraryCss.al--var--al-muted;
+        }
+    }
+}
+
+export component AgentSpecimen inherits Rectangle {
+    HorizontalLayout {
+        padding: Space.s4;
+        spacing: Space.s4;
+        for col in AgentWidgets.columns: Rectangle {
+            border-radius: LibraryCss.al-stage--border-radius;
+            background: col.ground == OrbGround.stage ? LibraryCss.al--var--al-stage : col.ground == OrbGround.paper ? LibraryCss.al--var--al-ink : transparent;
+            clip: true;
+            if col.ground == OrbGround.glass: GlassPanel {
+                tier: GlassTier.thick;
+                radius: LibraryCss.al-stage--border-radius;
+            }
+            Rows {
+                rows: col.rows;
+                light: col.light;
+            }
+        }
+    }
+}

@@ -807,6 +807,7 @@ impl Host {
         }
         if let Some(gone) = self.parked.remove(&id) {
             self.aux().remove_window(id);
+            crate::orbs::remove(id);
             let _ = gone.handle.hide();
             // picture-in-picture's window went, whoever closed it
             if gone.kind == WindowKind::Pip {
