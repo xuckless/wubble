@@ -94,6 +94,8 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Typed local addresses | A scheme-less address gets https only for public names without a port; IPs, `localhost`, single labels, `.local` and other ports stay http. | 2026-11-18 |
 | Local Network (macOS) | The bundle carries `NSLocalNetworkUsageDescription`; loopback works in every form on macOS and Linux. | 2026-11-18 |
 | Accessibility | Shell through Slint's AccessKit tree; pages get the accessibility media features; web content's full subtree waits for a Slint graft API (M6). | 2026-11-19 |
+| Extensions on | Chrome's extension system runs only while at least one extension is installed and enabled (`--load-extension`, else `disable-extensions`); changes apply at the next start; extensions load in every container. Supersedes "Extensions" (2026-11-18): our own Chromium is here ([research/extensions.md](research/extensions.md)). | 2026-11-20 |
+| Extension install | From the user's files only: an unpacked directory in place, a .crx unpacked by wubble with its key kept (signature not verified); no Chromium or CEF patch for loading; tabs, windows, actions and prompts wait for patches P1 to P4. | 2026-11-20 |
 
 ## Shell and UI
 
@@ -185,6 +187,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Blocker request path | CEF `OnBeforeResourceLoad` through the fork's request filter into CEF-free `filter::ContentFilter`; per-view counts. | 2026-11-18 |
 | Cosmetic channel and list updates | Cosmetic hiding runs on the helper's context script (`cosmetic.js`) over a named channel; the engine answers each frame's `hello`. | 2026-11-18 |
 | Remote debugging | `devtools.remote_port` is off by default; its Settings row carries the warning. | 2026-11-18 |
+| Extension updates | None: no request to the Web Store or an update server for extensions; command-line extensions are never auto-updated, and `disable-default-apps` turns off Chromium's external sources (Linux installed `/usr/share/chromium/extensions` entries from the Web Store). | 2026-11-20 |
 | SponsorBlock | Built in on the hash-prefix API; a request of wubble's own, so `sponsor.enabled` starts off and the first video asks once. | 2026-11-18 |
 
 ## Media and codecs

@@ -8734,6 +8734,7 @@ name = "wubble-core"
 version = "0.1.0-preview.1"
 dependencies = [
  "aes 0.9.4",
+ "base64 0.22.1",
  "cbc",
  "chrono",
  "dash-mpd-core",

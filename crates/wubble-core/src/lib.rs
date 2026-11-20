@@ -16,6 +16,7 @@ pub mod controls;
 pub mod devtools;
 pub mod dnd;
 pub mod download;
+pub mod extensions;
 pub mod external;
 pub mod favicon;
 pub mod gesture;

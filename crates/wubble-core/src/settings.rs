@@ -793,6 +793,17 @@ pub const UPDATE_LAST_CHECK: SettingDef = SettingDef {
     restart: false,
 };
 
+/// The installed extensions (`extensions::Installed`, a JSON array): its own page edits it, and
+/// it is read as CEF starts (`--load-extension`), so a change applies at the next start.
+pub const EXTENSIONS_INSTALLED: SettingDef = SettingDef {
+    key: "extensions.installed",
+    kind: SettingKind::Text,
+    default: "[]",
+    label: "Installed extensions",
+    section: Section::Hidden,
+    restart: true,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -865,6 +876,7 @@ pub const ALL: &[&SettingDef] = &[
     &BOOSTS_ENABLED,
     &UPDATE_CHECK_ON_OPEN,
     &UPDATE_LAST_CHECK,
+    &EXTENSIONS_INSTALLED,
 ];
 
 /// The definition of `key`, if it is a setting.

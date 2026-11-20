@@ -205,6 +205,13 @@ impl Settings {
         }
     }
 
+    /// The installed extensions (`settings::EXTENSIONS_INSTALLED`, read before the engine
+    /// starts: `wubble_core::extensions::load_paths` is its `--load-extension`).
+    pub fn extensions(&self) -> wubble_core::extensions::Installed {
+        let text = apply::value_of(&wubble_core::settings::EXTENSIONS_INSTALLED, &self.stored);
+        wubble_core::extensions::Installed::from_json(text).unwrap_or_default()
+    }
+
     /// Whether the wgpu glass scene runs (`settings::GLASS_SCENE`, read before the window).
     pub fn glass_scene(&self) -> bool {
         apply::value_of(&wubble_core::settings::GLASS_SCENE, &self.stored) == "1"

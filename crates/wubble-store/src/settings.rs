@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use wubble_core::apply::GlassSetting;
 use wubble_core::archive::ArchiveAfter;
+use wubble_core::extensions::Installed;
 use wubble_core::omnibox::SearchEngine;
 use wubble_core::pagetheme::{Contrast, Motion, PageTheme};
 use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
@@ -155,6 +156,16 @@ impl Codec for ZoomTable {
     }
 }
 
+/// A JSON array of extensions (`wubble_core::extensions`); a bad entry is dropped.
+impl Codec for Installed {
+    fn encode(&self) -> String {
+        self.to_json()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        Installed::from_json(s)
+    }
+}
+
 macro_rules! settings {
     ($($(#[$doc:meta])* $name:ident: $ty:ty = $def:expr;)*) => {
         $(
@@ -283,6 +294,8 @@ settings! {
     UpdateCheckOnOpen: bool = defs::UPDATE_CHECK_ON_OPEN;
     /// Unix seconds of the last update check (0: never).
     UpdateLastCheck: u32 = defs::UPDATE_LAST_CHECK;
+    /// A CEF start switch (`--load-extension`): read before the engine starts.
+    InstalledExtensions: Installed = defs::EXTENSIONS_INSTALLED;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a
@@ -426,6 +439,22 @@ mod tests {
             let zoom = ZoomTable::from([("a.test".to_string(), 125), ("日本.jp".to_string(), 67)]);
             round_trip::<SiteZoom>(&mut s, zoom).await;
             round_trip::<SiteZoom>(&mut s, ZoomTable::new()).await;
+            let ext = wubble_core::extensions::Extension {
+                id: wubble_core::extensions::id_from_key(b"test"),
+                name: "Mark".into(),
+                version: "1.0".into(),
+                enabled: false,
+                source: wubble_core::extensions::Source::Unpacked {
+                    dir: "/home/x/ext".into(),
+                },
+                permissions: vec!["storage".into()],
+            };
+            let (list, _) = wubble_core::extensions::transition(
+                Installed::default(),
+                wubble_core::extensions::Event::Install(ext),
+            );
+            round_trip::<InstalledExtensions>(&mut s, list).await;
+            round_trip::<InstalledExtensions>(&mut s, Installed::default()).await;
         });
     }
 

@@ -136,6 +136,10 @@ enum SmokeArg {
     },
     Start,
     SessionPhase(Phase),
+    /// `extensions` or `extensions-none`.
+    Extensions {
+        installed: bool,
+    },
 }
 
 fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
@@ -162,6 +166,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "codecs" => Ok(SmokeArg::Codecs { wired: true }),
         Some(("codecs", "bare")) => Ok(SmokeArg::Codecs { wired: false }),
         None if value == "ax" => Ok(SmokeArg::Ax),
+        None if value == "extensions" => Ok(SmokeArg::Extensions { installed: true }),
+        None if value == "extensions-none" => Ok(SmokeArg::Extensions { installed: false }),
         None if value == "start" => Ok(SmokeArg::Start),
         None if value == "overlay" => Ok(SmokeArg::Overlay { dark: false }),
         Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
@@ -174,7 +180,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark`, `start` or `session-phase=1|2`"
+             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark`, `start`, `extensions`, \
+             `extensions-none` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -246,6 +253,10 @@ pub enum Smoke {
     /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
     /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
     Start { dir: Option<PathBuf> },
+    /// Windowless: the test extension installed as a directory and as a .crx, its content
+    /// script and service worker on a loopback page (`installed`), or nothing installed and no
+    /// extension process (`extensions_smoke.rs`).
+    Extensions { installed: bool },
 }
 
 /// The halves of `--smoke session`, each its own process (CEF starts once
@@ -399,6 +410,9 @@ impl TryFrom<Cli> for Command {
                 dir: cli.shot_dir,
             },
             (Some(SmokeArg::Start), None, None) => Smoke::Start { dir: cli.shot_dir },
+            (Some(SmokeArg::Extensions { installed }), None, None) => {
+                Smoke::Extensions { installed }
+            }
         };
         Ok(Command::Smoke(smoke))
     }
@@ -658,6 +672,20 @@ mod tests {
                 dir: Some(PathBuf::from("/tmp/o"))
             }))
         );
+    }
+
+    #[test]
+    fn smoke_extensions() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "extensions"]).ok(),
+            Some(Command::Smoke(Smoke::Extensions { installed: true }))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "extensions-none"]).ok(),
+            Some(Command::Smoke(Smoke::Extensions { installed: false }))
+        );
+        assert!(parse(["wubble", "--smoke", "extensions", "--url", "about:blank"]).is_err());
+        assert!(parse(["wubble", "--smoke", "extensions=x"]).is_err());
     }
 
     #[test]

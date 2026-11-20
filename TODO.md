@@ -64,6 +64,7 @@ Open, to build or check:
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
 - [ ] Extensions button in the sidebar footer (the free place before Downloads); needs extensions (M6)
+- [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -166,6 +167,8 @@ Open, to build or check:
 - [ ] Build with `enable_widevine` and codecs; ship no CDM; a CDM loader (installed CDM, else opt-in download)
 - [ ] Document DRM limits (Linux L3 around 720p; services that need a VMP-signed browser refuse us)
 - [ ] Build infrastructure: Linux and macOS local; Windows on a runner large enough for Chromium
+- [x] Extensions research ([docs/research/extensions.md](docs/research/extensions.md)); the extension system on only when one is installed; install from a directory or a .crx (no UI yet; `--smoke extensions`) (COMMIT)
+- [ ] Extensions: patches P1 (tabs.query, tab events, windows), P2 (extension-opened tabs and windows), P3 (action button and popup), P4 (permission prompts); then the install page with permissions and "restart to apply"
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
 - [ ] Swap in behind `wubble-engine`, shell unchanged
 - [ ] CEF OSR patch: hide a view's compositor on `Hide()` (frees each hidden tab's backbuffer)

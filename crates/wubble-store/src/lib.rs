@@ -52,6 +52,8 @@ pub use settings::{
     VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
 
+pub use settings::InstalledExtensions;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("database error: {0}")]

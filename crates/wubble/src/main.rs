@@ -11,6 +11,8 @@ mod chooser;
 mod cli;
 mod clipboard;
 mod codecs_smoke;
+mod extensions;
+mod extensions_smoke;
 mod gallery_smoke;
 mod host;
 mod ime;
@@ -212,6 +214,15 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Smoke(Smoke::Extensions { installed }) => {
+            match with_smoke_dir(|config, dir| extensions_smoke::run(config, dir, installed)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("smoke: extensions FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Session) => match smoke_session() {
             Ok(()) => {
                 println!("smoke: session ok");
@@ -325,6 +336,7 @@ fn main() -> ExitCode {
                 | Smoke::Update
                 | Smoke::Quit
                 | Smoke::Codecs { .. }
+                | Smoke::Extensions { .. }
                 | Smoke::Session
                 | Smoke::SessionPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
@@ -1539,6 +1551,7 @@ fn run(
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
+        extensions: wubble_core::extensions::load_paths(&loaded.settings.extensions()),
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);

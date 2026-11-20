@@ -78,6 +78,10 @@ pub struct EngineConfig {
     /// (`storage`): the session's. Others come up when a view first needs
     /// them.
     pub containers: Vec<ContainerId>,
+    /// Unpacked extension directories Chromium loads at start
+    /// (`wubble_core::extensions::load_paths`); empty keeps the extension system off
+    /// ([`extension_switches`]). Read only here: a change applies at the next start.
+    pub extensions: Vec<PathBuf>,
 }
 
 /// Whose profile CEF runs on.
@@ -304,6 +308,7 @@ impl EngineConfig {
             profile: ProfileKind::User,
             no_sandbox: no_sandbox_requested(std::env::args_os()),
             containers: vec![],
+            extensions: vec![],
         })
     }
 
@@ -325,6 +330,7 @@ impl EngineConfig {
             profile: ProfileKind::Throwaway,
             no_sandbox: false,
             containers: vec![],
+            extensions: vec![],
         })
     }
 }
@@ -479,15 +485,42 @@ fn nvidia_vaapi(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -
 /// switch, each with the reason. A switch given twice keeps one value, so a
 /// platform table must not add its own `enable-features`: merge it here.
 /// The `enable-features` switch is not here: [`PageFeatures::switches`] writes it, from the
-/// user's settings.
+/// user's settings, nor the extension system's: [`extension_switches`] writes those, from the
+/// installed list. Empty now; the table stays for the next switch every OS needs.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+
+/// The extension system's switches for the installed, enabled extensions `paths`.
 ///
-/// `disable-extensions`: CEF 156's Chrome runtime otherwise starts the extension system with
-/// two extension renderers and two helper processes of its own before any tab opens: about
-/// 60 MiB PSS (`--measure memory`, Linux, 1 and 10 tabs). wubble runs no extensions before M6
-/// (TODO.md Decided "Extensions"); Chromium's PDF viewer, a component extension, still opens
-/// (`--smoke builtins`), and DevTools still docks (`--smoke page`). Remove it with the M6
-/// extension pass.
-const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("disable-extensions", None)];
+/// None: `disable-extensions`. CEF 156's Chrome runtime otherwise starts the extension system
+/// with two extension renderers and two helper processes of its own before any tab opens:
+/// about 60 MiB PSS (`--measure memory`, Linux, 1 and 10 tabs). Chromium's PDF viewer, a
+/// component extension, still opens (`--smoke builtins`), and DevTools still docks
+/// (`--smoke page`).
+///
+/// Some: `load-extension` with the directories joined by `,` (Chromium splits on it, so the
+/// core list refuses paths with one; `extension_service.cc`, unbranded builds only), and
+/// `disable-component-extensions-with-background-pages`, which keeps Chromium's own background
+/// component extensions (likely the two extension renderers of those 60 MiB; some may use
+/// Google's component updater) from starting; the PDF viewer is not one of them (`component_loader.cc`). Extensions loaded
+/// this way are never auto-updated (`Manifest::IsAutoUpdateableLocation`), so nothing asks an
+/// update server (docs/research/extensions.md).
+fn extension_switches(paths: &[PathBuf]) -> Vec<(String, Option<String>)> {
+    if paths.is_empty() {
+        return vec![("disable-extensions".into(), None)];
+    }
+    let list: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    vec![
+        ("load-extension".into(), Some(list.join(","))),
+        (
+            "disable-component-extensions-with-background-pages".into(),
+            None,
+        ),
+        ("disable-default-apps".into(), None),
+    ]
+}
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) struct Linux;
@@ -639,6 +672,8 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     cef.browser_subprocess_path = Current::helper_path(&config.exe_dir);
     cef.cache_path = Some(config.cache_dir.clone());
     cef.command_line_switches = config.features.switches();
+    cef.command_line_switches
+        .extend(extension_switches(&config.extensions));
     let throwaway = match config.profile {
         ProfileKind::User => &[][..],
         ProfileKind::Throwaway => Current::THROWAWAY_SWITCHES,
@@ -1155,7 +1190,48 @@ mod tests {
             profile: ProfileKind::User,
             no_sandbox: false,
             containers: vec![],
+            extensions: vec![],
         }
+    }
+
+    #[test]
+    fn extensions_are_off_until_one_is_installed() {
+        assert_eq!(
+            extension_switches(&[]),
+            [("disable-extensions".to_string(), None)]
+        );
+        let two = [PathBuf::from("/p/a"), PathBuf::from("/home/x/my ext")];
+        assert_eq!(
+            extension_switches(&two),
+            [
+                (
+                    "load-extension".to_string(),
+                    Some("/p/a,/home/x/my ext".to_string())
+                ),
+                (
+                    "disable-component-extensions-with-background-pages".to_string(),
+                    None
+                ),
+                ("disable-default-apps".to_string(), None),
+            ]
+        );
+        let cef = cef_config(&EngineConfig {
+            extensions: two.to_vec(),
+            ..config("/opt/wubble", "/c")
+        });
+        let names: Vec<&str> = cef
+            .command_line_switches
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect();
+        assert!(names.contains(&"load-extension"));
+        assert!(!names.contains(&"disable-extensions"));
+        let off = cef_config(&config("/opt/wubble", "/c"));
+        assert!(
+            off.command_line_switches
+                .iter()
+                .any(|(n, _)| n == "disable-extensions")
+        );
     }
 
     #[test]
@@ -1551,6 +1627,7 @@ mod tests {
             features: PageFeatures::default(),
             clipboard_bridge: false,
             containers: vec![],
+            extensions: vec![],
             profile: ProfileKind::Throwaway,
             no_sandbox: false,
         })
