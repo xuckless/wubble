@@ -122,8 +122,10 @@ fn check_drag_frame(app: &AppWindow, scene: &[GlassItem], frame: usize) {
     check_inside(app, scene, frame);
 }
 
-/// Every glass under the page the scene holds but the window's lies inside the sidebar, which
-/// clips what it shows (none may reach under the page; an overlay's is drawn above it), and the
+/// Every glass under the page the scene holds but the window's ends where the sidebar ends, which
+/// clips it there (none may reach under the page; an overlay's is drawn above it); its start is
+/// not cut (the sections ride the bowed string past the sidebar's start, as the design's do: only
+/// the window clips them, QA HIGH-10); and the
 /// address pill's is the pill Slint shows: none on the rail, where the pill is a search button
 /// without glass (.wb-rail-addr).
 fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
@@ -135,7 +137,7 @@ fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
         .filter(|i| i.key != keys.get_sidebar() && i.layer == 0)
     {
         assert!(
-            item.x >= edges.start - 0.01 && item.x + item.width <= edges.end + 0.01,
+            item.x + item.width <= edges.end + 0.01,
             "frame {frame}: glass {item:?} reaches outside the sidebar {edges:?}"
         );
     }
@@ -147,8 +149,8 @@ fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
         );
     } else {
         let pill = pill.unwrap_or_else(|| panic!("frame {frame}: no address glass"));
-        // the pill as the sidebar shows it: cut where it rides past the sidebar's edges
-        let (x0, x1) = (edges.pill.max(edges.start), edges.pill_end.min(edges.end));
+        // the pill as the sidebar shows it: cut where it rides past the sidebar's end
+        let (x0, x1) = (edges.pill, edges.pill_end.min(edges.end));
         assert!(
             near(pill.x, x0) && near(pill.width, x1 - x0),
             "frame {frame}: the pill's glass {pill:?} is not the pill {edges:?}"
