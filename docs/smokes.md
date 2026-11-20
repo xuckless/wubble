@@ -1,7 +1,8 @@
 # Smokes, measurements and examples
 
 Status (2026-11-19): every hand-run check, moved out of [AGENTS.md](../AGENTS.md). Window smokes need a GUI
-session; over ssh they hang creating the window, so wrap them in `timeout`. The Mac: [macos.md](macos.md).
+session; over ssh they hang creating the window, so wrap them in `timeout`; on Linux run them on an invisible
+display instead ([Headless](#headless-linux)). The Mac: [macos.md](macos.md).
 Numbers from the `--measure` runs: [measurements.md](measurements.md).
 
 ## Commands
@@ -73,3 +74,54 @@ Surfaces that need a live page (split panes, DevTools docked, video strip, reade
 Little and Popup windows) are not scenes: use `--shot PNG` with their own smoke. Compare each PNG by
 eye with its design counterpart (`browser/*.css`, `pages/*.css` in the design repo) before UI work is
 handed back.
+
+## Headless (Linux)
+
+`scripts/headless.sh <command...>` runs a command on an invisible Wayland display, so a smoke's
+window never shows on the desktop or takes its focus; prefix every window smoke, `--shot` and
+`--shot-dir` run with it, e.g. `scripts/headless.sh timeout 240 target/debug/wubble --smoke page`.
+Each call starts its own headless mutter (1360x880 virtual monitor; `WUBBLE_HEADLESS_SIZE`) on a
+private D-Bus session that starts no services, and tears it down when the command exits, so
+parallel callers never share focus or a clipboard and nothing reaches the desktop's display,
+clipboard, D-Bus session or settings (`WUBBLE_HEADLESS_LOG=FILE` keeps mutter's output). The
+command keeps the caller's environment apart from `WAYLAND_DISPLAY`, `DISPLAY`, `XAUTHORITY` and
+`XDG_SESSION_TYPE`. Needs mutter, dbus-run-session, python3-gobject and GTK 4 (Fedora Workstation
+has them). What the display adds to a bare `mutter --headless`, and why:
+
+- A keyboard: a RemoteDesktop session on the private bus adds mutter's virtual input devices and
+  presses Shift once. Without one no window gets keyboard focus or an input serial, and Wayland
+  lets only the focused client set the selection: every clipboard check failed ("clipboard holds
+  None"). The pointer is never moved, so screenshots show no hover.
+- A ticker: a small software-drawn GTK window drawing every frame under the command's windows.
+  Mutter 50's headless frame clock can park ("scheduled-later") on a commit that carries a
+  commit-timing timestamp (NVIDIA's Vulkan and EGL presents send `wp_commit_timer_v1` with
+  `wp_fifo_v1`) after an empty frame, and never wake: the window then gets no frame callback and
+  stops drawing (`--smoke start` stuck at Poked, `--smoke page` at PopupShown/PopupFrame). A
+  desktop always has something else damaging the stage. `CLUTTER_PAINT=continuous-redraw` does
+  not help on mutter 50.
+- Xwayland, mutter's own: Copy Image goes through arboard, which on GNOME (no data-control
+  protocol) falls back to X11; without a `DISPLAY` `B.copy-image` failed after X11 timeouts.
+
+Frames stay GPU-accelerated there (`--smoke frames=300`: accelerated=300 cpu_fallback=0, 16.7 ms).
+
+Every `--smoke` on `scripts/headless.sh`, 2026-11-19, debug build of `qa1/headless`, three runs
+each, three at once (each its own compositor):
+
+| Smoke | Runs | Smoke | Runs | Smoke | Runs |
+|---|---|---|---|---|---|
+| boot | 3/3 | session | 3/3 | ax | 3/3 |
+| quit | 3/3 | start | 3/3 | media | 3/3 |
+| frames=300 | 3/3 | settings | 3/3 | overlay | 3/3 |
+| nav | 3/3 | autofill | 3/3 | overlay=dark | 3/3 |
+| tabs | 3/3 | gallery (`--shot-dir`) | 3/3 | builtins | 3/3 |
+| windows | 3/3 | codecs | 3/3 | video | 3/3 |
+| split | 3/3 | codecs=bare | 3/3 | boost | 3/3 |
+| page | 3/3 | pages | 3/3 | block | 3/3 |
+| parity | 3/3 (11/12 more) | | | | |
+
+Known flake: `--smoke parity` fails about one run in six on this display (7 of 40), always early in
+`A.type-input` (its first item) or `A.pagedown-scrolls`, and never with the keyboard left out (0 of
+18): the page sees every keydown but not its default action (no keypress, nothing typed; no
+scroll). Cause not found yet. Also fixed on the way: `--smoke autofill` failed about one
+run in five (the submitting page's own load report read as a failed sign-in), and parallel
+`--smoke parity` runs stalled three minutes (the loopback server answered one connection at a time).
