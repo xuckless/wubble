@@ -5,28 +5,47 @@ Decisions: [docs/decisions.md](docs/decisions.md) · numbers: [docs/measurements
 fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/research/](docs/research/) · commands: [docs/smokes.md](docs/smokes.md)
 Legend: `[ ]` open · `[~]` in progress · `[x]` done, with the commit that brought it to `main` (`git show <hash>`).
 
-## Status (2026-11-19)
-See `git log` for where `main` is. M0 to M5 and the built-ins work on Linux; macOS (M2 Pro) passed every smoke but `parity` in
-batch eight and has not been run since. The design-fidelity phase has merged phases 0 to 3: kit, generated values,
-glass, motion, icons, controls, chrome, start page, Settings, list pages and every overlay are on kit components; it
-ends with the owner's sign-off. The capture and scoring tool was removed (187d7a4). Windows is not green in CI.
+## Status (2026-11-19, night)
+`main` is at 6d70c9e and builds, lints and passes 1871 tests; all 25 window smokes pass on the invisible test
+display (`scripts/headless.sh`). M0 to M5 and the built-ins work on Linux. The design-fidelity phase has every
+surface on kit components (kit, generated values, glass, motion, icons, controls, chrome, start page, Settings,
+list pages, overlays) and has been through one outside QA round (26 findings: 20 fixed, 3 not reproduced, 3 not
+bugs). The phase ends with the owner's sign-off. macOS has not been run since batch eight (the Mac is driven only
+from its own session); Windows is not green in CI. The owner's runnable binary is rebuilt only on their word.
 
 ## Now: design-fidelity phase
-- [x] Page copy buttons: `navigator.clipboard.writeText`/`write` reach the system clipboard (4992603)
-- [ ] Headless test display has no seat focus: `start`, `page` and clipboard smokes fail there; `write([ClipboardItem])` unverified
-- [x] QA round 1 (`qa-report/`): overlay stack and Escape (4f9fbe0), keys and command-bar ranking (db07570),
-      glass over bright pages (8326b57), switch fade, Reader scroll, Settings wheel (1cd0b67), layout and text (b2b7f68)
-- [ ] Glass over white: faint ink (disabled rows, shortcuts) sits near 2:1; glass reads flat grey (owner to judge)
-- [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on YouTube (none reproduced in tests)
+Done today, after the kit merges listed under "Design fidelity":
+- [x] New-tab page: capsule at 60%, bubble higher, "Let's Wubble" (4c6633a); docs tidy: lean TODO/AGENTS, `docs/` (fad1969)
+- [x] Page copy buttons: `navigator.clipboard.writeText`/`write` reach the system clipboard, verified on the desktop (4992603)
+- [x] QA: one overlay stack: one modal at a time, Escape closes the topmost, tab-scoped overlays, SponsorBlock banner (4f9fbe0)
+- [x] QA: Shift on symbol chords (Unsplit), actions outrank web search, compact mode, "+ New tab" is Ctrl+T (db07570)
+- [x] QA: glass over a page uses the design's CSS tiers plus one luminance ceiling; no seam across the sidebar edge (8326b57)
+- [x] QA: tab-switch fade on the wall clock (no page bleed), Reader keeps the scroll position, Settings first wheel (1cd0b67)
+- [x] QA: address pill elision, menus fit their rows, sidebar collapse clip, task manager columns, "Start" tab title,
+      sidebar empty-area menu, start-page hover card (b2b7f68)
+- [x] Invisible test display with focus, clipboard and GPU; save prompt lost when a sign-in beats page load (6d70c9e)
+
+Open, for the owner's eye:
+- [ ] Glass over white: faint ink (disabled rows, shortcuts, counts) sits near 2:1; glass reads flat grey
+- [ ] Menus grow from the design's 236 to 320 for long rows (derived; on the review sheet)
+- [ ] Sidebar mid-collapse shows the rail look below 140 wide (the design's own behaviour; QA read it as a reflow)
+- [ ] Rail close badge size; video strip: should a collapse carry over to later pages
+- [ ] Find bar closes on reload (Chromium keeps it); Escape does not dismiss the SponsorBlock question
+- [ ] Compact mode duplicates the hide-sidebar toggle (or make it sidebar <-> rail)
+- [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md)); the sign-off that ends the phase
+
+Open, to build or check:
+- [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on a playing YouTube tab (tests pass; not reproduced)
+- [ ] `--smoke parity` flakes about 1 in 6 on the test display: early key presses arrive without their default action
 - [ ] In-place rename for a new Space in the sidebar (needs a design); Linux alternates for the chords GNOME takes
+- [ ] Audible badge: the probe misses iframes, shadow DOM and WebAudio (a real signal needs the CEF patch, M6)
+- [ ] Page copy buttons carry text only (no image items)
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
 - [ ] Settings against the web: Reset per section; rows folding while searching
 - [ ] List editor: the selected row stays highlighted while a draft is open
-- [ ] Video strip: should a collapse carry over to later pages (owner decision)
-- [ ] Rail close badge size (owner to judge)
 - [ ] Downloads page has no search (the host has no filter path)
-- [ ] The derived-pieces review sheet awaits the owner ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
-- [ ] The owner's sign-off ends the phase
+- [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
+- [ ] `qa-report/` is untracked: commit it or keep it out (owner)
 
 ## M0: Frame path
 - [x] Workspace, CEF init and pump, helper, Linux dmabuf import, blit into `slint::Image` (c6b168a)
@@ -64,7 +83,7 @@ ends with the owner's sign-off. The capture and scoring tool was removed (187d7a
 - [x] Spaces: switcher, tint, containers, swipe, New Space from "+", the action and Settings (60c86ca)
 - [ ] Film rim on the remaining controls (buttons, menu rows)
 - [ ] Touch-kit pieces not yet ported: pin, download button, dock with gliding tooltip, the check box's mask grow
-- [ ] Gallery sweep: thick glass breaks over the sidebar/page seam; the autofill key chip overlaps the Space header
+- [ ] Gallery sweep: the autofill key chip overlaps the Space header
 - [ ] Bookmarks: drag reorder, a bookmarks bar, bookmarks as command-bar candidates
 
 ## M3: Memory and sleeping
