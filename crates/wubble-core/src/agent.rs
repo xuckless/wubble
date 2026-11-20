@@ -291,6 +291,46 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 }
 
+/// What the approval sheet shows of a [`Request`], as text: the client by name, the secrets it
+/// asks for by name only, the sites it limits itself to, and which window mode it asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetText {
+    pub client: String,
+    pub secrets: Vec<String>,
+    /// Empty: any site.
+    pub sites: Vec<String>,
+    pub headless: bool,
+}
+
+impl SheetText {
+    pub fn new(request: &Request, sites: &[String]) -> SheetText {
+        SheetText {
+            client: request.client.clone(),
+            secrets: request.wants_secrets.clone(),
+            sites: sites.to_vec(),
+            headless: request.wants_mode == Mode::Headless,
+        }
+    }
+}
+
+/// The owner's answer to the sheet as the session's event: Allow grants the sites asked for in
+/// the mode the sheet's choice says. No secret is bound to a vault login here (the sheet has no
+/// login picker yet), so a grant holds none; a grant that cannot be built denies.
+pub fn answer(sites: &[String], allow: bool, headless: bool) -> Event {
+    if !allow {
+        return Event::Deny;
+    }
+    let mode = if headless {
+        Mode::Headless
+    } else {
+        Mode::Windowed
+    };
+    match Grant::new([], sites, mode) {
+        Ok(grant) => Event::Approve(grant),
+        Err(_) => Event::Deny,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +565,39 @@ mod tests {
         let some = Grant::new([], &["github.com".to_string()], Mode::Headless).unwrap();
         assert!(some.allows_site("https://gist.github.com/x"));
         assert!(!some.allows_site("https://evil.test/github.com"));
+    }
+
+    #[test]
+    fn the_sheet_shows_the_request_by_name() {
+        let t = SheetText::new(&request(), &["github.com".to_string()]);
+        assert_eq!(t.client, "claude");
+        assert_eq!(t.secrets, ["GITHUB_PASSWORD"]);
+        assert_eq!(t.sites, ["github.com"]);
+        assert!(t.headless);
+        let windowed = Request {
+            wants_mode: Mode::Windowed,
+            ..request()
+        };
+        assert!(!SheetText::new(&windowed, &[]).headless);
+    }
+
+    #[test]
+    fn the_sheet_s_answer_is_an_event() {
+        let sites = ["github.com".to_string()];
+        assert_eq!(answer(&sites, false, true), Event::Deny);
+        let Event::Approve(g) = answer(&sites, true, true) else {
+            panic!("allow approves");
+        };
+        assert_eq!(g.mode, Mode::Headless);
+        assert!(g.allows_site("https://github.com/x"));
+        assert!(!g.allows_site("https://evil.test/"));
+        assert_eq!(g.secret_names().count(), 0);
+        let Event::Approve(g) = answer(&[], true, false) else {
+            panic!("allow approves");
+        };
+        assert_eq!(g.mode, Mode::Windowed);
+        // a site that is no pattern cannot be granted
+        assert_eq!(answer(&["a b".to_string()], true, false), Event::Deny);
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! Agent sessions over MCP (docs/research/mcp-server.md section 0, the basic version): the
 //! host's half. Connections arrive from `mcp.rs`; each session's lifecycle is
 //! `wubble_core::agent::transition`, held here in the one session table, and its effects are
-//! carried out here: the approval (the sheet is a later item; until then only `--smoke mcp`
-//! approves, through [`Host::approve_for_smoke`]), a new Space with its own container for the
-//! session's tabs, the token, the teardown that closes the Space.
+//! carried out here: the approval (the sheet, `Kind::AgentSheet` of the one overlay stack,
+//! asking one session at a time), a new Space with its own container for the session's tabs,
+//! the token, the teardown that closes the Space; and the owner's stop (`agents_stop`).
 //!
 //! A call presents its session's token (the handle `start_session` returned), on the
 //! connection that started it, and names tabs by handle; a tab outside the session's Space is
@@ -15,17 +15,21 @@
 //! A call that waits (a load, a condition, a script, a capture) is a [`Pending`] answered from
 //! the page's events, or with an error at its deadline.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
 use serde_json::{Value, json};
+use slint::{ComponentHandle, Model};
 use wubble_ax::{AxItem, Bounds, PageTree, Reach};
 use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
-use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
+use wubble_core::agent::{
+    self, Effect, Env, Event, Grant, Mode, Request, SessionId, SheetText, State,
+};
 use wubble_core::agent::{Refusal, StopReason, Token};
 use wubble_core::model::Command;
+use wubble_core::overlay::Kind;
 use wubble_core::secret::Secret;
 use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
@@ -33,6 +37,7 @@ use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
 use wubble_engine::page::{EditCommand, PageEvent};
 use wubble_mcp::{AgentCall, ButtonKind, NavTarget, RequestId, ToolResult, WaitCondition};
+use wubble_ui::{AgentLogItem, AgentSheetView, AppWindow};
 use wubble_vault::RecordId;
 
 use super::{Host, now_ms};
@@ -194,6 +199,12 @@ pub(super) struct Agents {
     pending: Vec<Pending>,
     next: u64,
     timer: slint::Timer,
+    /// Sessions waiting for the approval sheet, the first the one it shows (or will show).
+    asking: VecDeque<SessionId>,
+    /// The window the sheet shows in, while it does.
+    sheet: Option<slint::Weak<AppWindow>>,
+    /// Counts the sheets shown, so each restarts the sheet's window choice.
+    sheets: i32,
 }
 
 impl Agents {
@@ -251,6 +262,22 @@ fn inside(b: Bounds, outer: Bounds) -> bool {
         && b.y >= outer.y
         && b.x + b.width <= outer.x + outer.width
         && b.y + b.height <= outer.y + outer.height
+}
+
+/// The sheet's window view of what it shows.
+fn sheet_view(text: &SheetText, serial: i32) -> AgentSheetView {
+    let names = |v: &[String]| -> slint::ModelRc<slint::SharedString> {
+        let v: Vec<slint::SharedString> = v.iter().map(|s| s.as_str().into()).collect();
+        v.as_slice().into()
+    };
+    AgentSheetView {
+        open: true,
+        serial,
+        client: text.client.as_str().into(),
+        secrets: names(&text.secrets),
+        sites: names(&text.sites),
+        headless: text.headless,
+    }
 }
 
 fn stopped_text(reason: StopReason, note: Option<&str>) -> String {
@@ -363,23 +390,18 @@ impl Host {
 
     fn agent_effect(&mut self, id: &SessionId, effect: Effect) {
         match effect {
-            Effect::ShowApprovalSheet(request) => {
-                if self.checks.mcp_smoke {
-                    self.approve_for_smoke(id);
-                } else {
-                    // The sheet is a later item (mcp4): until it exists nothing can approve.
-                    eprintln!(
-                        "wubble: agent session from {} refused: the approval sheet is not built yet",
-                        request.client
-                    );
-                    if let Some(s) = self.agents.sessions.get_mut(id) {
-                        s.note =
-                            Some("refused: wubble cannot ask the user to approve sessions yet");
-                    }
-                    self.agent_event(id, Event::Deny);
-                }
+            Effect::ShowApprovalSheet(_) => {
+                self.agents.asking.push_back(id.clone());
+                self.agent_sheet_pump();
             }
-            Effect::DismissApprovalSheet => {}
+            Effect::DismissApprovalSheet => {
+                let was_first = self.agents.asking.front() == Some(id);
+                self.agents.asking.retain(|a| a != id);
+                if was_first {
+                    self.agent_sheet_clear();
+                }
+                self.agent_sheet_pump();
+            }
             Effect::OpenSpace(mode) => self.agent_open_space(id, mode),
             Effect::MintToken => {
                 let token = mint();
@@ -400,23 +422,199 @@ impl Host {
         }
     }
 
-    /// `--smoke mcp` only, until the approval sheet exists: approves what was asked, with no
-    /// secrets (none can be bound without the sheet).
-    fn approve_for_smoke(&mut self, id: &SessionId) {
-        let Some(s) = self.agents.sessions.get(id) else {
+    // ----- the approval sheet
+
+    /// Shows the first waiting session's sheet when the overlays let it (one modal at a time:
+    /// a page's dialog or the user's sheet makes it wait; the pump asks again).
+    pub(super) fn agent_sheet_pump(&mut self) {
+        if self.agents.sheet.is_some() {
+            return;
+        }
+        let Some(id) = self.agents.asking.front().cloned() else {
             return;
         };
-        let mode = match &s.state {
-            State::AwaitingApproval(r) => r.wants_mode,
-            _ => return,
-        };
-        match Grant::new([], &s.sites, mode) {
-            Ok(grant) => self.agent_event(id, Event::Approve(grant)),
-            Err(e) => {
-                eprintln!("wubble: agent session: {e:?}");
-                self.agent_event(id, Event::Deny);
+        let text = match self.agents.sessions.get(&id) {
+            Some(Session {
+                state: State::AwaitingApproval(request),
+                sites,
+                ..
+            }) => SheetText::new(request, sites),
+            // ended since it asked
+            _ => {
+                self.agents.asking.pop_front();
+                return self.agent_sheet_pump();
             }
+        };
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        if !self.overlay_open(Kind::AgentSheet, None) {
+            return;
         }
+        self.agents.sheets += 1;
+        window.set_agent_sheet_view(sheet_view(&text, self.agents.sheets));
+        self.agents.sheet = Some(window.as_weak());
+        self.render_surfaces(&window);
+        if self.checks.mcp_smoke {
+            let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
+        }
+    }
+
+    /// The sheet leaves (answered, or its session ended).
+    fn agent_sheet_clear(&mut self) {
+        if let Some(window) = self.agents.sheet.take().and_then(|w| w.upgrade()) {
+            window.set_agent_sheet_view(AgentSheetView::default());
+        }
+    }
+
+    /// The sheet's own answer: Allow or Deny (Escape and a click on Deny), with its window
+    /// choice. It answers the session the sheet shows.
+    pub(crate) fn agent_sheet_answered(&mut self, allow: bool, headless: bool) {
+        if self.agents.sheet.is_none() {
+            return;
+        }
+        let Some(id) = self.agents.asking.front().cloned() else {
+            return;
+        };
+        let sites = self
+            .agents
+            .sessions
+            .get(&id)
+            .map(|s| s.sites.clone())
+            .unwrap_or_default();
+        // the session's transition dismisses the sheet and shows the next
+        self.agent_event(&id, agent::answer(&sites, allow, headless));
+    }
+
+    /// The sheet is showing (the overlay stack's read).
+    pub(super) fn agent_sheet_open(&self) -> bool {
+        self.agents.sheet.is_some()
+    }
+
+    /// `--smoke gallery`: a session as a client would make it, asking for approval, or (when
+    /// `approved`) approved in the window with a few tabs, which shows its marks. The scene
+    /// after it stops it (`agents_stop`).
+    pub(super) fn gallery_agent(&mut self, approved: bool) {
+        let id = SessionId("gallery".into());
+        self.agents.sessions.insert(
+            id.clone(),
+            Session {
+                conn: 0,
+                state: State::Requested,
+                purpose: "Look up the release notes".into(),
+                sites: vec!["github.com".into()],
+                start: None,
+                space: None,
+                note: None,
+            },
+        );
+        let request = Request {
+            client: "Claude Code".into(),
+            wants_secrets: vec!["GITHUB_PASSWORD".into()],
+            wants_mode: Mode::Windowed,
+        };
+        let env = Env {
+            mcp_enabled: true,
+            remote_port: None,
+        };
+        self.agent_event(&id, Event::ClientAsks(request, env));
+        if !approved {
+            return;
+        }
+        self.agent_event(&id, agent::answer(&["github.com".to_string()], true, false));
+        let Some((space, _)) = self.agents.sessions.get(&id).and_then(|s| s.space) else {
+            return;
+        };
+        for url in ["https://github.com/", "https://github.com/releases"] {
+            self.dispatch(Command::OpenInSpace {
+                space,
+                url: url.into(),
+            });
+        }
+    }
+
+    /// `--smoke gallery`: entries for the activity page.
+    pub(super) fn gallery_agent_log(&mut self) {
+        let id = SessionId("s1".into());
+        let now = now_ms();
+        let calls = [
+            ("session_started", None, Outcome::Done, 540),
+            ("navigate", Some("https://github.com/"), Outcome::Done, 520),
+            ("read_page", Some("https://github.com/"), Outcome::Done, 515),
+            ("click", Some("https://github.com/"), Outcome::Done, 480),
+            (
+                "navigate",
+                Some("https://evil.example/"),
+                Outcome::Refused,
+                300,
+            ),
+            (
+                "screenshot",
+                Some("https://github.com/"),
+                Outcome::Failed,
+                120,
+            ),
+            ("session_stopped", None, Outcome::Done, 60),
+        ];
+        for (tool, target, outcome, secs_ago) in calls {
+            self.store.push_agent_log(Entry {
+                session: id.clone(),
+                at_ms: now - secs_ago * 1000,
+                tool: tool.into(),
+                target: target.map(Into::into),
+                outcome,
+            });
+        }
+    }
+
+    // ----- stopping
+
+    /// The owner's stop: every session ends and its Space closes, headless or not. The
+    /// command bar's "Stop All Agents", and the mark on a tab row or the Space header.
+    pub(super) fn agents_stop(&mut self) {
+        let all: Vec<SessionId> = self.agents.sessions.keys().cloned().collect();
+        for id in all {
+            self.agent_event(&id, Event::Stop);
+        }
+    }
+
+    /// Marks the rows of tabs an agent session drives, and the session's Space.
+    pub(super) fn agent_marks(&self, view: &mut crate::shell::ShellView) {
+        let spaces = self.agents.spaces();
+        for row in view.pinned.iter_mut().chain(view.tabs.iter_mut()) {
+            row.agent = row.kind == crate::shell::RowKind::Tab
+                && crate::shell::tab_id(row.id).is_some_and(|t| self.agent_drives(t));
+        }
+        for row in &mut view.spaces {
+            row.agent = crate::shell::space_id(row.id).is_some_and(|s| spaces.contains(&s));
+        }
+    }
+
+    // ----- the activity page
+
+    /// The page is shown: its rows, newest first, from the store.
+    pub(super) fn agent_log_shown(&mut self) {
+        self.store
+            .agent_log(wubble_core::agent::log::STORE_MAX, |entries| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.render_agent_log(&entries))
+                });
+            });
+    }
+
+    fn render_agent_log(&self, entries: &[Entry]) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let items: Vec<AgentLogItem> = agent::log::rows(entries, now_ms())
+            .into_iter()
+            .map(|r| AgentLogItem {
+                title: r.title.into(),
+                note: r.note.into(),
+                failed: r.failed,
+            })
+            .collect();
+        crate::bind::sync(window.get_agent_log(), items, |m| window.set_agent_log(m));
     }
 
     /// The session's own Space, in a new container, with its first tab; shown in the window
@@ -1269,6 +1467,41 @@ impl Host {
             outcome,
         };
         self.store.push_agent_log(entry);
+    }
+
+    /// `--smoke mcp`: the sheet is up. Checks what it shows against what the client asked, then
+    /// answers it through the window's own callback, as its buttons do: Allow, but Deny for the
+    /// session that asks for a secret.
+    pub(crate) fn mcp_smoke_answer(&mut self) {
+        let Some(window) = self.agents.sheet.as_ref().and_then(|w| w.upgrade()) else {
+            return self.fail("the approval sheet is not up".into());
+        };
+        let view = window.get_agent_sheet_view();
+        let secrets: Vec<String> = view.secrets.iter().map(|s| s.to_string()).collect();
+        let sites: Vec<String> = view.sites.iter().map(|s| s.to_string()).collect();
+        if !view.open || view.client.is_empty() {
+            return self.fail("the approval sheet names no client".into());
+        }
+        let deny = !secrets.is_empty();
+        if deny && (secrets != ["GITHUB_PASSWORD"] || sites != ["example.com"]) {
+            return self.fail(format!("the sheet shows {secrets:?} on {sites:?}"));
+        }
+        if !deny && (!sites.is_empty() || !view.headless) {
+            return self.fail(format!(
+                "the sheet shows {sites:?}, headless {}",
+                view.headless
+            ));
+        }
+        println!(
+            "smoke: mcp sheet {} asks {secrets:?} on {sites:?}, answered {}",
+            view.client,
+            if deny { "Deny" } else { "Allow" }
+        );
+        let headless = view.headless;
+        let _ = self
+            .w
+            .window
+            .upgrade_in_event_loop(move |w| w.invoke_agent_sheet_answered(!deny, headless));
     }
 
     /// `--smoke mcp`'s client finished: its step count, or what failed. Then the agent's

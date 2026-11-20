@@ -176,12 +176,14 @@ fn draw_the_layout_cases() {
             name: "Space 1".into(),
             tint: slint::Color::from_rgb_u8(0x7c, 0xc8, 0xff),
             icon: "personal".into(),
+            ..Default::default()
         },
         SpaceItem {
             id: 2,
             name: "Work".into(),
             tint: slint::Color::from_rgb_u8(0xff, 0xb8, 0x6b),
             icon: "work".into(),
+            ..Default::default()
         },
     ]))));
     app.set_active_space_id(1);

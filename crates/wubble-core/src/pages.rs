@@ -502,13 +502,15 @@ pub enum InternalPage {
     Archive,
     /// The Task manager: tabs and processes with memory, CPU and state.
     Tasks,
+    /// What agent sessions did: the activity log (`agent::log`), newest first.
+    AgentLog,
     /// The start page, the new-tab page: the design's living bubble (`start`), a search capsule
     /// and the shell's favourites (TODO.md Decided, "Start page").
     Start,
 }
 
 impl InternalPage {
-    pub const ALL: [InternalPage; 8] = [
+    pub const ALL: [InternalPage; 9] = [
         InternalPage::Settings,
         InternalPage::History,
         InternalPage::Bookmarks,
@@ -516,6 +518,7 @@ impl InternalPage {
         InternalPage::Passwords,
         InternalPage::Archive,
         InternalPage::Tasks,
+        InternalPage::AgentLog,
         InternalPage::Start,
     ];
 
@@ -528,6 +531,7 @@ impl InternalPage {
             InternalPage::Passwords => "wubble://passwords",
             InternalPage::Archive => "wubble://archive",
             InternalPage::Tasks => "wubble://tasks",
+            InternalPage::AgentLog => "wubble://agent",
             InternalPage::Start => "wubble://start",
         }
     }
@@ -542,6 +546,7 @@ impl InternalPage {
             InternalPage::Passwords => "Passwords",
             InternalPage::Archive => "Archive",
             InternalPage::Tasks => "Task manager",
+            InternalPage::AgentLog => "Agent activity",
             // not "New tab": that is the row under the tabs that opens one (QA LOW-01)
             InternalPage::Start => "Start",
         }
@@ -595,7 +600,7 @@ impl PageLink {
 
 /// Every page Settings links to, in the nav's order: each user-facing built-in page but
 /// Settings itself and the start page (the new-tab page, which the new-tab row opens).
-pub const PAGE_LINKS: [PageLink; 6] = {
+pub const PAGE_LINKS: [PageLink; 7] = {
     use crate::action::Action;
     [
         PageLink {
@@ -633,6 +638,12 @@ pub const PAGE_LINKS: [PageLink; 6] = {
             action: Action::OpenTasks,
             note: "Tabs and processes, their memory and CPU",
             keywords: &["tasks", "tabs", "memory", "cpu", "processes"],
+        },
+        PageLink {
+            page: InternalPage::AgentLog,
+            action: Action::OpenAgentLog,
+            note: "What agent sessions did in wubble",
+            keywords: &["agents", "mcp", "sessions", "log", "ai"],
         },
     ]
 };
@@ -980,6 +991,7 @@ mod tests {
             assert!(!l.note.is_empty(), "{}", l.title());
         }
         assert_eq!(PAGE_LINKS[5].title(), "Task manager");
+        assert_eq!(PAGE_LINKS[6].url(), "wubble://agent");
         assert_eq!(PAGE_LINKS[0].url(), "wubble://history");
     }
 
@@ -1508,7 +1520,7 @@ mod tests {
         assert_eq!(InternalPage::from_url("https://settings"), None);
         assert_eq!(InternalPage::from_url("wubble://nope"), None);
         // the new-tab page
-        assert_eq!(InternalPage::ALL.len(), 8);
+        assert_eq!(InternalPage::ALL.len(), 9);
         assert_eq!(
             InternalPage::from_url("Wubble://Start/"),
             Some(InternalPage::Start)

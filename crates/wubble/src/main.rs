@@ -1157,6 +1157,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
             })
         },
     );
+    window.on_agent_sheet_answered(move |allow, headless| {
+        with_host_in(win, |host| host.agent_sheet_answered(allow, headless))
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });

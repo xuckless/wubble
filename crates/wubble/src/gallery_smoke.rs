@@ -73,6 +73,10 @@ pub enum Overlay {
     Bookmark,
     /// The print sheet.
     Print,
+    /// An agent session's approval sheet (a client asking, the secret named).
+    AgentSheet,
+    /// An approved agent session in the window: its tab rows and Space header carry the mark.
+    AgentTabs,
     LoadError,
     CertError,
     AutofillMenu,
@@ -334,11 +338,16 @@ pub const SCENES: &[Scene] = &[
         wheel: 20_000,
         ..on("settings-updates", InternalPage::Settings)
     },
-    // last: twelve Spaces stay in the profile, the popup's rows scroll over its sticky row
+    // twelve Spaces stay in the profile, the popup's rows scroll over its sticky row
     Scene {
         pointer: Some(SPACES_ROW),
         ..over("spaces-popup-many", Overlay::Spaces(12))
     },
+    // last, for an agent session's Space ends with the scene after it: the activity page, the
+    // approval sheet, the marks of an approved session's tabs and Space (wubble-only, derived)
+    on("agent-activity", InternalPage::AgentLog),
+    over("agent-sheet", Overlay::AgentSheet),
+    over("agent-tabs", Overlay::AgentTabs),
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile

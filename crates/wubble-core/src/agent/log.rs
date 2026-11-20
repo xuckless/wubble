@@ -78,6 +78,44 @@ impl ActivityLog {
     }
 }
 
+/// One line of the activity log page, as text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    /// The tool, and the page it touched.
+    pub title: String,
+    /// The session, how long ago, and how it ended.
+    pub note: String,
+    /// A gate said no or the call failed.
+    pub failed: bool,
+}
+
+/// `entry` as a page line; `now_ms` is the clock the age is read against.
+pub fn row(entry: &Entry, now_ms: i64) -> Row {
+    let title = match &entry.target {
+        Some(target) => format!("{}  {target}", entry.tool),
+        None => entry.tool.clone(),
+    };
+    let outcome = match entry.outcome {
+        Outcome::Done => "done",
+        Outcome::Refused => "refused",
+        Outcome::Failed => "failed",
+    };
+    let age = crate::pages::relative_age(
+        u64::try_from(now_ms / 1000).unwrap_or(0),
+        u64::try_from(entry.at_ms / 1000).unwrap_or(0),
+    );
+    Row {
+        title,
+        note: format!("{} · {age} · {outcome}", entry.session.0),
+        failed: entry.outcome != Outcome::Done,
+    }
+}
+
+/// The newest-first page lines of `entries` (the store keeps them oldest first).
+pub fn rows(entries: &[Entry], now_ms: i64) -> Vec<Row> {
+    entries.iter().rev().map(|e| row(e, now_ms)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +159,31 @@ mod tests {
         let a = SessionId("a".into());
         assert_eq!(log.of(&a).map(|e| e.at_ms).collect::<Vec<_>>(), [1, 3]);
         assert!(!log.is_empty());
+    }
+
+    #[test]
+    fn a_page_line_names_the_tool_the_page_the_session_and_the_outcome() {
+        let mut e = entry("s1", 0);
+        e.tool = "navigate".into();
+        e.target = Some("https://example.com/".into());
+        e.at_ms = 1_000_000;
+        let r = row(&e, 1_000_000 + 120_000);
+        assert_eq!(r.title, "navigate  https://example.com/");
+        assert_eq!(r.note, "s1 · 2 minutes ago · done");
+        assert!(!r.failed);
+        e.target = None;
+        e.outcome = Outcome::Refused;
+        let r = row(&e, 1_000_000);
+        assert_eq!(r.title, "navigate");
+        assert_eq!(r.note, "s1 · just now · refused");
+        assert!(r.failed);
+    }
+
+    #[test]
+    fn the_page_lists_the_newest_first() {
+        let entries = [entry("a", 1), entry("a", 2), entry("a", 3)];
+        let titles: Vec<_> = rows(&entries, 0).into_iter().map(|r| r.title).collect();
+        assert_eq!(titles, ["tool3", "tool2", "tool1"]);
     }
 
     #[test]

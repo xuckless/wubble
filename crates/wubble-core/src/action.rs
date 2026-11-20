@@ -68,6 +68,11 @@ pub enum Action {
     OpenArchive,
     /// Show the Task manager (`pages::InternalPage::Tasks`).
     OpenTasks,
+    /// Show the agent activity log (`pages::InternalPage::AgentLog`).
+    OpenAgentLog,
+    /// End every agent session (`agent::Event::Stop`): the kill switch, which works while a
+    /// session runs headless.
+    StopAgents,
     /// Bookmark the visible page: opens the name and folder sheet.
     BookmarkPage,
     /// Group the Space's tabs into folders by site.
@@ -107,7 +112,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 65] = [
+const FIXED: [(&str, Action); 67] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -152,6 +157,8 @@ const FIXED: [(&str, Action); 65] = [
     ("open-passwords", Action::OpenPasswords),
     ("open-archive", Action::OpenArchive),
     ("open-tasks", Action::OpenTasks),
+    ("open-agent-log", Action::OpenAgentLog),
+    ("stop-agents", Action::StopAgents),
     ("bookmark-page", Action::BookmarkPage),
     ("tidy-tabs", Action::TidyTabs),
     ("undo-tidy-tabs", Action::UndoTidyTabs),
@@ -250,7 +257,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 28] = [
+pub const PALETTE: [ActionInfo; 30] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -348,6 +355,16 @@ pub const PALETTE: [ActionInfo; 28] = [
         keywords: "memory cpu processes sleep discard",
     },
     ActionInfo {
+        action: Action::OpenAgentLog,
+        title: "Agent Activity",
+        keywords: "mcp sessions calls log agents",
+    },
+    ActionInfo {
+        action: Action::StopAgents,
+        title: "Stop All Agents",
+        keywords: "mcp sessions kill end agents headless",
+    },
+    ActionInfo {
         action: Action::BookmarkPage,
         title: "Bookmark This Page",
         keywords: "star save favourite",
@@ -401,7 +418,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 83);
+        assert_eq!(all.len(), 85);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -428,7 +445,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 83);
+        assert_eq!(ids.len(), 85);
     }
 
     #[test]

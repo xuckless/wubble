@@ -14,7 +14,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -27,9 +27,10 @@ import { PermissionPrompt } from "components/permission-prompt.slint";
 import { AutofillAnswer, AutofillMenu, AutofillView } from "components/autofill-menu.slint";
 import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
-import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage, TasksPage } from "components/pages.slint";
+import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage, TasksPage, AgentLogPage } from "components/pages.slint";
 import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { PrintSheet } from "components/print-sheet.slint";
+import { AgentSheet } from "components/agent-sheet.slint";
 import { SwipeChip } from "components/swipe-chip.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { SpacesMenu } from "kit/chrome/spaces-menu.slint";
@@ -57,7 +58,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -495,6 +496,11 @@ export component AppWindow inherits Window {
     in property <PrintSheetView> print-sheet-view;
     callback print-sheet-edited(int, string, bool, int, int, int, bool, int);
     callback print-sheet-answered(bool);
+    // An agent session's approval sheet; the intent is (allow, headless).
+    in property <AgentSheetView> agent-sheet-view;
+    callback agent-sheet-answered(bool, bool);
+    // The agent activity log page, newest first.
+    in property <[AgentLogItem]> agent-log;
     // A touchpad history swipe: -1..1 of the way to forward (negative) or back; 0 hides the
     // chip. `swipe-shift` is its rubber-banded travel from the edge (host side, motion.rs band).
     in property <float> swipe-progress;
@@ -649,6 +655,7 @@ export component AppWindow inherits Window {
     property <bool> error-open: root.page-error.open;
     property <bool> bookmark-open: root.bookmark-sheet-view.open;
     property <bool> print-open: root.print-sheet-view.open;
+    property <bool> agent-sheet-open: root.agent-sheet-view.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
     property <bool> overlay-open: root.menu.open || root.downloads-open || root.spaces-open || root.dialog.open || root.page-error.open;
@@ -668,6 +675,8 @@ export component AppWindow inherits Window {
             bookmark-sheet.focus-sheet();
         } else if print-sheet.open {
             print-sheet.focus-sheet();
+        } else if agent-sheet.open {
+            agent-sheet.focus-sheet();
         } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {
@@ -682,6 +691,8 @@ export component AppWindow inherits Window {
             passwords-ui.take-focus();
         } else if root.page == InternalPageKind.tasks {
             tasks-ui.take-focus();
+        } else if root.page == InternalPageKind.agent-log {
+            agent-log-ui.take-focus();
         } else if root.page == InternalPageKind.start {
             // the start page's capsule is the address field: it holds the keys
             StartBridge.focus-serial += 1;
@@ -709,6 +720,9 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed print-open => {
+        root.settle-focus();
+    }
+    changed agent-sheet-open => {
         root.settle-focus();
     }
     changed downloads-open => {
@@ -1107,6 +1121,10 @@ export component AppWindow inherits Window {
                     root.task-action(tab, pid, a);
                 }
             }
+            agent-log-ui := AgentLogPage {
+                open: root.page == InternalPageKind.agent-log;
+                items: root.agent-log;
+            }
             passwords-ui := PasswordsPage {
                 open: root.page == InternalPageKind.passwords;
                 view: root.passwords-view;
@@ -1296,6 +1314,14 @@ export component AppWindow inherits Window {
                 }
                 answered(accept) => {
                     root.print-sheet-answered(accept);
+                }
+            }
+            agent-sheet := AgentSheet {
+                glass-key: GlassKeys.agent-sheet;
+                glass-layer: GlassOver.card;
+                sheet: root.agent-sheet-view;
+                answered(allow, headless) => {
+                    root.agent-sheet-answered(allow, headless);
                 }
             }
             // The history swipe's chip at the edge it goes toward.

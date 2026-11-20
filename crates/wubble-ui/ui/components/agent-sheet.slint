@@ -1,0 +1,88 @@
+import { SheetFrame } from "sheet-frame.slint";
+import { AgentSheetView } from "model.slint";
+import { Segmented } from "../kit/controls/segmented.slint";
+import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+
+// An agent session's approval sheet (docs/research/mcp-server.md section 6): who asks (the
+// calling program, as the host found it), the secrets it asks for by name, the sites it limits
+// itself to, windowed or headless, Allow and Deny. The design has no such sheet (derived-review.md,
+// Agent sessions): the SheetFrame chrome over a settings card of rows, as the print sheet. It is
+// modal and the window's, one at a time (`wubble_core::overlay::Kind::AgentSheet`); `answered`
+// is the intent (allow, headless), the host answers the session. Enter never approves (the
+// sheet may appear while the user types: keyjacking); Escape and Deny refuse, only the Allow
+// button allows.
+export component AgentSheet inherits SheetFrame {
+    in property <AgentSheetView> sheet;
+    callback answered(bool, bool);
+
+    // The window choice: restarts from what the client asked, at each sheet.
+    property <bool> headless;
+    // What the body shows: the open sheet's, kept through its exit.
+    property <AgentSheetView> last;
+    property <AgentSheetView> view: root.sheet.open ? root.sheet : root.last;
+    changed sheet => {
+        if root.sheet.open {
+            root.last = root.sheet;
+        }
+    }
+    property <int> serial: root.sheet.serial;
+    changed serial => {
+        root.headless = root.sheet.headless;
+    }
+
+    open: root.sheet.open;
+    title: "Let an agent use wubble?";
+    message: root.view.client + " asks to browse in a Space of its own. It reads the pages it opens and can click and type there.";
+    accept-text: "Allow";
+    cancel-text: "Deny";
+    enter-accepts: false;
+    accepted => {
+        root.answered(true, root.headless);
+    }
+    cancelled => {
+        root.answered(false, root.headless);
+    }
+
+    public function focus-sheet() {
+        root.take-focus();
+    }
+
+    BCard {
+        BRow {
+            title: "Secrets";
+            BNote {
+                text: root.view.secrets.length == 0 ? "None asked for" : "Names only";
+            }
+        }
+        for name in root.view.secrets: BRow {
+            title: name;
+        }
+        BRow {
+            title: "Sites";
+            BNote {
+                text: root.view.sites.length == 0 ? "Any site" : "Only these";
+            }
+        }
+        for site in root.view.sites: BRow {
+            title: site;
+        }
+        BRow {
+            title: "Window";
+            Segmented {
+                compact: true;
+                label: "Window";
+                labels: ["Windowed", "Headless"];
+                selected: root.headless ? 1 : 0;
+                chosen(i) => {
+                    root.headless = i == 1;
+                }
+            }
+        }
+    }
+    if root.view.secrets.length > 0: BNote {
+        text: "The agent never sees a secret's value, and none is bound to a saved login yet, so none is granted.";
+    }
+    BNote {
+        text: "Stop an agent from its mark on the tab, from the command bar (Stop All Agents), or by closing wubble.";
+    }
+}

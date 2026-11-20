@@ -21,6 +21,7 @@ import { Wobble } from "../motion/wobble.slint";
 import { Entering } from "../motion/overlap.slint";
 import { Calm } from "../motion/calm.slint";
 import { SpaceItem } from "../../components/model.slint";
+import { AgentMark } from "agent-mark.slint";
 
 export global SpaceTint {
     // computed: `.wb-space:hover` (0,2,0) when hovered, else `.wb button`'s inherited `.wb` ink
@@ -88,6 +89,9 @@ export component SpaceCurrent inherits Rectangle {
 export component SpaceName inherits Rectangle {
     in property <string> text;
     in property <float> enter: 1;
+    // wubble: an agent session's Space: the mark at the end of the header (kit AgentMark).
+    in property <bool> agent;
+    callback agent-stop();
     height: BrowserCss.wb-space-name--height;
     Entering {
         e: root.enter;
@@ -101,6 +105,13 @@ export component SpaceName inherits Rectangle {
             color: BrowserCss.wb-space-name--color;
             vertical-alignment: center;
             overflow: elide;
+        }
+        if root.agent: AgentMark {
+            x: parent.width - self.width - BrowserCss.wb-space-name--padding-right;
+            y: (parent.height - self.height) / 2;
+            stopped => {
+                root.agent-stop();
+            }
         }
     }
 }

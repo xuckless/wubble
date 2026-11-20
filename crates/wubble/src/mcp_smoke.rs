@@ -1,7 +1,7 @@
 //! `--smoke mcp`: an MCP client on the browser's own socket, as a harness's `wubble mcp` would
 //! be. On a throwaway profile with `agent.mcp_enabled` on, a thread connects and runs, one line
-//! per step: discovery, the tool list, `start_session` (headless; the smoke approves it,
-//! `Host::approve_for_smoke`), at once `navigate` to the bundled page on loopback and
+//! per step: discovery, the tool list, a `start_session` that asks for a secret and is denied on
+//! the approval sheet, `start_session` (headless; allowed on the sheet), at once `navigate` to the bundled page on loopback and
 //! `read_page` (the new tab's own `about:blank` load must not pass for the page's), that the
 //! session sees only its own tab, two clicks on its button by ref (each its own single click)
 //! and a wait for what the click wrote, typing into its field and a wait for what the input
@@ -9,6 +9,9 @@
 //! `stop_session`, and that the handle is dead afterwards; last a second session is started and
 //! left running: the browser's quit must close its Space. The host then checks that the user's
 //! recently-closed list and history hold nothing of the agent's.
+//! The sheet is the real one: the host reads what its window shows (the client, the secret names,
+//! the sites, the window choice) and answers through the window's callback, as its buttons do
+//! (`Host::mcp_smoke_answer`).
 //! Every step waits for its answer: the browser bounds each call by its deadline. Run by hand
 //! (it opens a window), under `scripts/headless.sh` and `timeout`.
 
@@ -161,6 +164,16 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     }
     c.step("tools/list", format!("{tools} tools"));
 
+    // The sheet's Deny: the host's answer to the one that asks for a secret (the sheet shows it
+    // by name; no value exists to ask for).
+    let denied = c.tool(
+        "start_session",
+        json!({"purpose": "to be denied", "secrets": ["GITHUB_PASSWORD"], "sites": ["example.com"]}),
+    )?;
+    match denied {
+        Err(why) if why.contains("denied") => c.step("start_session", &why),
+        other => return Err(format!("the denied session: {other:?}")),
+    }
     let started = c.ok(
         "start_session",
         json!({"purpose": "the mcp smoke", "headless": true}),
@@ -171,7 +184,10 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     if session.len() != 64 || tab.is_empty() {
         return Err(format!("start_session: {started}"));
     }
-    c.step("start_session", format!("tab {tab}, headless"));
+    c.step(
+        "start_session",
+        format!("tab {tab}, headless, allowed on the sheet"),
+    );
 
     c.ok(
         "navigate",
