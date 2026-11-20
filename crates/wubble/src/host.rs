@@ -2512,9 +2512,16 @@ impl Host {
             Some(split_smoke::Action::Resized(left, right)) => {
                 println!("smoke: split resized panes {left}+{right}");
             }
+            // By its chord through the host's key path, as a hand presses it (Ctrl+Shift+\ on
+            // a US layout; QA CRIT-04).
             Some(split_smoke::Action::Unsplit) => {
-                if let Some(tab) = self.shown() {
-                    self.dispatch(Command::Unsplit(tab));
+                match self
+                    .keymap
+                    .shortcut_for(wubble_core::action::Action::Unsplit)
+                    .and_then(crate::parity::key_inputs)
+                {
+                    Some(keys) => self.smoke_keys(keys),
+                    None => self.fail("split: no keys for the unsplit chord".into()),
                 }
             }
             Some(split_smoke::Action::Pass) => {

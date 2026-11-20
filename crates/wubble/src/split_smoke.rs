@@ -3,7 +3,8 @@
 //! window; then the seam between them is dragged [`DRAG`] px left and let go (the shell's seam
 //! callbacks), and both views must repaint at the new sizes; then the seam is pulled again, and
 //! both panes must show their frame cut along the bowed string (the page edge mask) until it is
-//! let go and rests straight again; then the split is undone and one view stays. Every wait is
+//! let go and rests straight again; then the split is undone by its chord (the host's key path)
+//! and one view stays. Every wait is
 //! "until the host sees X",
 //! bounded by a count of CEF work runs, never by time.
 

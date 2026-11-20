@@ -1288,9 +1288,16 @@ fn input(
 /// X11 and Wayland events do), the key pressed and released, the modifiers
 /// released. winit's Linux `text` ignores Ctrl (Ctrl+C types "c"). The scan
 /// code is this OS's (winit's `to_scancode`).
+///
+/// A chord naming a shifted symbol (`Ctrl+|`, `Ctrl+Plus`) holds Shift on its key, as a hand
+/// types it.
 pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
     let (code, unmodified, chars) = us_key(chord.key)?;
-    let held = [chord.ctrl, chord.alt, chord.shift, chord.cmd];
+    let symbol = chars.is_some_and(|(plain, shifted)| {
+        plain != shifted && chord.key == Key::Char(shifted) && !shifted.is_alphanumeric()
+    });
+    let shift = chord.shift || symbol;
+    let held = [chord.ctrl, chord.alt, shift, chord.cmd];
     let mut state = ModifiersState::empty();
     let mut out = vec![];
     for (on, &(code, named, bit)) in held.iter().zip(&MODIFIER_KEYS) {
@@ -1306,7 +1313,7 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
             ));
         }
     }
-    let text = chars.map(|(plain, shifted)| if chord.shift { shifted } else { plain }.to_string());
+    let text = chars.map(|(plain, shifted)| if shift { shifted } else { plain }.to_string());
     out.push(input(
         true,
         code,
