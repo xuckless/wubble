@@ -119,9 +119,6 @@ impl Host {
     /// The page in `tab` says what a drop at the pointer would do: the page drag's operation,
     /// or the answer to a drag from another app.
     pub(super) fn drag_cursor(&mut self, tab: TabId, op: DragOps) {
-        if std::env::var_os("WUBBLE_DND_TRACE").is_some() {
-            eprintln!("dnd trace: {tab:?} cursor {op:?}");
-        }
         if self.drag.page().is_some() {
             self.run_drag(Input::Page(pagedrag::Input::Cursor { tab, op }));
         } else if self.external_drag.as_ref().and_then(|d| d.over) == Some(tab) {
@@ -299,9 +296,6 @@ impl Host {
         let modifiers = self.input.modifiers();
         let page = |host: &mut Self, tab: TabId, phase: DragPhase, allowed: DragOps| {
             let p = host.drag_point_in(&window, tab);
-            if std::env::var_os("WUBBLE_DND_TRACE").is_some() {
-                eprintln!("dnd trace: {tab:?} {phase:?} at {p:?}");
-            }
             if let Some(view) = host.tab_view(tab) {
                 view.drag(phase, p, &modifiers, allowed);
             }
