@@ -26,9 +26,8 @@ this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --worksp
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
 in its order. First step: stop redrawing the shell per page frame (the flame graph's 76 % of the main thread).
-How to start it: measure first with the kept harness (`~/Dev/wubble-wt/notes/bench-2026-11-20/`: `runner.py`,
-`profile-lbr.sh`, `fold.py`; move them into `scripts/` as the first commit) so every step has a before and an after
-on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md) (2026-11-20). Measured by
+Measure with [scripts/bench/](scripts/bench/README.md) (`profile.sh`, `breakdown.py`, `runner.py`) so every step has a
+before and an after on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md). Measured by
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
@@ -229,7 +228,7 @@ Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchma
 - [ ] Memory breakdown per allocation in the main and GPU processes, before any memory change
 - [ ] Hidden tabs free their frame targets; the blur pyramid exists only while glass is open; revisit Skia's 256 MiB layer budget
 - [ ] A page frame touches the scene and the blur pyramid only while overlay glass or motion is on screen (1.3 % today: low value)
-- [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step; keep the harness and the profile scripts in `scripts/`
+- [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step (`scripts/bench/`; the Speedometer and MotionMark checkouts are not kept: fetch them into a scratch directory)
 - [ ] Only if plain video still costs far more than Chromium after the above: the page on a native OS surface with faked glass (overturns four frame-path decisions; owner decides)
 
 ## Open decisions (owner)
