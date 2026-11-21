@@ -71,6 +71,19 @@ pub enum Section {
     Hidden,
 }
 
+impl Section {
+    /// The section's heading on the page (none for a hidden setting).
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::General => "General",
+            Section::Privacy => "Privacy",
+            Section::Appearance => "Appearance",
+            Section::Performance => "Performance",
+            Section::Hidden => "",
+        }
+    }
+}
+
 /// One setting.
 #[derive(Debug, PartialEq)]
 pub struct SettingDef {

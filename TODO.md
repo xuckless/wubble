@@ -27,6 +27,11 @@ Beside it, small and unordered:
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
+- [ ] Settings at a content width of 759 px or less (a window under about 1010 with the sidebar out): the design's one-column layout (`settings.css` narrow block: no section list, title and search on top) is not built, the controls run off the right edge with no way to reach them; repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
+- [ ] The Settings Select's list is drawn by Slint (no blur): the scene's window-level glass lies over the page; the design's blur needs the page's lists in a window-level layer (owner's call)
+- [ ] The search engine dropdown shows "Google" while none is chosen (the address bar asks on first use); picking Google then stores it
+- [ ] The shortcut editor has no way to clear a chord, and takes chords the page needs (Ctrl+C/V/X/A/Z) without a warning
+- [ ] Shortcut row labels mix cases ("Close Tab", "Reopen Closed Tab", "Close window"): `Action::label`
 - [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space

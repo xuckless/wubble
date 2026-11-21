@@ -1250,6 +1250,12 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
             host.write_setting(&key, &value);
         })
     });
+    // the Sidebar row follows the shell's own mode; later, outside whatever changed it
+    window.on_sidebar_mode_seen(move || {
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host_in(win, |host| host.settings_sidebar_seen())
+        });
+    });
     window.on_setting_reset(move |key| with_host_in(win, |host| host.setting_reset(&key)));
     window.on_setting_entry_removed(move |key, entry| {
         with_host_in(win, |host| host.setting_entry_removed(&key, &entry))

@@ -49,6 +49,11 @@ impl SettingsPage {
         }
     }
 
+    /// The recorder's state (`--smoke settings` reads it).
+    pub fn capture(&self) -> Capture {
+        self.capture
+    }
+
     /// The stored keybinding overrides.
     fn overrides(&self) -> Vec<Override> {
         let entries = match apply::effect_of(defs::KEYBINDING_OVERRIDES.key, &self.stored) {
@@ -192,6 +197,12 @@ impl Host {
         }
         self.render_settings();
         true
+    }
+
+    /// The shell's sidebar mode changed: the page's Sidebar row shows it (`render_page` reads it
+    /// from the window, the one owner).
+    pub(crate) fn settings_sidebar_seen(&mut self) {
+        self.render_settings();
     }
 
     pub(crate) fn setting_reset(&mut self, key: &str) {
@@ -474,10 +485,11 @@ fn render_page(window: &AppWindow, host: &Host) {
     let bindings: Vec<_> = keys::binding_rows(Platform::current(), &overrides)
         .into_iter()
         .filter(|r| {
-            needle.is_empty()
-                || r.action.label().to_lowercase().contains(&needle)
-                || r.chord
-                    .is_some_and(|c| c.to_string().to_lowercase().contains(&needle))
+            pages::binding_matches(
+                &r.action.label(),
+                &r.chord.map(|c| c.to_string()).unwrap_or_default(),
+                &page.query,
+            )
         })
         .collect();
     crate::bind::sync(
