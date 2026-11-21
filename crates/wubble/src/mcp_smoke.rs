@@ -106,6 +106,26 @@ document.getElementById('src').addEventListener('mousedown', () => { from = 'Sou
 document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' on ' + (e.target.id || e.target.tagName)); from = null; });
 </script></body></html>"##;
 
+/// The job-application-style form: a phone field, a native `<select>` dropdown, a bare file
+/// input, and a custom upload button that triggers a hidden file input.
+const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title></head>
+<body style="font:16px sans-serif">
+<label for="phone">Phone</label>
+<input id="phone" type="tel">
+<label for="loc">Location</label>
+<select id="loc" oninput="window.selEvents=(window.selEvents||'')+'i'" onchange="window.selEvents=(window.selEvents||'')+'c'">
+  <option value="">Choose one</option>
+  <option value="yyz">Toronto, ON</option>
+  <option value="nyc">New York, NY</option>
+  <option value="lon" disabled>London, UK</option>
+</select>
+<label for="resume">Resume</label>
+<input id="resume" type="file" accept=".pdf">
+<input id="hidden-file" type="file" style="display:none" onchange="document.getElementById('custom-out').textContent='attached '+Array.from(this.files).map(f=>f.name).join(',')">
+<button id="custom-btn" type="button" onclick="document.getElementById('hidden-file').click()">Upload cover</button>
+<p id="custom-out">no cover</p>
+</body></html>"##;
+
 /// The site whose sign-ins the owner shares with a session, and one the owner is signed in to
 /// that the session's sites leave out (`.localhost`: loopback).
 pub const SIGNIN_HOST: &str = "signin.localhost";
@@ -157,6 +177,7 @@ pub fn route(path: &str, port: u16, cookie: &str) -> Option<Route> {
         "/mcp/next" => page(NEXT),
         "/mcp/sticky" => page(STICKY),
         "/mcp/tools" => page(TOOLS),
+        "/mcp/forms" => page(FORMS),
         // a server's redirect off the web: Chromium must not follow it for a session
         "/mcp/to-file" => Some(Route::Redirect("file:///etc/passwd".into())),
         "/mcp/to-chrome" => Some(Route::Redirect("chrome://version".into())),
@@ -606,6 +627,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     keys(&mut c, &s, page)?;
     shots(&mut c, &s, &base)?;
     pointer(&mut c, &s, &base)?;
+    forms(&mut c, &s, &base)?;
     reading(&mut c, &s, &base)?;
     safety(&mut c, &s, &session, page, &base)?;
 
@@ -1180,6 +1202,108 @@ fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(),
     c.step(
         "scroll",
         "Bottom brought into view, the wheel scrolled the page up and down",
+    );
+    Ok(())
+}
+
+/// `type` focus/dropdown refusal, `select`, `upload_file` (bare input + custom button), blocked
+/// OS file picker on `click`, and immediate AX tree refresh after attach.
+fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp/forms")})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
+    let phone = find("- textField \"Phone\"")?;
+    let loc = ref_of(&read, "- comboBoxSelect \"Location\"")
+        .or_else(|| ref_of(&read, "- popUpButton \"Location\""))
+        .ok_or(format!("no Location dropdown: {read}"))?;
+    let resume = find("- button \"Resume")?;
+    let custom = find("- button \"Upload cover\"")?;
+
+    // Type into Phone, then attempt to type into the Location dropdown: must be refused and
+    // must NOT corrupt Phone.
+    c.ok("type", s(json!({"ref": phone, "text": "+1 555 0100"})))?;
+    match c.tool("type", s(json!({"ref": loc, "text": "Toronto, ON"})))? {
+        Err(e) if e.contains("select") => {}
+        r => return Err(format!("type on Location dropdown: {r:?}")),
+    }
+    let phone_val = text(&c.ok(
+        "evaluate",
+        s(json!({"script": "document.getElementById('phone').value"})),
+    )?);
+    if phone_val != "\"+1 555 0100\"" {
+        return Err(format!("Phone corrupted after refused type: {phone_val}"));
+    }
+
+    // `select` by visible label, firing input + change, then by value, then mismatch & non-select.
+    let sel = text(&c.ok("select", s(json!({"ref": loc, "option": "Toronto, ON"})))?);
+    if !sel.contains("Toronto, ON") || !sel.contains("yyz") {
+        return Err(format!("select by label: {sel}"));
+    }
+    let events = text(&c.ok("evaluate", s(json!({"script": "window.selEvents"})))?);
+    if events != "\"ic\"" {
+        return Err(format!("select did not fire input+change: {events}"));
+    }
+    let sel2 = text(&c.ok("select", s(json!({"ref": loc, "option": "nyc"})))?);
+    if !sel2.contains("New York, NY") {
+        return Err(format!("select by value: {sel2}"));
+    }
+    match c.tool("select", s(json!({"ref": loc, "option": "Mars"})))? {
+        Err(e) if e.contains("Toronto, ON") && e.contains("New York, NY") => {}
+        r => return Err(format!("select mismatch: {r:?}")),
+    }
+    match c.tool("select", s(json!({"ref": custom, "option": "x"})))? {
+        Err(e) if e.contains("click") => {}
+        r => return Err(format!("select on non-select button: {r:?}")),
+    }
+
+    // `click` on a file input must cancel the OS chooser and tell the agent to use `upload_file`.
+    match c.tool("click", s(json!({"ref": resume})))? {
+        Err(e) if e.contains("upload_file") => {}
+        r => return Err(format!("click on file input: {r:?}")),
+    }
+
+    // `upload_file` on a bare `<input type="file">` AND on a custom button; `read_page` must
+    // immediately reflect `resume.pdf` (never stale "No file chosen").
+    let dir = std::env::temp_dir().join(format!("wubble-mcp-upload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let resume_path = dir.join("resume.pdf");
+    let cover_path = dir.join("cover.txt");
+    std::fs::write(&resume_path, b"%PDF-1.4\n%wubble-smoke\n").map_err(|e| e.to_string())?;
+    std::fs::write(&cover_path, b"hello cover").map_err(|e| e.to_string())?;
+
+    let up = text(&c.ok(
+        "upload_file",
+        s(json!({"ref": resume, "path": resume_path.to_string_lossy()})),
+    )?);
+    if !up.contains("resume.pdf") {
+        return Err(format!("upload_file bare input: {up}"));
+    }
+    let after_read = text(&c.ok("read_page", s(json!({})))?);
+    if !after_read.contains("resume.pdf") || after_read.contains("No file chosen") {
+        return Err(format!(
+            "read_page stale after upload_file: {after_read}"
+        ));
+    }
+
+    let up2 = text(&c.ok(
+        "upload_file",
+        s(json!({"ref": custom, "path": cover_path.to_string_lossy()})),
+    )?);
+    if !up2.contains("cover.txt") {
+        return Err(format!("upload_file custom button: {up2}"));
+    }
+    let custom_out = text(&c.ok(
+        "evaluate",
+        s(json!({"script": "document.getElementById('custom-out').textContent"})),
+    )?);
+    if custom_out != "\"attached cover.txt\"" {
+        return Err(format!("custom upload button result: {custom_out}"));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    c.step(
+        "forms",
+        "type refused dropdown without corrupting Phone; select matched label/value and listed options; click on file input blocked chooser; upload_file attached bare & custom inputs with fresh read_page",
     );
     Ok(())
 }
