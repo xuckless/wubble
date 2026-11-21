@@ -65,12 +65,12 @@ could not be changed, and its Secrets and Sites were not editable (they become t
 list editor, and what the owner leaves in the lists is the grant); an agent tab the owner switched to showed a
 blurred page. Still open from section 0: binding a secret's name to a saved login on the sheet.
 
-**Built after the tests (2026-11-20, `xm/sheet-fix`), the tool surface is 20 tools** (the table is data in
+**Built after the tests (2026-11-20, `xm/sheet-fix`), the tool surface is 21 tools** (the table is data in
 `wubble-mcp/src/tools.rs`; section 4 stays the plan): `start_session`, `stop_session` (`keep_tabs`: the Space and its
 tabs stay the owner's), `request_more` (sites, secret names; the sheet lists only what is new, every time),
 `navigate`, `read_page` (link targets, whole text, a note when cut), `read_text` (Readability's article or the page's
 text, or one element's; capped with a note), `click`, `hover`, `drag` (to a ref, or inside a canvas to a point),
-`scroll` (into view, or the wheel), `type` (`submit` waits as `navigate`), `press_key` (wubble's back, forward and
+`scroll` (into view, or the wheel), `type` (`submit` waits as `navigate`; refused where focus stayed on an unrelated field or is not editable), `select` (a native `<select>` by label or value), `press_key` (wubble's back, forward and
 reload chords act on the tab; its window chords are refused, and the reply says so), `screenshot` (an element
 scrolled into view and cropped right at any scroll, or `full_page`), `list_tabs` (`active`, `shown`), `focus_tab`,
 `open_tab` (waits for its load), `close_tab`, `wait_for` (text, `text_gone`, ref, load, `url`, `navigation`;
