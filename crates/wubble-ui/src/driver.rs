@@ -43,8 +43,8 @@ use wubble_core::tabs::{self, TabRows, TabUp};
 use crate::glass::GlassRegistry;
 use crate::{
     AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, CommandPlacement, GlassItem,
-    GlassLayer, InternalPageKind, LeavingRow, Origin, PageScroll, PeekCue, Radius, Shell,
-    SidebarMode, TabItem, sync,
+    GlassLayer, InternalPageKind, LeavingRow, NavScroll, Origin, PageScroll, PeekCue, Radius,
+    Shell, SidebarMode, TabItem, sync,
 };
 
 impl From<seam::SidebarMode> for SidebarMode {
@@ -85,6 +85,8 @@ pub struct Driver {
     /// The open native page's scroller (`PageScroll`): the design's pages scroll in its
     /// `Scroller` too.
     page_scroll: Scroller,
+    /// The settings page's side column (`NavScroll`): the same scroller, on its own offset.
+    nav_scroll: Scroller,
     /// The address pill's border beam (wubble_core::beam), and what turns the shown tab and its
     /// loading flag into the beam's events; `laps` counts laps started, for their hues.
     beam: Beam,
@@ -183,6 +185,7 @@ impl Driver {
             seam,
             scroll: Scroller::new(),
             page_scroll: Scroller::new(),
+            nav_scroll: Scroller::new(),
             beam: Beam::Idle,
             watch: beam::Watch::default(),
             laps: 0,
@@ -372,17 +375,9 @@ impl Driver {
         }
         window.set_thumb_visible(r.thumb_visible);
 
-        // the open native page's scroller
-        self.measure_page(window);
-        moving |= self.page_scroll.step(dt, now);
-        let page = window.global::<PageScroll>();
-        let r = self.page_scroll.render(now);
-        page.set_y(r.shown as f32);
-        if let Some((top, h)) = r.thumb {
-            page.set_thumb_top(top as f32);
-            page.set_thumb_height(h as f32);
-        }
-        page.set_thumb_visible(r.thumb_visible);
+        // the open native page's scroller, and the settings page's side column's
+        moving |= self.step_page_scroll(window, dt, now);
+        moving |= self.step_nav_scroll(window, dt, now);
 
         // the address pill's border beam: a lap when another tab is shown, lapping while the
         // page loads, fading once it has loaded (beam.rs)
@@ -410,19 +405,6 @@ impl Driver {
             window.set_exit_page(slint::Image::default());
         }
         self.page_t < OVERLAP_IN || self.exit_t < PAGE_OUT
-    }
-
-    /// The open page's sizes into its scroller. The page reports them in `changed` handlers,
-    /// which Slint runs after this frame's step, so input measures again before it moves the
-    /// page. On a page that had just opened, the frame's sizes were from before its layout
-    /// (none): a gesture's second tick read as pushing past the end, and the rest of the
-    /// gesture as momentum, dropped; the page barely moved (QA MED-06).
-    fn measure_page(&mut self, window: &AppWindow) {
-        let page = window.global::<PageScroll>();
-        self.page_scroll.measure(
-            f64::from(page.get_viewport()),
-            f64::from(page.get_content()),
-        );
     }
 
     fn step_beam(&mut self, window: &AppWindow, dt: f64) -> bool {
@@ -550,6 +532,135 @@ fn run(
         None => {}
     }
 }
+
+/// A native page scroller on a `Scroller` of its own, from the Slint global that carries it
+/// (`PageScroll`, `NavScroll`: the same members): `$measure` puts the global's sizes into the
+/// scroller, `$step` runs a frame and writes the offset and thumb back, `$wire` takes the
+/// global's wheel, touch and thumb input.
+macro_rules! scroller_global {
+    ($global:ident, $field:ident, $measure:ident, $step:ident, $wire:ident) => {
+        impl Driver {
+            /// The open page's sizes into its scroller. The page reports them in `changed`
+            /// handlers, which Slint runs after this frame's step, so input measures again
+            /// before it moves the page. On a page that had just opened, the frame's sizes were
+            /// from before its layout (none): a gesture's second tick read as pushing past the
+            /// end, and the rest of the gesture as momentum, dropped; the page barely moved (QA
+            /// MED-06).
+            fn $measure(&mut self, window: &AppWindow) {
+                let g = window.global::<$global>();
+                self.$field
+                    .measure(f64::from(g.get_viewport()), f64::from(g.get_content()));
+            }
+
+            fn $step(&mut self, window: &AppWindow, dt: f64, now: f64) -> bool {
+                self.$measure(window);
+                let moving = self.$field.step(dt, now);
+                let g = window.global::<$global>();
+                let r = self.$field.render(now);
+                g.set_y(r.shown as f32);
+                if let Some((top, h)) = r.thumb {
+                    g.set_thumb_top(top as f32);
+                    g.set_thumb_height(h as f32);
+                }
+                g.set_thumb_visible(r.thumb_visible);
+                moving
+            }
+        }
+
+        fn $wire(window: &AppWindow, driver: &Shared) {
+            let g = window.global::<$global>();
+            let hook = || (Rc::clone(driver), window.as_weak());
+            let (d, w) = hook();
+            g.on_wheel(move |dy| {
+                run(&d, &w, |s, window| {
+                    s.$measure(window);
+                    let now = s.now_ms();
+                    s.$field.wheel(f64::from(dy), DeltaMode::Pixel, now);
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_touch_down(move |y| {
+                run(&d, &w, |s, window| {
+                    s.$measure(window);
+                    let now = s.now_ms();
+                    s.$field.touch_down(f64::from(y), now);
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_touch_move(move |y| {
+                run(&d, &w, |s, _| {
+                    let now = s.now_ms();
+                    s.$field.touch_move(f64::from(y), now);
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_touch_up(move || {
+                run(&d, &w, |s, _| {
+                    s.$field.touch_up();
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_thumb_down(move |y| {
+                run(&d, &w, |s, window| {
+                    s.$measure(window);
+                    s.$field.thumb_down(f64::from(y));
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_thumb_move(move |y| {
+                run(&d, &w, |s, _| {
+                    s.$field.thumb_move(f64::from(y));
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_thumb_up(move || {
+                run(&d, &w, |s, _| {
+                    let now = s.now_ms();
+                    s.$field.thumb_up(now);
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_to(move |y| {
+                run(&d, &w, |s, window| {
+                    s.$measure(window);
+                    let now = s.now_ms();
+                    s.$field.to(f64::from(y), now);
+                    None
+                })
+            });
+            let (d, w) = hook();
+            g.on_reset(move || {
+                run(&d, &w, |s, _| {
+                    s.$field.reset();
+                    None
+                })
+            });
+        }
+    };
+}
+
+// The open native page's scroller, and the settings page's side column's.
+scroller_global!(
+    PageScroll,
+    page_scroll,
+    measure_page,
+    step_page_scroll,
+    wire_page_scroll
+);
+scroller_global!(
+    NavScroll,
+    nav_scroll,
+    measure_nav,
+    step_nav_scroll,
+    wire_nav_scroll
+);
 
 /// One step of the peek (wubble_core::chrome::peek), its effects run: the one timer armed or
 /// stopped, `peek` written, and the sidebar's compact look worked out again (a peek is never
@@ -893,90 +1004,13 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
         })
     });
     wire_page_scroll(window, &driver);
+    wire_nav_scroll(window, &driver);
     let controls = crate::controls::wire(window);
     Wired {
         driver,
         glass,
         controls,
     }
-}
-
-/// The open native page's scroller: wheel, touch and the thumb from `PageScroll`.
-fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
-    let page = window.global::<PageScroll>();
-    let hook = || (Rc::clone(driver), window.as_weak());
-    let (d, w) = hook();
-    page.on_wheel(move |dy| {
-        run(&d, &w, |s, window| {
-            s.measure_page(window);
-            let now = s.now_ms();
-            s.page_scroll.wheel(f64::from(dy), DeltaMode::Pixel, now);
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_touch_down(move |y| {
-        run(&d, &w, |s, window| {
-            s.measure_page(window);
-            let now = s.now_ms();
-            s.page_scroll.touch_down(f64::from(y), now);
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_touch_move(move |y| {
-        run(&d, &w, |s, _| {
-            let now = s.now_ms();
-            s.page_scroll.touch_move(f64::from(y), now);
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_touch_up(move || {
-        run(&d, &w, |s, _| {
-            s.page_scroll.touch_up();
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_thumb_down(move |y| {
-        run(&d, &w, |s, window| {
-            s.measure_page(window);
-            s.page_scroll.thumb_down(f64::from(y));
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_thumb_move(move |y| {
-        run(&d, &w, |s, _| {
-            s.page_scroll.thumb_move(f64::from(y));
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_thumb_up(move || {
-        run(&d, &w, |s, _| {
-            let now = s.now_ms();
-            s.page_scroll.thumb_up(now);
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_to(move |y| {
-        run(&d, &w, |s, window| {
-            s.measure_page(window);
-            let now = s.now_ms();
-            s.page_scroll.to(f64::from(y), now);
-            None
-        })
-    });
-    let (d, w) = hook();
-    page.on_reset(move || {
-        run(&d, &w, |s, _| {
-            s.page_scroll.reset();
-            None
-        })
-    });
 }
 
 /// Wire the shell driver, its seam starting as `seam`, and register the window's one

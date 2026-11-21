@@ -25,3 +25,26 @@ export global PageScroll {
     // glide to a y inside the page (scroller.tsx `to`: a settings section picked in its list)
     callback to(length);
 }
+
+// The settings page's side column (the title and search stay put; the section list under them
+// scrolls when it is taller than the window). The same scroller as the page's: the same
+// declarations, driven by a second `Scroller` in the shell driver (`wire_scroller!`). The open
+// page reports its sizes and input here.
+export global NavScroll {
+    in-out property <length> y;
+    in-out property <length> thumb-top;
+    in-out property <length> thumb-height;
+    in-out property <bool> thumb-visible;
+    in-out property <length> viewport;
+    in-out property <length> content;
+    callback wheel(length);
+    callback touch-down(length);
+    callback touch-move(length);
+    callback touch-up();
+    callback thumb-down(length);
+    callback thumb-move(length);
+    callback thumb-up();
+    callback reset();
+    // glide to a y inside the column (a section the page scrolled into is brought into view)
+    callback to(length);
+}
