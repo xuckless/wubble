@@ -1269,7 +1269,7 @@ fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), S
     }
     let locked = find("- comboBoxSelect \"Size\"")?;
     match c.tool("select", s(json!({"ref": locked, "option": "Two"})))? {
-        Err(e) if e.contains("is disabled") => {}
+        Err(e) if e.contains("this <select> dropdown is disabled") => {}
         r => return Err(format!("select in a disabled fieldset: {r:?}")),
     }
     let colour = find("- popUpButton \"Colour\"")?;
