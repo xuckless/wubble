@@ -154,9 +154,12 @@ enum Act {
         button: MouseButton,
         count: u32,
     },
+    /// `mark`: the key the element focused before the click is kept under in the page
+    /// ([`forms::type_mark_script`]).
     Type {
         text: Secret,
         submit: bool,
+        mark: u64,
     },
     /// `fill_secret`'s value for granted variable `name`: typed only once the page confirms
     /// the click focused the element there, in its own document, still on the login's site.
@@ -355,6 +358,14 @@ enum Wait {
         text: Secret,
         name: String,
     },
+    /// `type`, before its click at `at`: the page keeping what has focus now
+    /// ([`forms::type_mark_script`]).
+    TypeMark {
+        id: u64,
+        tab: TabId,
+        at: (f64, f64),
+        act: Act,
+    },
     /// `type` clicked its element at `at`: the page's word on whether focus landed on an
     /// editable target ([`forms::type_focus_script`]).
     TypeFocus {
@@ -454,6 +465,7 @@ enum Then {
         text: Secret,
         submit: bool,
         before: Option<String>,
+        mark: u64,
     },
     /// A drag let go.
     Dragged,
@@ -545,6 +557,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Metrics { tab, .. }
         | Wait::Vault { tab, .. }
         | Wait::Focus { tab, .. }
+        | Wait::TypeMark { tab, .. }
         | Wait::TypeFocus { tab, .. }
         | Wait::Select { tab, .. }
         | Wait::Input { tab, .. }
@@ -2557,9 +2570,23 @@ impl Host {
             return self.agent_unpress(reply, tab, &act, "the tab has no page");
         };
         match act {
-            Act::Click { .. } | Act::Type { .. } | Act::Fill { .. } => {
-                self.agent_input(reply, tab, x, y, act)
+            Act::Type { mark, .. } => {
+                // what has focus is kept first: the click is sent once the page has it
+                let script = forms::type_mark_script(mark);
+                match view.eval(&script) {
+                    Some(id) => {
+                        let wait = Wait::TypeMark {
+                            id: id.0,
+                            tab,
+                            at: (x, y),
+                            act,
+                        };
+                        self.agent_wait(reply, wait, WAIT);
+                    }
+                    None => self.agent_fail(reply, "the page cannot run scripts now"),
+                }
             }
+            Act::Click { .. } | Act::Fill { .. } => self.agent_input(reply, tab, x, y, act),
             Act::Hover => {
                 view.mouse_move(point, &Modifiers::default(), now);
                 self.pace(wubble_gfx::pacing::PaceEvent::Wake);
@@ -2706,11 +2733,12 @@ impl Host {
             }
         }
         let then = match act {
-            Act::Type { text, submit } => Then::TypeFocus {
+            Act::Type { text, submit, mark } => Then::TypeFocus {
                 at: (x, y),
                 text,
                 submit,
                 before,
+                mark,
             },
             Act::Fill { text, name } => Then::Focus {
                 at: (x, y),
@@ -2792,10 +2820,11 @@ impl Host {
                 text,
                 submit,
                 before,
+                mark,
             } => {
                 let Some(id) = self
                     .tab_view(tab)
-                    .and_then(|v| v.eval(&forms::type_focus_script(at.0, at.1)))
+                    .and_then(|v| v.eval(&forms::type_focus_script(at.0, at.1, mark)))
                 else {
                     return self.agent_fail(reply, "the page cannot run scripts now");
                 };
@@ -2866,7 +2895,8 @@ impl Host {
         );
     }
 
-    /// `type`: refuses dropdown roles up front, then clicks and verifies focus before typing.
+    /// `type`: refuses dropdown roles up front; then, at the element, what has focus is kept,
+    /// the click sent, and the text typed only where [`forms::classify_type_focus`] allows.
     fn agent_type(&mut self, reply: Reply, tab: TabId, target: &str, text: Secret, submit: bool) {
         let Some((item, _, _)) = self.agent_item(tab, target) else {
             return self.agent_fail(reply, "stale ref: take a new snapshot");
@@ -2874,11 +2904,13 @@ impl Host {
         if let Some(why) = forms::type_role_refusal(&item.role) {
             return self.agent_refuse(reply, why);
         }
-        self.agent_act(reply, tab, target, None, Act::Type { text, submit });
+        let mark = self.agents.fresh();
+        let act = Act::Type { text, submit, mark };
+        self.agent_act(reply, tab, target, None, act);
     }
 
-    /// The page's answer to [`forms::type_focus_script`]: text is typed only once focus landed on an
-    /// editable target element (or iframe) at `at`.
+    /// The page's answer to [`forms::type_focus_script`]: the text is typed only where
+    /// [`forms::classify_type_focus`] allows.
     #[allow(clippy::too_many_arguments)]
     fn agent_type_focused(
         &mut self,
@@ -3736,6 +3768,7 @@ impl Host {
             | Wait::Locate { id: w, .. }
             | Wait::Metrics { id: w, .. }
             | Wait::Focus { id: w, .. }
+            | Wait::TypeMark { id: w, .. }
             | Wait::TypeFocus { id: w, .. }
             | Wait::Select { id: w, .. }
             | Wait::Input { id: w, .. } => w == id,
@@ -3846,6 +3879,18 @@ impl Host {
                     _ => (false, String::new()),
                 };
                 self.agent_focused(p.reply, tab, at, text, &name, &href, password);
+            }
+            (Wait::TypeMark { .. }, PageEvent::EvalResult { result, .. }) => {
+                let Wait::TypeMark { tab, at, act, .. } = p.wait else {
+                    return true;
+                };
+                match result {
+                    Ok(_) => self.agent_input(p.reply, tab, at.0, at.1, act),
+                    Err(e) => {
+                        let why = format!("could not read focus before clicking: {e}");
+                        self.agent_fail(p.reply, &why);
+                    }
+                }
             }
             (Wait::TypeFocus { .. }, PageEvent::EvalResult { result, .. }) => {
                 let Wait::TypeFocus {

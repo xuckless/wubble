@@ -52,13 +52,36 @@ pub fn type_role_refusal(role: &str) -> Option<&'static str> {
     }
 }
 
-/// Asks the page what element is at `(x, y)` and what has focus (piercing shadow roots), plus
-/// whether they are the same element, ancestor/descendant (including across shadow roots), or a
-/// `<label>` pointing at the focused control.
-pub fn type_focus_script(x: f64, y: f64) -> String {
+/// The element that has focus, through open shadow roots (a closed one stops at its host), as
+/// a JS arrow function `d`.
+const DEEP_ACTIVE: &str = "const d=()=>{let a=document.activeElement;\
+while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;return a};";
+
+/// The page's registry key `type` call `mark` keeps the element focused before its click under.
+fn mark_key(mark: u64) -> String {
+    format!("Symbol.for('wubble.type.{mark}')")
+}
+
+/// Run just before `type`'s click: keeps the element that has focus now (in the page's main
+/// world, under a key only this call names) for [`type_focus_script`] to compare with.
+pub fn type_mark_script(mark: u64) -> String {
+    let key = mark_key(mark);
     format!(
-        "(()=>{{let a=document.activeElement;\
-         while(a&&a.shadowRoot&&a.shadowRoot.activeElement)a=a.shadowRoot.activeElement;\
+        "(()=>{{{DEEP_ACTIVE}Object.defineProperty(globalThis,{key},\
+         {{value:d(),configurable:true}});return true}})()"
+    )
+}
+
+/// Run after `type`'s click at `(x, y)`: what has focus now, what is at the point (both through
+/// open shadow roots), whether they are the same element, one inside the other (across shadow
+/// roots too) or a `<label>` and its control, and whether focus changed since
+/// [`type_mark_script`] (`null` when the mark is gone: another document).
+pub fn type_focus_script(x: f64, y: f64, mark: u64) -> String {
+    let key = mark_key(mark);
+    format!(
+        "(()=>{{{DEEP_ACTIVE}const a=d(),k={key};\
+         const marked=Object.prototype.hasOwnProperty.call(globalThis,k);\
+         const b=globalThis[k];delete globalThis[k];\
          let h=document.elementFromPoint({x},{y});\
          while(h&&h.shadowRoot){{const i=h.shadowRoot.elementFromPoint({x},{y});if(!i||i===h)break;h=i}}\
          const has=(p,c)=>{{while(c){{if(c===p)return true;c=c.parentNode||c.host}}return false}};\
@@ -66,22 +89,27 @@ pub fn type_focus_script(x: f64, y: f64) -> String {
          const related=!!(a&&h&&(has(a,h)||has(h,a)||(lbl&&lbl.control===a)));\
          const info=el=>el?{{tag:(el.tagName||'').toLowerCase(),\
          type:el.tagName==='INPUT'?(el.type||'text').toLowerCase():'',\
-         editable:!!el.isContentEditable}}:null;\
-         return{{active:info(a),hit:info(h),related}}}})()"
+         editable:!!el.isContentEditable,\
+         opaque:!!(el.tagName&&el.tagName.includes('-')&&!el.shadowRoot)}}:null;\
+         return{{active:info(a),hit:info(h),related,changed:marked?a!==b:null}}}})()"
     )
 }
 
 /// Summary of a DOM element returned by [`type_focus_script`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct ElementInfo {
     tag: String,
     input_type: String,
     editable: bool,
+    /// A custom element whose shadow root the page's script cannot read (closed, or none):
+    /// focus inside a closed root shows as its host, so what holds it cannot be seen.
+    opaque: bool,
 }
 
 impl ElementInfo {
     fn from_value(v: &Value) -> Option<Self> {
         let obj = v.as_object()?;
+        let flag = |k: &str| obj.get(k).and_then(Value::as_bool).unwrap_or(false);
         Some(Self {
             tag: obj.get("tag")?.as_str()?.to_owned(),
             input_type: obj
@@ -89,10 +117,8 @@ impl ElementInfo {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
-            editable: obj
-                .get("editable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            editable: flag("editable"),
+            opaque: flag("opaque"),
         })
     }
 
@@ -104,8 +130,10 @@ impl ElementInfo {
         self.tag == "input" && self.input_type == "file"
     }
 
-    fn is_frame(&self) -> bool {
-        matches!(self.tag.as_str(), "iframe" | "frame")
+    /// A frame or an opaque host: what has focus inside cannot be seen from here, so it is
+    /// taken as able to take text.
+    fn may_hold_a_field(&self) -> bool {
+        self.opaque || matches!(self.tag.as_str(), "iframe" | "frame")
     }
 
     fn is_editable(&self) -> bool {
@@ -129,12 +157,29 @@ impl ElementInfo {
     }
 }
 
-/// Decides whether `type` may type into the focused element after clicking the target.
-pub fn classify_type_focus(
-    active: Option<&ElementInfo>,
-    hit: Option<&ElementInfo>,
-    related: bool,
-) -> Result<(), String> {
+/// The page's answer to [`type_focus_script`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TypeFocus {
+    /// What has focus after the click.
+    pub active: Option<ElementInfo>,
+    /// What is at the click's point.
+    pub hit: Option<ElementInfo>,
+    /// `active` and `hit` are the same element, one holds the other, or `hit` is a label of
+    /// `active`.
+    pub related: bool,
+    /// Focus is on another element than before the click (false when that cannot be told).
+    pub changed: bool,
+}
+
+/// Whether `type` may type into what has focus after its click. Refused: a `<select>` or a file
+/// input, nothing editable focused, or focus that stayed where it was before the click on an
+/// element unrelated to the one clicked (the case the check exists for: text meant for a custom
+/// widget would overwrite an earlier field). Focus that moved to an editable element is taken
+/// even when that element is not the one clicked: editors such as Monaco, CodeMirror 5, Ace and
+/// Google Docs focus a hidden textarea or an off-screen frame beside what shows, and a field
+/// under an overlay may be focused by the page's script.
+pub fn classify_type_focus(f: &TypeFocus) -> Result<(), String> {
+    let (active, hit) = (f.active.as_ref(), f.hit.as_ref());
     if hit.is_some_and(ElementInfo::is_select) || active.is_some_and(ElementInfo::is_select) {
         return Err(
             "this element is a <select> dropdown: use the select tool instead of type".into(),
@@ -142,33 +187,21 @@ pub fn classify_type_focus(
     }
     if hit.is_some_and(ElementInfo::is_file_input) || active.is_some_and(ElementInfo::is_file_input)
     {
-        return Err(
-            "this element is a file input: use the upload_file tool instead of type".into(),
-        );
+        return Err("this element is a file input: type cannot choose files".into());
     }
-    let Some(active) = active else {
+    let Some(active) = active.filter(|a| !matches!(a.tag.as_str(), "body" | "html" | "")) else {
         return Err("clicking the element did not focus an editable field".into());
     };
-    if matches!(active.tag.as_str(), "body" | "html" | "") {
-        return Err("clicking the element did not focus an editable field".into());
-    }
-    if active.is_frame() {
-        return if related {
-            Ok(())
-        } else {
-            Err("clicking the element did not focus the target frame".into())
-        };
-    }
-    if !active.is_editable() {
+    if !active.is_editable() && !active.may_hold_a_field() {
         return Err(format!(
             "focused element <{}> is not editable: type only works on text fields",
             active.tag
         ));
     }
-    if !related {
+    if !f.changed && !f.related {
         return Err(format!(
-            "clicking the element did not move focus to it (focus remained on an unrelated <{}>); \
-             refusing to type so another field is not overwritten",
+            "clicking the element did not move focus (it stayed on an earlier <{}> unrelated to \
+             the element clicked); refusing to type so that field is not overwritten",
             active.tag
         ));
     }
@@ -179,10 +212,13 @@ pub fn classify_type_focus(
 pub fn parse_type_focus(json: &str) -> Result<(), String> {
     let v: Value = serde_json::from_str(json)
         .map_err(|_| "could not verify focus before typing".to_owned())?;
-    let active = v.get("active").and_then(ElementInfo::from_value);
-    let hit = v.get("hit").and_then(ElementInfo::from_value);
-    let related = v.get("related").and_then(Value::as_bool).unwrap_or(false);
-    classify_type_focus(active.as_ref(), hit.as_ref(), related)
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+    classify_type_focus(&TypeFocus {
+        active: v.get("active").and_then(ElementInfo::from_value),
+        hit: v.get("hit").and_then(ElementInfo::from_value),
+        related: flag("related"),
+        changed: flag("changed"),
+    })
 }
 
 /// Formats the JSON reply of [`SELECT_OPTION`] into a tool success message or error message.
@@ -243,51 +279,148 @@ mod tests {
         }
     }
 
+    fn el(tag: &str) -> Option<ElementInfo> {
+        let (tag, input_type) = tag.split_once(':').unwrap_or((tag, ""));
+        Some(ElementInfo {
+            tag: tag.into(),
+            input_type: input_type.into(),
+            ..ElementInfo::default()
+        })
+    }
+
+    fn focus(
+        active: Option<ElementInfo>,
+        hit: Option<ElementInfo>,
+        related: bool,
+        changed: bool,
+    ) -> TypeFocus {
+        TypeFocus {
+            active,
+            hit,
+            related,
+            changed,
+        }
+    }
+
     #[test]
-    fn type_focus_classification_accepts_editable_targets_and_refuses_others() {
-        let ok_cases = [
-            json!({"active": {"tag": "input", "type": "text", "editable": false}, "hit": {"tag": "input", "type": "text", "editable": false}, "related": true}),
-            json!({"active": {"tag": "input", "type": "email", "editable": false}, "hit": {"tag": "label", "type": "", "editable": false}, "related": true}),
-            json!({"active": {"tag": "textarea", "type": "", "editable": false}, "hit": {"tag": "textarea", "type": "", "editable": false}, "related": true}),
-            json!({"active": {"tag": "div", "type": "", "editable": true}, "hit": {"tag": "span", "type": "", "editable": true}, "related": true}),
-            json!({"active": {"tag": "iframe", "type": "", "editable": false}, "hit": {"tag": "iframe", "type": "", "editable": false}, "related": true}),
+    fn type_takes_focus_that_moved_to_an_editable_element_or_stayed_on_the_target() {
+        let cases = [
+            // a plain input, clicked: focus moved to it
+            (
+                "plain input",
+                focus(el("input:text"), el("input:text"), true, true),
+            ),
+            // a label for the field, clicked
+            (
+                "label for",
+                focus(el("input:email"), el("label"), true, true),
+            ),
+            // Monaco, CodeMirror 5, Ace: the visible element focuses a hidden textarea beside it
+            (
+                "hidden textarea",
+                focus(el("textarea"), el("div"), false, true),
+            ),
+            // Google Docs: an off-screen frame takes the keys
+            (
+                "off-screen frame",
+                focus(el("iframe"), el("canvas"), false, true),
+            ),
+            // a field under an overlay that focuses it from script
+            ("overlay", focus(el("input:text"), el("div"), false, true)),
+            // typing again into the field that already has focus
+            (
+                "same field again",
+                focus(el("input:text"), el("input:text"), true, false),
+            ),
+            // a field inside a closed shadow root: focus shows as its host
+            (
+                "closed shadow host",
+                focus(
+                    Some(ElementInfo {
+                        opaque: true,
+                        ..el("x-field").unwrap()
+                    }),
+                    Some(ElementInfo {
+                        opaque: true,
+                        ..el("x-field").unwrap()
+                    }),
+                    true,
+                    true,
+                ),
+            ),
+            // a contenteditable span's paragraph
+            (
+                "contenteditable",
+                focus(
+                    Some(ElementInfo {
+                        editable: true,
+                        ..el("div").unwrap()
+                    }),
+                    el("span"),
+                    true,
+                    true,
+                ),
+            ),
         ];
-        for case in ok_cases {
-            assert!(parse_type_focus(&case.to_string()).is_ok(), "{case}");
+        for (what, f) in cases {
+            assert_eq!(classify_type_focus(&f), Ok(()), "{what}");
         }
+    }
 
-        // <select> (either hit or active)
-        let sel = json!({"active": {"tag": "select", "type": "", "editable": false}, "hit": {"tag": "select", "type": "", "editable": false}, "related": true});
-        assert!(
-            parse_type_focus(&sel.to_string())
-                .unwrap_err()
-                .contains("select tool")
-        );
-
-        // <input type="file"> (either hit or active)
-        let file = json!({"active": {"tag": "input", "type": "tel", "editable": false}, "hit": {"tag": "input", "type": "file", "editable": false}, "related": false});
-        assert!(
-            parse_type_focus(&file.to_string())
-                .unwrap_err()
-                .contains("upload_file")
-        );
-
-        // Unrelated previously focused text input (e.g. Phone field) when clicking a custom widget
-        let unrelated = json!({"active": {"tag": "input", "type": "tel", "editable": false}, "hit": {"tag": "div", "type": "", "editable": false}, "related": false});
-        let err = parse_type_focus(&unrelated.to_string()).unwrap_err();
-        assert!(err.contains("unrelated"), "{err}");
-
-        // Non-editable focused elements
-        for bad in [
-            json!({"active": {"tag": "button", "type": "", "editable": false}, "hit": {"tag": "button", "type": "", "editable": false}, "related": true}),
-            json!({"active": {"tag": "input", "type": "checkbox", "editable": false}, "hit": {"tag": "input", "type": "checkbox", "editable": false}, "related": true}),
-            json!({"active": {"tag": "body", "type": "", "editable": false}, "hit": {"tag": "div", "type": "", "editable": false}, "related": true}),
-            json!({"active": null, "hit": null, "related": false}),
-            json!({"active": {"tag": "iframe", "type": "", "editable": false}, "hit": {"tag": "div", "type": "", "editable": false}, "related": false}),
+    #[test]
+    fn type_refuses_focus_left_on_an_earlier_field_and_what_is_not_editable() {
+        // the case the check exists for: a custom widget that takes no focus, the Phone field
+        // typed into before still focused
+        let err =
+            classify_type_focus(&focus(el("input:tel"), el("div"), false, false)).unwrap_err();
+        assert!(err.contains("stayed on an earlier <input>"), "{err}");
+        // the same through a frame or a closed shadow root
+        assert!(classify_type_focus(&focus(el("iframe"), el("div"), false, false)).is_err());
+        let host = Some(ElementInfo {
+            opaque: true,
+            ..el("x-field").unwrap()
+        });
+        assert!(classify_type_focus(&focus(host, el("div"), false, false)).is_err());
+        // a custom widget that takes focus itself (`<div tabindex=0>`): not editable
+        let err = classify_type_focus(&focus(el("div"), el("div"), true, true)).unwrap_err();
+        assert!(err.contains("<div> is not editable"), "{err}");
+        for (what, f) in [
+            ("button", focus(el("button"), el("button"), true, true)),
+            (
+                "checkbox",
+                focus(el("input:checkbox"), el("input:checkbox"), true, true),
+            ),
+            ("body", focus(el("body"), el("div"), true, true)),
+            ("nothing", focus(None, None, false, true)),
         ] {
-            assert!(parse_type_focus(&bad.to_string()).is_err(), "{bad}");
+            assert!(classify_type_focus(&f).is_err(), "{what}");
         }
+        let sel = classify_type_focus(&focus(el("select"), el("select"), true, true)).unwrap_err();
+        assert!(sel.contains("select tool"), "{sel}");
+        let file = classify_type_focus(&focus(el("input:tel"), el("input:file"), false, true));
+        assert!(file.unwrap_err().contains("file input"));
+    }
+
+    #[test]
+    fn the_page_answer_is_read_with_unknowns_taken_as_unchanged() {
+        let moved = json!({"active": {"tag": "textarea", "type": "", "editable": false, "opaque": false},
+            "hit": {"tag": "div", "type": "", "editable": false, "opaque": false},
+            "related": false, "changed": true});
+        assert_eq!(parse_type_focus(&moved.to_string()), Ok(()));
+        // the mark is gone (another document): not taken as a move
+        let unknown = json!({"active": {"tag": "textarea", "type": "", "editable": false},
+            "hit": {"tag": "div", "type": "", "editable": false},
+            "related": false, "changed": null});
+        assert!(parse_type_focus(&unknown.to_string()).is_err());
         assert!(parse_type_focus("not json").is_err());
+    }
+
+    #[test]
+    fn the_mark_and_the_check_name_the_same_key() {
+        let key = "Symbol.for('wubble.type.42')";
+        assert!(type_mark_script(42).contains(key));
+        assert!(type_focus_script(1.0, 2.0, 42).contains(key));
+        assert!(type_focus_script(1.0, 2.0, 42).contains("elementFromPoint(1,2)"));
     }
 
     #[test]
