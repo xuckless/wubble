@@ -664,9 +664,8 @@ pub enum Capture {
     Conflict {
         action: Action,
         chord: Chord,
+        /// Taking it from a page-edit command (`Action::is_edit`) warns the user.
         other: Action,
-        /// `other` is a page-edit command (`Action::is_edit`): taking it warns the user.
-        other_is_edit: bool,
     },
 }
 
@@ -705,7 +704,6 @@ pub fn capture(
                         action,
                         chord,
                         other,
-                        other_is_edit: other.is_edit(),
                     },
                     None,
                 ),
@@ -1278,7 +1276,6 @@ mod tests {
                 action: Action::Find,
                 chord: ch("Ctrl+R"),
                 other: Action::Reload,
-                other_is_edit: false,
             }
         );
         assert_eq!(out, None);
@@ -1288,7 +1285,7 @@ mod tests {
             (Capture::Idle, Some((Action::Find, Some(ch("Ctrl+R")))))
         );
         assert_eq!(capture(s, CaptureEvent::Cancel, &km), (Capture::Idle, None));
-        // Conflicting with a page-edit chord flags `other_is_edit`.
+        // Conflicting with a page-edit chord: the other is an edit command, which warns.
         let (s, _) = capture(Capture::Idle, CaptureEvent::Arm(Action::Find), &km);
         let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+C")), &km);
         assert_eq!(
@@ -1297,9 +1294,9 @@ mod tests {
                 action: Action::Find,
                 chord: ch("Ctrl+C"),
                 other: Action::Copy,
-                other_is_edit: true,
             }
         );
+        assert!(Action::Copy.is_edit() && !Action::Reload.is_edit());
         assert_eq!(out, None);
         // Pressing keys while idle does nothing.
         assert_eq!(

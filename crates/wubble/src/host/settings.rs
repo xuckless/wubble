@@ -529,14 +529,13 @@ fn render_page(window: &AppWindow, host: &Host) {
             action,
             chord,
             other,
-            other_is_edit,
         } => CaptureView {
             action: action.id().into(),
             armed: false,
             conflict: true,
             chord: chord.to_string().into(),
             other: other.label().into(),
-            other_is_edit,
+            other_is_edit: other.is_edit(),
         },
     });
 
