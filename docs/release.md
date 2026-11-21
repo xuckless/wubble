@@ -35,11 +35,14 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
 1. Set `[workspace.package] version` in `Cargo.toml` (e.g. `0.1.0-preview.1`), commit, tag
    `v<version>`, push the commit and the tag.
 2. Linux (this box): `CEF_PATH=<codec CEF> scripts/release/package-linux.sh`
-   (the own CEF build with codecs; the script refuses to pack without `CEF_PATH`). It writes
+   (the own CEF build with codecs; the script refuses to pack without `CEF_PATH`). It first builds
+   `wubble-ffmpeg` (`scripts/release/build-ffmpeg.sh`: the pinned FFmpeg source, downloaded once to
+   `dist/ffmpeg-src`, LGPL, stream copy only, about 2 MB) and packs it beside `wubble`. It writes
    `dist/wubble-<V>-linux-x86_64.tar.xz`, the `.debug.tar.xz` and their `.sha256`.
 3. macOS (the Mac): `CEF_PATH=<codec CEF for macOS> WUBBLE_SIGN_IDENTITY="Developer ID Application: ..."
    WUBBLE_NOTARY_PROFILE=<profile> scripts/release/package-macos.sh` (store the profile once with
-   `xcrun notarytool store-credentials`). It signs inside out with
+   `xcrun notarytool store-credentials`). It builds `wubble-ffmpeg` with Xcode's tools
+   (no Homebrew), puts it in `Contents/MacOS` and signs it, then signs inside out with
    `scripts/release/macos/entitlements.plist`, notarises and staples the app and the DMG, and
    writes `dist/wubble-<V>-macos-aarch64.tar.xz`, `.dmg` and their `.sha256`.
 4. Sign on this box (the key never leaves it: `~/.config/wubble-release/`), with the key's text and

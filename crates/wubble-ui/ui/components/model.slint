@@ -823,6 +823,8 @@ export struct VideoView {
     rate-index: int,
     speeds: bool,
     can-pip: bool,
+    // an embedded frame's area, not a video: only the save control is offered
+    frame: bool,
     save: VideoSave,
     // while saving: 0..1, below 0 while the size is unknown
     save-fraction: float,

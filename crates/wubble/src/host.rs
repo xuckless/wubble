@@ -306,6 +306,8 @@ pub struct Checks {
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
+    /// `--smoke media=probe`.
+    pub media_probe: Option<crate::media_smoke::Probe>,
     pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
     /// `--smoke video` and `--smoke boost`.
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,

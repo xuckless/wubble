@@ -381,7 +381,7 @@ fn main() -> ExitCode {
                 }
                 Smoke::Pages => Mode::Pages,
                 Smoke::Autofill { probe } => Mode::Autofill { probe },
-                Smoke::Media => Mode::Media,
+                Smoke::Media { probe } => Mode::Media { probe },
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
@@ -905,8 +905,8 @@ enum Mode {
     Gallery,
     /// `--smoke autofill`, or with `probe` its hand-run look at a real page.
     Autofill { probe: Option<String> },
-    /// `--smoke media`.
-    Media,
+    /// `--smoke media`, or with `probe` its hand-run look at a page.
+    Media { probe: Option<String> },
     /// `--smoke builtins`.
     Builtins,
     /// `--smoke video`.
@@ -1576,7 +1576,7 @@ fn run(
         .then(data_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
-    let media_port = matches!(mode, Mode::Media)
+    let media_port = matches!(mode, Mode::Media { probe: None })
         .then(media_smoke::serve)
         .transpose()?;
     // `--smoke video`'s and `--smoke boost`'s pages and fake endpoint, on a loopback port.
@@ -1662,6 +1662,7 @@ fn run(
         autofill_smoke: None,
         windows_smoke: None,
         media_smoke: None,
+        media_probe: None,
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
@@ -1807,10 +1808,17 @@ fn run(
                 },
             )
         }
-        Mode::Media => (
+        Mode::Media { probe: None } => (
             media_port.map(|port| format!("http://127.0.0.1:{port}/")),
             Checks {
                 media_smoke: Some(media_smoke::MediaSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Media { probe: Some(url) } => (
+            Some(url.clone()),
+            Checks {
+                media_probe: Some(media_smoke::Probe::from_env()),
                 ..none
             },
         ),

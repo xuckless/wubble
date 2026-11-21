@@ -21,6 +21,7 @@ use wubble_core::media::select::{self, Selection};
 use wubble_core::media::{
     Container, Plan, Refusal, Resolution, Track, Variant, dash, hls, name, youtube,
 };
+use wubble_core::space::ContainerId;
 use wubble_core::tab::TabId;
 use wubble_engine::fetch::{FetchEvent, FetchId, FetchSpec, Fetcher};
 use wubble_engine::filter::{ResponseInfo, ResponseObserver};
@@ -39,12 +40,16 @@ pub struct MediaObserver {
     enabled: AtomicBool,
     min_bytes: AtomicU64,
     seen: Mutex<Vec<(i32, Candidate)>>,
+    trace: bool,
 }
 
 impl MediaObserver {
     pub fn new() -> Arc<Self> {
         let defaults = MediaSettings::default();
-        let o = Self::default();
+        let o = Self {
+            trace: std::env::var_os("WUBBLE_PROBE_TRACE").is_some(),
+            ..Self::default()
+        };
         o.enabled.store(defaults.enabled, Ordering::Relaxed);
         o.min_bytes.store(defaults.min_bytes, Ordering::Relaxed);
         Arc::new(o)
@@ -73,6 +78,13 @@ impl ResponseObserver for MediaObserver {
             content_range: r.content_range,
             accepts_ranges: r.accepts_ranges,
         };
+        if self.trace {
+            // `--smoke media=probe` with `WUBBLE_PROBE_TRACE=1`: every response the hook sees.
+            println!(
+                "probe: response {} {} {:?} {} range={:?} accepts={}",
+                r.status, r.mime, r.content_length, r.url, r.content_range, r.accepts_ranges
+            );
+        }
         if let Some(c) = detect::classify(&response, self.min_bytes.load(Ordering::Relaxed)) {
             self.seen
                 .lock()
@@ -150,6 +162,8 @@ struct Run {
     job: Job,
     /// The tab it was started from: its session fetches, while it lives.
     tab: TabId,
+    /// That tab's container: the session a fetch keeps once the tab is gone.
+    container: ContainerId,
     /// The page the stream plays on (the fetches' referrer).
     page: String,
     title: String,
@@ -233,18 +247,48 @@ fn page_key(url: &str) -> &str {
 impl Host {
     pub(super) fn apply_media_settings(&mut self, settings: MediaSettings) {
         self.media.observer.set(&settings);
-        let youtube_off = !settings.youtube && self.media.settings.youtube;
+        let lookup_moved = settings.youtube != self.media.settings.youtube
+            || settings.enabled != self.media.settings.enabled;
         let save = self.video_save_now();
         self.media.settings = settings;
-        if youtube_off {
-            for list in self.media.tabs.values_mut() {
-                list.items.retain(|i| i.kind != Kind::YouTube);
+        if lookup_moved {
+            // YouTube pages already open: asked about again (or no longer), per the setting.
+            let tabs: Vec<TabId> = self.media.tabs.keys().copied().collect();
+            for tab in tabs {
+                if let Some(list) = self.media.tabs.get_mut(&tab) {
+                    list.items.retain(|i| i.kind != Kind::YouTube);
+                }
+                if let Some(url) = self.committed.get(&tab).cloned() {
+                    self.media_youtube_page(tab, &url);
+                }
             }
         }
         if let Some(window) = self.w.window.upgrade() {
             self.render_pill(&window);
         }
         self.video_save_redraw(save);
+    }
+
+    /// A YouTube video's page: listed to be looked up (`media.youtube` on), else listed as
+    /// off, with no request.
+    fn media_youtube_page(&mut self, tab: TabId, url: &str) {
+        if !self.media.settings.enabled || youtube::video_id(url).is_none() {
+            return;
+        }
+        let candidate = Candidate {
+            url: page_key(url).to_owned(),
+            kind: Kind::YouTube,
+            track: Track::Muxed,
+            container: Container::Mp4,
+            size: None,
+            ranges: false,
+        };
+        let event = if self.media.settings.youtube {
+            MediaEvent::Seen(candidate)
+        } else {
+            MediaEvent::Declined(candidate)
+        };
+        self.media_update(tab, event);
     }
 
     /// The main frame of `tab` committed `url` (before `committed` moves on): another page
@@ -257,18 +301,7 @@ impl Host {
         if !same {
             self.media_update(tab, MediaEvent::Navigated);
         }
-        let s = &self.media.settings;
-        if s.enabled && s.youtube && youtube::video_id(url).is_some() {
-            let candidate = Candidate {
-                url: page_key(url).to_owned(),
-                kind: Kind::YouTube,
-                track: Track::Muxed,
-                container: Container::Mp4,
-                size: None,
-                ranges: false,
-            };
-            self.media_update(tab, MediaEvent::Seen(candidate));
-        }
+        self.media_youtube_page(tab, url);
     }
 
     /// The tab closed: its list goes (its jobs keep running).
@@ -294,18 +327,32 @@ impl Host {
         self.video_save_redraw(save);
     }
 
-    /// The tab's view, else any live one: whose session a fetch uses.
-    fn fetch_browser(&mut self, tab: TabId) -> Option<i32> {
+    /// The tab's view, else a live page of the same container (the tab closed or went to
+    /// sleep): whose session a fetch uses. Never a page of another container: its cookies are
+    /// not the video's.
+    fn fetch_browser(&mut self, tab: TabId, container: ContainerId) -> Option<i32> {
         if let Some(view) = self.tab_view(tab) {
             return Some(view.browser_id());
         }
-        self.any_view().map(|v| v.browser_id())
+        let same = self.views.keys().copied().find(|t| {
+            self.model
+                .tabs
+                .get(t)
+                .is_some_and(|m| m.container == container)
+        })?;
+        self.tab_view(same).map(|v| v.browser_id())
     }
 
     fn media_fetch(&mut self, tab: TabId, spec: FetchSpec, purpose: Purpose) -> Result<(), String> {
+        let container = purpose
+            .job()
+            .and_then(|j| self.media.runs.get(&j))
+            .map(|r| r.container)
+            .or_else(|| self.model.tabs.get(&tab).map(|t| t.container))
+            .unwrap_or(ContainerId::DEFAULT);
         let browser_id = self
-            .fetch_browser(tab)
-            .ok_or("no page is open to fetch from")?;
+            .fetch_browser(tab, container)
+            .ok_or("the page it came from is closed: open that site's page again, then resume")?;
         let id = self
             .media
             .fetcher
@@ -384,13 +431,14 @@ impl Host {
             .unwrap_or_default();
         for event in events {
             match event {
-                WriteEvent::Joined { job, result } => self.media_joined(job, result),
+                WriteEvent::Joined { job, result, note } => self.media_joined(job, result, note),
                 WriteEvent::Failed { job, error } => {
                     self.job_event(job, JobEvent::SegmentFailed(error))
                 }
             }
         }
         self.media_smoke_step();
+        self.media_probe_step();
     }
 
     /// Shutdown, before CEF goes: every request of the downloader is stopped and released;
@@ -412,6 +460,208 @@ impl Host {
         if let Some(writer) = self.media.writer.take() {
             writer.finish();
         }
+    }
+
+    // ----- `--smoke media=probe`
+
+    /// One look of the probe: the settings on the first run, the list printed once it settles,
+    /// the saves (as the strip or the menu starts them), and each download's end.
+    fn media_probe_step(&mut self) {
+        use crate::media_smoke::{ProbePhase as P, ProbeSave};
+        use std::time::Instant;
+        let Some(mut probe) = self.checks.media_probe.take() else {
+            return;
+        };
+        let now = Instant::now();
+        let tab = self.model.visible_tab();
+        let say = |line: String| println!("probe: {line}");
+        // The smoke's host has no timers: the page kit's poll (the strip's eyes) runs here.
+        self.poll_media();
+        match probe.phase.clone() {
+            P::Start => {
+                let mut s = self.media.settings.clone();
+                s.youtube = probe.youtube;
+                s.ask_each_time = probe.ask;
+                if let Some(q) = &probe.quality {
+                    s.quality = select::Quality::from_word(q);
+                }
+                if let Some(d) = &probe.dir {
+                    s.save_dir.clone_from(d);
+                }
+                if let Some(b) = probe.min_bytes {
+                    s.min_bytes = b;
+                }
+                say(format!(
+                    "settings youtube={} quality={:?} ask={} dir={:?} min_bytes={}",
+                    s.youtube, s.quality, s.ask_each_time, s.save_dir, s.min_bytes
+                ));
+                self.apply_media_settings(s);
+                probe.phase = P::Watching {
+                    until: now + probe.settle,
+                    played: false,
+                };
+            }
+            P::Watching { until, played } => {
+                let mut played = played;
+                if probe.play
+                    && !played
+                    && now + probe.settle / 2 > until
+                    && let Some(view) = self.view()
+                {
+                    view.eval(
+                        "(()=>{const v=document.querySelector('video,audio');if(v){v.muted=true;v.play()}return 1})()",
+                    );
+                    played = true;
+                    say("played the page's first video".into());
+                }
+                let items: Vec<Detected> = tab
+                    .and_then(|t| self.media.tabs.get(&t))
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let resolving = items.iter().any(|i| i.found == Found::Resolving);
+                let ready = items.iter().any(|i| matches!(i.found, Found::Ready(_)));
+                // A stream's choices are in once nothing resolves; the strip follows.
+                let strip_seen = tab.is_some_and(|t| self.video_save_state(t).offered());
+                if now >= until || (!probe.full && ready && !resolving && strip_seen) {
+                    if resolving {
+                        say("a stream still resolving at the end of the watch".into());
+                    }
+                    for i in &items {
+                        match &i.found {
+                            Found::Ready(v) => {
+                                let choices = select::choices(v);
+                                let labels: Vec<String> =
+                                    choices.iter().map(|c| c.label.clone()).collect();
+                                say(format!("offered {:?} {} {labels:?}", i.kind, i.url));
+                            }
+                            other => say(format!("listed {:?} {} {other:?}", i.kind, i.url)),
+                        }
+                    }
+                    if items.is_empty() {
+                        say("the downloader listed nothing".into());
+                    }
+                    if let Some(t) = tab {
+                        say(format!("strip {:?}", self.video_save_state(t)));
+                        say(format!("video overlay {:?}", self.video_overlay_debug(t)));
+                        say(format!("pill glyph {}", self.media.has_media(t)));
+                    }
+                    let saves: Vec<(u32, usize)> = items
+                        .iter()
+                        .filter_map(|i| match &i.found {
+                            Found::Ready(v) => Some((i.id, select::choices(v).len())),
+                            _ => None,
+                        })
+                        .flat_map(|(id, n)| (0..n).map(move |c| (id, c)))
+                        .collect();
+                    match (probe.save, tab) {
+                        (ProbeSave::All, Some(t)) => {
+                            for (item, choice) in saves {
+                                self.save_media(t, item, choice);
+                            }
+                        }
+                        (ProbeSave::Default, Some(t)) => {
+                            let before = self.media.runs.len();
+                            let can_join = wubble_engine::save::find_ffmpeg().is_some();
+                            for i in &items {
+                                if let Found::Ready(v) = &i.found {
+                                    let c = select::choices(v);
+                                    let pick =
+                                        select::choose(&c, self.media.settings.quality, can_join);
+                                    say(format!("default picks {:?}", pick.map(|p| &c[p].label)));
+                                    break;
+                                }
+                            }
+                            self.media_entry(t, 100.0, 100.0);
+                            if self.media.runs.len() == before {
+                                say("the button saved nothing (it would open the menu)".into());
+                            }
+                        }
+                        _ => {}
+                    }
+                    probe.phase = if self.media.runs.is_empty() {
+                        P::Done
+                    } else {
+                        P::Saving {
+                            until: now + std::time::Duration::from_secs(120),
+                        }
+                    };
+                    self.checks.media_probe = Some(probe);
+                    return self.media_probe_step();
+                }
+                probe.phase = P::Watching { until, played };
+            }
+            P::Saving { until } => {
+                if let Some(cap) = probe.stop_bytes {
+                    let over: Vec<i64> = self
+                        .media
+                        .runs
+                        .iter()
+                        .filter(|(_, r)| r.job.is_live() && r.received() >= cap)
+                        .map(|(&id, _)| id)
+                        .collect();
+                    for id in over {
+                        if let Some(r) = self.media.runs.get(&id) {
+                            for (i, t) in r.tracks.iter().enumerate() {
+                                let copy = r.output.with_extension(format!("partial{i}"));
+                                let _ = std::fs::copy(&t.part, &copy);
+                            }
+                            say(format!("stopped {} at {} bytes", r.title, r.received()));
+                        }
+                        self.job_event(id, JobEvent::Cancel);
+                    }
+                }
+                if let (Some(how), false, Some(t)) = (probe.close.clone(), probe.closed, tab)
+                    && self.media.runs.values().any(|r| r.job.is_live())
+                {
+                    probe.closed = true;
+                    let container = (how == "other").then(|| {
+                        self.dispatch(wubble_core::model::Command::NewContainer {
+                            name: "Probe".into(),
+                        });
+                        self.model.containers.last().map(|c| c.id)
+                    });
+                    self.dispatch(wubble_core::model::Command::NewTab {
+                        url: "about:blank".into(),
+                        container: container.flatten(),
+                        opener: None,
+                    });
+                    self.dispatch(wubble_core::model::Command::CloseTab(t));
+                    say(format!("closed the page's tab ({how} container)"));
+                }
+                let live = self.media.runs.values().filter(|r| r.job.is_live()).count();
+                let joining = self
+                    .media
+                    .runs
+                    .values()
+                    .any(|r| matches!(r.job, Job::Joining { .. }));
+                if (live == 0 && !joining) || now >= until {
+                    for (id, r) in &self.media.runs {
+                        let len = std::fs::metadata(&r.output).map(|m| m.len()).ok();
+                        let entry = self.downloads.get(*id).map(|e| format!("{:?}", e.state));
+                        say(format!(
+                            "job {} -> {:?} file {} ({:?} bytes) list {:?} received {}",
+                            r.title,
+                            r.job,
+                            r.output.display(),
+                            len,
+                            entry,
+                            r.received(),
+                        ));
+                    }
+                    if let Some(t) = tab {
+                        say(format!("strip after {:?}", self.video_save_state(t)));
+                    }
+                    probe.phase = P::Done;
+                }
+            }
+            P::Done => {
+                say("end".into());
+                self.media_passed = true;
+                crate::quit();
+                return;
+            }
+        }
+        self.checks.media_probe = Some(probe);
     }
 
     // ----- `--smoke media`
@@ -607,12 +857,15 @@ impl Host {
                 body,
             } => {
                 let text = String::from_utf8_lossy(&body);
-                let protected =
-                    result.is_ok() && hls::parse_media(&text, &url) == Err(Refusal::Protected);
-                let result = if protected {
-                    Err(Refusal::Protected)
-                } else {
-                    Ok(resolution)
+                let probed = result.is_ok().then(|| hls::parse_media(&text, &url));
+                let result = match probed {
+                    Some(Err(Refusal::Protected)) => Err(Refusal::Protected),
+                    // The playlist shows whether the segments are MPEG-TS or fragmented MP4.
+                    Some(Ok(plan)) => Ok(Resolution {
+                        variants: hls::with_container(resolution.variants, plan.container),
+                        ..resolution
+                    }),
+                    _ => Ok(resolution),
                 };
                 self.media_update(tab, MediaEvent::Resolved { id: item, result });
             }
@@ -716,14 +969,18 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(list) = self.media.tabs.get(&tab) else {
-            return;
-        };
-        if !self.media.settings.ask_each_time {
+        // A video with MediaKeys is protected whatever the page's other streams are: the menu
+        // says so and offers nothing.
+        let protected = self.video_is_protected(tab);
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
+        if !self.media.settings.ask_each_time && !protected {
+            let can_join = wubble_engine::save::find_ffmpeg().is_some();
             let first = list.items.iter().find_map(|i| match &i.found {
                 Found::Ready(variants) => {
                     let choices = select::choices(variants);
-                    select::choose(&choices, self.media.settings.quality).map(|c| (i.id, c))
+                    select::choose(&choices, self.media.settings.quality, can_join)
+                        .map(|c| (i.id, c))
                 }
                 _ => None,
             });
@@ -744,22 +1001,41 @@ impl Host {
             .iter()
             .map(|i| item_title(i, &page_title))
             .collect();
-        let rows: Vec<MediaRow> = list
-            .items
-            .iter()
-            .zip(&titles)
-            .filter(|(i, _)| !matches!(i.found, Found::Refused(Refusal::Failed(_))))
-            .map(|(i, title)| MediaRow {
-                item: i.id,
-                title,
-                found: &i.found,
-            })
-            .collect();
-        let entries = crate::menu::media_entries(&rows);
+        let protected_found = Found::Refused(Refusal::Protected);
+        let rows: Vec<MediaRow> = if protected {
+            vec![MediaRow {
+                item: 0,
+                title: &page_title,
+                found: &protected_found,
+            }]
+        } else {
+            list.items
+                .iter()
+                .zip(&titles)
+                .filter(|(i, _)| i.is_shown())
+                .map(|(i, title)| MediaRow {
+                    item: i.id,
+                    title,
+                    found: &i.found,
+                })
+                .collect()
+        };
+        let entries =
+            crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+    }
+
+    /// The downloader is on and lists something for the tab's page (a stream, or why not).
+    pub(super) fn media_has_shown(&self, tab: TabId) -> bool {
+        self.media.has_media(tab)
+    }
+
+    /// Whether the downloader is on (`media.enabled`).
+    pub(super) fn media_enabled(&self) -> bool {
+        self.media.settings.enabled
     }
 
     /// The tab's streams, as the downloader lists them (none while it is off).
@@ -819,8 +1095,14 @@ impl Host {
             .map(|i| variants[i].clone())
             .collect();
         let pair = matches!(chosen.selection, Selection::Pair { .. });
+        let container = self
+            .model
+            .tabs
+            .get(&tab)
+            .map_or(ContainerId::DEFAULT, |t| t.container);
         self.start_media(
             tab,
+            container,
             page,
             title,
             note,
@@ -831,30 +1113,41 @@ impl Host {
         );
     }
 
-    /// Where saved media goes: the setting's folder, else the downloads folder; created.
-    fn media_dir(&self) -> Option<PathBuf> {
+    /// Where saved media goes: the setting's folder, else the downloads folder; created, and
+    /// checked for a file to be written there (a read-only or missing folder says so now, not
+    /// after the whole video is fetched).
+    fn media_dir(&self) -> Result<PathBuf, String> {
         let dir = match self.media.settings.save_dir.as_str() {
-            "" => self.downloads.dir()?.to_path_buf(),
+            "" => self
+                .downloads
+                .dir()
+                .ok_or("there is no downloads folder")?
+                .to_path_buf(),
             dir => PathBuf::from(dir),
         };
         std::fs::create_dir_all(&dir)
-            .map_err(|e| eprintln!("wubble: {}: {e}", dir.display()))
-            .ok()?;
-        Some(dir)
+            .map_err(|e| format!("{} cannot be created ({e})", dir.display()))?;
+        let probe = dir.join(format!(".wubble-write-{}", std::process::id()));
+        std::fs::write(&probe, b"")
+            .map_err(|e| format!("{} cannot be written to ({e})", dir.display()))?;
+        let _ = std::fs::remove_file(probe);
+        Ok(dir)
     }
 
     /// A free path in the media folder for `file_name`.
-    fn media_path(&self, file_name: &str) -> Option<PathBuf> {
+    fn media_path(&self, file_name: &str) -> Result<PathBuf, String> {
         let dir = self.media_dir()?;
         download::unique_name(&dir, file_name, |p| {
             p.exists() || self.media.reserved(p) || self.downloads.reserved(p)
         })
+        .ok_or_else(|| format!("no free name for {file_name} in {}", dir.display()))
     }
 
     #[allow(clippy::too_many_arguments)]
     fn start_media(
         &mut self,
         tab: TabId,
+        session: ContainerId,
         page: String,
         title: String,
         note: String,
@@ -863,11 +1156,15 @@ impl Host {
         size: Option<u64>,
         url: &str,
     ) {
-        let Some(output) = self.media_path(&name::media_file_name(&title, &note, container)) else {
-            if let Some(window) = self.w.window.upgrade() {
-                self.toast(&window, "Cannot save: no folder for videos");
+        let output = match self.media_path(&name::media_file_name(&title, &note, container)) {
+            Ok(output) => output,
+            Err(why) => {
+                eprintln!("wubble: media: {why}");
+                if let Some(window) = self.w.window.upgrade() {
+                    self.toast(&window, &format!("Cannot save the video: {why}"));
+                }
+                return;
             }
-            return;
         };
         let tracks = variants
             .into_iter()
@@ -882,6 +1179,7 @@ impl Host {
         let run = Run {
             job: Job::Resolving { paused: false },
             tab,
+            container: session,
             page,
             title,
             note,
@@ -1103,10 +1401,25 @@ impl Host {
                         .iter()
                         .filter_map(|(what, c)| {
                             self.media_path(&name::media_file_name(&title, what, *c))
+                                .ok()
                         })
                         .collect()
                 } else {
                     vec![]
+                };
+                // MPEG-TS (HLS), one track or a pair, becomes an MP4 when an ffmpeg is there (a
+                // `.ts` plays almost nowhere); one that cannot be converted keeps its `.ts` name.
+                let to_mp4 =
+                    container == Container::Ts && wubble_engine::save::find_ffmpeg().is_some();
+                let remux = to_mp4 && parts.len() == 1;
+                let (output, container, fallback) = if to_mp4 {
+                    let mp4 = self
+                        .media_path(&name::media_file_name(&title, &note, Container::Mp4))
+                        .unwrap_or_else(|_| output.with_extension("mp4"));
+                    let fallback = if remux { vec![output] } else { fallback };
+                    (mp4, Container::Mp4, fallback)
+                } else {
+                    (output, container, fallback)
                 };
                 if let Some(run) = self.media.runs.get_mut(&job) {
                     run.output = output.clone();
@@ -1117,6 +1430,7 @@ impl Host {
                     output,
                     container,
                     fallback,
+                    remux,
                 }));
                 None
             }
@@ -1129,24 +1443,30 @@ impl Host {
         }
     }
 
-    fn media_joined(&mut self, job: i64, result: Result<Vec<PathBuf>, String>) {
+    fn media_joined(
+        &mut self,
+        job: i64,
+        result: Result<Vec<PathBuf>, String>,
+        note: Option<String>,
+    ) {
         let Some(run) = self.media.runs.get_mut(&job) else {
             return;
         };
         let kept = run.job == Job::Joining { cancelled: false };
         if let Ok(paths) = &result {
             run.saved.clone_from(paths);
+            if let Some(first) = paths.first() {
+                // Where the file really is: a conversion that failed kept the stream as it came.
+                run.output.clone_from(first);
+            }
             if kept && let Some(first) = paths.first() {
                 self.set_download_path(job, first);
             }
             if kept
-                && paths.len() == 2
+                && let Some(note) = note
                 && let Some(window) = self.w.window.upgrade()
             {
-                self.toast(
-                    &window,
-                    "ffmpeg not found: video and audio saved as two files",
-                );
+                self.toast(&window, &note);
             }
         }
         self.job_event(job, JobEvent::Joined(result.map(|_| ())));
@@ -1191,13 +1511,14 @@ impl Host {
         let Some(run) = self.media.runs.get(&id) else {
             return;
         };
-        let container = run
+        let file = run
             .tracks
             .first()
             .map_or(Container::Other, |t| t.variant.container);
         let variants: Vec<Variant> = run.tracks.iter().map(|t| t.variant.clone()).collect();
-        let (tab, page, title, note, size) = (
+        let (tab, container, page, title, note, size) = (
             run.tab,
+            run.container,
             run.page.clone(),
             run.title.clone(),
             run.note.clone(),
@@ -1206,7 +1527,9 @@ impl Host {
         self.media_release(id);
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);
-        self.start_media(tab, page, title, note, variants, container, size, &url);
+        self.start_media(
+            tab, container, page, title, note, variants, file, size, &url,
+        );
     }
 }
 
@@ -1215,7 +1538,7 @@ fn item_title(item: &Detected, page_title: &str) -> String {
     match &item.title {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ if !page_title.is_empty() => page_title.to_owned(),
-        _ => name::page_title(item.url.rsplit('/').next().unwrap_or("video")).to_owned(),
+        _ => name::url_title(&item.url),
     }
 }
 
@@ -1267,6 +1590,6 @@ mod tests {
         };
         assert_eq!(item_title(&item(Some("Own")), "Page"), "Own");
         assert_eq!(item_title(&item(None), "Page"), "Page");
-        assert_eq!(item_title(&item(Some(" ")), ""), "clip.mp4");
+        assert_eq!(item_title(&item(Some(" ")), ""), "clip");
     }
 }

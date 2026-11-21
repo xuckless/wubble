@@ -162,6 +162,7 @@ enum SmokeArg {
     AutofillProbe,
     Windows,
     Media,
+    MediaProbe,
     Builtins,
     Video,
     Boost,
@@ -208,6 +209,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("autofill", "probe")) => Ok(SmokeArg::AutofillProbe),
         None if value == "windows" => Ok(SmokeArg::Windows),
         None if value == "media" => Ok(SmokeArg::Media),
+        Some(("media", "probe")) => Ok(SmokeArg::MediaProbe),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
         None if value == "video" => Ok(SmokeArg::Video),
         None if value == "boost" => Ok(SmokeArg::Boost),
@@ -236,7 +238,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
-             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
+             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `media=probe`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none`, `data` or `session-phase=1|2`"
                 .into(),
@@ -292,8 +294,9 @@ pub enum Smoke {
     /// With `probe`, a real page instead, read-only: what the chip would offer (by hand).
     Autofill { probe: Option<String> },
     /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
-    /// check sizes and hashes.
-    Media,
+    /// check sizes and hashes. With `probe`, a page instead, by hand: what the downloader lists,
+    /// and (`WUBBLE_PROBE_SAVE`) what each save does.
+    Media { probe: Option<String> },
     /// Dark mode for pages, reader mode, link hints, screenshots and the PDF viewer on
     /// bundled pages.
     Builtins,
@@ -499,7 +502,18 @@ impl TryFrom<Cli> for Command {
                     "--smoke autofill=probe needs --url",
                 ));
             }
-            (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
+            (Some(SmokeArg::MediaProbe), Some(url), None) => Smoke::Media {
+                probe: Some(wubble_core::url::from_cli_arg(&url)),
+            },
+            (Some(SmokeArg::MediaProbe), None, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke media=probe needs --url",
+                ));
+            }
+            (Some(_), Some(_), None) => {
+                return conflict("--url only applies to --smoke frames=N and the probes");
+            }
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
             (Some(SmokeArg::Quit), None, None) => Smoke::Quit,
@@ -521,7 +535,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Data), None, None) => Smoke::Data,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
-            (Some(SmokeArg::Media), None, None) => Smoke::Media,
+            (Some(SmokeArg::Media), None, None) => Smoke::Media { probe: None },
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
             (Some(SmokeArg::Video), None, None) => Smoke::Video,
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,

@@ -111,7 +111,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         Mode::Data(_) => ("data", ok(o.data_passed)),
         Mode::Gallery => ("gallery", ok(o.gallery_passed)),
         Mode::Autofill { .. } => ("autofill", ok(o.autofill_passed)),
-        Mode::Media => ("media", ok(o.media_passed)),
+        Mode::Media { .. } => ("media", ok(o.media_passed)),
         Mode::Builtins => (
             "builtins",
             o.builtins_passed.as_ref().map(|w| format!("ok ({w})")),
