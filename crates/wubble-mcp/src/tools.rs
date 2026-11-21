@@ -467,19 +467,17 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "select",
-        description: "Select an option in a native <select> dropdown by visible label or value \
-            (exact match first, then case-insensitive). Lists available options if none matches. \
-            For custom JS/ARIA dropdowns, use click (or type for a searchable combobox).",
+        description: "Choose an option of a native <select> dropdown (or of the <select> an \
+            <option> ref belongs to) by its visible label or value: exact first, then with \
+            Unicode spaces as plain ones, then case-insensitive; of equal options the first, \
+            and the answer says so. It sets a single choice, on a <select multiple> too (the \
+            others are cleared). Lists the enabled options when none matches. For a custom \
+            JS/ARIA dropdown, click it and then its choice (or type into a searchable combobox).",
         args: &[
             SESSION,
             TAB,
             REF,
-            arg(
-                "option",
-                Ty::Str,
-                true,
-                "Option label or value to select (exact match first, then case-insensitive).",
-            ),
+            arg("option", Ty::Str, true, "The option's label or value."),
         ],
         annotations: ACT,
         one_of: &[],

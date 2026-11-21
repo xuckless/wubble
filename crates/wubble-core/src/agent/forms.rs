@@ -3,43 +3,54 @@
 
 use serde_json::Value;
 
-/// Maximum number of available options listed in a `select` mismatch error.
+/// Characters of one option's label or value a `select` reply carries (page text, so a
+/// prompt-injection surface: kept short).
+pub const LABEL_CHARS: usize = 80;
+/// Options a `select` mismatch lists at most (the reply's size cap cuts it sooner).
 pub const SELECT_OPTIONS_CAP: usize = 100;
-/// `select`: picks an option on a native `<select>` by exact label, exact value,
-/// case-insensitive label, or case-insensitive value, and fires `input` and `change`.
-pub const SELECT_OPTION: &str = "function(wanted){\
-if(!this||this.tagName!=='SELECT'){\
-const tag=this&&this.tagName?this.tagName.toLowerCase():'unknown';\
-return{ok:false,error:'element <'+tag+'> is not a native <select> dropdown: use click (or type for a searchable combobox) for custom widgets'};\
-}\
-if(this.disabled)return{ok:false,error:'this <select> dropdown is disabled'};\
-const opts=Array.from(this.options).map(o=>({\
-opt:o,\
-label:(o.text||o.label||'').trim(),\
-altLabel:(o.label||'').trim(),\
-value:o.value,\
-disabled:!!o.disabled||!!(o.parentElement&&o.parentElement.tagName==='OPTGROUP'&&o.parentElement.disabled)\
-}));\
-const w=String(wanted),wt=w.trim(),wl=wt.toLowerCase();\
-const findIn=list=>\
-list.find(o=>o.label===wt||o.altLabel===wt)\
-||list.find(o=>o.value===w)\
-||list.find(o=>o.label.toLowerCase()===wl||o.altLabel.toLowerCase()===wl)\
-||list.find(o=>o.value.toLowerCase()===wl);\
+/// Bytes of a `select` reply at most.
+pub const REPLY_BYTES: usize = 4096;
+/// Characters of what the page's script threw that a reply carries.
+pub const THROWN_CHARS: usize = 200;
+
+/// `select`, called on the ref's node (a `<select>`, or an `<option>`: its own `<select>`, that
+/// option alone): picks the enabled option whose label (trimmed), then value, then label with
+/// Unicode spaces made plain, then that without case, then value without case equals `wanted`;
+/// the first of equal ones. Sets it as the list's only choice and fires `input` and `change`.
+/// Answers with codes, not prose: the host words them ([`format_select_result`]), page text
+/// cut to [`LABEL_CHARS`] here and again there. Sent as [`select_option_script`].
+const SELECT_OPTION: &str = "function(wanted){\
+const cut=s=>{s=String(s);return s.length>LABEL_CHARS?s.slice(0,LABEL_CHARS):s};\
+let sel=this,only=null;\
+if(sel&&sel.tagName==='OPTION'){only=sel;sel=sel.closest('select')}\
+if(!sel||sel.tagName!=='SELECT')\
+return{ok:false,why:'not-select',tag:this&&this.tagName?cut(this.tagName.toLowerCase()):'unknown'};\
+if(sel.matches(':disabled'))return{ok:false,why:'disabled'};\
+const norm=s=>String(s).replace(/[\\s\\u200b]+/g,' ').trim(),low=s=>norm(s).toLowerCase();\
+let opts=Array.from(sel.options).map(o=>({opt:o,label:(o.text||o.label||'').trim(),\
+alt:(o.label||'').trim(),value:o.value,disabled:o.matches(':disabled')}));\
+if(only)opts=opts.filter(o=>o.opt===only);\
+const W=String(wanted),wt=W.trim(),wn=norm(W),wl=wn.toLowerCase();\
+const tiers=[o=>o.label===wt||o.alt===wt,o=>o.value===W,\
+o=>norm(o.label)===wn||norm(o.alt)===wn,o=>low(o.label)===wl||low(o.alt)===wl,\
+o=>low(o.value)===wl];\
+const find=list=>{for(const t of tiers){const m=list.filter(t);if(m.length)return m}return[]};\
 const enabled=opts.filter(o=>!o.disabled);\
-const hit=findIn(enabled);\
-if(!hit){\
-const disabledHit=findIn(opts);\
-const available=enabled.map(o=>({label:o.label,value:o.value}));\
-if(disabledHit)return{ok:false,error:'option '+JSON.stringify(disabledHit.label)+' is disabled',options:available};\
-return{ok:false,error:'no option matches '+JSON.stringify(wanted),options:available};\
+const listed={options:enabled.slice(0,OPTIONS_CAP).map(o=>({label:cut(o.label),value:cut(o.value)})),\
+total:enabled.length};\
+const m=find(enabled);\
+if(!m.length){\
+const d=find(opts);\
+if(d.length)return{ok:false,why:'option-disabled',label:cut(d[0].label),...listed};\
+if(only)return{ok:false,why:'not-this-option',label:cut(only.text||only.label||'')};\
+return{ok:false,why:'no-match',...listed};\
 }\
-this.focus();\
-this.value=hit.value;\
-hit.opt.selected=true;\
-this.dispatchEvent(new Event('input',{bubbles:true}));\
-this.dispatchEvent(new Event('change',{bubbles:true}));\
-return{ok:true,label:hit.label,value:hit.value};\
+const hit=m[0];\
+sel.focus();\
+for(const o of sel.options)o.selected=o===hit.opt;\
+sel.dispatchEvent(new Event('input',{bubbles:true}));\
+sel.dispatchEvent(new Event('change',{bubbles:true}));\
+return{ok:true,label:cut(hit.label),value:cut(hit.value),matches:m.length,multiple:!!sel.multiple};\
 }";
 
 /// Refuses `type` before clicking when the element's accessibility role (Chromium's name) says
@@ -233,40 +244,132 @@ pub fn parse_type_focus(json: &str) -> Result<(), String> {
     })
 }
 
-/// Formats the JSON reply of [`SELECT_OPTION`] into a tool success message or error message.
-pub fn format_select_result(v: &Value) -> Result<String, String> {
+/// [`SELECT_OPTION`] with its caps written in.
+pub fn select_option_script() -> String {
+    SELECT_OPTION
+        .replace("LABEL_CHARS", &LABEL_CHARS.to_string())
+        .replace("OPTIONS_CAP", &SELECT_OPTIONS_CAP.to_string())
+}
+
+/// `text` cut to `max` characters, an ellipsis saying so.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// `text` cut to [`REPLY_BYTES`] (at a character's edge).
+fn capped(mut text: String) -> String {
+    if text.len() > REPLY_BYTES {
+        let mut end = REPLY_BYTES - '…'.len_utf8();
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push('…');
+    }
+    text
+}
+
+/// A page string of a [`SELECT_OPTION`] answer, quoted and cut.
+fn page_text(v: &Value) -> String {
+    format!("{:?}", cut(v.as_str().unwrap_or_default(), LABEL_CHARS))
+}
+
+/// The enabled options a [`SELECT_OPTION`] answer lists, as many as fit the reply.
+fn options_listed(v: &Value) -> String {
+    let opts = v["options"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let total = v["total"].as_u64().map_or(opts.len(), |t| t as usize);
+    if total == 0 {
+        return "no enabled options available".into();
+    }
+    let mut out = String::from("available options: ");
+    let mut shown = 0;
+    for (i, o) in opts.iter().take(SELECT_OPTIONS_CAP).enumerate() {
+        let (label, value) = (page_text(&o["label"]), page_text(&o["value"]));
+        let one = if value == "\"\"" || value == label {
+            label
+        } else {
+            format!("{label} (value={value})")
+        };
+        // room left for the note of how many more
+        if out.len() + one.len() + 40 > REPLY_BYTES - 200 {
+            break;
+        }
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&one);
+        shown += 1;
+    }
+    if total > shown {
+        out.push_str(&format!(", ... (+{} more)", total - shown));
+    }
+    out
+}
+
+/// Words the answer of [`SELECT_OPTION`] for `wanted` (the agent's own `option`): the success
+/// message, or the error. Page text in it is cut to [`LABEL_CHARS`] a string, the whole to
+/// [`REPLY_BYTES`].
+pub fn format_select_result(v: &Value, wanted: &str) -> Result<String, String> {
+    let wanted = format!("{:?}", cut(wanted, LABEL_CHARS));
     if v["ok"] == true {
-        let label = v["label"].as_str().unwrap_or_default();
-        let value = v["value"].as_str().unwrap_or_default();
-        return Ok(format!("selected {label:?} (value={value:?})"));
+        let mut out = format!(
+            "selected {} (value={})",
+            page_text(&v["label"]),
+            page_text(&v["value"])
+        );
+        if let Some(n) = v["matches"].as_u64().filter(|n| *n > 1) {
+            out.push_str(&format!(
+                "; {n} options match {wanted} equally: the first was chosen (name another by \
+                 its value)"
+            ));
+        }
+        if v["multiple"] == true {
+            out.push_str("; this list takes several choices: select made this its only one");
+        }
+        return Ok(capped(out));
     }
-    let error = v["error"]
-        .as_str()
-        .unwrap_or("could not select option")
-        .to_owned();
-    let Some(opts) = v.get("options").and_then(Value::as_array) else {
-        return Err(error);
+    let error = match v["why"].as_str() {
+        Some("not-select") => format!(
+            "element <{}> is not a native <select> dropdown: for a custom dropdown, click it, \
+             then click the choice (or type into a searchable combobox)",
+            cut(v["tag"].as_str().unwrap_or("unknown"), 40)
+        ),
+        Some("disabled") => "this <select> dropdown is disabled".into(),
+        Some("option-disabled") => format!(
+            "option {} is disabled; {}",
+            page_text(&v["label"]),
+            options_listed(v)
+        ),
+        Some("not-this-option") => format!(
+            "the ref is the option {}, which {wanted} does not name: name it, or pass the \
+             <select>'s ref",
+            page_text(&v["label"])
+        ),
+        Some("no-match") => format!("no option matches {wanted}; {}", options_listed(v)),
+        _ => "could not select option: the page's answer was not understood".into(),
     };
-    if opts.is_empty() {
-        return Err(format!("{error}; no enabled options available"));
-    }
-    let mut listed: Vec<String> = opts
-        .iter()
-        .take(SELECT_OPTIONS_CAP)
-        .map(|o| {
-            let label = o["label"].as_str().unwrap_or_default();
-            let value = o["value"].as_str().unwrap_or_default();
-            if value.is_empty() || value == label {
-                format!("{label:?}")
-            } else {
-                format!("{label:?} (value={value:?})")
-            }
-        })
-        .collect();
-    if opts.len() > SELECT_OPTIONS_CAP {
-        listed.push(format!("... (+{} more)", opts.len() - SELECT_OPTIONS_CAP));
-    }
-    Err(format!("{error}; available options: {}", listed.join(", ")))
+    Err(capped(error))
+}
+
+/// The error for a `select` whose script threw (`exceptionDetails`): what it threw, cut to
+/// [`THROWN_CHARS`] (the page chooses that text).
+pub fn select_threw(details: &Value) -> String {
+    let what = details["exception"]["description"]
+        .as_str()
+        .or_else(|| details["text"].as_str())
+        .unwrap_or("an exception");
+    format!(
+        "could not select option: the page's script threw: {}",
+        cut(what, THROWN_CHARS)
+    )
 }
 
 #[cfg(test)]
@@ -450,41 +553,95 @@ mod tests {
 
     #[test]
     fn select_result_formatting() {
-        let ok = json!({"ok": true, "label": "Toronto, ON", "value": "yyz"});
+        let ok = json!({"ok": true, "label": "Toronto, ON", "value": "yyz", "matches": 1, "multiple": false});
         assert_eq!(
-            format_select_result(&ok).unwrap(),
+            format_select_result(&ok, "Toronto, ON").unwrap(),
             "selected \"Toronto, ON\" (value=\"yyz\")"
         );
+        // equal labels: the first, and the reply says so
+        let dup = json!({"ok": true, "label": "Paris", "value": "fr", "matches": 2});
+        let msg = format_select_result(&dup, "Paris").unwrap();
+        assert!(
+            msg.contains("2 options match \"Paris\" equally: the first"),
+            "{msg}"
+        );
+        // <select multiple>: one choice, said
+        let many =
+            json!({"ok": true, "label": "Red", "value": "r", "matches": 1, "multiple": true});
+        let msg = format_select_result(&many, "Red").unwrap();
+        assert!(msg.contains("its only one"), "{msg}");
 
         let miss = json!({
             "ok": false,
-            "error": "no option matches \"NYC\"",
+            "why": "no-match",
             "options": [
                 {"label": "Toronto, ON", "value": "yyz"},
                 {"label": "Montreal", "value": "Montreal"}
-            ]
+            ],
+            "total": 2
         });
-        let err = format_select_result(&miss).unwrap_err();
+        let err = format_select_result(&miss, "NYC").unwrap_err();
         assert!(err.contains("no option matches \"NYC\""), "{err}");
         assert!(err.contains("\"Toronto, ON\" (value=\"yyz\")"), "{err}");
         assert!(err.contains("\"Montreal\""), "{err}");
         assert!(!err.contains("value=\"Montreal\""), "{err}");
 
-        let empty = json!({"ok": false, "error": "no option matches \"x\"", "options": []});
+        let empty = json!({"ok": false, "why": "no-match", "options": [], "total": 0});
+        let err = format_select_result(&empty, "x").unwrap_err();
+        assert!(err.contains("no enabled options"), "{err}");
+
+        let non_select = json!({"ok": false, "why": "not-select", "tag": "button"});
+        let err = format_select_result(&non_select, "x").unwrap_err();
         assert!(
-            format_select_result(&empty)
-                .unwrap_err()
-                .contains("no enabled options")
+            err.contains("<button> is not a native <select>") && err.contains("click it"),
+            "{err}"
         );
 
-        let non_select = json!({
-            "ok": false,
-            "error": "element <div> is not a native <select> dropdown: use click (or type for a searchable combobox) for custom widgets"
-        });
+        let off = json!({"ok": false, "why": "option-disabled", "label": "Sold out",
+            "options": [{"label": "S", "value": "s"}], "total": 1});
+        let err = format_select_result(&off, "sold out").unwrap_err();
         assert!(
-            format_select_result(&non_select)
-                .unwrap_err()
-                .contains("not a native <select>")
+            err.contains("option \"Sold out\" is disabled; available options: \"S\""),
+            "{err}"
         );
+        let other = json!({"ok": false, "why": "not-this-option", "label": "Canada"});
+        let err = format_select_result(&other, "Mexico").unwrap_err();
+        assert!(err.contains("the ref is the option \"Canada\""), "{err}");
+        assert!(format_select_result(&json!("nonsense"), "x").is_err());
+    }
+
+    #[test]
+    fn page_text_in_select_replies_is_capped() {
+        let long = "A".repeat(10_000);
+        let ok = json!({"ok": true, "label": long, "value": long});
+        let msg = format_select_result(&ok, "x").unwrap();
+        assert!(msg.chars().count() < 2 * LABEL_CHARS + 40, "{}", msg.len());
+        // a thousand long options: the error stays under the cap, saying how many are left out
+        let options: Vec<Value> = (0..1000)
+            .map(|i| json!({"label": format!("{i}{long}"), "value": format!("v{i}{long}")}))
+            .collect();
+        let miss = json!({"ok": false, "why": "no-match", "options": options, "total": 1000});
+        let err = format_select_result(&miss, &long).unwrap_err();
+        assert!(err.len() <= REPLY_BYTES, "{}", err.len());
+        assert!(err.contains("more)"), "{err}");
+        // a script that throws a megabyte
+        let thrown = json!({"exception": {"description": "E".repeat(1 << 20)}});
+        let err = select_threw(&thrown);
+        assert!(err.chars().count() < THROWN_CHARS + 60, "{}", err.len());
+        // multi-byte text is cut at a character's edge
+        let wide = json!({"ok": false, "why": "no-match",
+            "options": (0..200).map(|i| json!({"label": format!("{i}{}", "é".repeat(79)), "value": ""})).collect::<Vec<_>>(),
+            "total": 200});
+        assert!(format_select_result(&wide, "x").unwrap_err().len() <= REPLY_BYTES);
+    }
+
+    #[test]
+    fn the_select_script_takes_its_caps_from_here() {
+        let script = select_option_script();
+        assert!(script.contains(&format!("s.length>{LABEL_CHARS}?s.slice(0,{LABEL_CHARS})")));
+        assert!(script.contains(&format!("slice(0,{SELECT_OPTIONS_CAP})")));
+        assert!(!script.contains("LABEL_CHARS") && !script.contains("OPTIONS_CAP"));
+        // the Unicode-space class reaches the page as a regex escape
+        assert!(script.contains(r"/[\s\u200b]+/g"));
     }
 }

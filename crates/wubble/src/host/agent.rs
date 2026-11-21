@@ -3033,7 +3033,7 @@ impl Host {
                 };
                 let params = json!({
                     "objectId": object_id,
-                    "functionDeclaration": forms::SELECT_OPTION,
+                    "functionDeclaration": forms::select_option_script(),
                     "arguments": [{ "value": option }],
                     "returnByValue": true,
                 });
@@ -3066,13 +3066,9 @@ impl Host {
                     }
                 };
                 if let Some(thrown) = v.get("exceptionDetails") {
-                    let what = thrown["exception"]["description"]
-                        .as_str()
-                        .or_else(|| thrown["text"].as_str())
-                        .unwrap_or("an exception");
-                    return self.agent_fail(p.reply, &format!("could not select option: {what}"));
+                    return self.agent_fail(p.reply, &forms::select_threw(thrown));
                 }
-                match forms::format_select_result(&v["result"]["value"]) {
+                match forms::format_select_result(&v["result"]["value"], &option) {
                     Ok(msg) => self.agent_settle(p.reply, tab, msg),
                     Err(why) => self.agent_fail(p.reply, &why),
                 }
