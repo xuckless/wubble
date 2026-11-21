@@ -194,6 +194,9 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Blocker request path | CEF `OnBeforeResourceLoad` through the fork's request filter into CEF-free `filter::ContentFilter`; per-view counts. | 2026-11-18 |
 | Cosmetic channel and list updates | Cosmetic hiding runs on the helper's context script (`cosmetic.js`) over a named channel; the engine answers each frame's `hello`. | 2026-11-18 |
 | Remote debugging | `devtools.remote_port` is off by default; its Settings row carries the warning. | 2026-11-18 |
+| Chromium's own requests | A fresh profile asks Google for nothing: the component updater, clock, AI Mode eligibility and translate ranker are off by switch or feature, and `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` cannot be resolved in Chromium (`host-resolver-rules`; the on-device model manifest registers itself whatever the switches say); the spelling dictionary goes with them. Measured with a net log and a packet capture on a private network namespace. | 2026-11-21 |
+| Routing never into an agent | A routing rule skips an agent session's Space and its container, and a link from another app opens in the rule's container as well as its Space. | 2026-11-21 |
+| Debugging port and agents | Agent sessions are refused while this run's engine has the debugging port open, whatever the setting now says (a start switch); the setting set for the next start refuses them too. | 2026-11-21 |
 | Extension updates | None: no request to the Web Store or an update server for extensions; command-line extensions are never auto-updated, and `disable-default-apps` turns off Chromium's external sources (Linux installed `/usr/share/chromium/extensions` entries from the Web Store). | 2026-11-20 |
 | SponsorBlock | Built in on the hash-prefix API; a request of wubble's own, so `sponsor.enabled` starts off and the first video asks once. | 2026-11-18 |
 
