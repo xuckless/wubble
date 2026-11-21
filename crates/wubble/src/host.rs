@@ -425,6 +425,8 @@ pub struct Host {
     drag_win: (f32, f32),
     /// The page drag's image, decoded once.
     drag_ghost: Option<drag::Ghost>,
+    /// The bookmarks page's folder row under a drag, as the page reports it.
+    bookmark_drop: Option<i64>,
     /// A drag from another app over the window (`drag.rs`).
     external_drag: Option<drag::ExternalDrag>,
     /// Touchpad pinch and history swipe (`gesture.rs`).
@@ -678,6 +680,7 @@ impl Host {
             drag: Default::default(),
             drag_win: (0.0, 0.0),
             drag_ghost: None,
+            bookmark_drop: None,
             external_drag: None,
             gestures: Default::default(),
             print: Default::default(),

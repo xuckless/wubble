@@ -282,6 +282,98 @@ pub fn stale_drag_dirs<S: AsRef<str>>(names: &[S], keep: usize) -> Vec<String> {
         .collect()
 }
 
+/// macOS: the pasteboard types a drag out writes and a drop in reads, as Chromium's
+/// `ui/base/dragdrop/os_exchange_data_provider_mac.mm` and `web_contents_view_mac.mm` use them
+/// (BSD-3-Clause; names and order only, no code copied): the link as `public.url` with its title
+/// under `public.url-name` (`PasteboardItemsFromUrls`), HTML as `public.html`, text as
+/// `public.utf8-plain-text` (`NSPasteboardTypeString`), files as `public.file-url`, and a dragged
+/// picture as a promised file of its type (`NSFilePromiseProvider`, as Chromium's
+/// `WebDragSource` promises one).
+pub mod pasteboard {
+    use super::{Kind, Outgoing};
+
+    pub const FILE_URL: &str = "public.file-url";
+    pub const URL: &str = "public.url";
+    pub const URL_NAME: &str = "public.url-name";
+    pub const HTML: &str = "public.html";
+    pub const TEXT: &str = "public.utf8-plain-text";
+
+    /// One thing a drag out puts on the dragging pasteboard.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Item {
+        /// Each file, as its own item (`NSURL`).
+        Files,
+        /// A string under this type on the drag's main item.
+        String(&'static str, Source),
+        /// The picture, a file promised with this type, written when the target asks.
+        Promise(&'static str),
+    }
+
+    /// Where a string item's value comes from.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Source {
+        Link,
+        /// The link's title, else the URL.
+        Title,
+        Html,
+        /// The text, else the link's URL.
+        Text,
+    }
+
+    /// What a drag out writes, best first. Files are file URLs and no link (Chromium writes
+    /// either); a picture with bytes of a known type is promised as a file.
+    pub fn writes(out: &Outgoing) -> Vec<Item> {
+        let mut items = vec![];
+        if out.uris && !out.link {
+            items.push(Item::Files);
+        }
+        if out.link {
+            items.push(Item::String(URL, Source::Link));
+            items.push(Item::String(URL_NAME, Source::Title));
+        }
+        if let Some(uti) = out.picture.and_then(image_uti) {
+            items.push(Item::Promise(uti));
+        }
+        if out.html {
+            items.push(Item::String(HTML, Source::Html));
+        }
+        if out.text {
+            items.push(Item::String(TEXT, Source::Text));
+        }
+        items
+    }
+
+    /// The UTI of a picture type.
+    pub fn image_uti(mime: &str) -> Option<&'static str> {
+        const UTIS: &[(&str, &str)] = &[
+            ("image/png", "public.png"),
+            ("image/jpeg", "public.jpeg"),
+            ("image/gif", "com.compuserve.gif"),
+            ("image/webp", "org.webmproject.webp"),
+            ("image/avif", "public.avif"),
+            ("image/bmp", "com.microsoft.bmp"),
+            ("image/tiff", "public.tiff"),
+            ("image/x-icon", "com.microsoft.ico"),
+            ("image/svg+xml", "public.svg-image"),
+        ];
+        UTIS.iter()
+            .find(|(m, _)| m.eq_ignore_ascii_case(mime))
+            .map(|(_, u)| *u)
+    }
+
+    /// The kinds to read for a drop offering `types`, each with the type to read, best first
+    /// (files, then a link, then HTML, then text); empty: nothing a page takes.
+    pub fn plan<S: AsRef<str>>(types: &[S]) -> Vec<(Kind, &'static str)> {
+        let has = |t: &str| types.iter().any(|m| m.as_ref() == t);
+        let uri = [FILE_URL, URL].into_iter().find(|t| has(t));
+        uri.map(|t| (Kind::UriList, t))
+            .into_iter()
+            .chain(has(HTML).then_some((Kind::Html, HTML)))
+            .chain(has(TEXT).then_some((Kind::Text, TEXT)))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +547,57 @@ mod tests {
         assert!(stale_drag_dirs(&names, 8).is_empty());
         assert_eq!(stale_drag_dirs(&names, 0), ["10", "3", "2", "1"]);
         assert!(stale_drag_dirs::<&str>(&[], 2).is_empty());
+    }
+
+    #[test]
+    fn a_mac_drag_out_writes_the_link_with_its_title_the_picture_html_and_text() {
+        use pasteboard::{Item, Source, writes};
+        let all = Outgoing {
+            uris: true,
+            link: true,
+            picture: Some("image/jpeg"),
+            html: true,
+            text: true,
+        };
+        assert_eq!(
+            writes(&all),
+            [
+                Item::String(pasteboard::URL, Source::Link),
+                Item::String(pasteboard::URL_NAME, Source::Title),
+                Item::Promise("public.jpeg"),
+                Item::String(pasteboard::HTML, Source::Html),
+                Item::String(pasteboard::TEXT, Source::Text),
+            ]
+        );
+        let files = Outgoing {
+            uris: true,
+            ..Outgoing::default()
+        };
+        assert_eq!(writes(&files), [Item::Files]);
+        // an unknown picture type is no promise
+        let odd = Outgoing {
+            picture: Some("image/heic"),
+            ..Outgoing::default()
+        };
+        assert!(writes(&odd).is_empty());
+        assert_eq!(pasteboard::image_uti("IMAGE/PNG"), Some("public.png"));
+    }
+
+    #[test]
+    fn a_mac_drop_reads_files_then_a_link_then_html_then_text() {
+        use pasteboard::{FILE_URL, HTML, TEXT, URL, plan};
+        assert_eq!(
+            plan(&[TEXT, URL, HTML, FILE_URL]),
+            [
+                (Kind::UriList, FILE_URL),
+                (Kind::Html, HTML),
+                (Kind::Text, TEXT)
+            ]
+        );
+        assert_eq!(
+            plan(&[TEXT, URL]),
+            [(Kind::UriList, URL), (Kind::Text, TEXT)]
+        );
+        assert!(plan(&["com.apple.flat-rtfd"]).is_empty());
     }
 }

@@ -992,3 +992,13 @@ export struct DropGeometry {
     new-tab-w: length,
     new-tab-h: length,
 }
+
+// A drag over the bookmarks page (components/pages.slint): the pointer while `on`, and the
+// folder whose row is lit while `folder-on`.
+export struct BookmarksDrop {
+    on: bool,
+    x: length,
+    y: length,
+    folder-on: bool,
+    folder: int,
+}

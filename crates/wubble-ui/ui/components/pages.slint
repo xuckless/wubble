@@ -155,6 +155,15 @@ export component BookmarksPage inherits PageFrame {
     callback move-requested(int);
     callback deleted(int);
     callback folder-requested();
+    // A drag over the page (window coordinates, while `drop-on`): the folder row under it says
+    // so (`drop-hovered`), and the host lights `drop-folder`'s row when a drop there would file
+    // the link into it.
+    in property <bool> drop-on;
+    in property <length> drop-x;
+    in property <length> drop-y;
+    in property <bool> drop-folder-on;
+    in property <int> drop-folder;
+    callback drop-hovered(int, bool);
 
     title: "Bookmarks";
     placeholder: "Search bookmarks";
@@ -183,6 +192,13 @@ export component BookmarksPage inherits PageFrame {
             index: i;
             accessible-expandable: line.is-folder;
             accessible-expanded: line.expanded;
+            property <bool> drop-here: line.is-folder && root.drop-on
+                && root.drop-x >= self.absolute-position.x && root.drop-x < self.absolute-position.x + self.width
+                && root.drop-y >= self.absolute-position.y && root.drop-y < self.absolute-position.y + self.height;
+            changed drop-here => {
+                root.drop-hovered(line.id, self.drop-here);
+            }
+            drop-target: root.drop-folder-on && line.is-folder && root.drop-folder == line.id;
             opened => {
                 if line.is-folder {
                     root.toggled(line.id);

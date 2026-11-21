@@ -1425,6 +1425,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     });
     window.on_bookmarks_query_changed(move |q| with_host_in(win, |host| host.bookmarks_query(&q)));
     window.on_bookmark_toggled(move |id| with_host_in(win, |host| host.bookmark_toggled(id)));
+    window.on_bookmark_drop_hovered(move |id, on| {
+        with_host_in(win, |host| host.bookmark_drop_hovered(id, on))
+    });
     window.on_bookmark_rename_requested(move |id| {
         with_host_in(win, |host| host.bookmark_rename_requested(id))
     });

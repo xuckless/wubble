@@ -244,6 +244,10 @@ impl wubble_core::pagedrag::Payload for DragData {
     fn text(&self) -> Option<&str> {
         self.text.as_deref().filter(|t| !t.is_empty())
     }
+
+    fn title(&self) -> Option<&str> {
+        self.link_title.as_deref().filter(|t| !t.is_empty())
+    }
 }
 
 impl From<welding::DragPayload> for DragData {
