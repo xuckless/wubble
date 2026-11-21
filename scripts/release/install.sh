@@ -10,8 +10,10 @@
 # writable), unmodified, as signed and notarised. Running it again installs the newest release
 # (an installed version is not unpacked twice). wubble updates itself from then on.
 #
-# Every download is checked against its .sha256; its minisign signature too when `minisign` is
-# installed. Layout and formats: docs/release.md.
+# Downloads are https only (WUBBLE_RELEASES may name http:// or file:// for testing). The archive
+# is checked against its .sha256; with `minisign` installed, the manifest's and the archive's
+# signatures are checked too, else a warning says so (--require-signature refuses instead).
+# Layout and formats: docs/release.md.
 set -eu
 
 # The key the releases are signed with: the same as the app's (crates/wubble-core/src/update/key.rs;
@@ -23,12 +25,12 @@ RELEASES=${WUBBLE_RELEASES:-https://github.com/xuckless/wubble/releases/download
 
 usage() {
     cat <<EOF
-usage: install.sh [--channel preview|stable] [--version V] [--allow-unsigned] [--uninstall]
+usage: install.sh [--channel preview|stable] [--version V] [--require-signature] [--uninstall]
 
-  --channel C       follow the preview (default) or stable releases
-  --version V       install this version instead of the channel's newest
-  --allow-unsigned  allow installing without minisign signature verification
-  --uninstall       remove wubble (your profile is kept)
+  --channel C          follow the preview (default) or stable releases
+  --version V          install this version instead of the channel's newest
+  --require-signature  refuse to install unless minisign checks the signatures
+  --uninstall          remove wubble (your profile is kept)
 
 WUBBLE_RELEASES overrides the download base ($RELEASES), for testing
 against a local server or a file:// folder of the same shape.
@@ -45,7 +47,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 channel=preview
 version=
 action=install
-allow_unsigned=0
+require_signature=0
 while [ $# -gt 0 ]; do
     case $1 in
     --channel)
@@ -56,8 +58,8 @@ while [ $# -gt 0 ]; do
         version=${2:?--version needs a version}
         shift 2
         ;;
-    --allow-unsigned)
-        allow_unsigned=1
+    --require-signature)
+        require_signature=1
         shift
         ;;
     --uninstall)
@@ -115,19 +117,14 @@ fetch() { # url file
     fi
 }
 
+# Checks a download's minisign signature when the signatures can be checked (see `sig_mode`);
+# otherwise the sha256 check stands alone, and the warning was said once before any download.
 verify_sig() { # url file label
-    if [ "$PUBLIC_KEY" = "$PLACEHOLDER" ]; then
-        say "warning: this script has no signing key yet; the signature of $3 was not checked"
-    elif have minisign; then
-        fetch "$1.minisig" "$2.minisig" || die "no signature for $3"
-        minisign -V -q -P "$PUBLIC_KEY" -m "$2" -x "$2.minisig" ||
-            die "the signature of $3 does not match: not installed"
-        say "signature ok ($3)"
-    elif [ "$allow_unsigned" = 1 ]; then
-        say "warning: minisign is not installed; skipping signature check for $3 (--allow-unsigned)"
-    else
-        die "minisign is required to verify $3; install minisign (dnf, apt or brew: minisign) or re-run with --allow-unsigned"
-    fi
+    [ "$sig_mode" = check ] || return 0
+    fetch "$1.minisig" "$2.minisig" || die "no signature for $3"
+    minisign -V -q -P "$PUBLIC_KEY" -m "$2" -x "$2.minisig" ||
+        die "the signature of $3 does not match: not installed"
+    say "signature ok ($3)"
 }
 
 sha256_of() {
@@ -206,8 +203,16 @@ if [ "$action" = uninstall ]; then
     exit 0
 fi
 
-if [ "$PUBLIC_KEY" != "$PLACEHOLDER" ] && ! have minisign && [ "$allow_unsigned" != 1 ]; then
-    die "minisign is required to verify the release signature; install minisign (dnf, apt or brew: minisign) or re-run with --allow-unsigned"
+if [ "$PUBLIC_KEY" = "$PLACEHOLDER" ]; then
+    [ "$require_signature" = 0 ] || die "this script has no signing key yet: cannot check signatures (--require-signature)"
+    sig_mode=none
+    say "warning: this script has no signing key yet; only the sha256 is checked"
+elif have minisign; then
+    sig_mode=check
+else
+    [ "$require_signature" = 0 ] || die "minisign is not installed: cannot check signatures (--require-signature); install it (dnf, apt or brew: minisign)"
+    sig_mode=none
+    say "warning: minisign is not installed, so only the sha256 is checked; install minisign (dnf, apt or brew) for full verification"
 fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/wubble-install.XXXXXX")

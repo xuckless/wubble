@@ -246,6 +246,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Build runners | Builds stay local for now: no rented runners ([research/build-runners.md](research/build-runners.md)). | 2026-11-19 |
 | Auto-update | wubble checks GitHub Releases for a new version when it opens; on by default with a Settings switch, the one explicit exception to "nothing phones home". | 2026-11-19 |
 | Update signing | Releases are built, packaged and signed on the owner's Linux box (key kept outside the repo, never on GitHub); the public key is in the binary. `release-sign.yml` stays as an unused alternative. Supersedes signing in CI. | 2026-11-20 |
+| Installer verification (owner to confirm) | `install.sh` fetches over https only and checks the archive's sha256 always; with `minisign` installed it also checks the manifest's and the archive's signatures, without it it warns once and installs on the sha256 alone (the one-liner works on a stock Mac or Linux); `--require-signature` refuses instead. | 2026-11-21 |
 | Release codecs | The downloadable builds ship the own CEF build with H.264 and AAC (owner accepts the patent exposure). | 2026-11-19 |
 | Release form | Linux: tarball + `install.sh` (curl script); macOS: DMG signed and notarised on the owner's Mac + the same script; first releases are previews. | 2026-11-19 |
 | Release hosting | Archives and update manifests are GitHub release assets (not Packages; under 2 GiB per file); an R2 bucket is the fallback, which would need the manifest address changed in a release. | 2026-11-20 |

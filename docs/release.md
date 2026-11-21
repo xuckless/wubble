@@ -28,7 +28,7 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    into `PUBLIC_KEY` in `crates/wubble-core/src/update/key.rs` and into the `PUBLIC_KEY='...'`
    line of `scripts/release/install.sh`; `cargo test -p wubble-release` checks they agree.
    Commit. Until then the app's updater is inert (Settings says "Updates are not set up in this
-   build") and `install.sh` checks only the sha256.
+   build") and `install.sh` checks only the sha256 (with `--require-signature` it refuses).
 
 ## Each release
 
@@ -49,7 +49,9 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    and sign `dist/latest.json` the same way.
 5. Test before publishing: a folder shaped like the releases (`v<V>/...`, `updates/preview.json`)
    and `WUBBLE_RELEASES=file://<folder> sh scripts/release/install.sh` in a throwaway `HOME`: a
-   fresh install, an install over the previous version, a tampered archive refused; then the
+   fresh install, an install over the previous version, a tampered archive refused (by its sha256;
+   by its signature too with `minisign` on `PATH`), once with and once without `minisign` on `PATH`
+   (without it: one warning, the sha256 alone; `--require-signature` refuses); then the
    installed binary's `--smoke boot` and `--smoke page`. Smokes that find elements by id
    (`mcp`, `settings`, `tabs`, `video`) need a `dist` build with `SLINT_EMIT_DEBUG_INFO=1`.
 6. Publish (the owner's go, every release): push the commit and the tag;
