@@ -1583,7 +1583,13 @@ mod tests {
 
     #[test]
     fn a_name_says_which_part_of_a_login_it_types() {
-        for name in ["GITHUB_USER", "github_username", "AMAZON_LOGIN", "WORK_EMAIL", "USER"] {
+        for name in [
+            "GITHUB_USER",
+            "github_username",
+            "AMAZON_LOGIN",
+            "WORK_EMAIL",
+            "USER",
+        ] {
             assert_eq!(part_of(name), Part::Username, "{name}");
         }
         for name in ["GITHUB_PASSWORD", "NPM_TOKEN", "PIN", "USER_PW"] {
@@ -1620,8 +1626,15 @@ mod tests {
             panic!("allowed");
         };
         assert_eq!(g.secret_names().collect::<Vec<_>>(), ["GH_PASSWORD"]);
-        let b = g.secret_for("GH_PASSWORD", "https://github.com/login", "https://github.com/login");
-        assert_eq!(b.map(|b| (b.login.0.as_str(), b.part)), Some(("l1", Part::Password)));
+        let b = g.secret_for(
+            "GH_PASSWORD",
+            "https://github.com/login",
+            "https://github.com/login",
+        );
+        assert_eq!(
+            b.map(|b| (b.login.0.as_str(), b.part)),
+            Some(("l1", Part::Password))
+        );
         // sharing is off by default
         assert_eq!(g.shared(), None);
         assert!(!g.signs_in("https://github.com/"));
@@ -1631,7 +1644,10 @@ mod tests {
             panic!("allowed");
         };
         assert_eq!(g.signin_sites().collect::<Vec<_>>(), ["github.com"]);
-        assert_eq!(g.shared().map(|s| (s.from, s.space.as_str())), Some((ContainerId(0), "Personal")));
+        assert_eq!(
+            g.shared().map(|s| (s.from, s.space.as_str())),
+            Some((ContainerId(0), "Personal"))
+        );
         assert!(g.signs_in("https://gist.github.com/x") && !g.signs_in("https://evil.test/"));
         // never with any site: the sheet does not offer it and Allow ignores it
         let mut any = Lists::asked(&[], &[]);
@@ -1675,7 +1691,10 @@ mod tests {
         let (s, e) = transition(s, Event::CookiesCopied);
         assert_eq!(e, vec![Effect::MintToken]);
         let (s, _) = transition(s, Event::TokenMinted(Token::new("t")));
-        assert!(s.authorize("t").is_some_and(|g| g.signs_in("https://b.test/")));
+        assert!(
+            s.authorize("t")
+                .is_some_and(|g| g.signs_in("https://b.test/"))
+        );
         // stopping while copying tears the session down (its container, with the copies)
         let (s, _) = transition(State::AwaitingApproval(request()), {
             let Event::Approve(g) = answer(&l, true, true, Some(&src())) else {
@@ -1719,7 +1738,10 @@ mod tests {
         // not shared: answered at once, nothing copied
         let (s, e) = transition(asking.clone(), answer_more(&grant, &l, true, Some(&src())));
         assert!(matches!(s, State::Running { .. }));
-        assert!(matches!(e.last(), Some(Effect::AnswerMore(MoreAnswer::Granted(_)))));
+        assert!(matches!(
+            e.last(),
+            Some(Effect::AnswerMore(MoreAnswer::Granted(_)))
+        ));
         assert!(!s.grant().unwrap().signs_in("https://b.test/"));
         // shared: only b.test is copied, the old grant serves meanwhile, then the answer
         l.edit(ListEdit::Share(true)).unwrap();
@@ -1737,7 +1759,10 @@ mod tests {
         );
         let old = s.authorize("t").unwrap();
         assert!(!old.allows_site("https://b.test/"));
-        assert_eq!(transition(s.clone(), ask(&["c.test"], &[])).1, vec![Effect::AnswerMore(MoreAnswer::Busy)]);
+        assert_eq!(
+            transition(s.clone(), ask(&["c.test"], &[])).1,
+            vec![Effect::AnswerMore(MoreAnswer::Busy)]
+        );
         let (s, e) = transition(s, Event::CookiesCopied);
         assert_eq!(
             e,

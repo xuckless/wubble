@@ -340,7 +340,9 @@ mod tests {
         if let Ok(path) = std::env::var(DB) {
             run(async {
                 let mut s = Store::open(std::path::Path::new(&path)).await.unwrap();
-                s.insert_login(login("id-a", "https://a.test", 7)).await.unwrap();
+                s.insert_login(login("id-a", "https://a.test", 7))
+                    .await
+                    .unwrap();
                 std::process::exit(0);
             });
         }
@@ -358,7 +360,10 @@ mod tests {
         assert!(status.success());
         run(async {
             let s = Store::open(&path).await.unwrap();
-            assert_eq!(s.login("id-a").await.unwrap(), Some(login("id-a", "https://a.test", 7)));
+            assert_eq!(
+                s.login("id-a").await.unwrap(),
+                Some(login("id-a", "https://a.test", 7))
+            );
         });
     }
 }

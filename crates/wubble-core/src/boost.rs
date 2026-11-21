@@ -203,7 +203,8 @@ impl Pattern {
             return false;
         }
         let under = |sub: &str, parent: &str| {
-            sub == parent || (sub.ends_with(parent) && sub[..sub.len() - parent.len()].ends_with('.'))
+            sub == parent
+                || (sub.ends_with(parent) && sub[..sub.len() - parent.len()].ends_with('.'))
         };
         let host_ok = match &self.host {
             Host::Any => false,
@@ -437,7 +438,10 @@ mod tests {
         let exact = p("https://accounts.google.com/*");
         assert!(exact.sends_cookie("accounts.google.com", "/", true));
         assert!(exact.sends_cookie(".google.com", "/", true));
-        assert!(!exact.sends_cookie("google.com", "/", true), "host-only of the parent");
+        assert!(
+            !exact.sends_cookie("google.com", "/", true),
+            "host-only of the parent"
+        );
         assert!(!exact.sends_cookie("mail.google.com", "/", true));
         assert!(!exact.sends_cookie(".mail.google.com", "/", true));
         // a secure cookie never goes over http

@@ -404,24 +404,42 @@ mod tests {
         ));
         let rows = entries(&mut v);
         assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].id.as_str(), rows[0].username.as_deref()), (id.as_str(), Some("me2")));
+        assert_eq!(
+            (rows[0].id.as_str(), rows[0].username.as_deref()),
+            (id.as_str(), Some("me2"))
+        );
         assert_eq!(reveal(&mut v, &id), "new-pw");
         // an empty password keeps the saved one
-        assert!(matches!(edit(&mut v, &id, "https://a.test", "me3", ""), VaultAnswer::Done));
+        assert!(matches!(
+            edit(&mut v, &id, "https://a.test", "me3", ""),
+            VaultAnswer::Done
+        ));
         assert_eq!(reveal(&mut v, &id), "new-pw");
         // another site: one row, on the new origin, the password carried
-        assert!(matches!(edit(&mut v, &id, "b.test:8443", "me3", ""), VaultAnswer::Done));
+        assert!(matches!(
+            edit(&mut v, &id, "b.test:8443", "me3", ""),
+            VaultAnswer::Done
+        ));
         let rows = entries(&mut v);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].origin, "https://b.test:8443");
         assert_eq!(reveal(&mut v, &rows[0].id), "new-pw");
         // a bad site or a gone row: refused, nothing changes
-        assert!(matches!(edit(&mut v, &rows[0].id, "not a site", "x", "y"), VaultAnswer::Failed(_)));
-        assert!(matches!(edit(&mut v, "gone", "a.test", "x", "y"), VaultAnswer::Failed(_)));
+        assert!(matches!(
+            edit(&mut v, &rows[0].id, "not a site", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
+        assert!(matches!(
+            edit(&mut v, "gone", "a.test", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
         assert_eq!(entries(&mut v).len(), 1);
         // locked: refused
         v.run(VaultCommand::Lock, 9);
-        assert!(matches!(edit(&mut v, &rows[0].id, "a.test", "x", "y"), VaultAnswer::Failed(_)));
+        assert!(matches!(
+            edit(&mut v, &rows[0].id, "a.test", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
     }
 
     #[test]
