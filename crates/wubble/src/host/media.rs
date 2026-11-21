@@ -1215,7 +1215,7 @@ fn item_title(item: &Detected, page_title: &str) -> String {
     match &item.title {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ if !page_title.is_empty() => page_title.to_owned(),
-        _ => name::page_title(item.url.rsplit('/').next().unwrap_or("video")).to_owned(),
+        _ => name::url_title(&item.url),
     }
 }
 
@@ -1267,6 +1267,6 @@ mod tests {
         };
         assert_eq!(item_title(&item(Some("Own")), "Page"), "Own");
         assert_eq!(item_title(&item(None), "Page"), "Page");
-        assert_eq!(item_title(&item(Some(" ")), ""), "clip.mp4");
+        assert_eq!(item_title(&item(Some(" ")), ""), "clip");
     }
 }

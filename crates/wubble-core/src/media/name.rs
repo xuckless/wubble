@@ -23,14 +23,41 @@ pub fn page_title(title: &str) -> &str {
         .map_or(title, |(at, _)| title[..at].trim_end())
 }
 
+/// Extensions a title may carry from a file name (a media page's title is its file's name).
+const MEDIA_EXTS: [&str; 14] = [
+    "mp4", "m4v", "mov", "webm", "mkv", "ogv", "ogg", "opus", "mp3", "m4a", "aac", "ts", "flac", "wav",
+];
+
+/// The title without a trailing media extension (`clip.mp4` is `clip`): the saved file adds its
+/// own, and `clip.mp4.mp4` names nothing.
+fn without_media_ext(title: &str) -> &str {
+    match title.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty() && MEDIA_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)) =>
+        {
+            stem
+        }
+        _ => title,
+    }
+}
+
+/// A title from a stream's URL, for a page without one: the last path segment, decoded, with
+/// no query and no media extension (`.../Clip%20One.webm?x=1` is `Clip One`).
+pub fn url_title(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let last = path.rsplit('/').next().unwrap_or_default();
+    let decoded = ::url::form_urlencoded::parse(last.replace('+', "%2B").as_bytes())
+        .next()
+        .map(|(k, v)| if v.is_empty() { k.into_owned() } else { format!("{k}={v}") })
+        .unwrap_or_default();
+    without_media_ext(&decoded).to_owned()
+}
+
 /// `Title (720p).mp4` (or `Title (audio).m4a`, a track of a pair that could not be joined);
 /// the note is left out when empty.
 pub fn media_file_name(title: &str, note: &str, container: Container) -> String {
-    let title = if title.trim().is_empty() {
-        "video"
-    } else {
-        title.trim()
-    };
+    let title = without_media_ext(title.trim());
+    let title = if title.is_empty() { "video" } else { title };
     let ext = container.ext();
     let name = if note.is_empty() {
         format!("{title}.{ext}")
@@ -62,12 +89,30 @@ mod tests {
     }
 
     #[test]
+    fn a_title_from_a_url_is_its_file_name_decoded() {
+        assert_eq!(url_title("https://a.test/v/Clip%20One.webm?x=1#t"), "Clip One");
+        assert_eq!(url_title("https://a.test/v/a+b.mp4"), "a+b");
+        assert_eq!(url_title("https://a.test/dl?id=5"), "dl");
+        assert_eq!(url_title("https://a.test/"), "");
+    }
+
+    #[test]
     fn names_are_sanitised_and_unique() {
         assert_eq!(
             media_file_name("A/B: c?", "720p", Container::Mp4),
             "B_ c_ (720p).mp4"
         );
         assert_eq!(media_file_name("  ", "", Container::Ts), "video.ts");
+        // A media page's title is its file's name: the extension is not doubled.
+        assert_eq!(
+            media_file_name("Crane_fly.webm", "", Container::Webm),
+            "Crane_fly.webm"
+        );
+        assert_eq!(
+            media_file_name("Clip.MP4", "720p", Container::Mp4),
+            "Clip (720p).mp4"
+        );
+        assert_eq!(media_file_name("v1.2", "", Container::Mp4), "v1.2.mp4");
         assert_eq!(media_file_name("CON", "", Container::Mp3), "_CON.mp3");
         let long = "\u{1F3B5}".repeat(100);
         let name = media_file_name(&long, "1080p", Container::Webm);
