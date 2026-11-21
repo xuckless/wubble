@@ -1127,6 +1127,23 @@ impl Model {
         self.glances.iter().any(|g| g.tab == tab)
     }
 
+    /// Whether closing `tab` by `command` (applied next) puts it on the user's recently-closed
+    /// list: not a peek's, not an empty tab, and not a tab of an agent Space that `command`
+    /// deletes (a session's teardown or the owner's dustbin: its pages are none of the user's).
+    /// A tab an agent session drives is excluded by the caller, which knows the sessions.
+    pub fn closes_into_recent(&self, tab: TabId, command: &Command) -> bool {
+        let deleted_agent_space = match command {
+            Command::DeleteSpace(space) => {
+                self.location(tab).is_some_and(|(at, _)| at == *space)
+                    && self.spaces.iter().any(|s| s.id == *space && s.agent)
+            }
+            _ => false,
+        };
+        !self.is_glance(tab)
+            && !deleted_agent_space
+            && self.tabs.get(&tab).is_some_and(|t| !t.url.is_empty())
+    }
+
     /// The model as a session keeps it: without the peeks and their tabs, and without the
     /// `transient` Spaces (an agent session's), their tabs and their own containers (a restart
     /// never brings one back).

@@ -452,9 +452,6 @@ pub(super) struct Agents {
     pub(super) last_at: HashMap<TabId, String>,
     /// The grant each view's navigation rule was last set from (`agent_rules`).
     rules: HashMap<wubble_engine::app::ViewId, Option<agent::Grant>>,
-    /// The agent Space its dustbin is deleting, while it is (its tabs are not the user's closed
-    /// tabs, as in a session's teardown).
-    pub(super) clearing: Option<SpaceId>,
     /// The answer to the sheet's last Sites draft: its serial, and the note (empty: taken).
     answer: (i32, &'static str),
     /// DevTools calls whose answers mean nothing (an object group released).
@@ -1708,9 +1705,7 @@ impl Host {
                 }
             }
             agent::Clear::Delete => {
-                self.agents.clearing = Some(space);
                 self.dispatch(Command::DeleteSpace(space));
-                self.agents.clearing = None;
                 // the session's own container; never the Default one, nor one another Space uses
                 let shared = self.model.spaces.iter().any(|s| s.container == container);
                 if container != ContainerId::DEFAULT && !shared {

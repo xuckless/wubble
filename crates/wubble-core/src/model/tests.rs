@@ -3698,3 +3698,32 @@ fn discard_now_refuses_internal_pages() {
     );
     assert!(m.check().is_ok(), "{:?}", m.check());
 }
+
+/// Deleting an agent Space (a session's teardown, the dustbin) records none of its tabs as the
+/// user's closed tabs; deleting a user's Space, or closing a tab of an agent Space by itself,
+/// does.
+#[test]
+fn an_agent_space_s_tabs_are_not_the_user_s_closed_tabs() {
+    let (m, ids) = with_tabs(1);
+    let (m, s) = add_space(m, ContainerId::DEFAULT);
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s,
+            url: "https://agent.test/".into(),
+        },
+    );
+    let tab = *m.order(s).first().unwrap();
+    assert!(
+        m.closes_into_recent(tab, &Command::DeleteSpace(s)),
+        "a user's Space"
+    );
+    let (m, _) = run(m, Command::MarkAgentSpace(s));
+    assert!(!m.closes_into_recent(tab, &Command::DeleteSpace(s)));
+    assert!(
+        m.closes_into_recent(tab, &Command::CloseTab(tab)),
+        "a kept tab closed by hand"
+    );
+    // another Space's deletion leaves the rule for this one's tabs alone
+    assert!(m.closes_into_recent(ids[0], &Command::DeleteSpace(s)));
+}

@@ -945,7 +945,7 @@ impl Host {
                 .tabs
                 .keys()
                 .copied()
-                .map(|tab| (tab, self.closed_tab_entry(tab)))
+                .map(|tab| (tab, self.closed_tab_entry(tab, &command)))
                 .collect::<Vec<_>>()
         });
         if matches!(
@@ -2248,21 +2248,17 @@ impl Host {
     // ----- persistence
 
     /// Snapshot of a tab for the recently-closed list, taken before the model drops it.
-    fn closed_tab_entry(&self, tab: TabId) -> Option<ClosedTab> {
-        if self.archiving.contains_key(&tab) || self.model.is_glance(tab) {
-            return None; // filed in the Archive or transient peek
-        }
-        // an agent session's tab is none of the user's, nor is one of an agent Space the owner
-        // clears with its dustbin, kept or not (as the session's own teardown)
-        let cleared = self.model.location(tab).map(|(sp, _)| sp) == self.agents.clearing
-            && self.agents.clearing.is_some();
-        if self.agent_drives(tab) || cleared {
+    /// `command` is about to run. None for a tab filed in the Archive, one an agent session
+    /// drives, and what `Model::closes_into_recent` leaves out (a peek's, an agent Space's being
+    /// deleted, an empty one).
+    fn closed_tab_entry(&self, tab: TabId, command: &Command) -> Option<ClosedTab> {
+        if self.archiving.contains_key(&tab)
+            || self.agent_drives(tab)
+            || !self.model.closes_into_recent(tab, command)
+        {
             return None;
         }
         let t = self.model.tabs.get(&tab)?;
-        if t.url.is_empty() {
-            return None;
-        }
         Some(ClosedTab {
             url: t.url.clone(),
             title: t.title.clone(),
