@@ -49,7 +49,7 @@ Tested on Fedora (GNOME, Wayland). Ubuntu 23.10 and later restrict the sandbox C
 - Peek at a link without leaving the page (<kbd>Shift</kbd>+click)
 - Reader, find in page, zoom, PDF, print, screenshots, link hints, picture-in-picture
 - Video controls over any video: speed, loop, frame step, save
-- H.264 and AAC playback on Linux (protected, DRM video does not play)
+- H.264 and AAC playback (protected, DRM video does not play)
 
 **Privacy**
 - A content blocker built on Brave's [adblock-rust](https://github.com/brave/adblock-rust), with cookie-banner and tracking-parameter lists

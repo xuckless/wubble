@@ -168,7 +168,7 @@ Open, to build or check:
 - [~] HDR output: researched and spiked; needs the own build (F16 capture) and a Slint renderer patch
 
 ## M7: Ship
-- [ ] macOS: a codec CEF for the Mac (preview builds there use the prebuilt engine: no H.264 or AAC); the Mac archive was never in the manifest before preview.2, so Macs on preview.1 need one manual install
+- [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
       shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
