@@ -28,7 +28,7 @@ export component HistoryPage inherits Rectangle {
     in property <string> placeholder: "Search history";
     in property <string> empty-text: "No history yet";
     in property <string> empty-search-text: "No visits match";
-    // Offers "Clear browsing data".
+    // Offers "Clear history".
     in property <bool> clearable: true;
     // Day headers and visits, newest first.
     in property <[HistoryLineItem]> lines;
@@ -63,7 +63,7 @@ export component HistoryPage inherits Rectangle {
         ListToolbar {
             if root.clearable: Button {
                 kind: ButtonKind.ghost;
-                text: "Clear browsing data";
+                text: "Clear history";
                 clicked => {
                     root.range = 0;
                     root.clearing = true;
@@ -83,7 +83,7 @@ export component HistoryPage inherits Rectangle {
                 last: i == root.lines.length - 1 || root.lines[i + 1].header;
                 visit := ListRow {
                     title: line.title;
-                    note: line.url;
+                    note: line.time != "" ? line.time + " · " + line.url : line.url;
                     mono-note: true;
                     favicon: line.favicon;
                     shown: root.open;
@@ -119,7 +119,7 @@ export component HistoryPage inherits Rectangle {
 
     sheet := Sheet {
         open: root.clearing;
-        title: "Clear browsing data";
+        title: "Clear history";
         message: "Forgets the visits in the range. Bookmarks and downloads stay.";
         accept-text: "Clear";
         cancel-text: "Cancel";
@@ -578,7 +578,7 @@ export component TasksPage inherits PageFrame {
             // A slot per control whether it shows or not, so the columns line up row to row.
             TableSlot {
                 width: Shell.task-sleep;
-                if item.tab >= 0: Toggle {
+                if item.can-sleep: Toggle {
                     size: ToggleSize.sm;
                     on: item.never-sleep;
                     label: "Never sleep";

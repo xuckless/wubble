@@ -14,8 +14,8 @@ use crate::mcp;
 #[derive(Clone, Debug)]
 pub struct McpPlace {
     pub socket: PathBuf,
-    /// `None`: no private place for it (`mcp::manifest_dir`); the relay then needs `--profile`.
-    pub manifest: Option<PathBuf>,
+    /// In the user's private root (`mcp::manifest_dir`).
+    pub manifest: PathBuf,
     pub profile: PathBuf,
     pub default_profile: bool,
     /// This browser's binary (the relay's command).
@@ -115,19 +115,15 @@ impl Host {
                     socket: place.socket.to_string_lossy().into_owned(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 };
-                match &place.manifest {
-                    Some(path) => {
-                        if let Err(e) = mcp::write_manifest(path, &m) {
-                            eprintln!("wubble: no MCP manifest at {}: {e}", path.display());
-                        }
-                    }
-                    None => eprintln!("wubble: no private directory for the MCP manifest"),
+                if let Err(e) = mcp::write_manifest(&place.manifest, &m) {
+                    eprintln!(
+                        "wubble: no MCP manifest at {}: {e}",
+                        place.manifest.display()
+                    );
                 }
             }
             Effect::RemoveManifest => {
-                if let Some(path) = &place.manifest {
-                    let _ = std::fs::remove_file(path);
-                }
+                let _ = std::fs::remove_file(&place.manifest);
             }
             // the agent apps' configuration (`host/harness.rs`)
             Effect::Register => self.mcp_register(),
@@ -144,6 +140,6 @@ impl Host {
     /// `--smoke mcp`: the files hosting keeps while on.
     pub(crate) fn mcp_files(&self) -> Option<(PathBuf, PathBuf)> {
         let p = self.hosting.place.as_ref()?;
-        Some((p.socket.clone(), p.manifest.clone()?))
+        Some((p.socket.clone(), p.manifest.clone()))
     }
 }

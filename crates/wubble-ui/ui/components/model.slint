@@ -499,6 +499,8 @@ export struct SettingItem {
     // a choice the design picks from a Select (the search engine): its labels as menu rows;
     // empty for the segmented ones
     options: [MenuEntry],
+    // what that Select reads while none is chosen
+    placeholder: string,
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).
@@ -520,6 +522,7 @@ export struct CaptureView {
     conflict: bool,
     chord: string,
     other: string,
+    other-is-edit: bool,
 }
 
 export struct SpaceSetting {
@@ -608,6 +611,7 @@ export struct TaskItem {
     cpu: string,
     busy: string,
     never-sleep: bool,
+    can-sleep: bool,
     can-discard: bool,
     can-end: bool,
 }
@@ -626,6 +630,7 @@ export struct HistoryLineItem {
     label: string,
     title: string,
     url: string,
+    time: string,
     favicon: image,
 }
 

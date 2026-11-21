@@ -90,27 +90,23 @@ impl Store {
             }
             return Ok(boost.id);
         }
-        let position = scalar(
-            &self.conn,
-            "SELECT coalesce(max(position) + 1, 0) FROM boosts",
-            (),
-        )
-        .await?
-        .unwrap_or(0);
-        self.conn
-            .execute(
-                "INSERT INTO boosts(name, site, css, js, js_at, tint, tint_strength, font, \
-                 enabled, updated_at, position) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                (
-                    fields.0, fields.1, fields.2, fields.3, fields.4, fields.5, fields.6, fields.7,
-                    fields.8, fields.9, position,
-                ),
-            )
-            .await?;
-        scalar(&self.conn, "SELECT last_insert_rowid()", ())
+        let tx = self.conn.transaction().await?;
+        let position = scalar(&tx, "SELECT coalesce(max(position) + 1, 0) FROM boosts", ())
             .await?
-            .ok_or_else(|| Error::Corrupt("no id for the new boost".into()))
+            .unwrap_or(0);
+        tx.execute(
+            "INSERT INTO boosts(name, site, css, js, js_at, tint, tint_strength, font, \
+             enabled, updated_at, position) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            (
+                fields.0, fields.1, fields.2, fields.3, fields.4, fields.5, fields.6, fields.7,
+                fields.8, fields.9, position,
+            ),
+        )
+        .await?;
+        let id = tx.last_insert_rowid();
+        tx.commit().await?;
+        Ok(id)
     }
 
     pub async fn delete_boost(&mut self, id: i64) -> Result<()> {

@@ -12,10 +12,21 @@ use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, define_class, extern_methods, msg_send,
     rc::Retained,
-    runtime::{Bool, NSObjectProtocol},
+    runtime::{AnyObject, Bool, NSObjectProtocol},
 };
 use objc2_app_kit::{NSApp, NSApplication, NSEvent};
 use std::cell::Cell;
+use std::sync::Mutex;
+
+static QUIT_HANDLER: Mutex<Option<fn()>> = Mutex::new(None);
+
+/// Registers or clears the callback invoked by `-[WubbleApplication terminate:]` instead of
+/// AppKit's default `exit(0)`, so `Cmd+Q` / Dock Quit runs orderly CEF shutdown.
+pub fn set_quit_handler(handler: Option<fn()>) {
+    if let Ok(mut slot) = QUIT_HANDLER.lock() {
+        *slot = handler;
+    }
+}
 
 #[derive(Default)]
 pub struct Ivars {
@@ -38,6 +49,26 @@ define_class!(
             let _: () = msg_send![super(self), sendEvent: event];
             if !was {
                 self.set_handling_send_event(false);
+            }
+        }
+
+        // `terminate:` is Cocoa's one entry for an orderly quit (the Quit item and Cmd+Q, the
+        // Dock, Activity Monitor's Quit, logout, restart and shut down). AppKit's own ends the
+        // process with exit() inside the run loop, so Chromium could not shut down; as cefclient
+        // (cef `tests/cefclient/cefclient_mac.mm`, `-[ClientApplication terminate:]`) and Chrome
+        // (`chrome/browser/chrome_browser_application_mac.mm`, `-[BrowserCrApplication
+        // terminate:]`) do, it starts the browser's own close and returns: "Return, don't exit.
+        // The application is responsible for exiting on its own." The handler ends the event
+        // loop (winit stops `NSApp` with `stop:`), the host drains CEF and `main` returns, which
+        // ends the process; a logout waits for that exit, as it does for Chrome. Without a
+        // handler (before the loop runs, after the drain), AppKit's own terminate runs.
+        #[unsafe(method(terminate:))]
+        unsafe fn terminate(&self, sender: Option<&AnyObject>) {
+            let handler = QUIT_HANDLER.lock().ok().and_then(|g| *g);
+            if let Some(quit) = handler {
+                quit();
+            } else {
+                let _: () = msg_send![super(self), terminate: sender];
             }
         }
     }

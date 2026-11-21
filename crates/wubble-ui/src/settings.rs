@@ -75,9 +75,10 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
                 .position(|w| *w == row.value)
                 .map_or(-1, |i| i as i32);
             // The engine is picked from a Select, as the design's. None chosen yet (the stored
-            // default, "ask on first run") keeps `selected` at -1: the Select shows the first
-            // engine's label, and picking any engine, the first too, stores it.
+            // default, "ask on first search") keeps `selected` at -1: the Select reads "Ask on
+            // first search", and picking any engine, the first too, stores it.
             if row.kind == SettingKind::SearchEngine {
+                item.placeholder = "Ask on first search".into();
                 item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
                     labels
                         .iter()
@@ -204,6 +205,7 @@ mod tests {
         assert_eq!(labels, ["Google", "DuckDuckGo"]);
         let options: Vec<String> = engine.options.iter().map(|o| o.label.to_string()).collect();
         assert_eq!(options, labels, "the engine's Select rows");
+        assert_eq!(engine.placeholder, "Ask on first search");
         let archive = items
             .iter()
             .find(|i| i.control == SettingControl::Segmented && i.key != "search.engine")

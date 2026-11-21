@@ -198,6 +198,7 @@ pub fn seed(db: &Path, keyring: &FakeKeyRing) -> Result<(), Box<dyn std::error::
                     total: Some(4),
                     state,
                     started_ms: now,
+                    container: ContainerId::DEFAULT,
                 })
                 .await?;
         }
@@ -259,6 +260,7 @@ pub fn seed(db: &Path, keyring: &FakeKeyRing) -> Result<(), Box<dyn std::error::
                     total: Some(4),
                     state: DownloadState::Complete,
                     started_ms: now - i * 1000,
+                    container: ContainerId::DEFAULT,
                 })
                 .await?;
         }

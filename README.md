@@ -27,7 +27,7 @@ wubble is an open-source web browser for Linux and macOS. It runs on Chromium, s
 curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh
 ```
 
-No root needed, on Linux (x86_64) and macOS (Apple silicon); on a Mac there is also a `.dmg` on the [Releases](https://github.com/xuckless/wubble/releases) page. To remove wubble, add `-s -- --uninstall`; your profile is kept.
+No root needed, on Linux (x86_64) and macOS (Apple silicon); on a Mac there is also a `.dmg` on the [Releases](https://github.com/xuckless/wubble/releases) page. To remove wubble, add `-s -- --uninstall`; your profile is kept. The script checks the archive's sha256, and the signatures of the archive and the release manifest too when [`minisign`](https://jedisct1.github.io/minisign/) is installed (without it, it says so; add `-s -- --require-signature` to refuse instead).
 
 wubble updates itself: it checks GitHub when it opens and installs a new version on the next start, signature-checked. That check is the only request wubble makes by itself, and Settings → Updates turns it off.
 

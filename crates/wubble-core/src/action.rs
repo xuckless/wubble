@@ -9,6 +9,7 @@
 pub enum Action {
     NewTab,
     CloseTab,
+    DuplicateTab,
     ReopenClosedTab,
     NewWindow,
     /// Close the focused window (the last Main window quits).
@@ -112,9 +113,10 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 67] = [
+const FIXED: [(&str, Action); 68] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
+    ("duplicate-tab", Action::DuplicateTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
     ("new-window", Action::NewWindow),
     ("close-window", Action::CloseWindow),
@@ -212,17 +214,30 @@ impl Action {
     }
 
     /// What the keybinding editor calls the action: its command-bar title, else its id in
-    /// words (`select-tab-3` reads "Select tab 3").
+    /// sentence case, as the design writes its labels (`select-tab-3` reads "Select tab 3",
+    /// `copy-url` "Copy URL").
     pub fn label(self) -> String {
         if let Some(info) = PALETTE.iter().find(|i| i.action == self) {
             return info.title.to_owned();
         }
-        let words = self.id().replace('-', " ");
-        let mut chars = words.chars();
-        chars
-            .next()
-            .map(|c| c.to_uppercase().chain(chars).collect())
-            .unwrap_or_default()
+        let words: Vec<String> = self
+            .id()
+            .split('-')
+            .enumerate()
+            .map(|(i, word)| match word {
+                // an initialism keeps its capitals
+                "url" => "URL".to_owned(),
+                _ if i == 0 => {
+                    let mut chars = word.chars();
+                    chars
+                        .next()
+                        .map(|c| c.to_uppercase().chain(chars).collect())
+                        .unwrap_or_default()
+                }
+                _ => word.to_owned(),
+            })
+            .collect();
+        words.join(" ")
     }
 
     /// Whether the action is an edit command (undo, cut, copy ...): a shell text field
@@ -257,7 +272,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 30] = [
+pub const PALETTE: [ActionInfo; 31] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -265,12 +280,17 @@ pub const PALETTE: [ActionInfo; 30] = [
     },
     ActionInfo {
         action: Action::CloseTab,
-        title: "Close Tab",
+        title: "Close tab",
         keywords: "remove",
     },
     ActionInfo {
+        action: Action::DuplicateTab,
+        title: "Duplicate tab",
+        keywords: "clone copy tab",
+    },
+    ActionInfo {
         action: Action::ReopenClosedTab,
-        title: "Reopen Closed Tab",
+        title: "Reopen closed tab",
         keywords: "undo restore",
     },
     ActionInfo {
@@ -280,28 +300,28 @@ pub const PALETTE: [ActionInfo; 30] = [
     },
     ActionInfo {
         action: Action::ToggleSidebar,
-        title: "Toggle Sidebar",
+        title: "Toggle sidebar",
         keywords: "hide show tabs",
     },
     ActionInfo {
         action: Action::ToggleMute,
-        title: "Mute Tab",
+        title: "Mute tab",
         keywords: "sound audio unmute",
     },
     // the design's command-bar rows (browser/command.tsx)
     ActionInfo {
         action: Action::SplitNext,
-        title: "Split View with the Next Tab",
+        title: "Split view with the next tab",
         keywords: "side by side beside pane open",
     },
     ActionInfo {
         action: Action::Unsplit,
-        title: "Take This Page out of the Split",
+        title: "Take this page out of the split",
         keywords: "unsplit side by side pane",
     },
     ActionInfo {
         action: Action::ToggleCompactMode,
-        title: "Toggle Compact Mode",
+        title: "Toggle compact mode",
         keywords: "hide show",
     },
     ActionInfo {
@@ -336,78 +356,78 @@ pub const PALETTE: [ActionInfo; 30] = [
     },
     ActionInfo {
         action: Action::TidyTabs,
-        title: "Tidy Tabs by Site",
+        title: "Tidy tabs by site",
         keywords: "group folders organise sort domain",
     },
     ActionInfo {
         action: Action::UndoTidyTabs,
-        title: "Undo Tidy Tabs",
+        title: "Undo tidy tabs",
         keywords: "ungroup folders restore order",
     },
     ActionInfo {
         action: Action::CloseDuplicateTabs,
-        title: "Close Duplicate Tabs",
+        title: "Close duplicate tabs",
         keywords: "repeated clean duplicates",
     },
     ActionInfo {
         action: Action::OpenTasks,
-        title: "Task Manager",
+        title: "Task manager",
         keywords: "memory cpu processes sleep discard",
     },
     ActionInfo {
         action: Action::OpenAgentLog,
-        title: "Agent Activity",
+        title: "Agent activity",
         keywords: "mcp sessions calls log agents",
     },
     ActionInfo {
         action: Action::StopAgents,
-        title: "Stop All Agents",
+        title: "Stop all agents",
         keywords: "mcp sessions kill end agents headless",
     },
     ActionInfo {
         action: Action::BookmarkPage,
-        title: "Bookmark This Page",
+        title: "Bookmark this page",
         keywords: "star save favourite",
     },
     ActionInfo {
         action: Action::CyclePageTheme,
-        title: "Dark Mode for This Site",
+        title: "Dark mode for this site",
         keywords: "page theme light night invert colours colors appearance",
     },
     ActionInfo {
         action: Action::LinkHints,
-        title: "Link Hints",
+        title: "Link hints",
         keywords: "keyboard click follow labels vimium",
     },
     ActionInfo {
         action: Action::ToggleReader,
-        title: "Reader Mode",
+        title: "Reader mode",
         keywords: "article read clean readability",
     },
     ActionInfo {
         action: Action::ScreenshotRegion,
-        title: "Screenshot of a Region",
+        title: "Screenshot of a region",
         keywords: "capture image snip select",
     },
     ActionInfo {
         action: Action::ScreenshotVisible,
-        title: "Screenshot of the Visible Page",
+        title: "Screenshot of the visible page",
         keywords: "capture image window",
     },
     ActionInfo {
         action: Action::ScreenshotFullPage,
-        title: "Screenshot of the Full Page",
+        title: "Screenshot of the full page",
         keywords: "capture image whole long scrolling",
     },
     ActionInfo {
         action: Action::NewBoost,
-        title: "New Boost for This Site",
+        title: "New Boost for this site",
         keywords: "css style script customise tweak userstyle userscript stylus arc",
     },
     ActionInfo {
         action: Action::ClearBrowsingData,
-        title: "Clear Browsing Data",
-        keywords: "cookies cache site storage logins forget privacy delete container",
+        title: "Clear browsing data",
+        keywords: "cookies cache site storage logins forget privacy delete container history browsing",
     },
 ];
 
@@ -418,7 +438,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 85);
+        assert_eq!(all.len(), 86);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -445,7 +465,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 85);
+        assert_eq!(ids.len(), 86);
     }
 
     #[test]
@@ -469,9 +489,33 @@ mod tests {
     #[test]
     fn open_settings_and_labels() {
         assert_eq!(Action::from_id("open-settings"), Some(Action::OpenSettings));
+        assert_eq!(Action::from_id("duplicate-tab"), Some(Action::DuplicateTab));
         assert_eq!(Action::OpenSettings.label(), "Settings");
+        assert_eq!(Action::DuplicateTab.label(), "Duplicate tab");
+        assert_eq!(Action::NewTab.label(), "New tab");
+        assert_eq!(Action::CloseTab.label(), "Close tab");
+        assert_eq!(Action::CloseWindow.label(), "Close window");
+        assert_eq!(Action::CopyUrl.label(), "Copy URL");
         assert_eq!(Action::SelectTab(3).label(), "Select tab 3");
         assert_eq!(Action::DevTools.label(), "Dev tools");
+        assert_eq!(Action::MoveTabToNewWindow.label(), "Move tab to new window");
+        // the command bar's titles are sentence case too (a Space is a name)
+        for info in &PALETTE {
+            let rest: String = info.title.chars().skip(1).collect();
+            let named = ["Space", "Boost"];
+            assert!(
+                rest.split(' ')
+                    .all(|w| named.contains(&w) || w.chars().all(|c| !c.is_uppercase())),
+                "{}",
+                info.title
+            );
+        }
+        let clear = PALETTE
+            .iter()
+            .find(|i| i.action == Action::ClearBrowsingData)
+            .expect("ClearBrowsingData in PALETTE");
+        assert!(clear.keywords.contains("history"));
+        assert!(clear.keywords.contains("browsing"));
     }
 
     #[test]
@@ -490,30 +534,30 @@ mod tests {
             (
                 "cycle-page-theme",
                 Action::CyclePageTheme,
-                "Dark Mode for This Site",
+                "Dark mode for this site",
             ),
-            ("link-hints", Action::LinkHints, "Link Hints"),
-            ("toggle-reader", Action::ToggleReader, "Reader Mode"),
+            ("link-hints", Action::LinkHints, "Link hints"),
+            ("toggle-reader", Action::ToggleReader, "Reader mode"),
             (
                 "screenshot",
                 Action::ScreenshotRegion,
-                "Screenshot of a Region",
+                "Screenshot of a region",
             ),
             (
                 "screenshot-visible",
                 Action::ScreenshotVisible,
-                "Screenshot of the Visible Page",
+                "Screenshot of the visible page",
             ),
             (
                 "screenshot-full-page",
                 Action::ScreenshotFullPage,
-                "Screenshot of the Full Page",
+                "Screenshot of the full page",
             ),
-            ("new-boost", Action::NewBoost, "New Boost for This Site"),
+            ("new-boost", Action::NewBoost, "New Boost for this site"),
             (
                 "clear-browsing-data",
                 Action::ClearBrowsingData,
-                "Clear Browsing Data",
+                "Clear browsing data",
             ),
         ] {
             assert_eq!(Action::from_id(id), Some(action));

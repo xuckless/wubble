@@ -69,6 +69,9 @@ impl Store {
         before: Option<(i64, i64)>,
         query: &str,
     ) -> Result<Vec<ArchivedTab>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let needle = query.trim().to_lowercase();
         if needle.is_ascii() {
             return self.archive_matching(limit, before, &needle).await;
@@ -102,7 +105,11 @@ impl Store {
         before: Option<(i64, i64)>,
         needle: &str,
     ) -> Result<Vec<ArchivedTab>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let (at, id) = before.unwrap_or((i64::MAX, i64::MAX));
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut rows = self
             .conn
             .query(
@@ -112,7 +119,7 @@ impl Store {
                        AND (?4 = '' OR instr(lower(title), ?4) > 0 OR instr(lower(url), ?4) > 0) \
                      ORDER BY archived_at DESC, id DESC LIMIT ?3"
                 ),
-                (at, id, limit as i64, needle.to_owned()),
+                (at, id, limit, needle.to_owned()),
             )
             .await?;
         let mut out = vec![];
@@ -269,6 +276,18 @@ mod tests {
             s.push_archive(&tab(0, 5)).await.unwrap(); // space 0
             s.conn.execute("DELETE FROM spaces", ()).await.unwrap();
             assert_eq!(s.list_archive(10, None, "").await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn limit_zero_returns_empty() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let mut t = tab(0, 5);
+            t.title = "Привет".into();
+            s.push_archive(&t).await.unwrap();
+            assert!(s.list_archive(0, None, "").await.unwrap().is_empty());
+            assert!(s.list_archive(0, None, "привет").await.unwrap().is_empty());
         });
     }
 }

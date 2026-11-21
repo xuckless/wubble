@@ -252,6 +252,15 @@ impl Host {
     /// Runs one permission event: remembered decisions are stored, every
     /// answer goes to the engine.
     pub(super) fn apply_permission(&mut self, tab: TabId, event: PermissionEvent) {
+        if self.agent_drives(tab) {
+            if let PermissionEvent::Requested(req) = event
+                && let crate::prompt::Ask::Engine { id, .. } = req.ask
+                && let Some(view) = self.tab_view(tab)
+            {
+                view.answer_permission(id, &[]);
+            }
+            return;
+        }
         let s = self.surfaces.entry(tab).or_default();
         let (next, answers) = prompt::permission(
             std::mem::take(&mut s.permission),

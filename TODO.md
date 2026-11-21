@@ -38,9 +38,6 @@ Beside it, small and unordered:
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
 - [ ] Settings at a content width of 759 px or less (a window under about 1010 with the sidebar out): the design's one-column layout (`settings.css` narrow block: no section list, title and search on top) is not built, the controls run off the right edge with no way to reach them; repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
 - [ ] The Settings Select's list is drawn by Slint (no blur): the scene's window-level glass lies over the page; the design's blur needs the page's lists in a window-level layer (owner's call)
-- [ ] The search engine dropdown shows "Google" while none is chosen (the address bar asks on first use); picking Google then stores it
-- [ ] The shortcut editor has no way to clear a chord, and takes chords the page needs (Ctrl+C/V/X/A/Z) without a warning
-- [ ] Shortcut row labels mix cases ("Close Tab", "Reopen Closed Tab", "Close window"): `Action::label`
 - [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
@@ -76,18 +73,17 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
+- [ ] Agent tabs ask the human (the airlocks' prompt) for a permission, a download or an external link, instead of refusing them outright as now
+- [ ] Clipboard isolation for agent tabs on every platform (the Wayland bridge cannot tell an agent's copy or paste from the human's; elsewhere Chromium writes itself)
 
 ## Hardening pass: built-in pages and their data (2026-11-21, open findings; checklist in the report)
 - [ ] Task manager on Linux with the sandbox: each renderer is pid 1 in its own PID namespace, so a tab cannot be tied to its renderer (tab rows have no memory, CPU or End) and renderers are listed as "Zygote"; needs a way to ask CEF's browser process for a tab's renderer pid
-- [ ] Task manager lists internal pages (wubble://history ...) with Discard and Never sleep though they have no process
 - [ ] List pages (History, Bookmarks, Downloads, Archive): a row cannot be opened from the keyboard (only its Delete is a Tab stop; a screen reader's default action opens it); no select, delete selection, undo, copy address or keyboard open in a new tab; a bookmark folder is deleted with its contents by one press; needs a focusable kit row and a design for selection and undo
-- [ ] History rows show no time of day (only a day header)
 - [ ] Media downloader: the Mac `wubble-ffmpeg` (scripts/release/build-ffmpeg.sh, signed in package-macos.sh) is written, never run: build and notarise it on the Mac, then try a YouTube pair and an HLS download in the app
 - [ ] Media downloader: YouTube's player API answered "Sign in to confirm you're not a bot" to the `android_vr` client from the dev box (shown to the user now, not worked around); its format URLs' own fetch is untried; an owner call: allow one 1 MB ranged fetch from a free video, and say which sites the owner tried
 - [ ] Media downloader: a DASH manifest of several periods is refused ("Not supported"); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)
-- [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page); downloads that an agent session's tab starts land in the user's list and folder with no prompt (the airlock is not built)
+- [ ] Downloads: Retry restarts from any tab of the download's container, not the tab it came from (a login-gated file can come back as a sign-in page)
 - [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
-- [ ] Two things are called "Clear browsing data" (the History page's button clears visits; the command clears cookies and cache), and the command is not found by "history"
 - [ ] `--smoke data` runs each process on its own CEF cache: a cookie cleared right before a SIGKILL and read after the next start is not checked
 
 ## Review findings (perpetual)
@@ -100,7 +96,7 @@ Open, for the owner's eye:
 - [ ] Menus grow from the design's 236 to 320 for long rows (derived; on the review sheet)
 - [ ] Sidebar mid-collapse shows the rail look below 140 wide (the design's own behaviour; QA read it as a reflow)
 - [ ] Rail close badge size; video strip: should a collapse carry over to later pages
-- [ ] Find bar closes on reload (Chromium keeps it); Escape does not dismiss the SponsorBlock question
+- [ ] Find bar closes on reload (Chromium keeps it)
 - [ ] Compact mode duplicates the hide-sidebar toggle (or make it sidebar <-> rail)
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
@@ -154,7 +150,7 @@ Open, to build or check:
 - [ ] Film rim on the remaining controls (buttons, menu rows)
 - [ ] Touch-kit pieces not yet ported: pin, download button, dock with gliding tooltip, the check box's mask grow
 - [ ] Gallery sweep: the autofill key chip overlaps the Space header
-- [ ] Bookmarks: drag reorder, a bookmarks bar, bookmarks as command-bar candidates
+- [ ] Bookmarks: drag reorder, a bookmarks bar
 
 ## M3: Memory and sleeping
 - [ ] Benchmark against Chrome and Zen: 200 tabs and after 1 h idle (Chromium and Firefox at 1/10/50 done)
@@ -169,12 +165,12 @@ Open, to build or check:
 
 ## Built in instead of extensions
 - [ ] Content blocker: uBO scriptlet coverage
+- [ ] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
 
 ## Privacy and containers (hardening pass, open)
 - [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
 - [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
 - [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
-- [ ] First start without a compiled list cache: requests pass until the background compile ends (seen once on a loaded machine); hold the first navigation until the engine is ready
 - [ ] Routing rules: renaming or deleting a Space (or container) a rule names silently turns the rule off, with no mark in the list; Space names are not unique; a Space named with `,` or `->` cannot be named by a rule; the row label does not say typed addresses and page links are not routed
 - [ ] Pill and counter: no check drives the shell by pointer for the blocker menu, the Sites list revoke or the Spaces list in a running window (only the engine side is driven, `notes/hp/privtools` of the pass)
 
@@ -222,14 +218,14 @@ Open, to build or check:
 - [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
 - [ ] Before every release: run `cargo test --workspace` on the Mac (preview.2 shipped with MCP hosting broken on macOS; one test there would have caught it), and run the whole suite there once now (never done)
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
-      shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
+      shellcheck not run on `install.sh`
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
 - [ ] Import: Zen legacy tables, Arc history, Little Arc, Helium/Chromium; verify Zen macOS and Arc Windows paths
 - [ ] Security update cadence: track Chromium stable
 - [ ] Packaging: Flatpak/RPM, MSI/winget, signed and notarised DMG; auto-update
 - [ ] Opt-in crash reports that open a GitHub issue (scrubbed)
 - [ ] Default-browser registration, URL handlers
-- [ ] Hardening: vault unlock off the store thread; clear the clipboard after a password copy
+- [ ] Hardening: vault unlock off the store thread
 
 ## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:

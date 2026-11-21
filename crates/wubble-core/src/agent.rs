@@ -171,10 +171,16 @@ pub fn may_visit(grant: &Grant, url: &str) -> Result<String, VisitRefusal> {
 /// [`may_visit`] allows. The grant's sites are where the tab may be, not what its pages may
 /// fetch: sub-resources are never asked.
 pub fn may_go(grant: &Grant, url: &str) -> Result<(), VisitRefusal> {
-    if url == "about:blank" {
+    if is_blank(url) {
         return Ok(());
     }
     may_visit(grant, url).map(|_| ())
+}
+
+/// Whether `url` is the blank page, with or without a fragment (Chromium commits
+/// `about:blank#blocked` for a navigation it blocked itself).
+pub fn is_blank(url: &str) -> bool {
+    url.split_once('#').map_or(url, |(page, _)| page) == "about:blank"
 }
 
 /// The agent's error for a navigation [`may_go`] refused: the site named, and the way on.
@@ -1490,6 +1496,9 @@ mod tests {
         assert_eq!(may_go(&some, "http://a.localhost:8080/x?y#z"), Ok(()));
         assert_eq!(may_go(&some, "HTTP://A.localhost/"), Ok(()));
         assert_eq!(may_go(&some, "about:blank"), Ok(()));
+        assert_eq!(may_go(&some, "about:blank#blocked"), Ok(()));
+        assert!(may_go(&some, "about:blankx").is_err());
+        assert!(may_go(&some, "about:srcdoc").is_err());
         assert_eq!(
             may_go(&some, "http://b.localhost/"),
             Err(VisitRefusal::NotGranted)

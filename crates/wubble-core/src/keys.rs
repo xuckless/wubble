@@ -589,20 +589,71 @@ pub fn set_binding(
     (next, previous)
 }
 
-/// The overrides without the user's changes to `action`: it runs on its default chords again
-/// (unless another action was bound to one of them since).
+/// The overrides after unbinding every chord `action` runs on now.
+pub fn clear_binding(overrides: &[Override], platform: Platform, action: Action) -> Vec<Override> {
+    let mut next: Vec<Override> = overrides
+        .iter()
+        .filter(|o| o.action != Some(action))
+        .copied()
+        .collect();
+    // If `action` had taken another rebound action's default chord, keep that chord unbound
+    // rather than resurrecting the other action's old default.
+    let base = Keymap::defaults(platform).with_overrides(&next);
+    for o in overrides.iter().filter(|o| o.action == Some(action)) {
+        if let Some((other, _)) = base.action_for(o.chord)
+            && other != action
+            && next.iter().any(|x| x.action == Some(other))
+        {
+            next.push(Override {
+                chord: o.chord,
+                action: None,
+            });
+        }
+    }
+    let base = Keymap::defaults(platform).with_overrides(&next);
+    next.extend(
+        base.rows
+            .iter()
+            .filter(|(_, a, _)| *a == action)
+            .map(|&(chord, _, _)| Override {
+                chord,
+                action: None,
+            }),
+    );
+    next
+}
+
+/// The overrides without the user's changes to `action`: it runs on its default chords again,
+/// unless another action was bound to one of them since (that one keeps it); a chord `action`
+/// had taken from another rebound action stays unbound, not that action's old default again.
 pub fn reset_binding(overrides: &[Override], platform: Platform, action: Action) -> Vec<Override> {
     let defaults: Vec<Chord> = default_rows(platform)
         .filter(|(_, a, _)| *a == action)
         .map(|(c, _, _)| c)
         .collect();
-    overrides
+    let mut next: Vec<Override> = overrides
         .iter()
         .filter(|o| {
             o.action != Some(action) && !(o.action.is_none() && defaults.contains(&o.chord))
         })
         .copied()
-        .collect()
+        .collect();
+    let base = Keymap::defaults(platform).with_overrides(&next);
+    for o in overrides
+        .iter()
+        .filter(|o| o.action == Some(action) && !defaults.contains(&o.chord))
+    {
+        if let Some((other, _)) = base.action_for(o.chord)
+            && other != action
+            && next.iter().any(|x| x.action == Some(other))
+        {
+            next.push(Override {
+                chord: o.chord,
+                action: None,
+            });
+        }
+    }
+    next
 }
 
 /// Recording a new chord for an action in the editor.
@@ -615,6 +666,7 @@ pub enum Capture {
     Conflict {
         action: Action,
         chord: Chord,
+        /// Taking it from a page-edit command (`Action::is_edit`) warns the user.
         other: Action,
     },
 }
@@ -626,19 +678,23 @@ pub enum CaptureEvent {
     Pressed(Chord),
     /// Take the chord from the other action.
     Confirm,
+    /// Unbind the armed action (Clear button, or Backspace/Delete while armed).
+    Clear,
     /// Escape, a click elsewhere, or the page closing.
     Cancel,
 }
 
-/// The one transition of [`Capture`]; the effect is the binding to store, if any.
+/// The one transition of [`Capture`]; the effect is the binding change to store, if any:
+/// `Some((action, Some(chord)))` binds `chord`, `Some((action, None))` unbinds `action`.
 pub fn capture(
     state: Capture,
     event: CaptureEvent,
     keymap: &Keymap,
-) -> (Capture, Option<(Action, Chord)>) {
+) -> (Capture, Option<(Action, Option<Chord>)>) {
     match (state, event) {
         (_, CaptureEvent::Arm(action)) => (Capture::Armed(action), None),
         (_, CaptureEvent::Cancel) => (Capture::Idle, None),
+        (Capture::Armed(action), CaptureEvent::Clear) => (Capture::Idle, Some((action, None))),
         (Capture::Armed(action), CaptureEvent::Pressed(chord)) => {
             let chord = chord.normalize();
             if !bindable(chord) {
@@ -653,11 +709,11 @@ pub fn capture(
                     },
                     None,
                 ),
-                _ => (Capture::Idle, Some((action, chord))),
+                _ => (Capture::Idle, Some((action, Some(chord)))),
             }
         }
         (Capture::Conflict { action, chord, .. }, CaptureEvent::Confirm) => {
-            (Capture::Idle, Some((action, chord)))
+            (Capture::Idle, Some((action, Some(chord))))
         }
         (state, _) => (state, None),
     }
@@ -869,6 +925,7 @@ mod tests {
     fn every_action_is_bound_except_allow_list() {
         // Chromium binds no key to muting a tab either.
         let unbound = [
+            Action::DuplicateTab,
             Action::NewSpace,
             Action::ToggleMute,
             Action::OpenPasswords,
@@ -1152,17 +1209,76 @@ mod tests {
     }
 
     #[test]
-    fn capture_records_confirms_and_cancels() {
+    fn reset_binding_keeps_a_default_taken_since_and_does_not_resurrect_rebound_default() {
+        let p = Platform::Linux;
+        // Scenario 1: B was bound to A's default since; resetting A leaves it with B, and A
+        // runs on its other defaults.
+        let (ov, prev) = set_binding(&[], p, Action::Find, ch("Ctrl+W"));
+        assert_eq!(prev, Some(Action::CloseTab));
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::Find);
+        assert_eq!(km.action_for(ch("Ctrl+F4")).unwrap().0, Action::CloseTab);
+        // A default only unbound (A moved off it) comes back.
+        let (ov, _) = set_binding(&[], p, Action::CloseTab, ch("Ctrl+Alt+K"));
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        assert!(ov.is_empty());
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
+
+        // Scenario 2: B is rebound to Ctrl+B, then A takes B's old default Ctrl+F.
+        // Resetting A must NOT resurrect Ctrl+F on B.
+        let (ov, _) = set_binding(&[], p, Action::Find, ch("Ctrl+B"));
+        let (ov, _) = set_binding(&ov, p, Action::CloseTab, ch("Ctrl+F"));
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
+        assert_eq!(km.action_for(ch("Ctrl+B")).unwrap().0, Action::Find);
+        assert_eq!(
+            km.action_for(ch("Ctrl+F")),
+            None,
+            "Find's old default stays unbound"
+        );
+    }
+
+    #[test]
+    fn clear_binding_unbinds_action_and_does_not_resurrect_rebound_default() {
+        let p = Platform::Linux;
+        let ov = clear_binding(&[], p, Action::CloseTab);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.shortcut_for(Action::CloseTab), None);
+        assert_eq!(km.action_for(ch("Ctrl+W")), None);
+        assert_eq!(km.action_for(ch("Ctrl+F4")), None);
+        // Resetting restores it cleanly.
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        assert!(ov.is_empty());
+        // Clearing an action that took another rebound action's default does not resurrect it.
+        let (ov, _) = set_binding(&[], p, Action::Find, ch("Ctrl+B"));
+        let (ov, _) = set_binding(&ov, p, Action::CloseTab, ch("Ctrl+F"));
+        let ov = clear_binding(&ov, p, Action::CloseTab);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.shortcut_for(Action::CloseTab), None);
+        assert_eq!(km.action_for(ch("Ctrl+F")), None);
+        assert_eq!(km.action_for(ch("Ctrl+B")).unwrap().0, Action::Find);
+    }
+
+    #[test]
+    fn capture_records_confirms_clears_and_cancels() {
         let km = Keymap::defaults(Platform::Linux);
         let (s, out) = capture(Capture::Idle, CaptureEvent::Arm(Action::Find), &km);
         assert_eq!((s, out), (Capture::Armed(Action::Find), None));
         // A bare letter is not taken.
         let (s, out) = capture(s, CaptureEvent::Pressed(ch("K")), &km);
         assert_eq!((s, out), (Capture::Armed(Action::Find), None));
+        // Clear unbinds while armed.
+        let (cleared, out) = capture(s, CaptureEvent::Clear, &km);
+        assert_eq!((cleared, out), (Capture::Idle, Some((Action::Find, None))));
+        // Re-arm and record a free chord.
+        let (s, _) = capture(Capture::Idle, CaptureEvent::Arm(Action::Find), &km);
         let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km);
         assert_eq!(
             (s, out),
-            (Capture::Idle, Some((Action::Find, ch("Ctrl+Alt+J"))))
+            (Capture::Idle, Some((Action::Find, Some(ch("Ctrl+Alt+J")))))
         );
         // A chord another action runs on asks first.
         let (s, _) = capture(s, CaptureEvent::Arm(Action::Find), &km);
@@ -1172,16 +1288,29 @@ mod tests {
             Capture::Conflict {
                 action: Action::Find,
                 chord: ch("Ctrl+R"),
-                other: Action::Reload
+                other: Action::Reload,
             }
         );
         assert_eq!(out, None);
         let (done, out) = capture(s, CaptureEvent::Confirm, &km);
         assert_eq!(
             (done, out),
-            (Capture::Idle, Some((Action::Find, ch("Ctrl+R"))))
+            (Capture::Idle, Some((Action::Find, Some(ch("Ctrl+R")))))
         );
         assert_eq!(capture(s, CaptureEvent::Cancel, &km), (Capture::Idle, None));
+        // Conflicting with a page-edit chord: the other is an edit command, which warns.
+        let (s, _) = capture(Capture::Idle, CaptureEvent::Arm(Action::Find), &km);
+        let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+C")), &km);
+        assert_eq!(
+            s,
+            Capture::Conflict {
+                action: Action::Find,
+                chord: ch("Ctrl+C"),
+                other: Action::Copy,
+            }
+        );
+        assert!(Action::Copy.is_edit() && !Action::Reload.is_edit());
+        assert_eq!(out, None);
         // Pressing keys while idle does nothing.
         assert_eq!(
             capture(Capture::Idle, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km),

@@ -1127,6 +1127,23 @@ impl Model {
         self.glances.iter().any(|g| g.tab == tab)
     }
 
+    /// Whether closing `tab` by `command` (applied next) puts it on the user's recently-closed
+    /// list: not a peek's, not an empty tab, and not a tab of an agent Space that `command`
+    /// deletes (a session's teardown or the owner's dustbin: its pages are none of the user's).
+    /// A tab an agent session drives is excluded by the caller, which knows the sessions.
+    pub fn closes_into_recent(&self, tab: TabId, command: &Command) -> bool {
+        let deleted_agent_space = match command {
+            Command::DeleteSpace(space) => {
+                self.location(tab).is_some_and(|(at, _)| at == *space)
+                    && self.spaces.iter().any(|s| s.id == *space && s.agent)
+            }
+            _ => false,
+        };
+        !self.is_glance(tab)
+            && !deleted_agent_space
+            && self.tabs.get(&tab).is_some_and(|t| !t.url.is_empty())
+    }
+
     /// The model as a session keeps it: without the peeks and their tabs, and without the
     /// `transient` Spaces (an agent session's), their tabs and their own containers (a restart
     /// never brings one back).
@@ -1497,9 +1514,11 @@ impl Model {
             return vec![];
         };
         if !self.order_idx(si).contains(&tab)
+            || !self.order_idx(si).contains(&focused)
             || self.is_internal(tab)
             || self.is_internal(focused)
             || self.windowed(tab).is_some()
+            || self.windowed(focused).is_some()
             || self.pip_tab().is_some_and(|p| p == tab || p == focused)
         {
             return vec![];
@@ -1530,7 +1549,9 @@ impl Model {
     /// A new tab beside the focused page (the design's `open_beside`). Into an empty Space, or
     /// beside a full split, it is a plain new tab shown alone.
     fn open_beside(&mut self, url: String) -> Vec<Effect> {
-        let focused = self.visible_tab();
+        let focused = self
+            .space_idx(self.active_space())
+            .and_then(|si| self.spaces[si].active);
         let mut fx = self.new_tab(url, None, None);
         let (Some(Effect::CreateTab { tab, .. }), Some(f)) = (fx.first().cloned(), focused) else {
             return fx;
@@ -1614,6 +1635,9 @@ impl Model {
     /// A hidden, idle tab judged as if memory were critical: the policy discards it unless it is
     /// pinned and kept alive, which is refused here rather than frozen.
     fn discard_now(&mut self, tab: TabId) -> Vec<Effect> {
+        if self.is_internal(tab) {
+            return vec![];
+        }
         let Some(l) = self.tabs.get(&tab).map(|t| t.lifecycle) else {
             return vec![];
         };

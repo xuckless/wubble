@@ -94,6 +94,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             opener: None,
         }),
         Action::CloseTab => on_visible(Command::CloseTab),
+        Action::DuplicateTab => on_visible(Command::DuplicateTab),
         Action::ReopenClosedTab => Plan::ReopenClosed,
         Action::FocusAddress => Plan::FocusAddress,
         Action::NextRegion => Plan::CycleRegion(false),
@@ -304,6 +305,10 @@ mod tests {
             Plan::Model(Command::CloseTab(TabId(3)))
         );
         assert_eq!(
+            plan(Action::DuplicateTab, &m),
+            Plan::Model(Command::DuplicateTab(TabId(3)))
+        );
+        assert_eq!(
             plan(Action::TogglePinTab, &m),
             Plan::Model(Command::PinTab(TabId(3)))
         );
@@ -349,6 +354,7 @@ mod tests {
         let m = Model::new(std::time::Instant::now());
         for action in [
             Action::CloseTab,
+            Action::DuplicateTab,
             Action::NextTab,
             Action::SelectTab(1),
             Action::SelectLastTab,

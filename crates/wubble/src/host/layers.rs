@@ -11,7 +11,7 @@ use wubble_ui::{AppWindow, CommandBarState, CommandPlacement};
 
 use super::Host;
 use crate::menu::{Menu, MenuEvent};
-use crate::prompt::{Auth, AuthEvent};
+use crate::prompt::{Auth, AuthEvent, PermissionEvent, PermissionPrompt};
 use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
 
 impl Host {
@@ -23,6 +23,9 @@ impl Host {
             add(Kind::Notice, Some(tab));
         }
         for (&tab, s) in &self.surfaces {
+            if matches!(s.permission, PermissionPrompt::Open { .. }) {
+                add(Kind::Permission, Some(tab));
+            }
             if matches!(s.find, FindBar::Open { .. }) {
                 add(Kind::Find, Some(tab));
             }
@@ -140,10 +143,16 @@ impl Host {
         )
     }
 
-    /// Escape: closes the topmost overlay; whether there was one to close.
+    /// Escape: closes the topmost overlay that takes it from whoever has the keys (the page's
+    /// Escape never answers a notice or a permission prompt); whether one closed.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
         let shown = self.shown();
-        let closed = !self.overlay_event(window, shown, Event::Escape).is_empty();
+        let event = if window.get_web_focused() {
+            Event::PageEscape
+        } else {
+            Event::Escape
+        };
+        let closed = !self.overlay_event(window, shown, event).is_empty();
         if closed {
             self.render_surfaces(window);
         }
@@ -153,6 +162,13 @@ impl Host {
     fn overlay_close(&mut self, window: &AppWindow, shown: Option<TabId>, layer: Layer) {
         match (layer.kind, layer.tab) {
             (Kind::Notice, _) => self.notice_close(),
+            (Kind::Permission, Some(tab)) => self.apply_permission(
+                tab,
+                PermissionEvent::Answer {
+                    allow: false,
+                    remember: false,
+                },
+            ),
             (Kind::Find, Some(tab)) => self.apply_find(tab, FindEvent::Close),
             (Kind::Dialog, Some(tab)) => {
                 if self
@@ -186,7 +202,7 @@ impl Host {
                     self.apply_menu(tab, MenuEvent::Dismiss);
                 }
             }
-            (Kind::Find | Kind::Dialog, None) => {}
+            (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
         }
     }
 }
