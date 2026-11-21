@@ -511,7 +511,7 @@ export component ListEditor inherits Rectangle {
             // the rows, the one highlight under them
             Rectangle {
                 hl := MenuHighlight {
-                    on: root.state.selected >= 0 && !(root.drafting && root.state.row == root.state.selected);
+                    on: root.state.selected >= 0 && !root.drafting;
                     jump: false;
                     top: root.pad + max(0, root.state.selected) * root.row-h;
                     panel-width: parent.width;
@@ -526,7 +526,7 @@ export component ListEditor inherits Rectangle {
                             columns: root.columns;
                             leads: root.leads;
                             swatch-column: root.swatch-column;
-                            selected: root.state.selected == i;
+                            selected: !root.drafting && root.state.selected == i;
                             index: i;
                             count: root.count;
                             picked => {

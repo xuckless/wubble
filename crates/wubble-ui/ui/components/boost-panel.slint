@@ -93,6 +93,9 @@ export component BoostPanel inherits Rectangle {
                 edited(t) => {
                     root.text-edited("name", t);
                 }
+                escaped => {
+                    root.act("close");
+                }
             }
         }
         BGroup {
@@ -103,6 +106,9 @@ export component BoostPanel inherits Rectangle {
                 label: "Sites";
                 edited(t) => {
                     root.text-edited("site", t);
+                }
+                escaped => {
+                    root.act("close");
                 }
             }
             BNote {
@@ -191,6 +197,9 @@ export component BoostPanel inherits Rectangle {
                 label: "Font";
                 edited(t) => {
                     root.text-edited("font", t);
+                }
+                escaped => {
+                    root.act("close");
                 }
             }
         }

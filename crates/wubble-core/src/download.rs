@@ -314,6 +314,19 @@ pub fn finished_ids(entries: &[DownloadEntry]) -> Vec<i64> {
         .collect()
 }
 
+/// Entries whose file name or URL matches `query` (case-insensitive; blank returns all).
+pub fn filter_entries(entries: &[DownloadEntry], query: &str) -> Vec<DownloadEntry> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return entries.to_vec();
+    }
+    entries
+        .iter()
+        .filter(|e| e.name.to_lowercase().contains(&q) || e.url.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 impl DownloadEntry {
     /// The file can be opened: the download completed.
     pub fn can_open(&self) -> bool {
@@ -642,5 +655,29 @@ mod tests {
         for (n, want) in cases {
             assert_eq!(format_bytes(n), want, "{n}");
         }
+    }
+
+    #[test]
+    fn filter_entries_matches_name_and_url_case_insensitively() {
+        let a = DownloadEntry {
+            id: 1,
+            name: "Report-2026.PDF".into(),
+            url: "https://docs.example.com/files/report.pdf".into(),
+            ..entry(DownloadState::Complete)
+        };
+        let b = DownloadEntry {
+            id: 2,
+            name: "archive.tar.gz".into(),
+            url: "https://cdn.wubble.test/builds/nightly.tar.gz".into(),
+            ..entry(DownloadState::Running)
+        };
+        let list = [a.clone(), b.clone()];
+        assert_eq!(filter_entries(&list, ""), list);
+        assert_eq!(filter_entries(&list, "   "), list);
+        assert_eq!(filter_entries(&list, "report"), [a.clone()]);
+        assert_eq!(filter_entries(&list, "PDF"), [a.clone()]);
+        assert_eq!(filter_entries(&list, "WUBBLE.TEST"), [b.clone()]);
+        assert_eq!(filter_entries(&list, "nightly"), [b]);
+        assert!(filter_entries(&list, "missing").is_empty());
     }
 }

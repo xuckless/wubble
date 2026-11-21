@@ -9,7 +9,7 @@
 // (`kit/controls/*`: Toggle sm, Segmented compact, Select, ElasticSlider compact, Swatches,
 // Kbd, Button, IconButton, the derived Field and ListEditor). This file lays them out and binds
 // the rows. The other native pages and sheets take their Field, Segmented, Stepper, TextButton,
-// Card, SectionHeader and PageFrame from here: thin compositions of the same kit parts.
+// Card and SectionHeader from here: thin compositions of the same kit parts.
 
 import { Shell } from "../kit/derived.slint";
 import { Mark } from "../kit/chrome/mark.slint";
@@ -301,62 +301,6 @@ component Section inherits Rectangle {
     }
 }
 
-// The frame the other native pages share: the page's colour, one scroller, a centred column
-// `Shell.settings-width` wide with the page's title and search capsule on top and the page's
-// rows (`@children`) under them. `open` shows it; `query-changed` is the search box.
-export component PageFrame inherits Rectangle {
-    in property <bool> open;
-    in property <string> title;
-    in property <string> placeholder: "Search";
-    // Without a search box (the downloads page).
-    in property <bool> searchable: true;
-    callback query-changed(string);
-
-    public function take-focus() {
-        search.take-focus();
-    }
-    // Back to the top: a new query or a page switch starts there.
-    public function scroll-to-top() {
-        page.reset();
-    }
-
-    visible: root.open;
-
-    page := PageScroller {
-        open: root.open;
-        HorizontalLayout {
-            alignment: center;
-            padding-top: Shell.settings-top;
-            padding-bottom: Shell.settings-bottom;
-            VerticalLayout {
-                width: min(Shell.settings-width, root.width - 2 * Shell.settings-pad-max);
-                spacing: 0px;
-
-                HorizontalLayout {
-                    spacing: SettingsLayout.title-gap;
-                    padding-bottom: Shell.settings-title-below;
-                    PageTitle {
-                        text: root.title;
-                        narrow: root.width <= SettingsLayout.narrow;
-                    }
-                    search := Field {
-                        horizontal-stretch: 1;
-                        capsule: true;
-                        visible: root.searchable;
-                        max-width: root.searchable ? Shell.settings-width : 0px;
-                        placeholder: root.placeholder;
-                        edited(q) => {
-                            page.reset();
-                            root.query-changed(q);
-                        }
-                    }
-                }
-                @children
-            }
-        }
-    }
-}
-
 // A section's icon in the list (settings.tsx SECTIONS), by the section's title.
 global SectionIcons {
     public pure function of(title: string) -> string {
@@ -365,6 +309,218 @@ global SectionIcons {
         if title == "Appearance" { return Glyph.palette; }
         if title == "Performance" { return Glyph.gauge; }
         return Glyph.globe;
+    }
+}
+
+// The section list and page links shared by the wide pinned column and the narrow stacked header.
+component SettingsNavList inherits VerticalLayout {
+    in property <bool> open;
+    in property <color> accent;
+    in property <[SettingItem]> rows;
+    in property <[BindingItem]> bindings;
+    in property <[PageLinkItem]> pages;
+    in property <bool> searching;
+    in property <bool> extensions-available;
+    in property <int> table;
+    in property <int> ext-gap;
+    in property <int> about-at;
+    in property <int> current;
+    in property <length> pitch;
+    in property <int> nav-focus-index;
+    in property <int> nav-focus-serial;
+    callback pick(int);
+    callback step-nav(int, bool);
+    callback page-requested(string);
+
+    spacing: 0px;
+    // .st-nav: the table's sections (one per first row), then the page's own
+    nav := Rectangle {
+        height: (root.about-at + 1) * root.pitch - Shell.nav-row-gap;
+        // made as the page opens (its spring's slot needs the wired `Controls`)
+        if root.open: NavIndicator {
+            y: 0px;
+            index: root.current;
+        }
+        VerticalLayout {
+            alignment: start;
+            for row in root.rows: Rectangle {
+                height: row.first ? root.pitch : 0px;
+                visible: row.first;
+                NavRow {
+                    y: 0px;
+                    title: row.section;
+                    icon-path: SectionIcons.of(row.section);
+                    on: root.current == row.section-index;
+                    accent: root.accent;
+                    focus-serial: root.nav-focus-serial;
+                    focus-me: root.nav-focus-index == row.section-index;
+                    picked => {
+                        root.pick(row.section-index);
+                    }
+                    step(down) => {
+                        root.step-nav(row.section-index, down);
+                    }
+                }
+            }
+            for extra[i] in [
+                { title: "Keyboard shortcuts", icon: Glyph.keyboard, shown: root.bindings.length > 0, gone: false },
+                { title: "Spaces", icon: Glyph.stack, shown: !root.searching, gone: false },
+                { title: "Sites", icon: Glyph.lock, shown: !root.searching, gone: false },
+                { title: "Filter lists", icon: Glyph.shield, shown: !root.searching, gone: false },
+                { title: "Extensions", icon: Glyph.puzzle, shown: !root.searching, gone: !root.extensions-available },
+                { title: "Agents (MCP)", icon: Glyph.agent, shown: !root.searching, gone: false },
+                { title: "Updates", icon: Glyph.download, shown: !root.searching, gone: false },
+                { title: "About", icon: Glyph.bubble, shown: !root.searching, gone: false },
+            ]: Rectangle {
+                // a row after a gone one stands for the section one index lower
+                property <int> index: root.table + i - (i > 4 ? root.ext-gap : 0);
+                height: extra.gone ? 0 : root.pitch;
+                visible: !extra.gone;
+                NavRow {
+                    y: 0px;
+                    title: extra.title;
+                    icon-path: extra.icon;
+                    enabled: extra.shown;
+                    on: root.current == parent.index;
+                    accent: root.accent;
+                    focus-serial: root.nav-focus-serial;
+                    focus-me: !extra.gone && root.nav-focus-index == parent.index;
+                    picked => {
+                        root.pick(parent.index);
+                    }
+                    step(down) => {
+                        root.step-nav(parent.index, down);
+                    }
+                }
+            }
+        }
+    }
+    // the built-in pages: links out of Settings, each opening its page
+    NavGroup {
+        text: "Pages";
+    }
+    for link[j] in root.pages: Rectangle {
+        property <int> index: root.about-at + 1 + j;
+        height: root.pitch;
+        NavRow {
+            y: 0px;
+            title: link.title;
+            icon-path: Glyph.page(link.url);
+            leads: true;
+            accent: root.accent;
+            accessible-role: AccessibleRole.button;
+            focus-serial: root.nav-focus-serial;
+            focus-me: root.nav-focus-index == parent.index;
+            picked => {
+                root.page-requested(link.action);
+            }
+            step(down) => {
+                root.step-nav(parent.index, down);
+            }
+        }
+    }
+}
+
+// .st-pin: title, search, match count, and the section nav (in its own scroller when wide,
+// or flat in the page scroller when narrow).
+component SettingsSide inherits VerticalLayout {
+    in property <bool> open;
+    in property <bool> narrow;
+    in property <color> accent;
+    in property <[SettingItem]> rows;
+    in property <[BindingItem]> bindings;
+    in property <[PageLinkItem]> pages;
+    in property <bool> searching;
+    in property <string> count-text;
+    in property <bool> extensions-available;
+    in property <int> table;
+    in property <int> ext-gap;
+    in property <int> about-at;
+    in property <int> current;
+    in property <length> pitch;
+    in property <int> nav-focus-index;
+    in property <int> nav-focus-serial;
+    in property <int> focus-serial;
+    in property <int> nav-reset-serial;
+    in property <int> nav-reveal-serial;
+    in property <length> nav-reveal-top;
+    in-out property <string> query;
+    callback search-for(string);
+    callback pick(int);
+    callback step-nav(int, bool);
+    callback page-requested(string);
+    callback nav-overflow(length);
+
+    changed focus-serial => {
+        search.take-focus();
+    }
+
+    min-width: 0px;
+    spacing: 0px;
+    alignment: start;
+    HorizontalLayout {
+        padding-left: Shell.settings-title-in;
+        padding-bottom: Shell.settings-title-below;
+        PageTitle {
+            text: "Settings";
+            narrow: root.narrow;
+        }
+    }
+    search := Field {
+        capsule: true;
+        text <=> root.query;
+        placeholder: "Search settings";
+        edited(q) => {
+            root.search-for(q);
+        }
+    }
+    // .st-count: how many rows the search leaves
+    HorizontalLayout {
+        padding-top: Shell.count-above;
+        padding-bottom: Shell.count-below;
+        padding-left: Shell.count-in;
+        SearchCount {
+            text: root.count-text;
+        }
+    }
+    if !root.narrow: nav-scroll := NavScroller {
+        property <int> reset-serial: root.nav-reset-serial;
+        property <int> reveal-serial: root.nav-reveal-serial;
+        changed reset-serial => {
+            self.reset();
+        }
+        changed reveal-serial => {
+            self.reveal(root.nav-reveal-top, Shell.nav-row);
+        }
+        open: root.open;
+        overflow(d) => {
+            root.nav-overflow(d);
+        }
+        SettingsNavList {
+            open: root.open;
+            accent: root.accent;
+            rows: root.rows;
+            bindings: root.bindings;
+            pages: root.pages;
+            searching: root.searching;
+            extensions-available: root.extensions-available;
+            table: root.table;
+            ext-gap: root.ext-gap;
+            about-at: root.about-at;
+            current: root.current;
+            pitch: root.pitch;
+            nav-focus-index: root.nav-focus-index;
+            nav-focus-serial: root.nav-focus-serial;
+            pick(i) => {
+                root.pick(i);
+            }
+            step-nav(i, d) => {
+                root.step-nav(i, d);
+            }
+            page-requested(a) => {
+                root.page-requested(a);
+            }
+        }
     }
 }
 
@@ -432,20 +588,20 @@ export component SettingsPage inherits Rectangle {
     callback updates-restart();
 
     public function take-focus() {
-        search.take-focus();
+        root.search-focus-serial += 1;
     }
     public function scroll-to-top() {
         page.reset();
-        nav-scroll.reset();
+        root.nav-reset-serial += 1;
         root.tracked = 0;
     }
     // the section list back at its top, the page where it is (the gallery)
     public function nav-to-top() {
-        nav-scroll.reset();
+        root.nav-reset-serial += 1;
     }
     // `q` typed into the search (the gallery's search scene)
     public function type-query(q: string) {
-        search.text = q;
+        root.query = q;
         root.search-for(q);
     }
 
@@ -456,6 +612,8 @@ export component SettingsPage inherits Rectangle {
         return icon == "personal" ? "work" : icon == "work" ? "study" : "personal";
     }
     property <bool> notices-open: false;
+    property <string> query;
+    property <bool> narrow: root.width <= SettingsLayout.narrow;
 
     // .st-grid, centred, at most `settings-max` wide with its padding inside
     property <length> pad-x: max(Shell.settings-pad-min, min(Shell.settings-pad-max, root.width * Shell.settings-pad-share));
@@ -463,6 +621,7 @@ export component SettingsPage inherits Rectangle {
     property <length> grid-w: min(Shell.settings-max, root.width) - 2 * root.pad-x;
     property <length> main-x: root.grid-x + Shell.settings-side + Shell.settings-gap;
     property <length> main-top: Shell.settings-top + Shell.section-top;
+    property <length> content-top: root.narrow ? SettingsLayout.narrow-top : root.main-top;
 
     // The sections: the table's (`section-index` 0..n), then shortcuts, Spaces, sites, about.
     property <int> table: root.rows.length > 0 ? root.rows[root.rows.length - 1].section-index + 1 : 0;
@@ -477,25 +636,63 @@ export component SettingsPage inherits Rectangle {
     property <int> agents-at: root.table + 5 - root.ext-gap;
     property <int> updates-at: root.table + 6 - root.ext-gap;
     property <int> about-at: root.table + 7 - root.ext-gap;
+    property <int> nav-count: root.about-at + 1 + root.pages.length;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
     property <int> matches: root.rows.length + root.bindings.length;
     // what the search leaves: "N settings", then ", M pages" when it names pages
     property <string> settings-count: root.matches == 1 ? "1 setting" : root.matches + " settings";
     property <string> pages-count: root.page-matches.length == 1 ? "1 page" : root.page-matches.length + " pages";
+    property <string> count-text: !root.searching ? "" : root.page-matches.length == 0 ? (root.matches == 0 ? "No matches" : root.settings-count) : root.matches == 0 ? root.pages-count : root.settings-count + ", " + root.pages-count;
     // the section the reader is in: the last one past the tracking line, the last at the end,
     // or the one picked in the list until the page is scrolled by hand
     property <int> tracked: 0;
     property <int> picked: -1;
     property <int> goto-index: -1;
     property <int> goto-serial: 0;
+    property <int> nav-focus-index: -1;
+    property <int> nav-focus-serial: 0;
+    property <int> search-focus-serial: 0;
+    property <int> nav-reset-serial: 0;
+    property <int> nav-reveal-serial: 0;
+    property <length> nav-reveal-top: 0px;
     property <bool> at-end: page.room > 0px && page.scroll >= page.room - Shell.settings-end-slack;
     out property <int> current: root.picked >= 0 ? root.picked : root.at-end ? root.last : root.tracked;
     property <length> pitch: Shell.nav-row + Shell.nav-row-gap;
 
     // the list scrolls the current section's row into view when the section changes
     changed current => {
-        if root.current >= 0 {
-            nav-scroll.reveal(root.current * root.pitch, Shell.nav-row);
+        if !root.narrow && root.current >= 0 {
+            root.nav-reveal-top = root.current * root.pitch;
+            root.nav-reveal-serial += 1;
+        }
+    }
+    pure function next-nav(from: int, down: bool) -> int {
+        if down {
+            if from + 1 < root.table { return from + 1; }
+            if from < root.shortcuts && root.bindings.length > 0 { return root.shortcuts; }
+            if from < root.spaces-at && !root.searching { return root.spaces-at; }
+            if from >= root.spaces-at && from < root.about-at && !root.searching { return from + 1; }
+            if from < root.about-at + 1 && root.pages.length > 0 { return root.about-at + 1; }
+            if from >= root.about-at + 1 && from + 1 < root.nav-count { return from + 1; }
+            return from;
+        }
+        if from > root.about-at + 1 { return from - 1; }
+        if from > root.about-at && !root.searching { return root.about-at; }
+        if from > root.spaces-at && from <= root.about-at && !root.searching { return from - 1; }
+        if from > root.shortcuts && root.bindings.length > 0 { return root.shortcuts; }
+        if from > root.table - 1 && root.table > 0 { return root.table - 1; }
+        if from > 0 && from < root.table { return from - 1; }
+        return from;
+    }
+    function step-nav(from: int, down: bool) {
+        let next = root.next-nav(from, down);
+        if next != from {
+            root.nav-focus-index = next;
+            root.nav-focus-serial += 1;
+            if !root.narrow && next <= root.about-at {
+                root.nav-reveal-top = next * root.pitch;
+                root.nav-reveal-serial += 1;
+            }
         }
     }
     function pick(index: int) {
@@ -522,13 +719,54 @@ export component SettingsPage inherits Rectangle {
             root.picked = -1;
         }
         HorizontalLayout {
-            padding-left: root.main-x;
+            padding-left: root.narrow ? root.grid-x : root.main-x;
             padding-right: root.width - root.grid-x - root.grid-w;
-            padding-top: root.main-top;
+            padding-top: root.content-top;
             padding-bottom: Shell.settings-bottom;
 
             VerticalLayout {
+                width: root.narrow ? root.grid-w : max(0px, root.grid-w - Shell.settings-side - Shell.settings-gap);
                 spacing: 0px;
+
+                if root.narrow: VerticalLayout {
+                    min-width: 0px;
+                    padding-bottom: SettingsLayout.narrow-main-top;
+                    narrow-side := SettingsSide {
+                        open: root.open;
+                        narrow: true;
+                        accent: root.accent;
+                        rows: root.rows;
+                        bindings: root.bindings;
+                        pages: root.pages;
+                        searching: root.searching;
+                        count-text: root.count-text;
+                        extensions-available: root.extensions-available;
+                        table: root.table;
+                        ext-gap: root.ext-gap;
+                        about-at: root.about-at;
+                        current: root.current;
+                        pitch: root.pitch;
+                        nav-focus-index: root.nav-focus-index;
+                        nav-focus-serial: root.nav-focus-serial;
+                        focus-serial: root.search-focus-serial;
+                        nav-reset-serial: root.nav-reset-serial;
+                        nav-reveal-serial: root.nav-reveal-serial;
+                        nav-reveal-top: root.nav-reveal-top;
+                        query <=> root.query;
+                        search-for(q) => {
+                            root.search-for(q);
+                        }
+                        pick(i) => {
+                            root.pick(i);
+                        }
+                        step-nav(i, d) => {
+                            root.step-nav(i, d);
+                        }
+                        page-requested(a) => {
+                            root.page-requested(a);
+                        }
+                    }
+                }
 
                 // A search's redirect rows: the built-in pages it names, above the settings
                 if root.searching && root.page-matches.length > 0: VerticalLayout {
@@ -555,7 +793,7 @@ export component SettingsPage inherits Rectangle {
                 for row in root.rows: setting-row := Section {
                     index: row.section-index;
                     start: row.first;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -596,7 +834,7 @@ export component SettingsPage inherits Rectangle {
 
                 if root.bindings.length > 0: Section {
                     index: root.shortcuts;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -632,7 +870,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.spaces-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -726,7 +964,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.sites-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -794,7 +1032,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.lists-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -872,7 +1110,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching && root.extensions-available: Section {
                     index: root.extensions-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -910,7 +1148,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.agents-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -948,7 +1186,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.updates-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -1010,7 +1248,7 @@ export component SettingsPage inherits Rectangle {
 
                 if !root.searching: Section {
                     index: root.about-at;
-                    top: self.y + root.main-top;
+                    top: self.y + root.content-top;
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
@@ -1065,14 +1303,14 @@ export component SettingsPage inherits Rectangle {
                     open: root.searching && root.matches == 0 && root.page-matches.length == 0;
                     content-height: empty.preferred-height;
                     empty := NothingMatches {
-                        text: "Nothing matches “" + search.text + "”.";
+                        text: "Nothing matches “" + root.query + "”.";
                         Button {
                             kind: ButtonKind.ghost;
                             text: "Clear search";
                             clicked => {
-                                search.text = "";
+                                root.query = "";
                                 root.search-for("");
-                                search.take-focus();
+                                root.take-focus();
                             }
                         }
                     }
@@ -1084,117 +1322,51 @@ export component SettingsPage inherits Rectangle {
     // .st-pin: the title, the search, the count and the section list, held 24 below the top
     // once the page scrolls; the wheel over the title scrolls the page, over the list the list
     // when it is taller than the window (derived-review.md), else the page.
-    side := TouchArea {
+    if !root.narrow: side := TouchArea {
         x: root.grid-x;
         y: max(Shell.settings-pin, Shell.settings-top - page.scroll);
         width: Shell.settings-side;
-        height: min(pin.preferred-height, root.height - self.y - Shell.settings-pin);
+        height: min(wide-side.preferred-height, root.height - self.y - Shell.settings-pin);
         scroll-event(e) => {
             page.wheel(-e.delta-y);
             accept
         }
-        pin := VerticalLayout {
-            spacing: 0px;
-            alignment: start;
-            HorizontalLayout {
-                padding-left: Shell.settings-title-in;
-                padding-bottom: Shell.settings-title-below;
-                PageTitle {
-                    text: "Settings";
-                    narrow: root.width <= SettingsLayout.narrow;
-                }
-            }
-            search := Field {
-                capsule: true;
-                placeholder: "Search settings";
-                edited(q) => {
-                    root.search-for(q);
-                }
-            }
-            // .st-count: how many rows the search leaves
-            HorizontalLayout {
-                padding-top: Shell.count-above;
-                padding-bottom: Shell.count-below;
-                padding-left: Shell.count-in;
-                SearchCount {
-                    text: !root.searching ? "" : root.page-matches.length == 0 ? (root.matches == 0 ? "No matches" : root.settings-count) : root.matches == 0 ? root.pages-count : root.settings-count + ", " + root.pages-count;
-                }
-            }
-            nav-scroll := NavScroller {
+        wide-side := SettingsSide {
             open: root.open;
-            overflow(d) => {
+            narrow: false;
+            accent: root.accent;
+            rows: root.rows;
+            bindings: root.bindings;
+            pages: root.pages;
+            searching: root.searching;
+            count-text: root.count-text;
+            extensions-available: root.extensions-available;
+            table: root.table;
+            ext-gap: root.ext-gap;
+            about-at: root.about-at;
+            current: root.current;
+            pitch: root.pitch;
+            nav-focus-index: root.nav-focus-index;
+            nav-focus-serial: root.nav-focus-serial;
+            focus-serial: root.search-focus-serial;
+            nav-reset-serial: root.nav-reset-serial;
+            nav-reveal-serial: root.nav-reveal-serial;
+            nav-reveal-top: root.nav-reveal-top;
+            query <=> root.query;
+            search-for(q) => {
+                root.search-for(q);
+            }
+            pick(i) => {
+                root.pick(i);
+            }
+            step-nav(i, d) => {
+                root.step-nav(i, d);
+            }
+            page-requested(a) => {
+                root.page-requested(a);
+            }
+            nav-overflow(d) => {
                 page.wheel(d);
-            }
-            // .st-nav: the table's sections (one per first row), then the page's own
-            nav := Rectangle {
-                height: (root.about-at + 1) * root.pitch - Shell.nav-row-gap;
-                // made as the page opens (its spring's slot needs the wired `Controls`)
-                if root.open: NavIndicator {
-                    y: 0px;
-                    index: root.current;
-                }
-                VerticalLayout {
-                    alignment: start;
-                    for row in root.rows: Rectangle {
-                        height: row.first ? root.pitch : 0px;
-                        visible: row.first;
-                        NavRow {
-                            y: 0px;
-                            title: row.section;
-                            icon-path: SectionIcons.of(row.section);
-                            on: root.current == row.section-index;
-                            accent: root.accent;
-                            picked => {
-                                root.pick(row.section-index);
-                            }
-                        }
-                    }
-                    for extra[i] in [
-                        { title: "Keyboard shortcuts", icon: Glyph.keyboard, shown: root.bindings.length > 0, gone: false },
-                        { title: "Spaces", icon: Glyph.stack, shown: !root.searching, gone: false },
-                        { title: "Sites", icon: Glyph.lock, shown: !root.searching, gone: false },
-                        { title: "Filter lists", icon: Glyph.shield, shown: !root.searching, gone: false },
-                        { title: "Extensions", icon: Glyph.puzzle, shown: !root.searching, gone: !root.extensions-available },
-                        { title: "Agents (MCP)", icon: Glyph.agent, shown: !root.searching, gone: false },
-                        { title: "Updates", icon: Glyph.download, shown: !root.searching, gone: false },
-                        { title: "About", icon: Glyph.bubble, shown: !root.searching, gone: false },
-                    ]: Rectangle {
-                        // a row after a gone one stands for the section one index lower
-                        property <int> index: root.table + i - (i > 4 ? root.ext-gap : 0);
-                        height: extra.gone ? 0 : root.pitch;
-                        visible: !extra.gone;
-                        NavRow {
-                            y: 0px;
-                            title: extra.title;
-                            icon-path: extra.icon;
-                            enabled: extra.shown;
-                            on: root.current == parent.index;
-                            accent: root.accent;
-                            picked => {
-                                root.pick(parent.index);
-                            }
-                        }
-                    }
-                }
-            }
-            // the built-in pages: links out of Settings, each opening its page
-            NavGroup {
-                text: "Pages";
-            }
-            for link in root.pages: Rectangle {
-                height: root.pitch;
-                NavRow {
-                    y: 0px;
-                    title: link.title;
-                    icon-path: Glyph.page(link.url);
-                    leads: true;
-                    accent: root.accent;
-                    accessible-role: AccessibleRole.button;
-                    picked => {
-                        root.page-requested(link.action);
-                    }
-                }
-            }
             }
         }
     }
