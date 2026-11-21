@@ -340,6 +340,14 @@ impl Host {
                     self.dispatch(Command::SwitchSpace(space));
                 }
             }
+            E::Bookmark { url, title, folder } => {
+                let title = title.unwrap_or_else(|| url.clone());
+                self.bookmarks_request(Some(wubble_core::pages::BookmarkEdit::Add {
+                    parent: folder,
+                    title,
+                    url,
+                }));
+            }
             E::Activate(tab) => self.dispatch(Command::ActivateTab(tab)),
             E::OpenSpaces => self.spaces_menu_requested(),
             E::CloseSpaces => window.set_spaces_open(false),
@@ -381,6 +389,14 @@ impl Host {
     /// drop fills it, it does not navigate).
     fn drop_fill_bar(&mut self, text: String) {
         let win = self.w.id;
+        // the bar is open: its field takes the text, its mode stays
+        if let Some(window) = self.w.window.upgrade()
+            && window.get_command_bar_state() == wubble_ui::CommandBarState::Open
+        {
+            window.set_command_query(text.as_str().into());
+            self.bar_query(&window, &text);
+            return;
+        }
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             window.invoke_request_address_focus();
             crate::with_host_in(win, |host| {
@@ -414,15 +430,38 @@ impl Host {
         )
     }
 
-    /// A page on screen under `at` that may take a drop: a model tab's (not the DevTools panel
-    /// or an extension popup). An agent's drag reaches no other page: [`pagedrag`] confines it.
+    /// A page on screen under `at` that may take a drop: a model tab's with a web view (not the
+    /// DevTools panel or an extension popup, nor one of wubble's own pages, which are the shell's). An agent's drag reaches no other page: [`pagedrag`] confines it.
     fn page_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
         self.pane_under(window, at)
-            .filter(|t| self.model.tabs.contains_key(t))
+            .filter(|t| self.model.tabs.contains_key(t) && self.views.contains_key(t))
     }
 
     /// The shell's drop target under `at`, while the sidebar shows.
     fn shell_target(&self, window: &AppWindow, at: (f32, f32)) -> Option<Shell> {
+        let within = |x: f32, y: f32, w: f32, h: f32| {
+            (x..x + w).contains(&at.0) && (y..y + h).contains(&at.1)
+        };
+        // the open command bar's field, over everything but the menus
+        if window.get_command_bar_state() == wubble_ui::CommandBarState::Open
+            && within(
+                window.get_command_field_x(),
+                window.get_command_field_y(),
+                window.get_command_field_w(),
+                window.get_command_field_h(),
+            )
+        {
+            return Some(Shell::Bar);
+        }
+        // the bookmarks page, a folder row on it
+        let bookmarks = self.shown_page() == Some(wubble_core::pages::InternalPage::Bookmarks)
+            && self.pane_under(window, at).is_some();
+        self.bookmarks_drop_point(window, bookmarks.then_some(at));
+        if bookmarks {
+            return Some(Shell::Bookmarks {
+                folder: self.bookmark_drop,
+            });
+        }
         let p = tabdrag::Point {
             x: f64::from(at.0),
             y: f64::from(at.1),
@@ -436,9 +475,6 @@ impl Host {
             return None;
         }
         let g = window.get_drop_geometry();
-        let within = |x: f32, y: f32, w: f32, h: f32| {
-            (x..x + w).contains(&at.0) && (y..y + h).contains(&at.1)
-        };
         if within(g.pill_x, g.pill_y, g.pill_w, g.pill_h) {
             return Some(Shell::Bar);
         }
@@ -458,6 +494,27 @@ impl Host {
         None
     }
 
+    /// Tells the bookmarks page where a drag is over it (`None`: not over it), so its folder rows
+    /// can say which one is under the pointer ([`Host::bookmark_drop_hovered`]).
+    fn bookmarks_drop_point(&self, window: &AppWindow, at: Option<(f32, f32)>) {
+        let mut drop = window.get_bookmarks_drop();
+        let (on, (x, y)) = (at.is_some(), at.unwrap_or_default());
+        if (drop.on, drop.x, drop.y) != (on, x, y) {
+            (drop.on, drop.x, drop.y) = (on, x, y);
+            window.set_bookmarks_drop(drop);
+        }
+    }
+
+    /// The bookmarks page's folder row `id` is (`on`) or is no longer under a drag.
+    pub fn bookmark_drop_hovered(&mut self, id: i32, on: bool) {
+        let id = i64::from(id);
+        match (on, self.bookmark_drop) {
+            (true, _) => self.bookmark_drop = Some(id),
+            (false, Some(was)) if was == id => self.bookmark_drop = None,
+            _ => {}
+        }
+    }
+
     /// The drop indicator over `target`, or none.
     fn drop_mark(&self, window: &AppWindow, target: Option<Shell>) {
         let g = window.get_drop_geometry();
@@ -470,8 +527,33 @@ impl Host {
         };
         let none = DropMarkView::default();
         window.set_spaces_drop_line(-1);
+        let mut drop = window.get_bookmarks_drop();
+        drop.folder_on = false;
+        let bar_open = window.get_command_bar_state() == wubble_ui::CommandBarState::Open;
         let view = match target {
+            Some(Shell::Bar) if bar_open => mark(
+                DropMarkKind::Box,
+                window.get_command_field_x(),
+                window.get_command_field_y(),
+                window.get_command_field_w(),
+                window.get_command_field_h(),
+            ),
             Some(Shell::Bar) => mark(DropMarkKind::Box, g.pill_x, g.pill_y, g.pill_w, g.pill_h),
+            // a folder row lights itself; the page's top level: the pane boxed
+            Some(Shell::Bookmarks {
+                folder: Some(folder),
+            }) => {
+                drop.folder_on = true;
+                drop.folder = i32::try_from(folder).unwrap_or(-1);
+                none
+            }
+            Some(Shell::Bookmarks { folder: None }) => mark(
+                DropMarkKind::Box,
+                window.get_content_x(),
+                window.get_content_y(),
+                window.get_content_width(),
+                window.get_content_height(),
+            ),
             Some(Shell::NewTab) => mark(
                 DropMarkKind::Box,
                 g.new_tab_x,
@@ -516,6 +598,7 @@ impl Host {
             }
             Some(Shell::SpacesTrigger) | None => none,
         };
+        window.set_bookmarks_drop(drop);
         window.set_drop_mark(view);
     }
 
@@ -525,6 +608,7 @@ impl Host {
             if window.get_page_ghost().shown {
                 window.set_page_ghost(PageGhost::default());
                 window.set_drop_mark(DropMarkView::default());
+                window.set_bookmarks_drop(Default::default());
             }
             return;
         };
@@ -604,10 +688,9 @@ impl Host {
             return;
         };
         let modifiers = self.input.modifiers();
-        let text = pagedrag::dropped_text(&drag.data);
         let shell = self
             .shell_target(window, at)
-            .filter(|s| text.is_some() && *s != Shell::SpacesTrigger);
+            .filter(|s| pagedrag::shell_drop::<_, DragData>(*s, &drag.data).is_some());
         let under = self
             .page_under(window, at)
             .filter(|t| shell.is_none() && !self.agent_drives(*t));
@@ -658,7 +741,7 @@ impl Host {
                 self.aux().drop_action(DragOps::COPY);
                 if phase == External::Drop {
                     self.drop_mark(window, None);
-                    if let Some(effect) = text.and_then(|t| pagedrag::shell_drop(s, t)) {
+                    if let Some(effect) = pagedrag::shell_drop(s, &drag.data) {
                         self.page_drag_effect(effect, None);
                     }
                 }

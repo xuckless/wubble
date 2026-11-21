@@ -14,7 +14,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -300,6 +300,14 @@ export component AppWindow inherits Window {
     in property <DropMarkView> drop-mark;
     // Where the shell's drop targets are, in window coordinates (the host hit-tests a drag).
     out property <DropGeometry> drop-geometry <=> sidebar.drop-geometry;
+    // A drag over the bookmarks page (written by the host) and the folder row it is over.
+    in property <BookmarksDrop> bookmarks-drop;
+    callback bookmark-drop-hovered(int, bool);
+    // The open command bar's query field (window coordinates): a drop there fills it.
+    out property <length> command-field-x: bar.head-x;
+    out property <length> command-field-y: bar.head-y;
+    out property <length> command-field-w: bar.head-w;
+    out property <length> command-field-h: bar.head-h;
     // The host took the drag from the row physics: the driver drops it.
     callback tab-rows-cancel();
     callback tab-drag <=> sidebar.tab-drag;
@@ -1175,6 +1183,14 @@ export component AppWindow inherits Window {
                 }
                 folder-requested => {
                     root.bookmark-folder-requested();
+                }
+                drop-on: root.bookmarks-drop.on;
+                drop-x: root.bookmarks-drop.x;
+                drop-y: root.bookmarks-drop.y;
+                drop-folder-on: root.bookmarks-drop.folder-on;
+                drop-folder: root.bookmarks-drop.folder;
+                drop-hovered(id, on) => {
+                    root.bookmark-drop-hovered(id, on);
                 }
             }
             downloads-page-ui := DownloadsPage {

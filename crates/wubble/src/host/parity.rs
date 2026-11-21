@@ -483,6 +483,10 @@ impl Host {
                 g.new_tab_y + g.new_tab_h / 2.0,
             ),
             Spot::Bar => (g.pill_x + g.pill_w / 2.0, g.pill_y + g.pill_h / 2.0),
+            Spot::CommandField => (
+                window.get_command_field_x() + window.get_command_field_w() / 2.0,
+                window.get_command_field_y() + window.get_command_field_h() / 2.0,
+            ),
             Spot::Pane(n, p) => {
                 let tab = *self.shown_tabs().get(n)?;
                 let (x, y) = self.view_origin(window, tab);
@@ -494,10 +498,16 @@ impl Host {
 
     fn parity_host_op(&mut self, window: &AppWindow, op: HostOp) {
         match op {
-            HostOp::SplitHome | HostOp::SecondTab => {
+            HostOp::SplitHome | HostOp::SecondTab | HostOp::BookmarksTab => {
                 let (Some(home), Some(first)) = (self.parity_home(), self.model.visible_tab())
                 else {
                     return;
+                };
+                let home = match op {
+                    HostOp::BookmarksTab => {
+                        wubble_core::pages::InternalPage::Bookmarks.url().to_owned()
+                    }
+                    _ => home,
                 };
                 self.dispatch(super::new_tab(home, Some(first)));
                 if let Some(second) = self.model.visible_tab() {
@@ -508,6 +518,20 @@ impl Host {
                         self.dispatch(wubble_core::model::Command::ActivateTab(first));
                     }
                 }
+            }
+            HostOp::DropTextFromApp(spot, text) => {
+                let Some(p) = self.parity_spot(window, spot) else {
+                    return;
+                };
+                let data = wubble_engine::page::DragData {
+                    text: Some(text.to_owned()),
+                    ..Default::default()
+                };
+                use crate::wl::AuxEvent as A;
+                let (x, y) = (p.x, p.y);
+                self.aux_event(A::DropEnter { x, y, data });
+                self.aux_event(A::DropMove { x, y });
+                self.aux_event(A::Dropped { x, y });
             }
             HostOp::Shot(name) => {
                 let Some(run) = self.parity_run() else { return };
@@ -786,6 +810,12 @@ impl Host {
                     .and_then(|t| self.surfaces.get(&t))
                     .is_some_and(|s| s.permission != crate::prompt::PermissionPrompt::None);
                 is(open == want, format!("permission prompt open: {open}"))
+            }
+            HostCheck::Bookmarked(want) => {
+                use slint::Model as _;
+                let lines = window.get_bookmark_lines();
+                let found = lines.iter().any(|l| l.url.contains(want));
+                is(found, format!("{} bookmark lines", lines.row_count()))
             }
             HostCheck::BarQuery(want) => {
                 let got = window.get_command_query();

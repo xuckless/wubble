@@ -2,12 +2,12 @@
 //! host on `dnd.html` (served on loopback, [`home`]): a link into a text field, a selection into
 //! a textarea, a picture onto a drop zone, an HTML `draggable` with its own data and drag image
 //! onto another element and into the other split pane, a link onto the tab list and the New tab
-//! row, text onto the address bar, a rest on a tab row showing that tab, Escape cancelling; the
+//! row, text onto the address bar and into the open command bar, a link onto the bookmarks page, a rest on a tab row showing that tab, Escape cancelling; the
 //! ghost is checked drawn and shot mid-drag (`--shot-dir`). The driver and executor are
 //! `--smoke parity`'s ([`crate::parity::next_in`], `host/parity.rs`). Bounded by counts of CEF
 //! work, never by time.
 
-use crate::parity::{Expect, HostCheck as C, HostOp, Item, RESET, Spot, Step};
+use crate::parity::{Button::Left, Expect, HostCheck as C, HostOp, Item, NONE, RESET, Spot, Step};
 use Expect::{Host as H, Js as J};
 use Step::*;
 use wubble_engine::input::Point;
@@ -78,6 +78,9 @@ pub const ITEMS: &[Item] = &[
     item!(
         "dnd.link-into-input",
         [
+            // the first item can begin while the page still fades in (its entrance, app.slint
+            // `page-enter`): a shot then shows the pane empty
+            Until(H(C::PageEntered)),
             LINK[0],
             LINK[1],
             LINK[2],
@@ -220,6 +223,43 @@ pub const ITEMS: &[Item] = &[
             Until(H(C::BarOpen(true)))
         ],
         [H(C::BarQuery("alpha")), H(C::Tabs(1))]
+    ),
+    item!(
+        "dnd.text-onto-the-open-command-bar",
+        [
+            // the bar's scrim takes a press, so the drag comes from another app
+            Click(Left, NONE, at::EMPTY),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Settle(10),
+            Host(HostOp::DropTextFromApp(Spot::CommandField, "alpha")),
+            Settle(10)
+        ],
+        [H(C::BarOpen(true)), H(C::BarQuery("alpha")), H(C::Tabs(1))]
+    ),
+    item!(
+        "dnd.link-onto-the-bookmarks-page",
+        [
+            Host(HostOp::BookmarksTab),
+            Settle(20),
+            Until(H(C::Visible(0))),
+            LINK[0],
+            LINK[1],
+            LINK[2],
+            LINK[3],
+            // rest on its row: the page shows, then over it
+            MoveToSpot(Spot::TabRow(1)),
+            Settle(4),
+            MoveToSpot(Spot::TabRow(1)),
+            Until(H(C::Visible(1))),
+            MoveToSpot(pane(0, at::x(at::DROP, 300.0))),
+            MoveToSpot(pane(0, at::DROP)),
+            Settle(10),
+            Host(HostOp::Shot("dnd-over-bookmarks")),
+            ReleaseAt(pane(0, at::DROP)),
+            Settle(20)
+        ],
+        [H(C::Bookmarked("/dnd/linked")), H(C::Drag(false))]
     ),
     item!(
         "dnd.rest-on-a-tab-row-shows-it",

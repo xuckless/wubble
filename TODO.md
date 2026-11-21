@@ -133,7 +133,7 @@ Open, to build or check:
 - [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
 - [ ] Drag out on Windows (the stub: `wl::Null`)
 - [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
-- [ ] A page drag dropped on the bookmarks page or a folder row makes a bookmark (the built-in pages take no drop yet); text or a link onto an open command bar's field (the pill only)
+- [ ] A bookmark dropped into a folder row lands at its end; Chrome's drop line between rows (a position) waits for drag reorder of bookmarks
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)
