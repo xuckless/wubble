@@ -190,6 +190,7 @@ impl Model {
             active: None,
             split: None,
             never_sleep: false,
+            agent: false,
         });
         id
     }

@@ -72,6 +72,8 @@ export struct SpacesMenuRow {
     // what the row's tile draws (wubble_core::space::glyph_id): "personal" | "work" | "study" | "agent"
     icon: string,
     current: bool,
+    // an agent Space (wubble_core::space::Space::agent): the row has the dustbin
+    clear: bool,
 }
 
 // A built-in page Settings links to (wubble_core::pages::PAGE_LINKS): its title, address (which

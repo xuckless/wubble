@@ -2191,8 +2191,12 @@ impl Host {
         if self.archiving.contains_key(&tab) {
             return; // filed in the Archive instead
         }
-        if self.agent_drives(tab) {
-            return; // an agent session's tab is none of the user's
+        // an agent session's tab is none of the user's, nor is one of an agent Space the owner
+        // clears with its dustbin, kept or not (as the session's own teardown)
+        let cleared = self.model.location(tab).map(|(sp, _)| sp) == self.agents.clearing
+            && self.agents.clearing.is_some();
+        if self.agent_drives(tab) || cleared {
+            return;
         }
         let Some(t) = self.model.tabs.get(&tab) else {
             return;

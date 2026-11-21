@@ -983,6 +983,11 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
             command(Cmd::SwitchSpace(s));
         }
     });
+    window.on_space_cleared(move |id| {
+        if let Some(s) = shell::space_id(id) {
+            with_host_in(win, |host| host.space_cleared(s));
+        }
+    });
     // The start page (host/start.rs): its stage's pointer and the front's intents.
     {
         use crate::host::start::StagePointer;

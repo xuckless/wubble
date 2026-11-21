@@ -185,6 +185,14 @@ pub const SHEETS: &[Sheet] = &[
         headless: true,
         press: Press::WindowedAllow,
     },
+    // the session the Spaces popup's dustbin stops
+    Sheet {
+        more: false,
+        secrets: &[],
+        sites: &[],
+        headless: true,
+        press: Press::Allow,
+    },
 ];
 
 /// What the smoke types.
@@ -577,6 +585,16 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
         "start_session",
         "a second one, windowed on the sheet, two tabs, left for the quit",
     );
+    // a third, headless, whose Space the host clears with the Spaces popup's dustbin
+    let (third, its_tab) = started(&c.ok(
+        "start_session",
+        json!({"purpose": "cleared by its dustbin", "headless": true}),
+    )?)?;
+    c.ok(
+        "navigate",
+        json!({"session": third, "tab": its_tab, "url": page}),
+    )?;
+    c.step("start_session", "a third one, headless, for the dustbin");
     let kept = own;
     let steps = c.steps;
     Ok((Done { steps, kept }, c))
@@ -988,6 +1006,8 @@ pub struct McpSmoke {
     pub blanked: usize,
     /// The client's step count, kept while the host switches tabs.
     pub steps: usize,
+    /// The Space the first session left its tab in (`stop_session` with `keep_tabs`).
+    pub kept_space: Option<wubble_core::space::SpaceId>,
     /// The switch's step and the tab whose frame it waits for (`Host::mcp_smoke_switch`).
     pub switch: Option<(usize, wubble_core::tab::TabId)>,
     /// The panes' frame size before the switch hid the sidebar.
@@ -1012,6 +1032,14 @@ pub mod sheet {
     fn centre(e: &ElementHandle) -> LogicalPosition {
         let (p, s) = (e.absolute_position(), e.size());
         LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+    }
+
+    /// The centre of the window's button `label`, wherever it is (the Spaces popup's dustbins).
+    pub fn labelled(window: &AppWindow, label: &str) -> Result<LogicalPosition, String> {
+        ElementHandle::find_by_accessible_label(window, label)
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+            .map(|e| centre(&e))
+            .ok_or_else(|| format!("no {label:?} button"))
     }
 
     /// The centre of the sheet's button `label` (Allow, Deny).

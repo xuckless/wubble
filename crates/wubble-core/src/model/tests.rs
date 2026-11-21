@@ -3567,3 +3567,21 @@ fn an_extension_tab_in_a_gone_container_or_space_opens_nothing() {
     let (_, fx) = run(m, extension_tab(D, Some(SpaceId(99)), true));
     assert!(fx.is_empty());
 }
+
+#[test]
+fn an_agent_space_stays_one() {
+    let (m, _) = with_tabs(1);
+    assert!(!m.spaces[0].agent);
+    let (m, fx) = run(m, Command::MarkAgentSpace(s0()));
+    assert!(m.spaces[0].agent && fx.is_empty());
+    // the session's Space outlives it: nothing but deleting the Space ends the mark
+    let (m, _) = run(
+        m,
+        Command::SetSpaceNeverSleep {
+            space: s0(),
+            on: false,
+        },
+    );
+    assert!(m.spaces[0].agent);
+    assert!(m.for_session(&[]).spaces[0].agent, "saved like any Space");
+}

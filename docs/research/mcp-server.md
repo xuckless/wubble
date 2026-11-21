@@ -77,7 +77,8 @@ scrolled into view and cropped right at any scroll, or `full_page`), `list_tabs`
 `in_values` for form fields), `evaluate` (statements, top-level await and return, promises awaited, nodes named, a
 throw with its stack, `timeout_ms`), `fill_secret`. Element actions take their place from the live layout
 (DevTools, by the node), not the accessibility mirror; raw coordinates only inside a `<canvas>` by ref. A closed
-connection still tears the session down: hand-off is explicit (decisions.md "Agent hand-off"). Not done: network
+connection still tears the session down: hand-off is explicit (decisions.md "Agent hand-off"); a kept Space stays
+an agent Space, which the owner clears with its dustbin in the Spaces popup (decisions.md "Agent Spaces"). Not done: network
 idle for in-page navigations; the wheel over a nested scroller (TODO.md).
 
 ## 1. Summary and recommendation

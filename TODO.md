@@ -16,7 +16,6 @@ own session and has not been run since batch eight; Windows is not green in CI.
 
 ## Now (2026-11-20)
 In flight, each in its own worktree, not yet on `main`:
-- [~] `xm/sheet-fix`: a dustbin on each agent Space row of the Spaces popup (clears that session and its Space)
 Next, in order:
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it

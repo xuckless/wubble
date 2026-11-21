@@ -77,8 +77,11 @@ pub enum Overlay {
     AgentSheet,
     /// An approved agent session in the window: its tab rows and Space header carry the mark.
     AgentTabs,
-    /// The same session, the footer's Spaces popup open over the agent's Space row.
+    /// The same session and a Space an ended session left (its tabs kept), the footer's Spaces
+    /// popup open: the user's Space, then the two agent Spaces with their dustbins.
     AgentSpaces,
+    /// The same session asking for more (`request_more`): the sheet lists only what is new.
+    AgentMore,
     /// The shown tab plays sound and / or is muted (the sound badge's states).
     Sound {
         audible: bool,
@@ -261,6 +264,10 @@ pub const SCENES: &[Scene] = &[
         ..over("agent-tabs-rail", Overlay::AgentTabs)
     },
     over("agent-spaces-popup", Overlay::AgentSpaces),
+    Scene {
+        pointer: Some(AGENT_SPACE_BIN),
+        ..over("agent-spaces-popup-bin", Overlay::AgentSpaces)
+    },
     Scene {
         frames: BURST,
         ..over("command-bar-open", Overlay::CommandBar(""))
@@ -469,6 +476,7 @@ pub const SCENES: &[Scene] = &[
     // approval sheet, the marks of an approved session's tabs and Space (wubble-only, derived)
     on("agent-activity", InternalPage::AgentLog),
     over("agent-sheet", Overlay::AgentSheet),
+    over("agent-sheet-more", Overlay::AgentMore),
     over("agent-tabs", Overlay::AgentTabs),
 ];
 
@@ -485,6 +493,8 @@ const RAIL_SOUND_BADGE: (u16, u16) = (45, 113);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
 // autofill menu's first login.
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);
+/// The dustbin on the running session's row of the Spaces popup (`agent-spaces-popup`).
+const AGENT_SPACE_BIN: (u16, u16) = (229, 718);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
 // Settings at the design's 1360x880 (extended sidebar): a routing rule's row in General, the

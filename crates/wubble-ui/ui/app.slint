@@ -597,6 +597,8 @@ export component AppWindow inherits Window {
     in property <[MenuEntry]> spaces-menu-entries;
     in-out property <bool> spaces-open: false;
     callback spaces-menu-requested();
+    // an agent Space row's dustbin (the host clears that Space; the popup stays open)
+    callback space-cleared(int);
     // a dragged tab over the popup: the line it would drop on (-1 none), its top in the list,
     // or the sticky New Space row (the host's, from wubble_core::tabdrag)
     in property <int> spaces-drop-line: -1;
@@ -1694,6 +1696,9 @@ export component AppWindow inherits Window {
         new-space => {
             root.spaces-open = false;
             root.shell-action("new-space");
+        }
+        cleared(id) => {
+            root.space-cleared(id);
         }
         dismissed => {
             root.spaces-open = false;

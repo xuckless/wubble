@@ -305,6 +305,9 @@ pub enum Command {
         space: SpaceId,
         on: bool,
     },
+    /// An agent session made the Space: an agent Space for the rest of its life
+    /// ([`Space::agent`]); nothing clears it.
+    MarkAgentSpace(SpaceId),
     /// Tabs on these sites (a host covers its subdomains) are never put to sleep.
     SetNeverSleepSites(Vec<String>),
     /// Groups the Space's unpinned top-level tabs into one folder per site (`tidy::plan_groups`).
@@ -434,6 +437,7 @@ impl Model {
             active: None,
             split: None,
             never_sleep: false,
+            agent: false,
         };
         Self {
             windows: vec![Window::main(WindowId(0), space.id)],
@@ -2038,6 +2042,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::SetSpaceNeverSleep { space, on } => {
             if let Some(si) = m.space_idx(space) {
                 m.spaces[si].never_sleep = on;
+            }
+            vec![]
+        }
+        Command::MarkAgentSpace(space) => {
+            if let Some(si) = m.space_idx(space) {
+                m.spaces[si].agent = true;
             }
             vec![]
         }

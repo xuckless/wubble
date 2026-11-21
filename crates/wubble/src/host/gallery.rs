@@ -310,7 +310,12 @@ impl Host {
                 }
             }
             Overlay::AgentSheet => self.gallery_agent(false),
-            Overlay::AgentTabs | Overlay::AgentSpaces => self.gallery_agent(true),
+            Overlay::AgentTabs => self.gallery_agent(true),
+            Overlay::AgentSpaces => {
+                self.gallery_agent(true);
+                self.gallery_agent_kept();
+            }
+            Overlay::AgentMore => self.gallery_agent_more(),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),

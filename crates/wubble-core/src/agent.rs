@@ -608,6 +608,25 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 }
 
+/// What the dustbin on an agent Space's row (the Spaces popup) does, by the session that holds
+/// the Space now (`None`: none does, the session ended and left its tabs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clear {
+    /// [`Event::Stop`] to that session alone: its teardown deletes the Space, its tabs and its
+    /// container.
+    Stop,
+    /// The host deletes the Space, its tabs and its container itself, as a teardown does.
+    Delete,
+}
+
+/// The dustbin on an agent Space's row ([`crate::space::Space::agent`]; a user's Space has none).
+pub fn clear(holder: Option<&State>) -> Clear {
+    match holder {
+        Some(State::Stopped(_)) | None => Clear::Delete,
+        Some(_) => Clear::Stop,
+    }
+}
+
 /// The owner's answer to a sheet for more (`State::AskingMore`): Allow widens `grant` by the
 /// sites the owner left on it (`Lists::sites`); Deny keeps the grant. A site that is no pattern
 /// denies.
@@ -1064,6 +1083,27 @@ mod tests {
             assert_eq!(s, state);
             assert!(e.is_empty());
         }
+    }
+
+    #[test]
+    fn the_dustbin_stops_a_live_session_and_deletes_a_left_space() {
+        let asking = State::AskingMore {
+            grant: Grant::new([], &[], Mode::Headless).unwrap(),
+            token: Token("t".into()),
+            more: More::default(),
+        };
+        for live in [running(Some("t")), running(None), asking] {
+            assert_eq!(clear(Some(&live)), Clear::Stop);
+            // and the stop is the teardown that deletes the Space
+            let (s, e) = transition(live, Event::Stop);
+            assert!(matches!(s, State::Stopped(_)));
+            assert!(e.contains(&Effect::Teardown), "{e:?}");
+        }
+        assert_eq!(clear(None), Clear::Delete);
+        assert_eq!(
+            clear(Some(&State::Stopped(StopReason::Released))),
+            Clear::Delete
+        );
     }
 
     #[test]

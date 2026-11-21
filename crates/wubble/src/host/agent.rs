@@ -325,6 +325,9 @@ pub(super) struct Agents {
     sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
+    /// The agent Space its dustbin is deleting, while it is (its tabs are not the user's closed
+    /// tabs, as in a session's teardown).
+    pub(super) clearing: Option<SpaceId>,
     /// The answer to the sheet's last Sites draft: its serial, and the note (empty: taken).
     answer: (i32, &'static str),
     /// DevTools calls whose answers mean nothing (an object group released).
@@ -902,6 +905,46 @@ impl Host {
         }
     }
 
+    /// `--smoke gallery`: a Space a session made and left with its tabs (an agent Space for
+    /// good, no session holding it).
+    pub(super) fn gallery_agent_kept(&mut self) {
+        const NAME: &str = "Agent: draft the issue";
+        // one scene after another on one profile: made once
+        if self.model.spaces.iter().any(|s| s.name == NAME) {
+            return;
+        }
+        let Command::NewSpace { tint, .. } = self.model.new_space() else {
+            return;
+        };
+        self.dispatch(Command::NewSpace {
+            name: NAME.into(),
+            tint,
+            container: ContainerId::DEFAULT,
+        });
+        let Some(space) = self.model.spaces.last().map(|s| s.id) else {
+            return;
+        };
+        self.dispatch(Command::MarkAgentSpace(space));
+        self.dispatch(Command::OpenInSpace {
+            space,
+            url: "https://github.com/issues/new".into(),
+        });
+    }
+
+    /// `--smoke gallery`: the approved session asks for a site and a secret it lacks, and one
+    /// it has: the sheet lists only the two new ones.
+    pub(super) fn gallery_agent_more(&mut self) {
+        self.gallery_agent(true);
+        let id = SessionId("gallery".into());
+        self.agent_event(
+            &id,
+            Event::AskMore {
+                sites: vec!["github.com".into(), "registry.npmjs.org".into()],
+                secrets: vec!["NPM_TOKEN".into()],
+            },
+        );
+    }
+
     /// `--smoke gallery`: entries for the activity page.
     pub(super) fn gallery_agent_log(&mut self) {
         let id = SessionId("s1".into());
@@ -944,6 +987,45 @@ impl Host {
         let all: Vec<SessionId> = self.agents.sessions.keys().cloned().collect();
         for id in all {
             self.agent_event(&id, Event::Stop);
+        }
+    }
+
+    /// The dustbin on an agent Space's row in the Spaces popup (`agent::clear`): the session
+    /// holding the Space is stopped (that one alone), its teardown deleting the Space; a Space
+    /// no session holds any more (its tabs were left to the owner) is deleted as a teardown
+    /// does. A user's Space has no dustbin, and is never deleted here.
+    pub(super) fn agent_space_cleared(&mut self, space: SpaceId) {
+        let Some(container) = self
+            .model
+            .spaces
+            .iter()
+            .find(|s| s.id == space && s.agent)
+            .map(|s| s.container)
+        else {
+            return;
+        };
+        let holder = self
+            .agents
+            .sessions
+            .iter()
+            .find(|(_, s)| s.space.is_some_and(|(sp, _)| sp == space))
+            .map(|(id, s)| (id.clone(), s.state.clone()));
+        match agent::clear(holder.as_ref().map(|(_, state)| state)) {
+            agent::Clear::Stop => {
+                if let Some((id, _)) = holder {
+                    self.agent_event(&id, Event::Stop);
+                }
+            }
+            agent::Clear::Delete => {
+                self.agents.clearing = Some(space);
+                self.dispatch(Command::DeleteSpace(space));
+                self.agents.clearing = None;
+                // the session's own container; never the Default one, nor one another Space uses
+                let shared = self.model.spaces.iter().any(|s| s.container == container);
+                if container != ContainerId::DEFAULT && !shared {
+                    self.dispatch(Command::DeleteContainer(container));
+                }
+            }
         }
     }
 
@@ -1014,6 +1096,7 @@ impl Host {
             s.space = Some((space, container));
         }
         self.dispatch(Command::SetSpaceNeverSleep { space, on: true });
+        self.dispatch(Command::MarkAgentSpace(space));
         self.dispatch(Command::OpenInSpace {
             space,
             url: BLANK.into(),
@@ -2836,7 +2919,9 @@ impl Host {
             .spaces
             .iter()
             .find(|s| self.model.order(s.id).contains(&kept));
-        let ok = space.is_some_and(|s| !self.agents.spaces().contains(&s.id) && !s.never_sleep)
+        // the owner's tabs now, in a Space that stays an agent Space
+        let ok = space
+            .is_some_and(|s| !self.agents.spaces().contains(&s.id) && !s.never_sleep && s.agent)
             && !self.agent_drives(kept);
         if !ok {
             return self.fail(format!(
@@ -2846,10 +2931,14 @@ impl Host {
             ));
         }
         println!(
-            "smoke: mcp hand-off ok tab {} kept in {:?}, no longer driven",
+            "smoke: mcp hand-off ok tab {} kept in {:?}, no longer driven, still an agent Space",
             kept.0,
             space.map(|s| s.name.clone()).unwrap_or_default()
         );
+        let kept_space = space.map(|s| s.id);
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.kept_space = kept_space;
+        }
         // what the session's page tried for (`mcp_smoke::safety`): no tab anywhere reached it
         let off: Vec<String> = self
             .model
@@ -2896,17 +2985,8 @@ impl Host {
             return self.fail(format!("the windowed session has tabs {tabs:?}, not two"));
         };
         let Some(&tab) = [first, second, first, second, second, first].get(step) else {
-            // shown again at full size: on to the user's closed tabs and history
-            let steps = self.checks.mcp_smoke.as_ref().map_or(0, |r| r.steps);
-            self.store.pop_closed(move |closed| {
-                let _ = slint::invoke_from_event_loop(move || {
-                    with_host(|host| match closed {
-                        Some(c) => host.fail(format!("the user's closed tabs hold {}", c.url)),
-                        None => host.mcp_smoke_history(steps),
-                    })
-                });
-            });
-            return;
+            // shown again at full size: on to the dustbins
+            return self.mcp_smoke_bins();
         };
         if let Some(run) = &mut self.checks.mcp_smoke {
             run.switch = Some((step, tab));
@@ -2988,6 +3068,119 @@ impl Host {
                 );
                 h.mcp_smoke_switch(step + 1);
             })
+        });
+    }
+
+    /// `--smoke mcp`, the Spaces popup's dustbins pressed by pointer: the kept Space's (no
+    /// session) and the headless session's (running: only it stops); the user's Space has none;
+    /// the popup stays open. Then the user's closed tabs and history.
+    fn mcp_smoke_bins(&mut self) {
+        let running = self
+            .agents
+            .sessions
+            .iter()
+            .find(|(_, s)| matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Headless))
+            .and_then(|(id, s)| Some((id.clone(), s.space?.0)));
+        let kept = self.checks.mcp_smoke.as_ref().and_then(|r| r.kept_space);
+        let (Some((session, live)), Some(kept)) = (running.clone(), kept) else {
+            return self.fail(format!(
+                "no Spaces to clear: running {running:?}, kept {kept:?}"
+            ));
+        };
+        let name = |h: &Host, sp: SpaceId| {
+            h.model
+                .spaces
+                .iter()
+                .find(|s| s.id == sp)
+                .map(|s| s.name.clone())
+                .unwrap_or_default()
+        };
+        let (kept_name, live_name) = (name(self, kept), name(self, live));
+        let users: Vec<String> = self
+            .model
+            .spaces
+            .iter()
+            .filter(|s| !s.agent)
+            .map(|s| s.name.clone())
+            .collect();
+        self.spaces_menu_requested();
+        let weak = self.w.window.clone();
+        // pressed outside the host, as winit's events would come, once the popup is laid out
+        slint::Timer::single_shot(Duration::from_millis(500), move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let ask = |f: &dyn Fn(&Host) -> Result<(), String>| {
+                let mut r = Ok(());
+                with_host(|h| r = f(h));
+                r
+            };
+            let press = |label: &str| -> Result<(), String> {
+                let at = crate::mcp_smoke::sheet::labelled(&window, label)?;
+                crate::mcp_smoke::sheet::click(&window, at);
+                Ok(())
+            };
+            let check = || -> Result<(), String> {
+                if !window.get_spaces_open() {
+                    return Err("the Spaces popup did not open".into());
+                }
+                for user in &users {
+                    if crate::mcp_smoke::sheet::labelled(&window, &format!("Clear {user}")).is_ok()
+                    {
+                        return Err(format!("the user's Space {user:?} has a dustbin"));
+                    }
+                }
+                press(&format!("Clear {kept_name}"))?;
+                ask(&|h| {
+                    if h.model.spaces.iter().any(|s| s.id == kept) {
+                        return Err(format!("{kept_name:?} is still there"));
+                    }
+                    Ok(())
+                })?;
+                if !window.get_spaces_open() {
+                    return Err("the popup closed on the dustbin".into());
+                }
+                press(&format!("Clear {live_name}"))?;
+                ask(&|h| {
+                    if h.agents.sessions.contains_key(&session) {
+                        return Err("the session runs on".into());
+                    }
+                    if h.model.spaces.iter().any(|s| s.id == live) {
+                        return Err(format!("{live_name:?} is still there"));
+                    }
+                    if !h.agents.sessions.values().any(|s| !s.state.is_stopped()) {
+                        return Err("the dustbin stopped the other session too".into());
+                    }
+                    Ok(())
+                })?;
+                if !window.get_spaces_open() {
+                    return Err("the popup closed on the dustbin".into());
+                }
+                Ok(())
+            };
+            let result = check();
+            with_host(|h| match result {
+                Err(e) => h.fail(format!("dustbin: {e}")),
+                Ok(()) => {
+                    println!(
+                        "smoke: mcp dustbin ok pressed on {kept_name:?} (kept, no session): gone; \
+                         on {live_name:?} (running): that session stopped, its Space gone, the \
+                         other runs on; {users:?} has none; the popup stayed open"
+                    );
+                    window.set_spaces_open(false);
+                    let steps = h.checks.mcp_smoke.as_ref().map_or(0, |r| r.steps);
+                    h.store.pop_closed(move |closed| {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_host(|host| match closed {
+                                Some(c) => {
+                                    host.fail(format!("the user's closed tabs hold {}", c.url))
+                                }
+                                None => host.mcp_smoke_history(steps),
+                            })
+                        });
+                    });
+                }
+            });
         });
     }
 
