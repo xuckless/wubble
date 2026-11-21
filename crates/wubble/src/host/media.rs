@@ -21,6 +21,7 @@ use wubble_core::media::select::{self, Selection};
 use wubble_core::media::{
     Container, Plan, Refusal, Resolution, Track, Variant, dash, hls, name, youtube,
 };
+use wubble_core::space::ContainerId;
 use wubble_core::tab::TabId;
 use wubble_engine::fetch::{FetchEvent, FetchId, FetchSpec, Fetcher};
 use wubble_engine::filter::{ResponseInfo, ResponseObserver};
@@ -161,6 +162,8 @@ struct Run {
     /// Bytes fetched per segment (the list's progress).
     fetched: BTreeMap<(usize, usize), u64>,
     /// The known size of the whole download.
+    /// That tab's container: the session a fetch keeps once the tab is gone.
+    container: ContainerId,
     size: Option<u64>,
     /// What the join saved (deleted again when the job was cancelled while joining).
     saved: Vec<PathBuf>,
@@ -294,18 +297,31 @@ impl Host {
         self.video_save_redraw(save);
     }
 
-    /// The tab's view, else any live one: whose session a fetch uses.
-    fn fetch_browser(&mut self, tab: TabId) -> Option<i32> {
+    /// The tab's view, else a live page of the same container (the tab closed or went to
+    /// sleep): whose session a fetch uses. Never a page of another container: its cookies are
+    /// not the video's.
+    fn fetch_browser(&mut self, tab: TabId, container: ContainerId) -> Option<i32> {
         if let Some(view) = self.tab_view(tab) {
             return Some(view.browser_id());
         }
-        self.any_view().map(|v| v.browser_id())
+        let same = self
+            .views
+            .keys()
+            .copied()
+            .find(|t| self.model.tabs.get(t).is_some_and(|m| m.container == container))?;
+        self.tab_view(same).map(|v| v.browser_id())
     }
 
     fn media_fetch(&mut self, tab: TabId, spec: FetchSpec, purpose: Purpose) -> Result<(), String> {
-        let browser_id = self
-            .fetch_browser(tab)
-            .ok_or("no page is open to fetch from")?;
+        let container = purpose
+            .job()
+            .and_then(|j| self.media.runs.get(&j))
+            .map(|r| r.container)
+            .or_else(|| self.model.tabs.get(&tab).map(|t| t.container))
+            .unwrap_or(ContainerId::DEFAULT);
+        let browser_id = self.fetch_browser(tab, container).ok_or(
+            "the page it came from is closed: open that site's page again, then resume",
+        )?;
         let id = self
             .media
             .fetcher
@@ -1023,8 +1039,14 @@ impl Host {
 
     /// Executes one job effect; a failure to start a fetch comes back as an event.
     fn job_effect(&mut self, job: i64, effect: JobEffect) -> Option<JobEvent> {
+        let container = self
+            .model
+            .tabs
+            .get(&tab)
+            .map_or(ContainerId::DEFAULT, |t| t.container);
         let run = self.media.runs.get_mut(&job)?;
         match effect {
+            container,
             JobEffect::Fetch { track, index } => {
                 let t = run.tracks.get(track)?;
                 let segment = t.plan.as_ref()?.segments.get(index)?.clone();
@@ -1059,6 +1081,7 @@ impl Host {
                     .fetches
                     .iter()
                     .filter(|(_, p)| p.job() == Some(job))
+        session: ContainerId,
                     .map(|(&id, _)| id)
                     .collect();
                 for id in ids {
@@ -1086,6 +1109,7 @@ impl Host {
                 let parts: Vec<PathBuf> = run.tracks.iter().map(|t| t.part.clone()).collect();
                 let containers: Vec<Container> = run
                     .tracks
+            container: session,
                     .iter()
                     .map(|t| t.plan.as_ref().map_or(t.variant.container, |p| p.container))
                     .collect();
@@ -1191,12 +1215,12 @@ impl Host {
         let Some(run) = self.media.runs.get(&id) else {
             return;
         };
-        let container = run
+        let file = run
             .tracks
             .first()
             .map_or(Container::Other, |t| t.variant.container);
         let variants: Vec<Variant> = run.tracks.iter().map(|t| t.variant.clone()).collect();
-        let (tab, page, title, note, size) = (
+        let (tab, container, page, title, note, size) = (
             run.tab,
             run.page.clone(),
             run.title.clone(),
@@ -1206,7 +1230,7 @@ impl Host {
         self.media_release(id);
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);
-        self.start_media(tab, page, title, note, variants, container, size, &url);
+        self.start_media(tab, container, page, title, note, variants, file, size, &url);
     }
 }
 
@@ -1270,3 +1294,4 @@ mod tests {
         assert_eq!(item_title(&item(Some(" ")), ""), "clip");
     }
 }
+            run.container,
