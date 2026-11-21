@@ -1659,6 +1659,12 @@ fn run(
                     mcp_smoke::SIGNIN_USER.into(),
                     mcp_smoke::SIGNIN_PASSWORD.into(),
                 ),
+                // and one on the site it visits unshared: its key chip must not show there
+                (
+                    format!("http://{}:{port}", mcp_smoke::OTHER_HOST),
+                    "other-user".into(),
+                    "other-pass".into(),
+                ),
             ],
         };
         seed_autofill_logins(&store, logins);

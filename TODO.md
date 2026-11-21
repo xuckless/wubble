@@ -71,8 +71,8 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Autofill: offer the login form a page shows right after a submit (the save check consumes that report today)
 - [ ] Autofill: re-probe Reddit (bot wall) and Wikipedia (redirects to auth.wikimedia.org) logins by hand
 - [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
-- [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
 - [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
+- [ ] Agent sign-ins: `--smoke mcp` under load failed once in 87 loaded runs with the session's first request to the shared site carrying no cookie ("sent: none") after the copy answered; not reproduced or traced yet (the copy's report was not printed)
 - [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
