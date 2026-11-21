@@ -262,6 +262,9 @@ fn client_of(stream: &Stream) -> String {
     format!("pid {pid}")
 }
 
+/// How long the relay still passes answers on after its client closed stdin.
+const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// `wubble mcp`: stdio to the socket at `path` and back, until either side ends. With no
 /// browser there, every request on stdin gets the [`NOT_RUNNING`] error.
 pub fn relay(path: &Path) -> io::Result<()> {
@@ -278,7 +281,9 @@ pub fn relay(path: &Path) -> io::Result<()> {
         .name("wubble-mcp-stdin".into())
         .spawn(move || {
             let _ = io::copy(&mut io::stdin().lock(), &mut &*send);
-            // The harness closed stdin: the session ends with the connection.
+            // The harness closed stdin: the session ends with the connection, once the answers
+            // to what it already asked (a script piping a few requests in) had time to arrive.
+            std::thread::sleep(CLOSE_GRACE);
             std::process::exit(0);
         })?;
     io::copy(&mut &*stream, &mut io::stdout().lock())?;
