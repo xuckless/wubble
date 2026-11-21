@@ -43,6 +43,7 @@ mod overlay;
 mod pages;
 mod panes;
 mod parity;
+mod pinch;
 mod preview;
 mod print;
 mod settings;
@@ -62,6 +63,7 @@ pub(crate) use data::DataSmoke;
 pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
+pub(crate) use pinch::fixture as pinch_fixture;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;
@@ -298,6 +300,8 @@ pub struct Checks {
     pub pages_smoke: Option<PagesSmoke>,
     pub passwords_smoke: Option<crate::passwords_smoke::PasswordsSmoke>,
     pub data_smoke: Option<DataSmoke>,
+    /// `--smoke pinch` (`host/pinch.rs`).
+    pub pinch_smoke: Option<crate::pinch_smoke::Run>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
@@ -381,6 +385,10 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    /// `--smoke pinch` passed, with its last scale.
+    pub pinch_passed: Option<String>,
+    /// `--smoke pinch`'s questions to the pages.
+    pinch_asked: pinch::Asked,
     /// `--smoke parity` passed: the known gaps that failed as expected.
     pub parity_passed: Option<Vec<&'static str>>,
     pub windows_passed: bool,
@@ -644,6 +652,8 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            pinch_passed: None,
+            pinch_asked: pinch::Asked::default(),
             parity_passed: None,
             windows_passed: false,
             settings_passed: false,
@@ -1366,6 +1376,7 @@ impl Host {
         }
         let presented = self.stats.accelerated != presented;
         self.split_smoke_step(&window);
+        self.pinch_smoke_worked(&window);
         self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();

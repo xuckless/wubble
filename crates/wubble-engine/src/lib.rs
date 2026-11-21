@@ -25,6 +25,7 @@ mod mac_app;
 pub mod media;
 pub mod nav;
 pub mod page;
+pub mod pinch;
 pub mod popup;
 pub mod save;
 pub mod storage;

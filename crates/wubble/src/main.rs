@@ -43,6 +43,7 @@ mod parity;
 mod passwords_smoke;
 mod perform;
 mod persist;
+mod pinch_smoke;
 mod pixels;
 mod profile;
 mod prompt;
@@ -124,6 +125,8 @@ pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
 
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+/// `--smoke pinch`'s fixture, served on loopback (`autofill_smoke::serve`).
+pub const PINCH_PAGE: &str = include_str!("../assets/pinch.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 /// `--smoke builtins`' pages: an article (reader, dark mode, link hints), a page 3000 CSS px
@@ -358,6 +361,7 @@ fn main() -> ExitCode {
                 Smoke::Tabs => Mode::Tabs,
                 Smoke::Windows => Mode::Windows,
                 Smoke::Split => Mode::Split,
+                Smoke::Pinch => Mode::Pinch,
                 Smoke::Page => Mode::Page,
                 Smoke::Parity => Mode::Parity,
                 Smoke::Block => Mode::Block,
@@ -820,6 +824,8 @@ struct Outcome {
     blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
+    /// `--smoke pinch` reached its end, with its last scale.
+    pinch_passed: Option<String>,
     /// `--smoke parity` passed every item but the known gaps, which failed as expected.
     parity_passed: Option<Vec<&'static str>>,
     /// `--smoke windows` reached its end.
@@ -870,6 +876,8 @@ enum Mode {
     Tabs,
     /// `--smoke split`.
     Split,
+    /// `--smoke pinch`.
+    Pinch,
     /// `--smoke windows`.
     Windows,
     /// `--smoke page`.
@@ -1544,7 +1552,7 @@ fn run(
     );
     let autofill_port = (matches!(
         mode,
-        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Mcp
+        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Mcp | Mode::Pinch
     ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
@@ -1640,6 +1648,7 @@ fn run(
         pages_smoke: None,
         passwords_smoke: None,
         data_smoke: None,
+        pinch_smoke: None,
         gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
@@ -1704,6 +1713,13 @@ fn run(
             Some(bundled()),
             Checks {
                 split_smoke: Some(SplitSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Pinch => (
+            autofill_port.map(|port| host::pinch_fixture(port, true)),
+            Checks {
+                pinch_smoke: Some(pinch_smoke::Run::default()),
                 ..none
             },
         ),
@@ -2159,6 +2175,7 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
+        pinch_passed: host.pinch_passed.take(),
         parity_passed: host.parity_passed,
         windows_passed: host.windows_passed,
         settings_passed: host.settings_passed,

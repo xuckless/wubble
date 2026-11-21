@@ -1162,6 +1162,13 @@ impl Engine {
         self.ext.available()
     }
 
+    /// This CEF applies a touchpad pinch (`patches/chromium/40-cef-touchpad-pinch.patch`, its own
+    /// marker, apart from [`Self::ext_apis`]): views pinch through DevTools' touchpad gesture,
+    /// else with two synthetic fingers (`pinch.rs`).
+    pub fn touchpad_pinch(&self) -> bool {
+        crate::pinch::touchpad_available()
+    }
+
     /// wubble's windows and tabs as extensions are to see them (a projection of the host's
     /// model, `wubble_core::extensions::project`, its tabs by view). Kept, and sent to CEF now
     /// and whenever a view's browser comes or goes; nothing is sent while it stays the same.

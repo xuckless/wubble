@@ -67,6 +67,9 @@ impl Host {
             PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
         ) {
             self.video_smoke_page(&event);
+            if self.pinch_smoke_answer(&event) {
+                return;
+            }
             if self.agent_answer(&event) || self.ax_answer(&event) || self.media_answer(tab, &event)
             {
                 return;

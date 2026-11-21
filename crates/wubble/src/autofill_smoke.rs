@@ -894,6 +894,8 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         // a `data:` page is not), and the copy button it frames from another origin.
         "/parity" => crate::PARITY_PAGE.to_owned(),
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
+        // `--smoke pinch`'s page (`?prevent` read by the page itself).
+        "/pinch" => crate::PINCH_PAGE.to_owned(),
         // `--smoke mcp`'s pages and redirects: an agent session navigates to them on loopback.
         p if p.starts_with("/mcp") => match crate::mcp_smoke::route(&target, port, &cookie) {
             Some(crate::mcp_smoke::Route::Page(page)) => page,
