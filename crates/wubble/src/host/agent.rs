@@ -67,6 +67,9 @@ const BEAT: Duration = Duration::from_secs(5);
 /// How long an action that may start a navigation (a click, a key, a script) waits before it
 /// answers, so a navigation its page started and the session's sites refused is its error.
 const SETTLE: Duration = Duration::from_millis(300);
+/// The DevTools object group `upload_file` holds the node its files go to in, while it does
+/// (each call its own: `-<n>`).
+const UPLOAD_GROUP: &str = "wubble-agent-upload";
 /// How long after the click's input fence `upload_file` waits for the page to open a file chooser.
 const UPLOAD_CHOOSER_WAIT: Duration = Duration::from_millis(1500);
 /// How long after answering a file chooser `upload_file` waits for the accessibility tree to refresh.
@@ -250,6 +253,16 @@ enum Selecting {
     Applying,
 }
 
+/// Where `upload_file` is with the node its files go to: resolving it (held in the call's object
+/// group from then on), reading it ([`upload::TARGET_SCRIPT`]), giving it the files
+/// (`DOM.setFileInputFiles`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Uploading {
+    Resolving,
+    Reading,
+    Setting,
+}
+
 /// Where `evaluate` is: the script as given, the script again as an async function body (it
 /// had a top-level `return`), the promise it gave being awaited, or its value being serialised.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -423,6 +436,20 @@ enum Wait {
         load: Load,
         answer: String,
     },
+    /// `upload_file` with the node its files may go to (`node`, a backend node id): the ref's
+    /// own (`fallback`: the ref, clicked instead if the node is no file input), or the file
+    /// input that opened the chooser its click opened (`fallback` none). `object`: the node in
+    /// the page, once resolved.
+    UploadTo {
+        id: u64,
+        tab: TabId,
+        node: i64,
+        paths: Vec<PathBuf>,
+        stage: Uploading,
+        group: String,
+        object: Option<String>,
+        fallback: Option<String>,
+    },
     /// `upload_file`: the click ran, waiting for the page to open a file chooser.
     Chooser {
         tab: TabId,
@@ -541,6 +568,10 @@ pub(super) struct Agents {
     /// What the sheet knows of the vault for its login pickers (fetched as a sheet asking for
     /// secrets shows).
     sheet_vault: SheetVault,
+    /// The tabs whose DevTools session was asked to intercept file choosers
+    /// (`Page.setInterceptFileChooserDialog`): those with an `upload_file` clicked
+    /// ([`Host::agent_intercept`]).
+    intercepting: std::collections::BTreeSet<TabId>,
     /// The values `fill_secret` typed, per session: redacted from every reply it gets.
     filled: BTreeMap<SessionId, Vec<Secret>>,
 }
@@ -577,6 +608,12 @@ impl Agents {
 /// `select` from the moment it asks for its node, until its answer.
 fn held_group(wait: &Wait) -> Option<(TabId, &str)> {
     match wait {
+        Wait::UploadTo {
+            tab,
+            group,
+            stage: Uploading::Reading | Uploading::Setting,
+            ..
+        } => Some((*tab, group)),
         Wait::Select {
             tab,
             group,
@@ -611,6 +648,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Shown { tab }
         | Wait::Started { tab, .. }
         | Wait::Chooser { tab, .. }
+        | Wait::UploadTo { tab, .. }
         | Wait::Uploaded { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
@@ -630,6 +668,7 @@ fn answer_id(wait: &Wait) -> Option<u64> {
         | Wait::TypeMark { id, .. }
         | Wait::TypeFocus { id, .. }
         | Wait::Select { id, .. }
+        | Wait::UploadTo { id, .. }
         | Wait::Input { id, .. } => Some(id),
         _ => None,
     }
@@ -653,6 +692,7 @@ fn stage(wait: &Wait) -> Stage {
             act: Act::Upload { .. },
             ..
         }
+        | Wait::UploadTo { .. }
         | Wait::Uploaded { .. } => Stage::Upload,
         Wait::Input { .. }
         | Wait::Settle { .. }
@@ -735,20 +775,6 @@ fn ax_shows_upload(items: &[AxItem], markers: &[String]) -> bool {
             .iter()
             .any(|m| item.name.contains(m.as_str()) || item.value.contains(m.as_str()))
     })
-}
-
-/// Whether a file chooser of `pick` accepts `count` uploaded files.
-fn chooser_allows(pick: crate::chooser::Pick, count: usize) -> Result<(), &'static str> {
-    use crate::chooser::Pick;
-    if count == 0 {
-        return Err("at least one file path is required");
-    }
-    match pick {
-        Pick::File if count > 1 => Err("this file input accepts only one file"),
-        Pick::File | Pick::Files => Ok(()),
-        Pick::Folder => Err("this chooser expects a folder, not files"),
-        Pick::Save => Err("this dialog is a save prompt, not a file upload"),
-    }
 }
 
 /// A random 256-bit token, hex.
@@ -2898,6 +2924,17 @@ impl Host {
     fn agent_input(&mut self, reply: Reply, tab: TabId, x: f64, y: f64, act: Act) {
         let now = self.input.now();
         let before = self.agent_document(tab);
+        // an upload's chooser is caught by DevTools, which names the input that opened it
+        if matches!(act, Act::Upload { .. }) && !self.agents.intercepting.contains(&tab) {
+            let params = json!({ "enabled": true });
+            if let Some(id) = self
+                .tab_view(tab)
+                .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params))
+            {
+                self.agents.ignored.push(id.0);
+                self.agents.intercepting.insert(tab);
+            }
+        }
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
         };
@@ -3654,7 +3691,272 @@ impl Host {
                 "another upload_file is in flight on this tab: wait for its answer",
             );
         }
-        self.agent_act(reply, tab, target, None, Act::Upload { paths });
+        self.agent_upload_to(reply, tab, target, paths);
+    }
+
+    /// `upload_file`'s files to the element `target` names: an `<input type=file>` of the page's
+    /// own document (frames of its process among it) takes them directly; anything else, or an
+    /// element of another process's frame, is clicked ([`Host::agent_input`]) for its chooser.
+    fn agent_upload_to(&mut self, reply: Reply, tab: TabId, target: &str, paths: Vec<PathBuf>) {
+        let Some((item, _, top)) = self.agent_item(tab, target) else {
+            return self.agent_fail(reply, "stale ref: take a new snapshot");
+        };
+        if !top || item.id <= 0 {
+            return self.agent_act(reply, tab, target, None, Act::Upload { paths });
+        }
+        let fallback = Some(target.to_owned());
+        self.agent_upload_node(reply, tab, i64::from(item.id), paths, fallback);
+    }
+
+    /// Resolves `node`, the element `upload_file`'s files may go to, in a group of its own.
+    fn agent_upload_node(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        node: i64,
+        paths: Vec<PathBuf>,
+        fallback: Option<String>,
+    ) {
+        let group = format!("{UPLOAD_GROUP}-{}", self.agents.fresh());
+        let params = json!({ "backendNodeId": node, "objectGroup": group });
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("DOM.resolveNode", &params))
+        {
+            Some(id) => {
+                let wait = Wait::UploadTo {
+                    id: id.0,
+                    tab,
+                    node,
+                    paths,
+                    stage: Uploading::Resolving,
+                    group,
+                    object: None,
+                    fallback,
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            None => self.agent_fail(reply, "the page cannot be reached now"),
+        }
+    }
+
+    /// DevTools' answer to one stage of `upload_file` at its node.
+    fn agent_uploading(&mut self, p: Pending, result: &Result<Value, String>) {
+        let Wait::UploadTo {
+            tab,
+            node,
+            paths,
+            stage,
+            group,
+            object,
+            fallback,
+            ..
+        } = p.wait
+        else {
+            return;
+        };
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.agent_release_group(tab, &group);
+                let why = match stage {
+                    Uploading::Setting => format!("the file input did not take the files: {e}"),
+                    _ => format!("the element cannot be reached: {e}"),
+                };
+                return self.agent_fail(p.reply, &why);
+            }
+        };
+        let wait = |stage, object| Wait::UploadTo {
+            id: 0,
+            tab,
+            node,
+            paths: paths.clone(),
+            stage,
+            group: group.clone(),
+            object,
+            fallback: fallback.clone(),
+        };
+        match stage {
+            Uploading::Resolving => {
+                let Some(object) = v.pointer("/object/objectId").and_then(Value::as_str) else {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_fail(p.reply, "the element could not be resolved to a node");
+                };
+                let params = json!({
+                    "objectId": object,
+                    "functionDeclaration": upload::TARGET_SCRIPT,
+                    "returnByValue": true,
+                });
+                let next = wait(Uploading::Reading, Some(object.to_owned()));
+                self.agent_upload_step(p.reply, "Runtime.callFunctionOn", &params, next);
+            }
+            Uploading::Reading => {
+                let Some(found) = upload::parse_target(v) else {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_fail(p.reply, "the element could not be read");
+                };
+                if !found.file {
+                    self.agent_release_group(tab, &group);
+                    return match fallback {
+                        // not a file input: clicked, for the chooser it opens
+                        Some(target) => {
+                            self.agent_act(p.reply, tab, &target, None, Act::Upload { paths })
+                        }
+                        None => self.agent_fail(
+                            p.reply,
+                            "the chooser named an element that is no file input",
+                        ),
+                    };
+                }
+                if let Err(why) = upload::fits(&found, paths.len()) {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_refuse(p.reply, why);
+                }
+                let allowed = self.agent_grant_of(tab).is_some_and(|(_, grant)| {
+                    found.origin != "null" && agent::may_go(&grant, &found.origin).is_ok()
+                });
+                if !allowed {
+                    self.agent_release_group(tab, &group);
+                    let why = format!(
+                        "the file input is in a document of {}, not one of this session's sites",
+                        found.origin
+                    );
+                    return self.agent_refuse(p.reply, &why);
+                }
+                let files: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                let params = json!({ "files": files, "objectId": object });
+                let next = wait(Uploading::Setting, object.clone());
+                self.agent_upload_step(p.reply, "DOM.setFileInputFiles", &params, next);
+            }
+            Uploading::Setting => {
+                self.agent_release_group(tab, &group);
+                self.agent_uploaded(p.reply, tab, &paths);
+            }
+        }
+    }
+
+    /// The next DevTools call of `upload_file` at its node, and `wait` (its id set) for its
+    /// answer.
+    fn agent_upload_step(&mut self, reply: Reply, method: &str, params: &Value, mut wait: Wait) {
+        let tab = wait_tab(&wait);
+        let sent = tab
+            .and_then(|tab| self.tab_view(tab))
+            .and_then(|v| v.cdp(method, params));
+        match (sent, &mut wait) {
+            (Some(sent), Wait::UploadTo { id, .. }) => {
+                *id = sent.0;
+                self.agent_wait(reply, wait, WAIT);
+            }
+            _ => {
+                if let Wait::UploadTo { tab, group, .. } = &wait {
+                    let (tab, group) = (*tab, group.clone());
+                    self.agent_release_group(tab, &group);
+                }
+                self.agent_fail(reply, "the page cannot be reached now");
+            }
+        }
+    }
+
+    /// The files are in the input: the answer once the page's tree shows them.
+    fn agent_uploaded(&mut self, reply: Reply, tab: TabId, paths: &[PathBuf]) {
+        let names = paths
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let answer = format!("uploaded {names}");
+        let wait = Wait::Uploaded {
+            tab,
+            rev: self.ax_rev(tab),
+            markers: upload_ax_markers(paths),
+            settle_at: Instant::now() + UPLOAD_AX_SETTLE,
+            answer,
+        };
+        self.agent_wait(reply, wait, UPLOAD_AX_WAIT);
+    }
+
+    /// A file chooser DevTools caught in `tab` (`Page.fileChooserOpened`, while
+    /// [`Host::agent_intercept`] asks for them): a clicked `upload_file`'s files go to the
+    /// element that opened it ([`upload::chooser`]).
+    pub(super) fn agent_intercepted(
+        &mut self,
+        tab: TabId,
+        opened: &wubble_engine::cdp::ChooserOpened,
+    ) {
+        let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
+        let clicked =
+            self.agents.pending.iter().position(|p| {
+                wait_tab(&p.wait) == Some(tab) && stage(&p.wait) == Stage::UploadClicked
+            });
+        let files = clicked.map_or(0, |i| match &self.agents.pending[i].wait {
+            Wait::Chooser { paths, .. }
+            | Wait::Input {
+                then: Then::Upload { paths },
+                ..
+            } => paths.len(),
+            _ => 0,
+        });
+        let multiple = opened.multiple;
+        let opened_by = upload::Opened::DevTools { multiple };
+        match upload::chooser(mode, &self.agent_stages(tab), opened_by, files) {
+            upload::Chooser::Owner | upload::Chooser::Drop => {}
+            upload::Chooser::Cancel => self.agent_chooser_cancelled(tab, upload::CHOOSER_CANCELLED),
+            upload::Chooser::Answer | upload::Chooser::Refuse(_) if clicked.is_none() => {}
+            upload::Chooser::Answer | upload::Chooser::Refuse(_) => {
+                let p = self.agents.pending.remove(clicked.unwrap_or_default());
+                let paths = match p.wait {
+                    Wait::Chooser { paths, .. } => paths,
+                    Wait::Input {
+                        id,
+                        then: Then::Upload { paths },
+                        ..
+                    } => {
+                        self.agents.ignored.push(id);
+                        paths
+                    }
+                    _ => return self.agent_arm(),
+                };
+                let decided = upload::chooser(mode, &[Stage::UploadClicked], opened_by, files);
+                match (decided, opened.node) {
+                    (upload::Chooser::Refuse(why), _) => self.agent_refuse(p.reply, why),
+                    (_, Some(node)) => self.agent_upload_node(p.reply, tab, node, paths, None),
+                    (_, None) => self.agent_fail(p.reply, "the file chooser named no element"),
+                }
+                self.agent_arm();
+            }
+        }
+    }
+
+    /// Each tab's DevTools session intercepts file choosers exactly while an `upload_file` is
+    /// clicked there (asked for just before its click, [`Host::agent_input`]).
+    fn agent_intercept(&mut self) {
+        let wanted: std::collections::BTreeSet<TabId> = self
+            .agents
+            .pending
+            .iter()
+            .filter(|p| stage(&p.wait) == Stage::UploadClicked)
+            .filter_map(|p| wait_tab(&p.wait))
+            .collect();
+        let off: Vec<TabId> = self
+            .agents
+            .intercepting
+            .difference(&wanted)
+            .copied()
+            .collect();
+        for tab in off {
+            self.agents.intercepting.remove(&tab);
+            let params = json!({ "enabled": false });
+            if let Some(id) = self
+                .tab_view(tab)
+                .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params))
+            {
+                self.agents.ignored.push(id.0);
+            }
+        }
     }
 
     /// A file chooser the page opened in `tab` ([`upload::chooser`]): the owner's goes on to
@@ -3665,28 +3967,25 @@ impl Host {
         &mut self,
         tab: TabId,
         id: RequestId,
-        spec: &crate::chooser::DialogSpec,
+        _spec: &crate::chooser::DialogSpec,
     ) -> bool {
         let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
-        match upload::chooser(mode, &self.agent_stages(tab)) {
+        match upload::chooser(mode, &self.agent_stages(tab), upload::Opened::Dialog, 0) {
             upload::Chooser::Owner => false,
-            upload::Chooser::Answer => {
-                self.agent_answer_chooser(tab, id, spec);
-                true
-            }
-            upload::Chooser::Cancel => {
+            _ => {
                 if let Some(view) = self.tab_view(tab) {
                     view.answer_file_chooser(id, None);
                 }
-                self.agent_chooser_cancelled(tab);
+                self.agent_chooser_cancelled(tab, upload::CHOOSER_UNREACHED);
                 true
             }
         }
     }
 
     /// A chooser cancelled in `tab`: logged, and the calls in flight there whose input or
-    /// script may have opened it fail ([`upload::CHOOSER_CANCELLED`]).
-    fn agent_chooser_cancelled(&mut self, tab: TabId) {
+    /// script may have opened it fail ([`upload::CHOOSER_CANCELLED`]; a clicked upload with
+    /// `clicked`).
+    fn agent_chooser_cancelled(&mut self, tab: TabId, clicked: &str) {
         if let Some((session, _)) = self.agent_grant_of(tab) {
             self.agent_log(&session, "file_chooser_blocked", None, Outcome::Refused);
         }
@@ -3705,78 +4004,13 @@ impl Host {
             if matches!(p.wait, Wait::Eval { .. }) {
                 self.agent_release_values(tab);
             }
-            self.agent_fail(p.reply, upload::CHOOSER_CANCELLED);
+            let why = match stage(&p.wait) {
+                Stage::UploadClicked => clicked,
+                _ => upload::CHOOSER_CANCELLED,
+            };
+            self.agent_fail(p.reply, why);
         }
         self.agent_arm();
-    }
-
-    /// The clicked `upload_file`'s chooser, answered with its files.
-    fn agent_answer_chooser(
-        &mut self,
-        tab: TabId,
-        id: RequestId,
-        spec: &crate::chooser::DialogSpec,
-    ) {
-        let armed =
-            self.agents.pending.iter().position(|p| {
-                wait_tab(&p.wait) == Some(tab) && stage(&p.wait) == Stage::UploadClicked
-            });
-        let Some(i) = armed else {
-            // no upload waits for it after all: cancelled
-            if let Some(view) = self.tab_view(tab) {
-                view.answer_file_chooser(id, None);
-            }
-            return;
-        };
-        let p = self.agents.pending.remove(i);
-        let paths = match p.wait {
-            Wait::Chooser { paths, .. } => paths,
-            Wait::Input {
-                id: fence_id,
-                then: Then::Upload { paths },
-                ..
-            } => {
-                self.agents.ignored.push(fence_id);
-                paths
-            }
-            _ => unreachable!(),
-        };
-        if let Err(why) = chooser_allows(spec.pick, paths.len()) {
-            if let Some(view) = self.tab_view(tab) {
-                view.answer_file_chooser(id, None);
-            }
-            self.agent_fail(p.reply, why);
-            self.agent_arm();
-            return;
-        }
-        let rev = self.ax_rev(tab);
-        let names = p.reply.target.clone().unwrap_or_default();
-        let answered = self
-            .tab_view(tab)
-            .is_some_and(|v| v.answer_file_chooser(id, Some(&paths)));
-        if !answered {
-            self.agent_fail(p.reply, "the tab has no page");
-            self.agent_arm();
-            return;
-        }
-        let answer = if names.is_empty() {
-            "uploaded".into()
-        } else {
-            format!("uploaded {names}")
-        };
-        let markers = upload_ax_markers(&paths);
-        let settle_at = Instant::now() + UPLOAD_AX_SETTLE;
-        self.agent_wait(
-            p.reply,
-            Wait::Uploaded {
-                tab,
-                rev,
-                markers,
-                settle_at,
-                answer,
-            },
-            UPLOAD_AX_WAIT,
-        );
     }
 
     /// What each call waiting on `tab` is doing ([`stage`]).
@@ -3800,8 +4034,10 @@ impl Host {
         self.agent_arm();
     }
 
-    /// The deadline timer, at the first call's deadline.
+    /// The deadline timer, at the first call's deadline; and each tab's chooser interception
+    /// as its calls want it.
     fn agent_arm(&mut self) {
+        self.agent_intercept();
         let Some(first) = self
             .agents
             .pending
@@ -4264,6 +4500,9 @@ impl Host {
             }
             (Wait::Select { .. }, PageEvent::CdpReply { result, .. }) => {
                 self.agent_selected(p, result);
+            }
+            (Wait::UploadTo { .. }, PageEvent::CdpReply { result, .. }) => {
+                self.agent_uploading(p, result);
             }
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
@@ -5419,8 +5658,6 @@ mod tests {
 
     #[test]
     fn upload_helpers_validate_paths_and_keep_log_targets_to_filenames() {
-        use crate::chooser::Pick;
-
         let dir = std::env::temp_dir().join(format!("wubble-upload-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("resume.pdf");
@@ -5446,14 +5683,6 @@ mod tests {
             upload_log_target(&["/a/b/one.txt".into(), "/c/d/two.pdf".into()]),
             "one.txt, two.pdf"
         );
-
-        assert!(chooser_allows(Pick::File, 1).is_ok());
-        assert!(chooser_allows(Pick::File, 2).is_err());
-        assert!(chooser_allows(Pick::Files, 1).is_ok());
-        assert!(chooser_allows(Pick::Files, 3).is_ok());
-        assert!(chooser_allows(Pick::Files, 0).is_err());
-        assert!(chooser_allows(Pick::Folder, 1).is_err());
-        assert!(chooser_allows(Pick::Save, 1).is_err());
 
         assert_eq!(
             upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]),

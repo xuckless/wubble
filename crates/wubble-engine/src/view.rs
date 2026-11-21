@@ -884,6 +884,10 @@ impl View {
         }
         while let Some(text) = self.producer.poll_devtools_message() {
             self.nav_requests.read(&text);
+            if let Some(opened) = cdp::chooser_opened(&text) {
+                self.page.push(PageEvent::ChooserIntercepted(opened));
+                continue;
+            }
             // the engine's own requests first (freeze, target id), then `View::cdp`'s calls
             if let Some(event) = self.pending.reply(&text) {
                 self.page.push(event);

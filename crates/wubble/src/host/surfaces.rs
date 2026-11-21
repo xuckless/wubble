@@ -61,6 +61,10 @@ impl Host {
             let location = matches!(event, PageEvent::AxLocation(_));
             return self.ax_event(tab, json, location);
         }
+        // A file chooser DevTools caught for an agent's upload (`host/agent.rs`).
+        if let PageEvent::ChooserIntercepted(opened) = &event {
+            return self.agent_intercepted(tab, opened);
+        }
         // The built-ins' answers (`host/builtins.rs`, `host/videos.rs`).
         if matches!(
             event,
