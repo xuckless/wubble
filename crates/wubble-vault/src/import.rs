@@ -182,6 +182,7 @@ pub fn apply<K: KeyRing, S: LoginStore>(
         VaultState::Unlocked { .. } => {}
         VaultState::Locked => return Err(VaultError::NotUnlocked),
         VaultState::Unavailable { reason } => return Err(VaultError::Unavailable(reason.clone())),
+        VaultState::KeyLost { rows } => return Err(VaultError::KeyLost { rows: *rows }),
     }
     let mut report = ApplyReport {
         skipped: import.skipped,

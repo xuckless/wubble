@@ -1,0 +1,72 @@
+// derived: the tab drag's ghost (the row's title on the shell fill, radius sm, `.wb-tab-drag`'s shadow), kit text roles (`wb-tab` for the title, `wb-cmd-hint` in mist for the URL)
+// What follows the pointer during a drag inside the window. A page's drag shows the image Chromium
+// made for it (CEF's drag image: the link label, the picture at 75 %, the selection at 75 %, or
+// the page's own `setDragImage`, its opacity already in its pixels), drawn as it is with its
+// hotspot under the pointer, so it looks as in Chrome. Without one (CEF gave none) it is the
+// label: the title, and under it the URL, as Chromium's link label orders them
+// (blink `DragImage::Create(url, label)`); a dragged tab shows its title alone. Written for
+// wubble: the design repo has no drag image. Recorded in docs/fidelity/derived-review.md.
+
+import { Palette, Radius, Space } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+
+export component DragGhost inherits Rectangle {
+    // the pointer, in the parent's coordinates
+    in property <length> pointer-x;
+    in property <length> pointer-y;
+    // Chromium's image (logical size, the pointer's point in it); none: the label
+    in property <image> image;
+    in property <bool> has-image: false;
+    in property <length> image-width;
+    in property <length> image-height;
+    in property <length> hotspot-x;
+    in property <length> hotspot-y;
+    in property <string> title;
+    in property <string> url;
+
+    property <bool> two-lines: root.url != "" && root.title != "";
+    x: root.has-image ? root.pointer-x - root.hotspot-x : root.pointer-x + Space.s3;
+    y: root.has-image ? root.pointer-y - root.hotspot-y : root.pointer-y + Space.s3;
+    width: root.has-image ? root.image-width : label.width;
+    height: root.has-image ? root.image-height : label.height;
+
+    if root.has-image: Image {
+        width: root.image-width;
+        height: root.image-height;
+        source: root.image;
+        image-fit: fill;
+    }
+
+    label := Rectangle {
+        visible: !root.has-image;
+        width: min(max(title-text.preferred-width, url-text.preferred-width) + 2 * Space.s3, Shell.drag-ghost-max);
+        height: root.two-lines ? Shell.row + url-text.preferred-height : Shell.row;
+        border-radius: Radius.sm;
+        background: Palette.shell;
+        drop-shadow-blur: Shell.drag-ghost-blur;
+        drop-shadow-color: Shell.drag-ghost-shadow;
+        title-text := KitText {
+            role: Role.wb-tab;
+            x: Space.s3;
+            y: 0px;
+            width: parent.width - 2 * Space.s3;
+            height: Shell.row;
+            text: root.title != "" ? root.title : root.url;
+            color: Palette.ink;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        url-text := KitText {
+            role: Role.wb-cmd-hint;
+            visible: root.two-lines;
+            x: Space.s3;
+            y: Shell.row - Space.s2;
+            width: parent.width - 2 * Space.s3;
+            text: root.two-lines ? root.url : "";
+            color: Palette.mist;
+            overflow: elide;
+        }
+    }
+}

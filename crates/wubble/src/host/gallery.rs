@@ -114,6 +114,9 @@ impl Host {
                 if SCENES[i].overlay == Overlay::SpacesDrag {
                     self.gallery_drag_to_spaces();
                 }
+                if let Overlay::PageDrag(at) = SCENES[i].overlay {
+                    self.gallery_page_drag(&window, at);
+                }
             }
             Some(Action::Click(i)) => {
                 self.gallery_wait(SETTLE);
@@ -214,6 +217,9 @@ impl Host {
                 self.dispatch(command);
             }
         }
+        // a page drag's ghost and mark are the gallery's own, and only its drag scenes'
+        window.set_page_ghost(Default::default());
+        window.set_drop_mark(Default::default());
         self.gallery_extensions(scene.overlay);
         self.gallery_orbs(window, scene.overlay, scene.ground);
         let shown = self.shown();
@@ -326,6 +332,7 @@ impl Host {
                 self.gallery_agent_kept();
             }
             Overlay::AgentMore => self.gallery_agent_more(),
+            Overlay::AgentSignIns => self.gallery_agent_signins(),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -348,6 +355,7 @@ impl Host {
                         },
                         MenuRow::Generate,
                     ]),
+                    menu_origin: None,
                     prompt: None,
                 }
             }
@@ -355,6 +363,7 @@ impl Host {
                 autofill = View {
                     chip: true,
                     menu: None,
+                    menu_origin: None,
                     prompt: Some((SaveKind::New, "alice".into(), origin)),
                 }
             }
@@ -378,6 +387,7 @@ impl Host {
             | Overlay::Downloads
             | Overlay::Spaces(_)
             | Overlay::SpacesDrag
+            | Overlay::PageDrag(_)
             | Overlay::Sound { .. }
             | Overlay::SettingsSearch(_)
             | Overlay::Unlock

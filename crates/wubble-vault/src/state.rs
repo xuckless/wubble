@@ -15,13 +15,22 @@ pub enum VaultState {
     Unavailable {
         reason: String,
     },
+    /// The keyring has no key, but `rows` saved logins were sealed with one: no new key is
+    /// made over them (it would replace the lost one for good). Nothing is saved or decrypted
+    /// until the key is back (a retry) or the owner deletes them and starts over.
+    KeyLost {
+        rows: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     UnlockRequested,
     KeyLoaded(Key),
-    KeyMissing,
+    /// The keyring has no key; `stored` logins are in the store.
+    KeyMissing {
+        stored: usize,
+    },
     KeyringFailed(String),
     LockRequested,
 }
@@ -42,12 +51,14 @@ pub fn transition(state: VaultState, event: Event) -> (VaultState, Vec<Effect>) 
         (Unlocked { key }, Event::UnlockRequested) => (Unlocked { key }, vec![]),
         (_, Event::UnlockRequested) => (Locked, vec![Effect::LoadKey]),
         (Locked, Event::KeyLoaded(key)) => (Unlocked { key }, vec![]),
-        (Locked, Event::KeyMissing) => (Locked, vec![Effect::CreateKey]),
+        (Locked, Event::KeyMissing { stored: 0 }) => (Locked, vec![Effect::CreateKey]),
+        (Locked, Event::KeyMissing { stored }) => (KeyLost { rows: stored }, vec![]),
         (Locked, Event::KeyringFailed(reason)) => (Unavailable { reason }, vec![]),
         (Unavailable { reason }, Event::LockRequested) => (Unavailable { reason }, vec![]),
+        (KeyLost { rows }, Event::LockRequested) => (KeyLost { rows }, vec![]),
         (_, Event::LockRequested) => (Locked, vec![]),
         // Late results in any other state are ignored.
-        (state, Event::KeyLoaded(_) | Event::KeyMissing | Event::KeyringFailed(_)) => {
+        (state, Event::KeyLoaded(_) | Event::KeyMissing { .. } | Event::KeyringFailed(_)) => {
             (state, vec![])
         }
     }
@@ -74,7 +85,31 @@ mod tests {
         let cases: Vec<(VaultState, Event, VaultState, Vec<Effect>)> = vec![
             (Locked, UnlockRequested, Locked, vec![Effect::LoadKey]),
             (Locked, KeyLoaded(key()), unlocked(), vec![]),
-            (Locked, KeyMissing, Locked, vec![Effect::CreateKey]),
+            // a key is made only for an empty store; logins sealed with another key wait for it
+            (
+                Locked,
+                KeyMissing { stored: 0 },
+                Locked,
+                vec![Effect::CreateKey],
+            ),
+            (
+                Locked,
+                KeyMissing { stored: 2 },
+                VaultState::KeyLost { rows: 2 },
+                vec![],
+            ),
+            (
+                VaultState::KeyLost { rows: 2 },
+                UnlockRequested,
+                Locked,
+                vec![Effect::LoadKey],
+            ),
+            (
+                VaultState::KeyLost { rows: 2 },
+                LockRequested,
+                VaultState::KeyLost { rows: 2 },
+                vec![],
+            ),
             (
                 Locked,
                 KeyringFailed("e".into()),
@@ -89,7 +124,7 @@ mod tests {
                 unlocked(),
                 vec![],
             ),
-            (unlocked(), KeyMissing, unlocked(), vec![]),
+            (unlocked(), KeyMissing { stored: 0 }, unlocked(), vec![]),
             (unlocked(), KeyringFailed("e".into()), unlocked(), vec![]),
             (unlocked(), LockRequested, Locked, vec![]),
             (
@@ -99,7 +134,12 @@ mod tests {
                 vec![Effect::LoadKey],
             ),
             (unavailable(), KeyLoaded(key()), unavailable(), vec![]),
-            (unavailable(), KeyMissing, unavailable(), vec![]),
+            (
+                unavailable(),
+                KeyMissing { stored: 0 },
+                unavailable(),
+                vec![],
+            ),
             (
                 unavailable(),
                 KeyringFailed("e".into()),

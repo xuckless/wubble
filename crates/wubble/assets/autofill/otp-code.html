@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Verify</title>
+<!-- The second factor alone: autocomplete one-time-code. No login is offered here. -->
+<form action="/f/welcome" method="post">
+<input type="text" name="code" id="code" autocomplete="one-time-code" inputmode="numeric">
+<button type="submit">Verify</button></form>
+<script>window.addEventListener("load", () => fx.say("ready code"));</script>

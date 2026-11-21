@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in</title>
+<!-- Decoys between the real username and password: display none, off-screen, a transparent
+     ancestor, aria-hidden with tabindex -1, zero size, visibility hidden. Only the real
+     fields may be filled. -->
+<form action="/f/welcome" method="post">
+<input type="text" name="username" id="user">
+<input type="text" name="website" id="d1" style="display:none">
+<input type="text" name="user_hp" id="d2" style="position:absolute;left:-9999px">
+<div style="opacity:0;position:absolute;left:600px;top:20px"><input type="text" name="contact" id="d3"></div>
+<input type="text" name="nickname" id="d4" aria-hidden="true" tabindex="-1" style="position:absolute;left:320px;top:20px">
+<input type="password" name="pw_trap" id="d5" style="width:0;height:0;border:0;padding:0">
+<input type="password" name="pw_hidden" id="d6" style="visibility:hidden;position:absolute">
+<input type="password" name="password" id="pass">
+<input type="submit" class="go" value="Sign in">
+</form>
+<script>
+fx.expect([["#user", "pat"], ["#pass", "p4t-pw"]], "filled ok", null, ["#d1", "#d2", "#d3", "#d4", "#d5", "#d6"]);
+</script>

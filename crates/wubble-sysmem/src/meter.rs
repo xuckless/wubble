@@ -201,6 +201,25 @@ impl Meter {
     }
 }
 
+/// The id a renderer reports for itself (`std::process::id()` in the renderer) as one of `pids`
+/// (wubble's processes): a sandboxed Linux renderer lives in its own PID namespace and reports
+/// the id it has there, which is not the system's. `ns` gives a process's innermost-namespace id
+/// (Linux `NSpid`, [`crate::namespace_pid`]; `None` where there is none, and then the reported id
+/// is the system's). `None` when no process or more than one has that id and none is the
+/// reported id itself.
+pub fn host_pid(reported: u32, pids: &[u32], ns: impl Fn(u32) -> Option<u32>) -> Option<u32> {
+    let hits: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|&p| ns(p).unwrap_or(p) == reported)
+        .collect();
+    match hits.as_slice() {
+        [one] => Some(*one),
+        [] => None,
+        many => many.contains(&reported).then_some(reported),
+    }
+}
+
 /// `threads` with the main thread first. sysinfo leaves out the thread whose id is the
 /// process's (Linux `get_proc_tasks`), and the process's time holds every thread's: the main
 /// thread's is the rest, together with threads that have exited. No row without threads.
@@ -293,6 +312,35 @@ mod tests {
         assert_eq!(descendants(10, &table), vec![10, 11, 14, 12, 13]);
         assert_eq!(descendants(99, &table), Vec::<u32>::new());
         assert_eq!(descendants(30, &table), vec![30]);
+    }
+
+    #[test]
+    fn a_namespaced_renderers_reported_id_is_found_among_the_processes() {
+        // 100 browser, 101 zygote, 120 and 121 sandboxed renderers that see themselves as 5
+        // and 6, 130 the GPU process (no namespace)
+        let ns = |p| match p {
+            120 => Some(5),
+            121 => Some(6),
+            101 => Some(1),
+            100 | 130 => Some(p),
+            _ => None,
+        };
+        let all = [100, 101, 120, 121, 130];
+        assert_eq!(host_pid(5, &all, ns), Some(120));
+        assert_eq!(host_pid(6, &all, ns), Some(121));
+        // no namespace (no sandbox, or another OS): the reported id is the system's
+        assert_eq!(host_pid(130, &all, ns), Some(130));
+        assert_eq!(host_pid(130, &all, |_| None), Some(130));
+        // unknown, or two renderers claiming one id and neither the id itself
+        assert_eq!(host_pid(77, &all, ns), None);
+        assert_eq!(
+            host_pid(5, &[120, 122], |p| Some(if p == 120 || p == 122 {
+                5
+            } else {
+                p
+            })),
+            None
+        );
     }
 
     #[test]

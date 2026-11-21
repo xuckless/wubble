@@ -6,13 +6,22 @@ fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/researc
 Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has them.
 
 ## Status (2026-11-20)
-`main` builds, lints and passes 2117 tests; every window smoke passes on the invisible test display
+`main` builds, lints and passes 2196 tests; every window smoke passes on the invisible test display
 (`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.3` for Linux and macOS (preview.3 fixes MCP hosting on macOS; preview.2, with codecs,
 added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
 registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
 (made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
 built but not released: they need the patched engine, which the release engine is not. The npm launcher
 (`packages/wubble-mcp`) is built, not published. Windows is not green in CI.
+
+## Hardening pass (2026-11-21), merged, not yet released
+Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
+`~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
+and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
+Owner decisions waiting: the spellcheck dictionary (its download was one of Chromium's own requests, now off);
+whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
+this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
+`WUBBLE_SMOKE_KEYRING=os` there before the release).
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
@@ -23,10 +32,13 @@ on the same build; the numbers to beat are in [docs/measurements.md](docs/measur
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
+- [ ] Build the engine with patch 40, then verify the touchpad pinch road (`--smoke pinch` takes it when the marker is there; unit-tested only so far); macOS engine too, and a real trackpad on GNOME and the Mac (the smoke injects through `Host::pinch`)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
+- [ ] Settings at a content width of 759 px or less (a window under about 1010 with the sidebar out): the design's one-column layout (`settings.css` narrow block: no section list, title and search on top) is not built, the controls run off the right edge with no way to reach them; repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
+- [ ] The Settings Select's list is drawn by Slint (no blur): the scene's window-level glass lies over the page; the design's blur needs the page's lists in a window-level layer (owner's call)
 - [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
@@ -47,9 +59,21 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Later (owner, 2026-11-20): "Move tab to" in a tab's right-click menu, a two-level menu: hovering the row (with its ">") opens the list of user-created Spaces; moving a tab out of an agent Space makes it an ordinary tab of that Space
 - [ ] Later (owner, 2026-11-20): clearing an agent Space that still has tabs asks first: "Close anyway", or "Move tabs", which opens the list of user-created Spaces downward and moves them before the Space is cleared (until then the dustbin clears at once)
-- [ ] Bind a requested secret name to a vault login on the sheet (a grant holds no secret until then; `fill_secret` is refused cleanly)
+- [ ] Autofill: offer the login form a page shows right after a submit (the save check consumes that report today)
+- [ ] Autofill: re-probe Reddit (bot wall) and Wikipedia (redirects to auth.wikimedia.org) logins by hand
+- [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
+- [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
+- [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
+- [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
-- [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, redaction of filled values, the airlocks
+- [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
+
+## Hardening pass: built-in pages and their data (2026-11-21, open findings; checklist in the report)
+- [ ] Task manager on Linux with the sandbox: each renderer is pid 1 in its own PID namespace, so a tab cannot be tied to its renderer (tab rows have no memory, CPU or End) and renderers are listed as "Zygote"; needs a way to ask CEF's browser process for a tab's renderer pid
+- [ ] List pages (History, Bookmarks, Downloads, Archive): a row cannot be opened from the keyboard (only its Delete is a Tab stop; a screen reader's default action opens it); no select, delete selection, undo, copy address or keyboard open in a new tab; a bookmark folder is deleted with its contents by one press; needs a focusable kit row and a design for selection and undo
+- [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page); downloads that an agent session's tab starts land in the user's list and folder with no prompt (the airlock is not built)
+- [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
+- [ ] `--smoke data` runs each process on its own CEF cache: a cookie cleared right before a SIGKILL and read after the next start is not checked
 
 ## Review findings (perpetual)
 The design-fidelity phase is over; this list never closes and gates nothing: findings from reviews, QA rounds and the
@@ -61,7 +85,7 @@ Open, for the owner's eye:
 - [ ] Menus grow from the design's 236 to 320 for long rows (derived; on the review sheet)
 - [ ] Sidebar mid-collapse shows the rail look below 140 wide (the design's own behaviour; QA read it as a reflow)
 - [ ] Rail close badge size; video strip: should a collapse carry over to later pages
-- [ ] Find bar closes on reload (Chromium keeps it); Escape does not dismiss the SponsorBlock question
+- [ ] Find bar closes on reload (Chromium keeps it)
 - [ ] Compact mode duplicates the hide-sidebar toggle (or make it sidebar <-> rail)
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
@@ -80,7 +104,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
+- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -99,7 +123,10 @@ Open, to build or check:
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
-- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps; picture drag-out on macOS and Windows
+- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
+- [ ] Drag out on macOS (`Aux` impl: NSDraggingSource, pasteboard items with the link, text, HTML and a promised file for a picture) and Windows (the stub: `wl::Null`); written for neither yet
+- [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
+- [ ] A page drag dropped on the bookmarks page or a folder row makes a bookmark (the built-in pages take no drop yet); text or a link onto an open command bar's field (the pill only)
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)
@@ -110,7 +137,7 @@ Open, to build or check:
 - [ ] Film rim on the remaining controls (buttons, menu rows)
 - [ ] Touch-kit pieces not yet ported: pin, download button, dock with gliding tooltip, the check box's mask grow
 - [ ] Gallery sweep: the autofill key chip overlaps the Space header
-- [ ] Bookmarks: drag reorder, a bookmarks bar, bookmarks as command-bar candidates
+- [ ] Bookmarks: drag reorder, a bookmarks bar
 
 ## M3: Memory and sleeping
 - [ ] Benchmark against Chrome and Zen: 200 tabs and after 1 h idle (Chromium and Firefox at 1/10/50 done)
@@ -118,13 +145,20 @@ Open, to build or check:
 ## M4: DevTools and built-ins
 - [ ] DevTools bottom dock (no design source; needs vertical pane rects)
 - [ ] Inspect-at-point in the docked panel (no protocol path; the detached window today)
-- [ ] Zen/Arc password import (CSV only) and a notice when the keyring is unavailable
+- [ ] Zen/Arc password import (CSV only)
 
 ## M5: Arc-style features
 - [ ] Sync (deferred)
 
 ## Built in instead of extensions
 - [ ] Content blocker: uBO scriptlet coverage
+
+## Privacy and containers (hardening pass, open)
+- [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
+- [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
+- [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
+- [ ] Routing rules: renaming or deleting a Space (or container) a rule names silently turns the rule off, with no mark in the list; Space names are not unique; a Space named with `,` or `->` cannot be named by a rule; the row label does not say typed addresses and page links are not routed
+- [ ] Pill and counter: no check drives the shell by pointer for the blocker menu, the Sites list revoke or the Spaces list in a running window (only the engine side is driven, `notes/hp/privtools` of the pass)
 
 ## Design fidelity
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals
@@ -171,14 +205,14 @@ Open, to build or check:
 - [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
 - [ ] Before every release: run `cargo test --workspace` on the Mac (preview.2 shipped with MCP hosting broken on macOS; one test there would have caught it), and run the whole suite there once now (never done)
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
-      shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
+      shellcheck not run on `install.sh`
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
 - [ ] Import: Zen legacy tables, Arc history, Little Arc, Helium/Chromium; verify Zen macOS and Arc Windows paths
 - [ ] Security update cadence: track Chromium stable
 - [ ] Packaging: Flatpak/RPM, MSI/winget, signed and notarised DMG; auto-update
 - [ ] Opt-in crash reports that open a GitHub issue (scrubbed)
 - [ ] Default-browser registration, URL handlers
-- [ ] Hardening: vault unlock off the store thread; clear the clipboard after a password copy
+- [ ] Hardening: vault unlock off the store thread
 
 ## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:

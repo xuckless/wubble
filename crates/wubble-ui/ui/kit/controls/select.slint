@@ -19,6 +19,7 @@ export component Select inherits Rectangle {
     in property <[MenuEntry]> options;
     in property <int> value;
     in property <string> label;
+    in property <string> placeholder: "Ask on first search";
     in property <color> accent: Palette.sky;
     // the view the menu must stay inside (window coordinates; the page's scroller), for the
     // upward flip; unbounded by default (it opens down)
@@ -48,7 +49,9 @@ export component Select inherits Rectangle {
             root.up = root.fits-up();
         }
         root.open = !root.open;
-        if root.open && by-key {
+        // wubble: the keys take the focus however it opened, so Escape closes a list that
+        // a click opened (the design's only does after a key)
+        if root.open {
             menu.take-focus();
         }
     }
@@ -57,7 +60,7 @@ export component Select inherits Rectangle {
         width: root.width;
         least-width: SettingsCss.wb-st-select-trig--min-width;
         trigger-height: SettingsCss.wb-st-select-trig--height;
-        text: root.current < root.options.length ? root.options[root.current].label : "";
+        text: root.value >= 0 && root.value < root.options.length ? root.options[root.value].label : root.placeholder;
         label: root.label;
         open: root.open;
         clicked(by-key) => {
@@ -78,9 +81,11 @@ export component Select inherits Rectangle {
         entries: root.options;
         label: root.label;
         checks: true;
-        checked: root.current;
+        checked: root.value;
         accent: root.accent;
         menu-width: TouchMenu.select-width;
+        // the list sits in the page, under the scene's window-level glass: its panel is its own
+        glass-layer: 0;
         // `.st-menu { right: 0 }`; `.st-menu.up { bottom: calc(100% + gap) }`
         panel-x: root.absolute-position.x + root.width - TouchMenu.select-width;
         panel-y: root.up ? root.absolute-position.y - TouchMenu.select-gap - self.panel-height : root.absolute-position.y + root.height + TouchMenu.select-gap;

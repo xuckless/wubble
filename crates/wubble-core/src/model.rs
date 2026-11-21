@@ -278,10 +278,11 @@ pub enum Command {
         size: Option<(u32, u32)>,
     },
     /// A link from another app: a new tab in `space` (`None`: the active one) shown in a
-    /// Little window.
+    /// Little window, in `container` (`None`: the Space's own).
     OpenLittle {
         url: String,
         space: Option<SpaceId>,
+        container: Option<ContainerId>,
     },
     /// The Little window's tab becomes an ordinary tab of `space`, shown; the window closes.
     PromoteLittle {
@@ -1496,9 +1497,11 @@ impl Model {
             return vec![];
         };
         if !self.order_idx(si).contains(&tab)
+            || !self.order_idx(si).contains(&focused)
             || self.is_internal(tab)
             || self.is_internal(focused)
             || self.windowed(tab).is_some()
+            || self.windowed(focused).is_some()
             || self.pip_tab().is_some_and(|p| p == tab || p == focused)
         {
             return vec![];
@@ -1529,7 +1532,9 @@ impl Model {
     /// A new tab beside the focused page (the design's `open_beside`). Into an empty Space, or
     /// beside a full split, it is a plain new tab shown alone.
     fn open_beside(&mut self, url: String) -> Vec<Effect> {
-        let focused = self.visible_tab();
+        let focused = self
+            .space_idx(self.active_space())
+            .and_then(|si| self.spaces[si].active);
         let mut fx = self.new_tab(url, None, None);
         let (Some(Effect::CreateTab { tab, .. }), Some(f)) = (fx.first().cloned(), focused) else {
             return fx;
@@ -1613,6 +1618,9 @@ impl Model {
     /// A hidden, idle tab judged as if memory were critical: the policy discards it unless it is
     /// pinned and kept alive, which is refused here rather than frozen.
     fn discard_now(&mut self, tab: TabId) -> Vec<Effect> {
+        if self.is_internal(tab) {
+            return vec![];
+        }
         let Some(l) = self.tabs.get(&tab).map(|t| t.lifecycle) else {
             return vec![];
         };
@@ -2033,7 +2041,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::ReturnPip => m.return_pip(),
         Command::MoveTabToWindow { tab, to } => m.move_tab_to_window(tab, to),
         Command::OpenPopupWindow { url, opener, size } => m.open_popup_window(url, opener, size),
-        Command::OpenLittle { url, space } => m.open_little(url, space),
+        Command::OpenLittle {
+            url,
+            space,
+            container,
+        } => m.open_little(url, space, container),
         Command::PromoteLittle { window, space } => m.promote_little(window, space),
         Command::SetSleepPolicy(policy) => {
             m.policy = policy;

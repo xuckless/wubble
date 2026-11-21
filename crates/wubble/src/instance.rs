@@ -130,11 +130,28 @@ pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// The directory for a hashed socket name.
+/// The directory for a hashed socket name: private to the user (`$XDG_RUNTIME_DIR`, else
+/// `$XDG_STATE_HOME` or `$HOME/.local/state`, on macOS `~/Library/Caches`, on Windows
+/// `%LOCALAPPDATA%`), never the shared temp directory.
 pub fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+    runtime_dir_from(|key| std::env::var_os(key).map(PathBuf::from))
+}
+
+fn runtime_dir_from(env: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
+    let abs = |key: &str| env(key).filter(|p| p.is_absolute());
+    if cfg!(windows) {
+        abs("LOCALAPPDATA").unwrap_or_else(|| PathBuf::from("."))
+    } else if let Some(runtime) = abs("XDG_RUNTIME_DIR") {
+        runtime
+    } else if cfg!(target_os = "macos") {
+        abs("HOME")
+            .map(|h| h.join("Library/Caches"))
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        abs("XDG_STATE_HOME")
+            .or_else(|| abs("HOME").map(|h| h.join(".local/state")))
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 /// How the start went.
@@ -145,14 +162,34 @@ pub enum Claim {
     Forwarded,
 }
 
+/// Binds the instance socket at `path` with `0o600` permissions on Unix (no umask race;
+/// falls back to a private temp directory + hard link where `fchmod` on a socket is unsupported).
+fn bind_instance(path: &Path) -> io::Result<Listener> {
+    #[cfg(unix)]
+    {
+        use interprocess::os::unix::local_socket::ListenerOptionsExt;
+        match ListenerOptions::new()
+            .name(path.to_fs_name::<GenericFilePath>()?)
+            .mode(0o600)
+            .create_sync()
+        {
+            Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+                crate::mcp::private_by_dir_impl(path, true)
+            }
+            other => other,
+        }
+    }
+    #[cfg(not(unix))]
+    ListenerOptions::new()
+        .name(path.to_fs_name::<GenericFilePath>()?)
+        .create_sync()
+}
+
 /// Binds the socket at `path`, or hands `message` to the browser already bound to it. A socket
 /// file nobody listens on (left by a crash) is removed and bound once more.
 pub fn claim(path: &Path, message: &Message) -> io::Result<Claim> {
     for _ in 0..2 {
-        match ListenerOptions::new()
-            .name(path.to_fs_name::<GenericFilePath>()?)
-            .create_sync()
-        {
+        match bind_instance(path) {
             Ok(listener) => return Ok(Claim::Primary(listener)),
             Err(e) if taken(&e) => {}
             Err(e) => return Err(e),
@@ -265,6 +302,18 @@ pub fn sweep(runtime: &Path) {
 #[cfg(not(unix))]
 pub fn sweep(_runtime: &Path) {}
 
+/// Whether the peer on `stream` runs as this effective user.
+#[cfg(unix)]
+pub(crate) fn peer_is_me(stream: &Stream) -> bool {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    stream
+        .peer_creds()
+        .ok()
+        .and_then(|c| c.euid())
+        .is_some_and(|uid| uid == me)
+}
+
 /// Accepts later starts on `listener` until the process ends, handing each one's message to
 /// `deliver`. On its own thread: `accept` blocks.
 pub fn listen(listener: Listener, deliver: impl Fn(Message) + Send + 'static) {
@@ -272,6 +321,10 @@ pub fn listen(listener: Listener, deliver: impl Fn(Message) + Send + 'static) {
         .name("wubble-instance".into())
         .spawn(move || {
             for stream in listener.incoming().filter_map(Result::ok) {
+                #[cfg(unix)]
+                if !peer_is_me(&stream) {
+                    continue;
+                }
                 if let Some(message) = read_message(stream) {
                     deliver(message);
                 }
@@ -383,5 +436,62 @@ mod tests {
                 Claim::Primary(_)
             ));
         }
+    }
+
+    #[test]
+    fn runtime_dir_never_falls_back_to_tmp() {
+        let tmp = std::env::temp_dir();
+        let none = runtime_dir_from(|_| None);
+        assert_ne!(none, tmp);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            assert_eq!(
+                runtime_dir_from(|k| match k {
+                    "XDG_RUNTIME_DIR" => Some(PathBuf::from("/run/user/1000")),
+                    "XDG_STATE_HOME" => Some(PathBuf::from("/home/u/.state")),
+                    "HOME" => Some(PathBuf::from("/home/u")),
+                    _ => None,
+                }),
+                PathBuf::from("/run/user/1000")
+            );
+            assert_eq!(
+                runtime_dir_from(|k| match k {
+                    "XDG_STATE_HOME" => Some(PathBuf::from("/home/u/.state")),
+                    "HOME" => Some(PathBuf::from("/home/u")),
+                    _ => None,
+                }),
+                PathBuf::from("/home/u/.state")
+            );
+            assert_eq!(
+                runtime_dir_from(|k| match k {
+                    "HOME" => Some(PathBuf::from("/home/u")),
+                    _ => None,
+                }),
+                PathBuf::from("/home/u/.local/state")
+            );
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                runtime_dir_from(|k| match k {
+                    "HOME" => Some(PathBuf::from("/Users/u")),
+                    _ => None,
+                }),
+                PathBuf::from("/Users/u/Library/Caches")
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn instance_socket_is_created_with_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = socket_path(dir.path(), &runtime_dir());
+        let Claim::Primary(_listener) = claim(&path, &Message::Focus).unwrap() else {
+            panic!("the first start binds");
+        };
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

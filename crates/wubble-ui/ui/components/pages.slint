@@ -28,7 +28,7 @@ export component HistoryPage inherits Rectangle {
     in property <string> placeholder: "Search history";
     in property <string> empty-text: "No history yet";
     in property <string> empty-search-text: "No visits match";
-    // Offers "Clear browsing data".
+    // Offers "Clear history".
     in property <bool> clearable: true;
     // Day headers and visits, newest first.
     in property <[HistoryLineItem]> lines;
@@ -63,7 +63,7 @@ export component HistoryPage inherits Rectangle {
         ListToolbar {
             if root.clearable: Button {
                 kind: ButtonKind.ghost;
-                text: "Clear browsing data";
+                text: "Clear history";
                 clicked => {
                     root.range = 0;
                     root.clearing = true;
@@ -83,7 +83,7 @@ export component HistoryPage inherits Rectangle {
                 last: i == root.lines.length - 1 || root.lines[i + 1].header;
                 visit := ListRow {
                     title: line.title;
-                    note: line.url;
+                    note: line.time != "" ? line.time + " · " + line.url : line.url;
                     mono-note: true;
                     favicon: line.favicon;
                     shown: root.open;
@@ -119,7 +119,7 @@ export component HistoryPage inherits Rectangle {
 
     sheet := Sheet {
         open: root.clearing;
-        title: "Clear browsing data";
+        title: "Clear history";
         message: "Forgets the visits in the range. Bookmarks and downloads stay.";
         accept-text: "Clear";
         cancel-text: "Cancel";
@@ -275,9 +275,15 @@ export component PasswordsPage inherits Rectangle {
     callback copy(string);
     callback deleted(string);
     callback added(string, string, string);
+    // a saved login changed by hand: (id, site, username, password; empty keeps the password)
+    callback edited(string, string, string, string);
     callback import-requested();
+    // the key is lost: delete the logins sealed with it and make a new one
+    callback start-over();
 
     property <bool> adding: false;
+    // the login the sheet edits; empty: it adds one
+    property <string> editing;
 
     public function take-focus() {
         frame.take-focus();
@@ -287,14 +293,27 @@ export component PasswordsPage inherits Rectangle {
         site.text = "";
         username.text = "";
         password.text = "";
+        root.editing = "";
         root.adding = false;
     }
 
     function save() {
-        if site.text != "" && password.text != "" {
+        if root.editing != "" && site.text != "" {
+            root.edited(root.editing, site.text, username.text, password.text);
+            root.close-sheet();
+        } else if site.text != "" && password.text != "" {
             root.added(site.text, username.text, password.text);
             root.close-sheet();
         }
+    }
+
+    function edit(login: LoginItem) {
+        root.editing = login.id;
+        site.text = login.origin;
+        username.text = login.username;
+        password.text = "";
+        root.adding = true;
+        password.take-focus();
     }
 
     frame := PageFrame {
@@ -323,7 +342,30 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                if root.view.state != VaultState.locked: VerticalLayout {
+                // nothing can be saved without the keyring: the unlock is the retry
+                if root.view.state == VaultState.unavailable || root.view.state == VaultState.key-lost: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        kind: ButtonKind.pri;
+                        text: "Try again";
+                        clicked => {
+                            root.unlock();
+                        }
+                    }
+                }
+                if root.view.state == VaultState.key-lost: VerticalLayout {
+                    alignment: center;
+                    KeyedHoldButton {
+                        key: "start-over";
+                        compact: true;
+                        text: "Delete them and start over";
+                        done-text: "Deleted";
+                        done => {
+                            root.start-over();
+                        }
+                    }
+                }
+                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable && root.view.state != VaultState.key-lost: VerticalLayout {
                     alignment: center;
                     Button {
                         kind: ButtonKind.ghost;
@@ -334,7 +376,7 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: VerticalLayout {
+                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable && root.view.state != VaultState.key-lost: VerticalLayout {
                     alignment: center;
                     Button {
                         kind: ButtonKind.ghost;
@@ -365,6 +407,13 @@ export component PasswordsPage inherits Rectangle {
                 tappable: false;
                 shown: root.open;
                 index: i + 1;
+                if login.readable: RowTextAction {
+                    text: "Edit";
+                    reveal: login-row.reveal;
+                    clicked => {
+                        root.edit(login);
+                    }
+                }
                 RowAction {
                     icon-path: Glyph.eye;
                     label: login.has-revealed ? "Hide" : "Show";
@@ -401,7 +450,7 @@ export component PasswordsPage inherits Rectangle {
 
     Sheet {
         open: root.adding;
-        title: "Add a password";
+        title: root.editing != "" ? "Edit password" : "Add a password";
         accept-text: "Save";
         cancel-text: "Cancel";
         accepted => {
@@ -429,7 +478,7 @@ export component PasswordsPage inherits Rectangle {
             }
         }
         password := ListField {
-            placeholder: "Password";
+            placeholder: root.editing != "" ? "New password (empty keeps it)" : "Password";
             secret: true;
             accepted => {
                 root.save();
@@ -513,7 +562,7 @@ export component TasksPage inherits PageFrame {
             // A slot per control whether it shows or not, so the columns line up row to row.
             TableSlot {
                 width: Shell.task-sleep;
-                if item.tab >= 0: Toggle {
+                if item.can-sleep: Toggle {
                     size: ToggleSize.sm;
                     on: item.never-sleep;
                     label: "Never sleep";

@@ -62,14 +62,54 @@ impl Store {
 
     /// One page: entries strictly before the `(archived_at, id)` cursor of the last row shown
     /// (`None`: from the newest), newest first, at most `limit`. `query` keeps the entries
-    /// whose title or url contains it (case-insensitive for ASCII; empty keeps all).
+    /// whose title or url contains it, in any case (empty keeps all).
     pub async fn list_archive(
         &self,
         limit: usize,
         before: Option<(i64, i64)>,
         query: &str,
     ) -> Result<Vec<ArchivedTab>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let needle = query.trim().to_lowercase();
+        if needle.is_ascii() {
+            return self.archive_matching(limit, before, &needle).await;
+        }
+        // SQLite's `lower()` folds ASCII only: a query with other letters is matched here.
+        let mut out = vec![];
+        let mut cursor = before;
+        loop {
+            let chunk = self.archive_matching(SCAN_CHUNK, cursor, "").await?;
+            let last = chunk.last().map(|t| (t.archived_at_ms, t.id));
+            let read = chunk.len();
+            for t in chunk {
+                if contains_folded(&t.title, &needle) || contains_folded(&t.url, &needle) {
+                    out.push(t);
+                    if out.len() == limit {
+                        return Ok(out);
+                    }
+                }
+            }
+            if read < SCAN_CHUNK {
+                return Ok(out);
+            }
+            cursor = last;
+        }
+    }
+
+    /// [`Self::list_archive`] where the SQL does the matching: `needle` is lowercase ASCII.
+    async fn archive_matching(
+        &self,
+        limit: usize,
+        before: Option<(i64, i64)>,
+        needle: &str,
+    ) -> Result<Vec<ArchivedTab>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let (at, id) = before.unwrap_or((i64::MAX, i64::MAX));
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut rows = self
             .conn
             .query(
@@ -79,7 +119,7 @@ impl Store {
                        AND (?4 = '' OR instr(lower(title), ?4) > 0 OR instr(lower(url), ?4) > 0) \
                      ORDER BY archived_at DESC, id DESC LIMIT ?3"
                 ),
-                (at, id, limit as i64, query.trim().to_lowercase()),
+                (at, id, limit, needle.to_owned()),
             )
             .await?;
         let mut out = vec![];
@@ -167,6 +207,22 @@ mod tests {
     }
 
     #[test]
+    fn search_ignores_case_in_any_script() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for (i, title) in ["Привет мир", "Plain"].into_iter().enumerate() {
+                let mut t = tab(i as i64, 10 + i as i64);
+                t.title = title.into();
+                s.push_archive(&t).await.unwrap();
+            }
+            for query in ["привет", "ПРИВЕТ", "Привет"] {
+                let hits = s.list_archive(10, None, query).await.unwrap();
+                assert_eq!(urls(&hits), ["https://x.test/0"], "query {query:?}");
+            }
+        });
+    }
+
+    #[test]
     fn search_and_keyset_paging() {
         pollster::block_on(async {
             let mut s = Store::open_in_memory().await.unwrap();
@@ -220,6 +276,18 @@ mod tests {
             s.push_archive(&tab(0, 5)).await.unwrap(); // space 0
             s.conn.execute("DELETE FROM spaces", ()).await.unwrap();
             assert_eq!(s.list_archive(10, None, "").await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn limit_zero_returns_empty() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let mut t = tab(0, 5);
+            t.title = "Привет".into();
+            s.push_archive(&t).await.unwrap();
+            assert!(s.list_archive(0, None, "").await.unwrap().is_empty());
+            assert!(s.list_archive(0, None, "привет").await.unwrap().is_empty());
         });
     }
 }

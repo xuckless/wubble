@@ -135,8 +135,12 @@ impl Blocker {
         let mut set = FilterSet::new(false);
         for source in sources {
             let Some(text) = source.read() else { continue };
-            let drop = source.def.map_or(&[][..], |d| d.drop_lines);
-            set.add_filter_list(crate::preparse::prune(&text, drop), parse_options(source));
+            let mut drop = source.def.map_or(&[][..], |d| d.drop_lines).to_vec();
+            // the switch is about URLs being rewritten, whichever list asks for it
+            if source.keep_params {
+                drop.push("removeparam");
+            }
+            set.add_filter_list(crate::preparse::prune(&text, &drop), parse_options(source));
         }
         Self {
             engine: Engine::new_with_filter_set(set),
@@ -570,7 +574,36 @@ mod tests {
         Source {
             def: crate::catalog::find(id),
             origin: crate::lists::Origin::Text(text.into()),
+            keep_params: false,
         }
+    }
+
+    #[test]
+    fn with_tracking_parameters_off_no_list_rewrites_a_url() {
+        // a rewrite from a list that is not the tracking category's (uBO's own filters have some)
+        let list = "||shop.test^$doc,removeparam=fbclid\n||ads.example^\n";
+        let url = "https://shop.test/p?fbclid=1&id=2";
+        let on = Blocker::from_parsed(&[source("ublock-filters", list)]);
+        let req = NetRequest {
+            url,
+            source_url: url,
+            resource_type: ResourceType::Document,
+        };
+        assert_eq!(
+            on.decide(req, Shields::On),
+            Decision::Rewrite {
+                url: "https://shop.test/p?id=2".into()
+            }
+        );
+        let mut off = source("ublock-filters", list);
+        off.keep_params = true;
+        let off = Blocker::from_parsed(&[off]);
+        assert_eq!(off.decide(req, Shields::On), Decision::Allow);
+        // the blocking rule of the same list stays
+        assert_eq!(
+            decide(&off, "https://ads.example/x.js", SITE, Script),
+            Decision::Block
+        );
     }
 
     #[test]

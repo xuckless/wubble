@@ -16,8 +16,10 @@
 //! - The **find bar** coexists under any exclusive overlay but a modal sheet (dialog, Add
 //!   bookmark, Print): it is refused under one, and opening it closes a menu, the command bar,
 //!   link hints or the screenshot picker.
-//! - A **notice** (SponsorBlock's question) sits under everything, never takes Escape (a key meant
-//!   for the page must not answer it, as the permission prompt), and one shows at a time.
+//! - A **notice** (SponsorBlock's question) sits under everything, takes Escape only when nothing
+//!   above it is open, and one shows at a time.
+//! - A **permission prompt** belongs to its tab, coexists under other overlays, and takes Escape
+//!   (dismissing the prompt as denied without remembering).
 //! - **Escape** closes the topmost visible overlay that takes it; a second Escape the next.
 //! - **Tab switch**: menus, sheets, link hints and the screenshot picker close; the find bar, a
 //!   page's dialog and a notice stay with their tab, hidden, and are revealed only on it. The
@@ -39,6 +41,8 @@ use crate::tab::TabId;
 pub enum Kind {
     /// A lasting notice of the page (SponsorBlock's "Skip sponsor segments?").
     Notice,
+    /// A tab's permission prompt (camera, mic, notifications, external link).
+    Permission,
     /// The find bar.
     Find,
     /// A page's JS dialog or sign-in sheet (the engine waits for its answer).
@@ -113,7 +117,7 @@ impl Kind {
     }
 
     fn takes_escape(self) -> bool {
-        self != Kind::Notice
+        true
     }
 
     /// Closes when its tab stops being the visible one (a window menu: on any switch); the rest
@@ -248,7 +252,7 @@ fn open(stack: Stack, layer: Layer) -> (Stack, Vec<Effect>) {
         .copied()
         .collect();
     let refused = match layer.kind {
-        Kind::Notice | Kind::Dialog => false,
+        Kind::Notice | Kind::Permission | Kind::Dialog => false,
         Kind::Find => visible.iter().any(|l| l.kind.modal()),
         // an agent's sheet never replaces the user's sheet, which it waits for
         Kind::AgentSheet => visible.iter().any(|l| l.kind.holds() || l.kind.modal()),
@@ -265,6 +269,7 @@ fn open(stack: Stack, layer: Layer) -> (Stack, Vec<Effect>) {
             .filter(|l| l.kind == Kind::Notice)
             .copied()
             .collect(),
+        Kind::Permission => vec![],
         Kind::Find => visible
             .into_iter()
             .filter(|l| l.kind.exclusive() && !l.kind.modal())
@@ -593,20 +598,46 @@ mod tests {
 
     #[test]
     fn escape_closes_the_topmost_then_the_next() {
-        let layers = [on(Notice, A), on(Find, A), win(Menu)];
+        let layers = [on(Notice, A), on(Permission, A), on(Find, A), win(Menu)];
         let (layers, fx) = step(&layers, Event::Escape);
         assert_eq!(fx, [Effect::Close(win(Menu))]);
         let (layers, fx) = step(&layers, Event::Escape);
         assert_eq!(fx, [Effect::Close(on(Find, A))]);
-        // a notice never takes Escape: the key goes on to the page
+        let (layers, fx) = step(&layers, Event::Escape);
+        assert_eq!(fx, [Effect::Close(on(Permission, A))]);
+        // Notice is lowest: Escape dismisses it once nothing sits above it.
+        let (layers, fx) = step(&layers, Event::Escape);
+        assert_eq!(fx, [Effect::Close(on(Notice, A))]);
+        assert!(layers.is_empty());
+        // With nothing left, Escape goes on to the page.
         let (layers, fx) = step(&layers, Event::Escape);
         assert!(fx.is_empty());
-        assert_eq!(layers, [on(Notice, A)]);
+        assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn permission_is_tab_scoped_and_coexists_with_other_overlays() {
+        assert_eq!(Layer::new(Permission, Some(A)).tab, Some(A));
+        assert!(!Permission.exclusive());
+        // Opening a menu or find bar leaves a permission prompt in place.
+        let (layers, fx) = step(&[on(Permission, A)], Event::Open(win(Menu)));
+        assert_eq!(layers, [on(Permission, A), win(Menu)]);
+        assert_eq!(fx, [Effect::Open(win(Menu))]);
+        // Switching tabs hides the permission prompt rather than closing it.
+        let (next, fx) = transition(stack(&[on(Permission, A)]), Event::Switched(Some(B)));
+        assert_eq!(next.layers, [on(Permission, A)]);
+        assert_eq!(fx, [Effect::Hide(on(Permission, A))]);
+        // Escape on tab B does not touch tab A's permission prompt.
+        let (after, fx) = transition(next, Event::Escape);
+        assert_eq!(after.layers, [on(Permission, A)]);
+        assert!(fx.is_empty());
     }
 
     #[test]
     fn escape_closes_each_kind() {
         for kind in [
+            Notice,
+            Permission,
             Find,
             Dialog,
             BookmarkSheet,

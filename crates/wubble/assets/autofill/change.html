@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Change password</title>
+<!-- A change-password form: current-password then new-password twice. A picked login fills the
+     username and the current password only; the generator fills the new ones. -->
+<form action="/f/welcome" method="post" class="edit_user">
+<input type="text" name="user[login]" id="user_login" autocomplete="username">
+<input type="password" name="user[old_password]" id="old" autocomplete="current-password">
+<input type="password" name="user[password]" id="new" autocomplete="new-password">
+<input type="password" name="user[password_confirmation]" id="confirm" autocomplete="new-password">
+<button type="submit" class="go">Update password</button>
+</form>
+<script>
+fx.expect([["#user_login", "ivan"], ["#old", "1van-old"]], "filled ok", null, ["#new", "#confirm"]);
+fx.$("#confirm").addEventListener("change", () => {
+  const p = fx.get(fx.$("#new"));
+  if (p.length >= 12 && p !== "1van-old" && fx.get(fx.$("#confirm")) === p) fx.say("generated ok");
+});
+</script>

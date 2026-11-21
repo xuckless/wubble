@@ -42,6 +42,8 @@ pub struct TaskRow {
     /// How many tabs run in this row's renderer (1 = its own).
     pub shared_with: usize,
     pub never_sleep: bool,
+    /// An internal `wubble://` page: no renderer process to discard or sleep.
+    pub internal: bool,
     /// The Space a tab row's tab is in, when there is more than one (tabs of the same title in
     /// two Spaces are told apart, QA MED-06); `None` for a process row.
     pub space: Option<String>,
@@ -112,6 +114,7 @@ pub fn rows(
                 busy: t.busy.labels(),
                 shared_with: pid.map_or(0, |p| sharing[&p]),
                 never_sleep: t.busy.contains(Reason::NeverSleep),
+                internal: InternalPage::from_url(&t.url).is_some(),
                 space: (model.spaces.len() > 1).then(|| space.name.clone()),
             });
         }
@@ -126,6 +129,7 @@ pub fn rows(
             busy: vec![],
             shared_with: 0,
             never_sleep: false,
+            internal: false,
             space: None,
         });
     }
@@ -255,6 +259,21 @@ mod tests {
         // The shared renderer counts once; the discarded tab's old renderer not at all.
         assert_eq!(t.total_rss_bytes, (100 + 50 + 30) << 20);
         assert_eq!(t.total_cpu_percent, 8.0);
+    }
+
+    #[test]
+    fn internal_pages_are_marked_internal() {
+        let (m, _) = model(1);
+        let (m, _) = apply(m, Command::OpenInternal(InternalPage::Settings));
+        let t = rows(
+            &m,
+            &BTreeMap::new(),
+            &[(1, "Browser".into())],
+            &BTreeMap::new(),
+        );
+        assert!(!t.rows[0].internal);
+        assert!(t.rows[1].internal);
+        assert!(!t.rows[2].internal);
     }
 
     #[test]

@@ -28,7 +28,7 @@ use crate::refresh::ListSpec;
 
 /// Changes whenever the way sources are turned into filters changes, so an
 /// older cache is rebuilt.
-const KEY_SCHEME: &str = "wubble-blocker sources 2\n";
+const KEY_SCHEME: &str = "wubble-blocker sources 3\n";
 
 /// Where a list's text is.
 #[derive(Clone, Debug)]
@@ -48,6 +48,9 @@ pub struct Source {
     /// format, untrusted, every rule type).
     pub def: Option<&'static ListDef>,
     pub origin: Origin,
+    /// `blocker.strip_params` is off: no list of any category rewrites a URL, so its
+    /// `$removeparam` rules are left out.
+    pub keep_params: bool,
 }
 
 impl Source {
@@ -56,6 +59,7 @@ impl Source {
         Self {
             def: None,
             origin: Origin::Text(text.into()),
+            keep_params: false,
         }
     }
 
@@ -76,6 +80,7 @@ impl Source {
     /// This source's line in the cache key.
     fn key(&self) -> String {
         let id = self.def.map_or("-", |d| d.id);
+        let id = format!("{id}{}", if self.keep_params { " keep-params" } else { "" });
         match &self.origin {
             Origin::Bundled(text) => format!("{id} bundled {} {:016x}\n", text.len(), head(text)),
             Origin::Text(text) => format!("{id} text {} {:016x}\n", text.len(), head(text)),
@@ -127,6 +132,7 @@ pub fn sources(dir: &Path, selection: &Selection) -> Vec<Source> {
             .map(|p| Source {
                 def: None,
                 origin: Origin::File(p),
+                keep_params: !selection.strip_params,
             }),
     );
     out
@@ -153,6 +159,7 @@ fn catalog_sources(
             Some(Source {
                 def: Some(def),
                 origin,
+                keep_params: !selection.strip_params,
             })
         })
         .collect()
@@ -349,6 +356,31 @@ mod tests {
         fn write(&self, name: &str, text: &str) {
             std::fs::write(self.lists().join(name), text).unwrap();
         }
+    }
+
+    #[test]
+    fn tracking_parameters_off_marks_every_source_and_the_cache_key() {
+        let dir = Dir::new("keep-params");
+        dir.write("mine.txt", "||x.test^$removeparam=a\n");
+        let on = Selection::default();
+        let off = Selection {
+            strip_params: false,
+            ..Selection::default()
+        };
+        let marks = |s: &Selection| -> Vec<bool> {
+            sources(&dir.lists(), s)
+                .iter()
+                .map(|s| s.keep_params)
+                .collect()
+        };
+        assert!(marks(&on).iter().all(|k| !k));
+        let off_marks = marks(&off);
+        assert!(!off_marks.is_empty() && off_marks.iter().all(|k| *k));
+        // a cache built with the rewrites is not the one without them
+        assert_ne!(
+            cache_key(&sources(&dir.lists(), &on)),
+            cache_key(&sources(&dir.lists(), &off))
+        );
     }
 
     impl Drop for Dir {

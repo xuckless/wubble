@@ -57,6 +57,19 @@ pub enum Ground {
     Dark,
 }
 
+/// Where the gallery's page drag is held, and what it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GhostScene {
+    /// The label (no drag image from Chromium) over the page.
+    LabelOverPage,
+    /// A translucent picture (Chromium's 75 %) over the page.
+    ImageOverPage,
+    /// The label over the tab list's first gap, its line lit.
+    OverTabList,
+    /// The label over the address pill, its box lit.
+    OverBar,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Overlay {
     None,
@@ -85,6 +98,8 @@ pub enum Overlay {
     AgentSpaces,
     /// The same session asking for more (`request_more`): the sheet lists only what is new.
     AgentMore,
+    /// The sheet with "Use my sign-ins" on and a secret name bound to a saved login.
+    AgentSignIns,
     /// The shown tab plays sound and / or is muted (the sound badge's states).
     Sound {
         audible: bool,
@@ -114,6 +129,8 @@ pub enum Overlay {
     /// The visible tab dragged onto the footer's switcher until the Spaces popup opened (three
     /// Spaces), then held over the popup's first drop row.
     SpacesDrag,
+    /// A page's drag held still (`kit/chrome/drag-ghost.slint`, `drop-mark.slint`).
+    PageDrag(GhostScene),
     /// Settings' search with this typed into it.
     SettingsSearch(&'static str),
     /// Two extensions installed (in memory only): Settings' Extensions section.
@@ -162,7 +179,7 @@ impl Scene {
         self.wheel > 0
             || self.side_wheel > 0
             || self.click.is_some()
-            || matches!(self.overlay, Overlay::SpacesDrag)
+            || matches!(self.overlay, Overlay::SpacesDrag | Overlay::PageDrag(_))
     }
 }
 
@@ -294,6 +311,21 @@ pub const SCENES: &[Scene] = &[
         ..over("spaces-popup-rail", Overlay::Spaces(3))
     },
     over("spaces-popup-drag", Overlay::SpacesDrag),
+    // a page's drag held still: the ghost over the page (Chromium's own image is what a real
+    // drag shows; `--smoke dnd --shot-dir` shoots those), over the tab list and the address bar
+    over(
+        "drag-ghost-label",
+        Overlay::PageDrag(GhostScene::LabelOverPage),
+    ),
+    over(
+        "drag-ghost-image",
+        Overlay::PageDrag(GhostScene::ImageOverPage),
+    ),
+    over(
+        "drag-ghost-tab-list",
+        Overlay::PageDrag(GhostScene::OverTabList),
+    ),
+    over("drag-ghost-bar", Overlay::PageDrag(GhostScene::OverBar)),
     Scene {
         pointer: Some(DOWNLOAD_ROW),
         ..over("downloads-popover-hover", Overlay::Downloads)
@@ -501,6 +533,7 @@ pub const SCENES: &[Scene] = &[
     on("agent-activity", InternalPage::AgentLog),
     over("agent-sheet", Overlay::AgentSheet),
     over("agent-sheet-more", Overlay::AgentMore),
+    over("agent-sheet-signins", Overlay::AgentSignIns),
     over("agent-tabs", Overlay::AgentTabs),
 ];
 

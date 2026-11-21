@@ -21,6 +21,7 @@ use std::fmt;
 
 use crate::autofill::may_fill;
 use crate::boost::Pattern;
+use crate::space::{ContainerId, SpaceId};
 
 /// The host's name for a session; also what every logged call is tagged with.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -37,12 +38,85 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoginRef(pub String);
 
-/// What a named secret points at: the login and the origin that login belongs to.
+/// Which part of a login a secret name types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Username,
+    Password,
+}
+
+/// The part the sheet suggests for a secret name (the owner picks; docs/research/mcp-server.md
+/// 0.3): one ending in `USER`, `USERNAME`, `LOGIN` or `EMAIL` (any case) the login's username,
+/// any other its password. Only a suggestion: `GITHUB_ID` may well be a username.
+pub fn suggested_part(name: &str) -> Part {
+    let upper = name.to_ascii_uppercase();
+    if ["USER", "USERNAME", "LOGIN", "EMAIL"]
+        .iter()
+        .any(|end| upper.ends_with(end))
+    {
+        Part::Username
+    } else {
+        Part::Password
+    }
+}
+
+/// What a named secret points at: the login, the origin that login belongs to, and which of its
+/// parts the name types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretBinding {
     pub login: LoginRef,
     /// `scheme://host[:port]`, as the vault stores it.
     pub origin: String,
+    pub part: Part,
+}
+
+/// One granted site whose sign-ins the owner shared with a session ("Use my sign-ins for these
+/// sites"): the site as written, and the Space (container) its cookies were copied from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedSite {
+    pub site: String,
+    pattern: Pattern,
+    pub from: ContainerId,
+    /// The Space's name, for the sheet and the activity log.
+    pub space: String,
+}
+
+/// Where a session's filled secrets could be read back by a page's script: the tabs a secret
+/// was typed into (for the rest of the session, wherever they go) and the origins it was typed
+/// on (any of the session's tabs while it shows one). `evaluate` is refused there; the
+/// session owns it, and nothing (`request_more` neither) lifts it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tainted {
+    tabs: std::collections::BTreeSet<crate::tab::TabId>,
+    origins: std::collections::BTreeSet<String>,
+}
+
+impl Tainted {
+    /// A secret was typed into `tab`, on the page at `url`.
+    pub fn filled(&mut self, tab: crate::tab::TabId, url: &str) {
+        self.tabs.insert(tab);
+        if let Some(origin) = crate::autofill::web_origin(url) {
+            self.origins.insert(origin);
+        }
+    }
+
+    /// Whether a script may not run in `tab`, now at `url`.
+    pub fn refuses_scripts(&self, tab: crate::tab::TabId, url: &str) -> bool {
+        self.tabs.contains(&tab)
+            || crate::autofill::web_origin(url).is_some_and(|o| self.origins.contains(&o))
+    }
+}
+
+/// The cookies a copy for `sites` takes ([`shares_cookie`]): the sites as patterns.
+pub fn cookie_scope(sites: &[String]) -> Vec<Pattern> {
+    sites.iter().filter_map(|s| Pattern::parse(s)).collect()
+}
+
+/// The one matcher of which cookies "Use my sign-ins" copies: those a page of one of `scope`'s
+/// sites would be sent (`boost::Pattern::sends_cookie`; `domain` as CEF names it, a leading dot
+/// for a domain cookie).
+pub fn shares_cookie(scope: &[Pattern], domain: &str, path: &str, secure: bool) -> bool {
+    scope.iter().any(|p| p.sends_cookie(domain, path, secure))
 }
 
 /// Why a grant could not be built.
@@ -144,6 +218,9 @@ pub enum MoreAnswer {
     NothingNew,
     /// A sheet for this session is up already.
     Busy,
+    /// The owner allowed, sharing sign-ins, but they could not be copied: nothing was granted,
+    /// the session runs on with what it had.
+    NotCopied,
 }
 
 /// What the owner lets a session use. Built by the approval sheet.
@@ -153,6 +230,8 @@ pub struct Grant {
     /// The site patterns as the owner left them, and parsed. Empty: any site.
     sites: Vec<(String, Pattern)>,
     pub mode: Mode,
+    /// The granted sites whose sign-ins the owner shared (copied in), each with its source.
+    shared: Vec<SharedSite>,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -184,7 +263,44 @@ impl Grant {
             secrets,
             sites,
             mode,
+            shared: Vec::new(),
         })
+    }
+
+    /// This grant with the owner's sign-ins for `sites` shared, taken from container `from`
+    /// (Space `space`): only sites this grant lists (never with a grant of any site, which
+    /// lists none) and that name a site ([`Pattern::names_a_site`]: never a public suffix),
+    /// added to those shared before, each keeping the Space it first came from.
+    pub fn with_signins(mut self, from: ContainerId, space: &str, sites: &[String]) -> Grant {
+        for site in sites.iter().map(|s| s.trim()) {
+            if let Some((s, p)) = self.sites.iter().find(|(s, _)| s == site)
+                && p.names_a_site()
+                && !self.shared.iter().any(|t| t.site == *s)
+            {
+                self.shared.push(SharedSite {
+                    site: s.clone(),
+                    pattern: p.clone(),
+                    from,
+                    space: space.to_owned(),
+                });
+            }
+        }
+        self
+    }
+
+    /// The sites whose sign-ins the owner shared, as written.
+    pub fn signin_sites(&self) -> impl Iterator<Item = &str> {
+        self.shared.iter().map(|s| s.site.as_str())
+    }
+
+    /// The shared sites and where each came from.
+    pub fn shared(&self) -> &[SharedSite] {
+        &self.shared
+    }
+
+    /// Whether the page at `url` is on a site whose sign-ins the owner shared.
+    pub fn signs_in(&self, url: &str) -> bool {
+        self.shared.iter().any(|s| s.pattern.matches(url))
     }
 
     /// The variable names the agent may mention; the only thing about secrets it ever sees.
@@ -236,41 +352,70 @@ impl Grant {
         more
     }
 
-    /// This grant with `sites` added (a grant of any site stays one); the secrets and the mode
-    /// stay.
-    pub fn widened(&self, sites: &[String]) -> Result<Grant, GrantError> {
-        if self.sites.is_empty() {
-            return Ok(self.clone());
-        }
-        let all: Vec<String> = self
-            .sites()
-            .map(str::to_owned)
-            .chain(sites.iter().cloned())
-            .collect();
-        Grant::new(self.secrets.clone(), &all, self.mode)
+    /// This grant with `sites` and `secrets` added (a grant of any site stays one); the mode
+    /// and what was shared stay.
+    pub fn widened(
+        &self,
+        sites: &[String],
+        secrets: impl IntoIterator<Item = (String, SecretBinding)>,
+    ) -> Result<Grant, GrantError> {
+        let all: Vec<String> = if self.sites.is_empty() {
+            vec![]
+        } else {
+            self.sites()
+                .map(str::to_owned)
+                .chain(sites.iter().cloned())
+                .collect()
+        };
+        let secrets = self.secrets.clone().into_iter().chain(secrets);
+        Ok(Grant {
+            shared: self.shared.clone(),
+            ..Grant::new(secrets, &all, self.mode)?
+        })
     }
 
-    /// The login to fill variable `name` from into a frame of `frame_url` under `top_url`:
-    /// `None` for an ungranted name, or when the vault's rule (`autofill::may_fill`) says the
-    /// page is not the login's origin.
-    pub fn secret_for(&self, name: &str, top_url: &str, frame_url: &str) -> Option<&LoginRef> {
+    /// The login (and part) to fill variable `name` from into a frame of `frame_url` under
+    /// `top_url`: `None` for an ungranted name, or when the vault's rule (`autofill::may_fill`)
+    /// says the page is not the login's origin.
+    pub fn secret_for(&self, name: &str, top_url: &str, frame_url: &str) -> Option<&SecretBinding> {
         let b = self.secrets.get(name)?;
-        may_fill(top_url, frame_url, &b.origin).then_some(&b.login)
+        may_fill(top_url, frame_url, &b.origin).then_some(b)
+    }
+
+    /// The binding of granted name `name`, wherever the page is (the sheet's and the log's).
+    pub fn binding(&self, name: &str) -> Option<&SecretBinding> {
+        self.secrets.get(name)
     }
 }
 
 /// What the approval sheet lets the owner change before Allow: the secret names the client
-/// asked for (removed only: none can be bound to a login yet) and the sites (empty: any site).
-/// The host keeps one per waiting session; Allow builds the grant from it ([`answer`]).
+/// asked for (removed, or bound to a saved login: an unbound name is not granted), the sites
+/// (empty: any site), and whether the owner's sign-ins for those sites are shared, from which
+/// Space. The host keeps one per waiting session; Allow builds the grant from it ([`answer`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lists {
     pub secrets: Vec<String>,
     pub sites: Vec<String>,
+    /// The logins the owner picked, by name.
+    pub bound: BTreeMap<String, SecretBinding>,
+    /// "Use my sign-ins for these sites": off until the owner turns it on.
+    pub share: bool,
+    /// The Space to take them from; `None`: the one the owner is in.
+    pub from: Option<SpaceId>,
 }
 
-/// One change on the sheet's list editors.
+/// One change on the sheet's list editors and choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListEdit<'a> {
+    /// A name stands for this login (`None`: for none).
+    Bind {
+        name: &'a str,
+        login: Option<&'a SecretBinding>,
+    },
+    /// "Use my sign-ins for these sites", on or off.
+    Share(bool),
+    /// The Space the sign-ins come from.
+    ShareFrom(SpaceId),
     RemoveSecret(&'a str),
     RemoveSite(&'a str),
     /// A site added at the end, or put in the place of `replacing` (an edit in place).
@@ -304,14 +449,55 @@ impl Lists {
         Lists {
             secrets: secrets.to_vec(),
             sites: sites.to_vec(),
+            ..Lists::default()
         }
+    }
+
+    /// Whether the sheet offers "Use my sign-ins": only for a list of sites (never any site).
+    pub fn may_share(&self) -> bool {
+        !self.sites.is_empty()
+    }
+
+    /// The listed sites whose sign-ins are never shared (a public suffix or a single label:
+    /// `com`, `*.co.uk`, `github.io`); they may still be visited.
+    pub fn unshareable(&self) -> Vec<&str> {
+        self.sites
+            .iter()
+            .filter(|s| Pattern::parse(s).is_some_and(|p| !p.names_a_site()))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// The bindings Allow grants: those of the names still listed.
+    fn granted_secrets(&self) -> impl Iterator<Item = (String, SecretBinding)> + '_ {
+        self.bound
+            .iter()
+            .filter(|(name, _)| self.secrets.contains(name))
+            .map(|(n, b)| (n.clone(), b.clone()))
     }
 
     /// Applies `edit`; a site must be a [`Pattern`] and not already listed (trimmed). Removing
     /// what is not listed changes nothing.
     pub fn edit(&mut self, edit: ListEdit) -> Result<(), ListRefusal> {
         match edit {
-            ListEdit::RemoveSecret(name) => self.secrets.retain(|s| s != name),
+            ListEdit::Bind { name, login } => {
+                if self.secrets.iter().any(|s| s == name) {
+                    match login {
+                        Some(b) => {
+                            self.bound.insert(name.to_owned(), b.clone());
+                        }
+                        None => {
+                            self.bound.remove(name);
+                        }
+                    }
+                }
+            }
+            ListEdit::Share(on) => self.share = on,
+            ListEdit::ShareFrom(space) => self.from = Some(space),
+            ListEdit::RemoveSecret(name) => {
+                self.secrets.retain(|s| s != name);
+                self.bound.remove(name);
+            }
             ListEdit::RemoveSite(site) => self.sites.retain(|s| s != site),
             ListEdit::PutSite { replacing, site } => {
                 let site = site.trim();
@@ -382,6 +568,13 @@ pub struct Env {
     pub remote_port: Option<u16>,
 }
 
+/// The debugging port that refuses every session: the one this run's engine opened (a start
+/// switch, so turning the setting off changes nothing until the restart: any program can still
+/// drive every tab), else the one the setting asks for at the next start.
+pub fn refusing_port(opened: Option<u16>, stored: Option<u16>) -> Option<u16> {
+    opened.or(stored)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// `agent.mcp_enabled` is off: nothing listens, so this is only a backstop.
@@ -412,6 +605,9 @@ pub enum StopReason {
     Released,
     ClientGone,
     BrowserQuit,
+    /// The owner's sign-ins could not be copied in (CEF refused, or the copy did not end in
+    /// time): the session does not start without them.
+    SignInsNotCopied,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -431,6 +627,16 @@ pub enum State {
         token: Token,
         more: More,
     },
+    /// Allowed with the owner's sign-ins: they are being copied into the session's container
+    /// (`Effect::CopyCookies`) before the session goes on. A new session has no token yet (its
+    /// `start_session` waits); a running one (`request_more`) works under `before` meanwhile and
+    /// is answered `granted` once the copy is done.
+    Copying {
+        grant: Grant,
+        token: Option<Token>,
+        before: Option<Grant>,
+        granted: Option<More>,
+    },
     Stopped(StopReason),
 }
 
@@ -449,6 +655,10 @@ pub enum Event {
         sites: Vec<String>,
         secrets: Vec<String>,
     },
+    /// The host's answer to `Effect::CopyCookies`: the copy ended (each cookie visited and set).
+    CookiesCopied,
+    /// The copy failed (CEF refused it) or did not end within the host's bound.
+    CookiesNotCopied,
     ClientDisconnects,
     BrowserQuits,
 }
@@ -470,6 +680,14 @@ pub enum Effect {
     ShowMoreSheet(More),
     /// Answer the waiting `request_more`.
     AnswerMore(MoreAnswer),
+    /// Copy into the session's container the cookies of container `from` (Space `space`)
+    /// that pages of `sites` would be sent ([`shares_cookie`]); answered with
+    /// `Event::CookiesCopied`.
+    CopyCookies {
+        from: ContainerId,
+        space: String,
+        sites: Vec<String>,
+    },
 }
 
 impl State {
@@ -487,15 +705,22 @@ impl State {
             }
             | State::AskingMore {
                 grant, token: t, ..
+            }
+            | State::Copying {
+                before: Some(grant),
+                token: Some(t),
+                ..
             } if t.matches(presented) => Some(grant),
             _ => None,
         }
     }
 
-    /// The grant a running session works under (also while it asks for more).
+    /// The grant a running session works under (also while it asks for more, and while its
+    /// sign-ins are copied: the grant it had before).
     pub fn grant(&self) -> Option<&Grant> {
         match self {
             State::Running { grant, .. } | State::AskingMore { grant, .. } => Some(grant),
+            State::Copying { grant, before, .. } => Some(before.as_ref().unwrap_or(grant)),
             _ => None,
         }
     }
@@ -532,11 +757,75 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
         },
         (AwaitingApproval(_), Event::Approve(grant)) => {
             let mode = grant.mode;
-            (
-                Running { grant, token: None },
-                vec![DismissApprovalSheet, OpenSpace(mode), MintToken],
-            )
+            match copy_of(&grant, None) {
+                // the sign-ins first: the handle (and so any navigation) waits for the copy
+                Some(copy) => (
+                    Copying {
+                        grant,
+                        token: None,
+                        before: None,
+                        granted: None,
+                    },
+                    vec![DismissApprovalSheet, OpenSpace(mode), copy],
+                ),
+                None => (
+                    Running { grant, token: None },
+                    vec![DismissApprovalSheet, OpenSpace(mode), MintToken],
+                ),
+            }
         }
+        (
+            Copying {
+                grant,
+                token: None,
+                before: None,
+                ..
+            },
+            Event::CookiesCopied,
+        ) => (Running { grant, token: None }, vec![MintToken]),
+        (
+            Copying {
+                grant,
+                token: Some(token),
+                granted,
+                ..
+            },
+            Event::CookiesCopied,
+        ) => (
+            Running {
+                grant,
+                token: Some(token),
+            },
+            vec![AnswerMore(MoreAnswer::Granted(granted.unwrap_or_default()))],
+        ),
+        (Copying { token: None, .. }, Event::CookiesNotCopied) => {
+            (Stopped(StopReason::SignInsNotCopied), vec![Teardown])
+        }
+        (
+            Copying {
+                token: Some(token),
+                before: Some(before),
+                ..
+            },
+            Event::CookiesNotCopied,
+        ) => (
+            Running {
+                grant: before,
+                token: Some(token),
+            },
+            vec![AnswerMore(MoreAnswer::NotCopied)],
+        ),
+        (state @ Copying { .. }, Event::AskMore { .. }) => {
+            (state, vec![AnswerMore(MoreAnswer::Busy)])
+        }
+        (Copying { .. }, Event::Stop) => (Stopped(StopReason::Stopped), vec![Teardown]),
+        (Copying { token: Some(_), .. }, Event::Release) => {
+            (Stopped(StopReason::Released), vec![Release])
+        }
+        (Copying { .. }, Event::ClientDisconnects) => {
+            (Stopped(StopReason::ClientGone), vec![Teardown])
+        }
+        (Copying { .. }, Event::BrowserQuits) => (Stopped(StopReason::BrowserQuit), vec![Teardown]),
         (AwaitingApproval(_), Event::Deny) => (
             Stopped(StopReason::Denied),
             vec![DismissApprovalSheet, Teardown],
@@ -604,20 +893,32 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
                     .collect(),
             };
             // the mode is the session's, whatever the sheet says
-            let grant = Grant {
+            let widened = Grant {
                 mode: grant.mode,
                 ..widened
             };
-            (
-                Running {
-                    grant,
-                    token: Some(token),
-                },
-                vec![
-                    DismissApprovalSheet,
-                    AnswerMore(MoreAnswer::Granted(granted)),
-                ],
-            )
+            match copy_of(&widened, Some(&grant)) {
+                // sign-ins for the new sites: the answer waits for the copy
+                Some(copy) => (
+                    Copying {
+                        grant: widened,
+                        token: Some(token),
+                        before: Some(grant),
+                        granted: Some(granted),
+                    },
+                    vec![DismissApprovalSheet, copy],
+                ),
+                None => (
+                    Running {
+                        grant: widened,
+                        token: Some(token),
+                    },
+                    vec![
+                        DismissApprovalSheet,
+                        AnswerMore(MoreAnswer::Granted(granted)),
+                    ],
+                ),
+            }
         }
         (AskingMore { grant, token, .. }, Event::Deny) => (
             Running {
@@ -654,6 +955,22 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 }
 
+/// The copy `grant`'s shared sign-ins call for: of the sites shared now and not in `before`
+/// (one approval shares them from one Space).
+fn copy_of(grant: &Grant, before: Option<&Grant>) -> Option<Effect> {
+    let new: Vec<&SharedSite> = grant
+        .shared()
+        .iter()
+        .filter(|s| !before.is_some_and(|b| b.signin_sites().any(|t| t == s.site)))
+        .collect();
+    let first = new.first()?;
+    Some(Effect::CopyCookies {
+        from: first.from,
+        space: first.space.clone(),
+        sites: new.iter().map(|s| s.site.clone()).collect(),
+    })
+}
+
 /// What the dustbin on an agent Space's row (the Spaces popup) does, by the session that holds
 /// the Space now (`None`: none does, the session ended and left its tabs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -673,20 +990,33 @@ pub fn clear(holder: Option<&State>) -> Clear {
     }
 }
 
+/// Where shared sign-ins come from, as the host resolved the sheet's Space: its container and
+/// name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Source {
+    pub container: ContainerId,
+    pub space: String,
+}
+
 /// The owner's answer to a sheet for more (`State::AskingMore`): Allow widens `grant` by the
-/// sites the owner left on it (`Lists::sites`); Deny keeps the grant. A site that is no pattern
+/// sites and the bound names the owner left on it (`Lists`), with the sign-ins of the new sites
+/// when the owner shared them (from `from`); Deny keeps the grant. A site that is no pattern
 /// denies.
-pub fn answer_more(grant: &Grant, sites: &[String], allow: bool) -> Event {
-    match grant.widened(sites) {
-        Ok(widened) if allow => Event::Approve(widened),
+pub fn answer_more(grant: &Grant, lists: &Lists, allow: bool, from: Option<&Source>) -> Event {
+    match grant.widened(&lists.sites, lists.granted_secrets()) {
+        Ok(widened) if allow => Event::Approve(match from.filter(|_| lists.share) {
+            Some(src) => widened.with_signins(src.container, &src.space, &lists.sites),
+            None => widened,
+        }),
         _ => Event::Deny,
     }
 }
 
-/// The owner's answer to the sheet as the session's event: Allow grants the sites asked for in
-/// the mode the sheet's choice says. No secret is bound to a vault login here (the sheet has no
-/// login picker yet), so a grant holds none; a grant that cannot be built denies.
-pub fn answer(sites: &[String], allow: bool, headless: bool) -> Event {
+/// The owner's answer to the sheet as the session's event: Allow grants the sites the owner
+/// left, in the mode the sheet's choice says, the names bound to logins (an unbound one is not
+/// granted), and the sign-ins of those sites when the owner shared them (from `from`; only for
+/// a list of sites). A grant that cannot be built denies.
+pub fn answer(lists: &Lists, allow: bool, headless: bool, from: Option<&Source>) -> Event {
     if !allow {
         return Event::Deny;
     }
@@ -695,8 +1025,11 @@ pub fn answer(sites: &[String], allow: bool, headless: bool) -> Event {
     } else {
         Mode::Windowed
     };
-    match Grant::new([], sites, mode) {
-        Ok(grant) => Event::Approve(grant),
+    match Grant::new(lists.granted_secrets(), &lists.sites, mode) {
+        Ok(grant) => Event::Approve(match from.filter(|_| lists.share && lists.may_share()) {
+            Some(src) => grant.with_signins(src.container, &src.space, &lists.sites),
+            None => grant,
+        }),
         Err(_) => Event::Deny,
     }
 }
@@ -727,13 +1060,13 @@ mod tests {
     #[test]
     fn allow_grants_the_edited_sites_and_an_empty_list_any_site() {
         let mut l = Lists::asked(&[], &["example.com".into()]);
-        let Event::Approve(g) = answer(&l.sites, true, false) else {
+        let Event::Approve(g) = answer(&l, true, false, None) else {
             panic!("not approved");
         };
         assert!(!g.allows_site("https://github.com/"));
         assert_eq!(g.mode, Mode::Windowed);
         l.edit(ListEdit::RemoveSite("example.com")).unwrap();
-        let Event::Approve(g) = answer(&l.sites, true, true) else {
+        let Event::Approve(g) = answer(&l, true, true, None) else {
             panic!("not approved");
         };
         assert!(g.allows_site("https://github.com/"));
@@ -761,6 +1094,7 @@ mod tests {
                 SecretBinding {
                     login: LoginRef("l1".into()),
                     origin: "https://github.com".into(),
+                    part: Part::Password,
                 },
             )],
             &[],
@@ -812,6 +1146,16 @@ mod tests {
             assert!(e.is_empty());
         }
         assert_eq!(admit(ON), Ok(()));
+    }
+
+    /// Turning the setting off does not close an endpoint this run opened: sessions stay
+    /// refused until the restart, and a port only set for the next start refuses them too.
+    #[test]
+    fn an_open_endpoint_refuses_sessions_whatever_the_setting_now_says() {
+        assert_eq!(refusing_port(Some(9222), None), Some(9222));
+        assert_eq!(refusing_port(None, Some(9333)), Some(9333));
+        assert_eq!(refusing_port(Some(9222), Some(9333)), Some(9222));
+        assert_eq!(refusing_port(None, None), None);
     }
 
     #[test]
@@ -942,7 +1286,7 @@ mod tests {
         let g = grant(Mode::Windowed);
         let gh = "https://github.com/login";
         assert_eq!(
-            g.secret_for("GITHUB_PASSWORD", gh, gh),
+            g.secret_for("GITHUB_PASSWORD", gh, gh).map(|b| &b.login),
             Some(&LoginRef("l1".into()))
         );
         // Not granted.
@@ -975,21 +1319,24 @@ mod tests {
 
     #[test]
     fn the_sheet_s_answer_is_an_event() {
-        let sites = ["github.com".to_string()];
-        assert_eq!(answer(&sites, false, true), Event::Deny);
-        let Event::Approve(g) = answer(&sites, true, true) else {
+        let sites = Lists::asked(&[], &["github.com".to_string()]);
+        assert_eq!(answer(&sites, false, true, None), Event::Deny);
+        let Event::Approve(g) = answer(&sites, true, true, None) else {
             panic!("allow approves");
         };
         assert_eq!(g.mode, Mode::Headless);
         assert!(g.allows_site("https://github.com/x"));
         assert!(!g.allows_site("https://evil.test/"));
         assert_eq!(g.secret_names().count(), 0);
-        let Event::Approve(g) = answer(&[], true, false) else {
+        let Event::Approve(g) = answer(&Lists::default(), true, false, None) else {
             panic!("allow approves");
         };
         assert_eq!(g.mode, Mode::Windowed);
         // a site that is no pattern cannot be granted
-        assert_eq!(answer(&["a b".to_string()], true, false), Event::Deny);
+        assert_eq!(
+            answer(&Lists::asked(&[], &["a b".to_string()]), true, false, None),
+            Event::Deny
+        );
     }
 
     fn on(sites: &[&str]) -> State {
@@ -1063,7 +1410,7 @@ mod tests {
         // Deny: running on the old grant
         let (s, e) = transition(
             asking.clone(),
-            answer_more(&grant, &["b.test".into()], false),
+            answer_more(&grant, &Lists::asked(&[], &["b.test".into()]), false, None),
         );
         assert_eq!(s, on(&["a.test"]));
         assert_eq!(
@@ -1075,7 +1422,10 @@ mod tests {
         );
         // Allow, the owner having added one more site on the sheet
         let left = ["b.test".to_string(), "c.test".to_string()];
-        let (s, e) = transition(asking.clone(), answer_more(&grant, &left, true));
+        let (s, e) = transition(
+            asking.clone(),
+            answer_more(&grant, &Lists::asked(&[], &left), true, None),
+        );
         let g = s.authorize("t").unwrap();
         assert!(g.allows_site("https://b.test/") && g.allows_site("https://c.test/"));
         assert!(g.allows_site("https://a.test/") && !g.allows_site("https://d.test/"));
@@ -1091,7 +1441,10 @@ mod tests {
             ]
         );
         // a site that is no pattern denies
-        assert_eq!(answer_more(&grant, &["a b".into()], true), Event::Deny);
+        assert_eq!(
+            answer_more(&grant, &Lists::asked(&[], &["a b".into()]), true, None),
+            Event::Deny
+        );
     }
 
     #[test]
@@ -1216,6 +1569,7 @@ mod tests {
         let b = SecretBinding {
             login: LoginRef("l".into()),
             origin: "https://a.test".into(),
+            part: Part::Password,
         };
         assert_eq!(
             Grant::new([("1X".to_string(), b.clone())], &[], Mode::Headless),
@@ -1285,5 +1639,352 @@ mod tests {
             },
         );
         assert_eq!(holder(&m, agent_tab, &sessions), None, "dragged out: free");
+    }
+
+    fn src() -> Source {
+        Source {
+            container: ContainerId(0),
+            space: "Personal".into(),
+        }
+    }
+
+    fn login(id: &str, origin: &str, part: Part) -> SecretBinding {
+        SecretBinding {
+            login: LoginRef(id.into()),
+            origin: origin.into(),
+            part,
+        }
+    }
+
+    #[test]
+    fn a_name_says_which_part_of_a_login_it_types() {
+        for name in [
+            "GITHUB_USER",
+            "github_username",
+            "AMAZON_LOGIN",
+            "WORK_EMAIL",
+            "USER",
+        ] {
+            assert_eq!(suggested_part(name), Part::Username, "{name}");
+        }
+        for name in ["GITHUB_PASSWORD", "NPM_TOKEN", "PIN", "USER_PW"] {
+            assert_eq!(suggested_part(name), Part::Password, "{name}");
+        }
+    }
+
+    #[test]
+    fn only_bound_listed_names_are_granted_and_only_with_sites_are_sign_ins_shared() {
+        let mut l = Lists::asked(
+            &["GH_USER".into(), "GH_PASSWORD".into(), "NPM".into()],
+            &["github.com".into()],
+        );
+        let gh = "https://github.com";
+        l.edit(ListEdit::Bind {
+            name: "GH_USER",
+            login: Some(&login("l1", gh, Part::Username)),
+        })
+        .unwrap();
+        l.edit(ListEdit::Bind {
+            name: "GH_PASSWORD",
+            login: Some(&login("l1", gh, Part::Password)),
+        })
+        .unwrap();
+        // a name nobody asked for cannot be bound
+        l.edit(ListEdit::Bind {
+            name: "OTHER",
+            login: Some(&login("l2", gh, Part::Password)),
+        })
+        .unwrap();
+        // removed after binding: not granted
+        l.edit(ListEdit::RemoveSecret("GH_USER")).unwrap();
+        let Event::Approve(g) = answer(&l, true, false, Some(&src())) else {
+            panic!("allowed");
+        };
+        assert_eq!(g.secret_names().collect::<Vec<_>>(), ["GH_PASSWORD"]);
+        let b = g.secret_for(
+            "GH_PASSWORD",
+            "https://github.com/login",
+            "https://github.com/login",
+        );
+        assert_eq!(
+            b.map(|b| (b.login.0.as_str(), b.part)),
+            Some(("l1", Part::Password))
+        );
+        // sharing is off by default
+        assert!(g.shared().is_empty());
+        assert!(!g.signs_in("https://github.com/"));
+        // on: the listed sites' sign-ins, from the Space resolved
+        l.edit(ListEdit::Share(true)).unwrap();
+        let Event::Approve(g) = answer(&l, true, false, Some(&src())) else {
+            panic!("allowed");
+        };
+        assert_eq!(g.signin_sites().collect::<Vec<_>>(), ["github.com"]);
+        assert_eq!(
+            g.shared().first().map(|s| (s.from, s.space.as_str())),
+            Some((ContainerId(0), "Personal"))
+        );
+        assert!(g.signs_in("https://gist.github.com/x") && !g.signs_in("https://evil.test/"));
+        // never with any site: the sheet does not offer it and Allow ignores it
+        let mut any = Lists::asked(&[], &[]);
+        assert!(!any.may_share());
+        any.edit(ListEdit::Share(true)).unwrap();
+        let Event::Approve(g) = answer(&any, true, false, Some(&src())) else {
+            panic!("allowed");
+        };
+        assert!(g.shared().is_empty());
+        // with_signins takes only granted sites
+        let g = Grant::new([], &["a.test".to_string()], Mode::Windowed)
+            .unwrap()
+            .with_signins(ContainerId(3), "Work", &["b.test".to_string()]);
+        assert!(g.shared().is_empty());
+    }
+
+    #[test]
+    fn shared_sign_ins_are_copied_before_the_session_gets_its_handle() {
+        let mut l = Lists::asked(&[], &["a.test".into(), "b.test".into()]);
+        l.edit(ListEdit::Share(true)).unwrap();
+        let Event::Approve(g) = answer(&l, true, true, Some(&src())) else {
+            panic!("allowed");
+        };
+        let (s, e) = transition(State::AwaitingApproval(request()), Event::Approve(g));
+        assert_eq!(
+            e,
+            vec![
+                Effect::DismissApprovalSheet,
+                Effect::OpenSpace(Mode::Headless),
+                Effect::CopyCookies {
+                    from: ContainerId(0),
+                    space: "Personal".into(),
+                    sites: vec!["a.test".into(), "b.test".into()],
+                },
+            ]
+        );
+        assert!(matches!(s, State::Copying { token: None, .. }));
+        // no token, no calls, until the copy answers; the grant already guards the tab
+        assert!(s.authorize("t").is_none());
+        assert!(s.grant().is_some_and(|g| g.allows_site("https://a.test/")));
+        let (s, e) = transition(s, Event::CookiesCopied);
+        assert_eq!(e, vec![Effect::MintToken]);
+        let (s, _) = transition(s, Event::TokenMinted(Token::new("t")));
+        assert!(
+            s.authorize("t")
+                .is_some_and(|g| g.signs_in("https://b.test/"))
+        );
+        // stopping while copying tears the session down (its container, with the copies)
+        let (s, _) = transition(State::AwaitingApproval(request()), {
+            let Event::Approve(g) = answer(&l, true, true, Some(&src())) else {
+                panic!()
+            };
+            Event::Approve(g)
+        });
+        for (ev, why) in [
+            (Event::Stop, StopReason::Stopped),
+            (Event::ClientDisconnects, StopReason::ClientGone),
+            (Event::BrowserQuits, StopReason::BrowserQuit),
+        ] {
+            assert_eq!(
+                transition(s.clone(), ev),
+                (State::Stopped(why), vec![Effect::Teardown])
+            );
+        }
+    }
+
+    #[test]
+    fn asking_for_more_copies_the_new_sites_sign_ins_only() {
+        // running with a.test shared
+        let g = Grant::new([], &["a.test".to_string()], Mode::Windowed)
+            .unwrap()
+            .with_signins(ContainerId(0), "Personal", &["a.test".to_string()]);
+        let running = State::Running {
+            grant: g,
+            token: Some(Token::new("t")),
+        };
+        let (asking, _) = transition(running, ask(&["b.test"], &["B_PASSWORD"]));
+        let State::AskingMore { grant, .. } = &asking else {
+            panic!("asking");
+        };
+        let grant = grant.clone();
+        let mut l = Lists::asked(&["B_PASSWORD".into()], &["b.test".into()]);
+        l.edit(ListEdit::Bind {
+            name: "B_PASSWORD",
+            login: Some(&login("l9", "https://b.test", Part::Password)),
+        })
+        .unwrap();
+        // not shared: answered at once, nothing copied
+        let (s, e) = transition(asking.clone(), answer_more(&grant, &l, true, Some(&src())));
+        assert!(matches!(s, State::Running { .. }));
+        assert!(matches!(
+            e.last(),
+            Some(Effect::AnswerMore(MoreAnswer::Granted(_)))
+        ));
+        assert!(!s.grant().unwrap().signs_in("https://b.test/"));
+        // shared: only b.test is copied, the old grant serves meanwhile, then the answer
+        l.edit(ListEdit::Share(true)).unwrap();
+        let (s, e) = transition(asking, answer_more(&grant, &l, true, Some(&src())));
+        assert_eq!(
+            e,
+            vec![
+                Effect::DismissApprovalSheet,
+                Effect::CopyCookies {
+                    from: ContainerId(0),
+                    space: "Personal".into(),
+                    sites: vec!["b.test".into()],
+                },
+            ]
+        );
+        let old = s.authorize("t").unwrap();
+        assert!(!old.allows_site("https://b.test/"));
+        assert_eq!(
+            transition(s.clone(), ask(&["c.test"], &[])).1,
+            vec![Effect::AnswerMore(MoreAnswer::Busy)]
+        );
+        let (s, e) = transition(s, Event::CookiesCopied);
+        assert_eq!(
+            e,
+            vec![Effect::AnswerMore(MoreAnswer::Granted(More {
+                sites: vec!["b.test".into()],
+                secrets: vec!["B_PASSWORD".into()],
+            }))]
+        );
+        let g = s.authorize("t").unwrap();
+        assert!(g.signs_in("https://a.test/") && g.signs_in("https://b.test/"));
+        assert_eq!(g.secret_names().collect::<Vec<_>>(), ["B_PASSWORD"]);
+    }
+
+    #[test]
+    fn the_cookie_matcher_is_the_grants_sites() {
+        let scope = cookie_scope(&["github.com".into(), "https://accounts.google.com/*".into()]);
+        assert!(shares_cookie(&scope, "github.com", "/", true));
+        assert!(shares_cookie(&scope, ".github.com", "/", false));
+        assert!(shares_cookie(&scope, ".google.com", "/", true));
+        assert!(!shares_cookie(&scope, "mail.google.com", "/", true));
+        assert!(!shares_cookie(&scope, "evil.test", "/", false));
+        assert!(!shares_cookie(&cookie_scope(&[]), "github.com", "/", false));
+    }
+
+    #[test]
+    fn sign_ins_are_never_shared_for_a_public_suffix() {
+        let mut l = Lists::asked(
+            &[],
+            &["*.co.uk".into(), "github.com".into(), "github.io".into()],
+        );
+        l.edit(ListEdit::Share(true)).unwrap();
+        assert_eq!(l.unshareable(), ["*.co.uk", "github.io"]);
+        let Event::Approve(g) = answer(&l, true, false, Some(&src())) else {
+            panic!("allowed: the suffixes are still sites to visit");
+        };
+        assert!(g.allows_site("https://bbc.co.uk/"));
+        assert_eq!(g.signin_sites().collect::<Vec<_>>(), ["github.com"]);
+        // only suffixes: nothing to share, nothing copied
+        let mut only = Lists::asked(&[], &["com".into()]);
+        only.edit(ListEdit::Share(true)).unwrap();
+        let Event::Approve(g) = answer(&only, true, false, Some(&src())) else {
+            panic!("allowed");
+        };
+        assert!(g.shared().is_empty());
+        assert_eq!(copy_of(&g, None), None);
+    }
+
+    #[test]
+    fn each_shared_site_keeps_the_space_it_came_from() {
+        let sites = ["a.test".to_string(), "b.test".to_string()];
+        let g = Grant::new([], &sites, Mode::Windowed)
+            .unwrap()
+            .with_signins(ContainerId(0), "Personal", &sites[..1])
+            .with_signins(ContainerId(3), "Work", &sites[1..])
+            // again from elsewhere: the first source stays
+            .with_signins(ContainerId(5), "Other", &sites[..1]);
+        let from: Vec<_> = g
+            .shared()
+            .iter()
+            .map(|s| (s.site.as_str(), s.from, s.space.as_str()))
+            .collect();
+        assert_eq!(
+            from,
+            [
+                ("a.test", ContainerId(0), "Personal"),
+                ("b.test", ContainerId(3), "Work")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_copy_that_fails_or_never_ends_fails_the_start_or_keeps_the_grant() {
+        let mut l = Lists::asked(&[], &["a.test".into()]);
+        l.edit(ListEdit::Share(true)).unwrap();
+        let Event::Approve(g) = answer(&l, true, true, Some(&src())) else {
+            panic!("allowed");
+        };
+        let (copying, _) = transition(State::AwaitingApproval(request()), Event::Approve(g));
+        // CEF refused, or the host's bound on the copy ran out: the start fails, the
+        // container (with whatever was copied) goes
+        assert_eq!(
+            transition(copying.clone(), Event::CookiesNotCopied),
+            (
+                State::Stopped(StopReason::SignInsNotCopied),
+                vec![Effect::Teardown]
+            )
+        );
+        // a late answer to a stopped session changes nothing
+        let (stopped, _) = transition(copying, Event::CookiesNotCopied);
+        assert_eq!(
+            transition(stopped.clone(), Event::CookiesCopied),
+            (stopped, vec![])
+        );
+        // request_more: the session runs on with the grant it had, the answer says why
+        let before = Grant::new([], &["a.test".to_string()], Mode::Windowed).unwrap();
+        let widened = Grant::new(
+            [],
+            &["a.test".to_string(), "b.test".to_string()],
+            Mode::Windowed,
+        )
+        .unwrap()
+        .with_signins(ContainerId(0), "Personal", &["b.test".to_string()]);
+        let more = State::Copying {
+            grant: widened,
+            token: Some(Token::new("t")),
+            before: Some(before.clone()),
+            granted: Some(More::default()),
+        };
+        assert_eq!(
+            transition(more, Event::CookiesNotCopied),
+            (
+                State::Running {
+                    grant: before,
+                    token: Some(Token::new("t"))
+                },
+                vec![Effect::AnswerMore(MoreAnswer::NotCopied)]
+            )
+        );
+    }
+
+    #[test]
+    fn a_fill_taints_its_tab_and_its_origin_for_scripts() {
+        let mut t = Tainted::default();
+        let (one, two) = (crate::tab::TabId(1), crate::tab::TabId(2));
+        assert!(!t.refuses_scripts(one, "https://github.com/login"));
+        t.filled(one, "https://github.com/login");
+        // the tab, wherever it goes now
+        assert!(t.refuses_scripts(one, "https://github.com/login"));
+        assert!(t.refuses_scripts(one, "https://elsewhere.test/"));
+        // another tab only while it is on the origin the secret was typed on
+        assert!(t.refuses_scripts(two, "https://github.com/settings"));
+        assert!(!t.refuses_scripts(two, "https://gist.github.com/"));
+        assert!(!t.refuses_scripts(two, "http://github.com/"));
+        assert!(!t.refuses_scripts(two, "https://elsewhere.test/"));
+    }
+
+    #[test]
+    fn the_name_only_suggests_a_part() {
+        assert_eq!(suggested_part("GITHUB_USER"), Part::Username);
+        assert_eq!(suggested_part("GITHUB_ID"), Part::Password);
+        // the owner's choice on the sheet is what the binding keeps
+        let mut l = Lists::asked(&["GITHUB_ID".into()], &["github.com".into()]);
+        l.edit(ListEdit::Bind {
+            name: "GITHUB_ID",
+            login: Some(&login("l1", "https://github.com", Part::Username)),
+        })
+        .unwrap();
+        assert_eq!(l.bound["GITHUB_ID"].part, Part::Username);
     }
 }

@@ -45,7 +45,15 @@ pub struct DayGroup {
 /// Local day number of `ms` at a UTC offset in minutes (east positive). One offset for all
 /// rows: around a DST change an older visit can land on the neighbouring day.
 fn local_day(ms: i64, tz_offset_min: i32) -> i64 {
-    (ms + i64::from(tz_offset_min) * MIN_MS).div_euclid(DAY_MS)
+    ms.saturating_add(i64::from(tz_offset_min).saturating_mul(MIN_MS))
+        .div_euclid(DAY_MS)
+}
+
+/// Local wall-clock time (`HH:MM`, 24-hour) of `ms` at a UTC offset in minutes (east positive).
+pub fn format_local_time(ms: i64, tz_offset_min: i32) -> String {
+    let local_ms = ms.saturating_add(i64::from(tz_offset_min).saturating_mul(MIN_MS));
+    let total_min = local_ms.rem_euclid(DAY_MS) / MIN_MS;
+    format!("{:02}:{:02}", total_min / 60, total_min % 60)
 }
 
 fn day_label(day: i64, today: i64) -> DayLabel {
@@ -139,8 +147,8 @@ impl ClearRange {
     /// The `[from, to)` span for the store's range delete.
     pub fn bounds(self, now_ms: i64) -> (i64, i64) {
         match self {
-            ClearRange::LastHour => (now_ms - 60 * MIN_MS, i64::MAX),
-            ClearRange::LastDay => (now_ms - DAY_MS, i64::MAX),
+            ClearRange::LastHour => (now_ms.saturating_sub(60 * MIN_MS), i64::MAX),
+            ClearRange::LastDay => (now_ms.saturating_sub(DAY_MS), i64::MAX),
             ClearRange::All => (i64::MIN, i64::MAX),
         }
     }
@@ -427,7 +435,21 @@ pub enum VaultStatus {
     Unreadable {
         rows: usize,
     },
+    /// The keyring has no key, and `rows` saved logins were sealed with one: they are kept and
+    /// no new key is made until the owner starts over.
+    KeyLost {
+        rows: usize,
+    },
 }
+
+/// The OS keyring the vault's key lives in, as the passwords page names it.
+const KEYRING: &str = if cfg!(target_os = "macos") {
+    "the macOS Keychain"
+} else if cfg!(windows) {
+    "Windows Credential Manager"
+} else {
+    "the system keyring (Secret Service: GNOME Keyring or KWallet)"
+};
 
 /// The status card's title and body.
 pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
@@ -438,8 +460,12 @@ pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
         ),
         VaultStatus::Unlocked => ("Saved passwords", String::new()),
         VaultStatus::Unavailable(why) => (
-            "Passwords are unavailable",
-            format!("The system keyring cannot be used: {why}"),
+            "Passwords cannot be saved",
+            format!(
+                "wubble keeps the key to your passwords in {KEYRING}, and it cannot be used: \
+                 {why}. Nothing is saved or filled until it can: unlock or set up the keyring, \
+                 then press Try again."
+            ),
         ),
         VaultStatus::Unreadable { rows } => (
             "Saved passwords cannot be read",
@@ -447,6 +473,20 @@ pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
                 "{rows} saved login{} no longer open with the key in your system keyring. \
                  They stay on disk, and new logins can still be saved.",
                 if *rows == 1 { "" } else { "s" }
+            ),
+        ),
+        VaultStatus::KeyLost { rows } => (
+            "Saved passwords are waiting for their key",
+            format!(
+                "{rows} saved login{s} {were} saved with a key that {KEYRING} does not have now \
+                 (it was reset, or another keyring answers). {They} {are} kept, and nothing new \
+                 is saved: restore or unlock that keyring and press Try again, or delete \
+                 {them} and start over.",
+                s = if *rows == 1 { "" } else { "s" },
+                were = if *rows == 1 { "was" } else { "were" },
+                They = if *rows == 1 { "It" } else { "They" },
+                are = if *rows == 1 { "is" } else { "are" },
+                them = if *rows == 1 { "it" } else { "them" },
             ),
         ),
     }
@@ -479,8 +519,17 @@ pub fn relative_age(now: u64, then: u64) -> String {
     format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
+/// The exception that turns blocking off on `page_url`: its own host's, or a parent's (an entry
+/// covers its subdomains, as the blocker reads them); a port is no part of a site.
+pub fn blocker_exception<'a>(page_url: &str, exceptions: &'a [String]) -> Option<&'a str> {
+    exceptions
+        .iter()
+        .map(String::as_str)
+        .find(|e| crate::routing::host_in(&[*e], page_url))
+}
+
 pub fn blocker_state(count: u32, page_url: &str, exceptions: &[String]) -> BlockerBadge {
-    let site_allowed = crate::zoom::host_of(page_url).is_some_and(|h| exceptions.contains(&h));
+    let site_allowed = blocker_exception(page_url, exceptions).is_some();
     BlockerBadge {
         count,
         site_allowed,
@@ -729,17 +778,12 @@ pub struct Entry {
 /// The column titles of a list or map setting's list editor; the first names the entry.
 /// Empty for the other kinds.
 pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
-    let sites = [
-        settings::BLOCKER_EXCEPTIONS.key,
-        settings::SLEEP_NEVER_SITES.key,
-        settings::VIDEO_HIDDEN_SITES.key,
-    ];
     match def.kind {
         SettingKind::List if def.key == settings::ROUTING_RULES.key => {
             &["Site", "Space", "Container"]
         }
         SettingKind::List if def.key == settings::BLOCKER_CUSTOM_LISTS.key => &["Address"],
-        SettingKind::List if sites.contains(&def.key) => &["Site"],
+        SettingKind::List if settings::SITE_LISTS.contains(&def.key) => &["Site"],
         SettingKind::List => &["Entry"],
         SettingKind::Map if def.key == settings::BLOCKER_LISTS.key => &["List", "Switched"],
         SettingKind::Map => &["Entry", "Value"],
@@ -889,19 +933,50 @@ pub fn settings_page_from(
         .collect()
 }
 
-/// The rows whose label or key contains `query` (case-insensitive; blank keeps all). A section
-/// left with no row is dropped.
+/// The words of a settings search, lower-cased (the design's `words`).
+fn query_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Every word appears somewhere in `haystack` (the design's `matches`: words in any order).
+fn has_all(haystack: &str, words: &[String]) -> bool {
+    let haystack = haystack.to_lowercase();
+    words.iter().all(|w| haystack.contains(w.as_str()))
+}
+
+/// What a settings search reads of a row: its label, key, section, restart note, and the words
+/// of its choices (a search engine's names, "sepia", "serif").
+fn row_text(section: settings::Section, row: &SettingRow) -> String {
+    let mut text = format!("{} {} {}", row.label, row.key, section.title());
+    if row.restart {
+        text.push_str(" applies after a restart");
+    }
+    if let Control::Segmented(words) = row.control {
+        for word in words {
+            text.push(' ');
+            text.push_str(
+                crate::omnibox::ENGINES
+                    .iter()
+                    .find(|e| e.id == *word)
+                    .map_or(word, |e| e.name),
+            );
+        }
+    }
+    text
+}
+
+/// The rows every word of `query` is in (case-insensitive, any order; blank keeps all): its
+/// label, key, section, restart note or one of its choices. A section left with no row is
+/// dropped.
 pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
-    let needle = query.trim().to_lowercase();
+    let words = query_words(query);
     sections
         .iter()
         .filter_map(|s| {
             let rows: Vec<SettingRow> = s
                 .rows
                 .iter()
-                .filter(|r| {
-                    needle.is_empty() || contains_ci(r.label, &needle) || r.key.contains(&needle)
-                })
+                .filter(|r| has_all(&row_text(s.section, r), &words))
                 .cloned()
                 .collect();
             (!rows.is_empty()).then_some(SectionView {
@@ -910,6 +985,15 @@ pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
             })
         })
         .collect()
+}
+
+/// Whether a shortcut row (its action's label and its chord as shown) answers a settings
+/// search: every word is in "keyboard shortcut", the label or the chord.
+pub fn binding_matches(label: &str, chord: &str, query: &str) -> bool {
+    has_all(
+        &format!("keyboard shortcut {label} {chord}"),
+        &query_words(query),
+    )
 }
 
 // ------------------------------------------------------------------ sites
@@ -1068,6 +1152,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn format_local_time_and_saturating_bounds() {
+        // NOW is 2024-03-01T12:00:00Z
+        assert_eq!(format_local_time(NOW, 0), "12:00");
+        assert_eq!(format_local_time(NOW + 5 * MIN_MS, 0), "12:05");
+        assert_eq!(format_local_time(NOW, 330), "17:30");
+        assert_eq!(format_local_time(NOW, -300), "07:00");
+        // Midnight wrap across positive and negative offsets.
+        assert_eq!(format_local_time(NOW + 11 * HOUR + 30 * MIN_MS, 60), "00:30");
+        assert_eq!(format_local_time(NOW - 11 * HOUR - 30 * MIN_MS, -60), "23:30");
+        // Extreme timestamps saturate instead of panicking.
+        let _ = format_local_time(i64::MAX, 60);
+        let _ = format_local_time(i64::MIN, -60);
+        let _ = local_day(i64::MAX, 60);
+        let _ = local_day(i64::MIN, -60);
+        assert_eq!(ClearRange::LastHour.bounds(i64::MIN), (i64::MIN, i64::MAX));
+        assert_eq!(ClearRange::LastDay.bounds(i64::MIN), (i64::MIN, i64::MAX));
+    }
+
     fn bm(id: i64, parent: Option<i64>, folder: bool, pos: u32, title: &str) -> BookmarkRow {
         BookmarkRow {
             id,
@@ -1176,11 +1279,16 @@ mod tests {
     #[test]
     fn status_text_names_each_state() {
         let t = |s| status_text(&s);
+        let (title, body) = t(VaultStatus::KeyLost { rows: 2 });
+        assert_eq!(title, "Saved passwords are waiting for their key");
+        assert!(
+            body.starts_with("2 saved logins were saved with a key") && body.contains("start over")
+        );
         assert_eq!(t(VaultStatus::Locked).0, "Passwords are locked");
         assert_eq!(t(VaultStatus::Unlocked).0, "Saved passwords");
         let (title, body) = t(VaultStatus::Unavailable("no daemon".into()));
-        assert_eq!(title, "Passwords are unavailable");
-        assert!(body.contains("no daemon"));
+        assert_eq!(title, "Passwords cannot be saved");
+        assert!(body.contains("no daemon") && body.contains(KEYRING) && body.contains("Try again"));
         let (title, body) = t(VaultStatus::Unreadable { rows: 1 });
         assert_eq!(title, "Saved passwords cannot be read");
         assert!(body.starts_with("1 saved login no longer"));
@@ -1353,6 +1461,44 @@ mod tests {
     }
 
     #[test]
+    fn filter_takes_words_in_any_order_and_reads_sections_notes_and_choices() {
+        let page = settings_page(&HashMap::new());
+        let keys = |q: &str| -> Vec<&str> {
+            filter(&page, q)
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|r| r.key))
+                .collect()
+        };
+        // words in any order
+        assert_eq!(keys("mode dark"), keys("dark mode"));
+        assert!(keys("dark mode").contains(&"pages.theme"));
+        // a choice's word finds its row
+        assert!(keys("sepia").contains(&"reader.theme"));
+        assert!(keys("duckduckgo").contains(&"search.engine"));
+        // the section's name finds its rows
+        let appearance = keys("appearance");
+        assert!(appearance.contains(&"ui.sidebar_mode") && !appearance.contains(&"zoom.default"));
+        // the note finds the rows that apply after a restart
+        let restart = keys("restart");
+        assert!(restart.contains(&"glass.scene") && !restart.contains(&"zoom.default"));
+        // a word that is nowhere keeps the row out
+        assert!(keys("zoom nonsense").is_empty());
+        // punctuation is just text: nothing has it, and nothing breaks
+        assert!(keys("(%)").contains(&"zoom.default"));
+        assert!(keys("???").is_empty());
+    }
+
+    #[test]
+    fn a_shortcut_row_answers_by_action_chord_and_the_words_keyboard_shortcut() {
+        assert!(binding_matches("New tab", "Ctrl+T", "new tab"));
+        assert!(binding_matches("New tab", "Ctrl+T", "ctrl+t"));
+        assert!(binding_matches("New tab", "Ctrl+T", "shortcut tab"));
+        assert!(binding_matches("New tab", "Ctrl+T", "keyboard"));
+        assert!(!binding_matches("New tab", "Ctrl+T", "zoom"));
+        assert!(binding_matches("New tab", "", " "));
+    }
+
+    #[test]
     fn day_labels_read_as_dates() {
         assert_eq!(DayLabel::Today.text(), "Today");
         assert_eq!(DayLabel::Yesterday.text(), "Yesterday");
@@ -1500,6 +1646,27 @@ mod tests {
         let s = blocker_state(0, "https://A.test/x", &ex);
         assert!(s.site_allowed && s.visible);
         assert!(!blocker_state(0, "about:blank", &ex).visible);
+    }
+
+    /// The pill must say what the blocker does: it skips a site's subdomains and never sees a
+    /// port.
+    #[test]
+    fn the_pill_follows_the_blocker_s_own_reading_of_an_exception() {
+        let ex = vec!["a.test".to_owned(), "127.0.0.1".to_owned()];
+        // a subdomain is covered by its parent's entry, which is the one to remove
+        assert_eq!(
+            blocker_exception("https://www.a.test/x", &ex),
+            Some("a.test")
+        );
+        assert!(blocker_state(0, "https://www.a.test/x", &ex).site_allowed);
+        // a page on a port is the site without it
+        assert_eq!(
+            blocker_exception("http://127.0.0.1:8080/p", &ex),
+            Some("127.0.0.1")
+        );
+        assert!(blocker_state(0, "http://127.0.0.1:8080/", &ex).site_allowed);
+        assert_eq!(blocker_exception("https://nota.test/", &ex), None);
+        assert_eq!(blocker_exception("https://a.test.evil.org/", &ex), None);
     }
 
     #[test]

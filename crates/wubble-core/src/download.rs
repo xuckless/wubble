@@ -17,6 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::space::ContainerId;
+
 /// A name used when the page suggests nothing usable.
 pub const FALLBACK_NAME: &str = "download";
 
@@ -254,6 +256,8 @@ pub struct DownloadEntry {
     pub state: DownloadState,
     /// Unix ms.
     pub started_ms: i64,
+    /// The container whose cookies started this download.
+    pub container: ContainerId,
 }
 
 impl DownloadEntry {
@@ -311,6 +315,22 @@ pub fn finished_ids(entries: &[DownloadEntry]) -> Vec<i64> {
         .iter()
         .filter(|e| !e.state.is_active())
         .map(|e| e.id)
+        .collect()
+}
+
+/// Entries whose file name or URL contains `query` (case-insensitive; empty keeps all),
+/// preserving input order.
+pub fn filter_entries(entries: &[DownloadEntry], query: &str) -> Vec<DownloadEntry> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return entries.to_vec();
+    }
+    entries
+        .iter()
+        .filter(|e| {
+            e.name.to_lowercase().contains(&needle) || e.url.to_lowercase().contains(&needle)
+        })
+        .cloned()
         .collect()
 }
 
@@ -567,7 +587,30 @@ mod tests {
             total: None,
             state,
             started_ms: 0,
+            container: ContainerId::DEFAULT,
         }
+    }
+
+    #[test]
+    fn filter_entries_matches_name_and_url_case_insensitively() {
+        let a = DownloadEntry {
+            id: 1,
+            url: "https://cdn.example.com/archive.tar.gz".into(),
+            name: "Report-2026.PDF".into(),
+            ..entry(DownloadState::Complete)
+        };
+        let b = DownloadEntry {
+            id: 2,
+            url: "https://files.test/photo.png".into(),
+            name: "Привет.png".into(),
+            ..entry(DownloadState::Running)
+        };
+        let list = [a.clone(), b.clone()];
+        assert_eq!(filter_entries(&list, "   "), list);
+        assert_eq!(filter_entries(&list, "report"), [a.clone()]);
+        assert_eq!(filter_entries(&list, "CDN.EXAMPLE"), [a]);
+        assert_eq!(filter_entries(&list, "привет"), [b]);
+        assert!(filter_entries(&list, "missing").is_empty());
     }
 
     #[test]

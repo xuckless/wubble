@@ -33,10 +33,26 @@ export component KbdCap inherits Rectangle {
     }
 }
 
-export component Kbd inherits HorizontalLayout {
+// wubble: `clickable` makes the combo a button (the shortcut editor's: a press asks for a new
+// chord). The press area lies over the caps: a child of the layout this once was took no room,
+// so a press on the caps reached nothing.
+export component Kbd inherits Rectangle {
     in property <[string]> keys;
-    spacing: SettingsCss.st-combo--gap;
-    for k in root.keys: KbdCap {
-        text: k;
+    in property <bool> clickable;
+    callback clicked();
+    preferred-width: caps.preferred-width;
+    min-width: caps.min-width;
+    preferred-height: caps.preferred-height;
+    caps := HorizontalLayout {
+        spacing: SettingsCss.st-combo--gap;
+        for k in root.keys: KbdCap {
+            text: k;
+        }
+    }
+    if root.clickable: TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => {
+            root.clicked();
+        }
     }
 }

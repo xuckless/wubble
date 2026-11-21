@@ -49,6 +49,11 @@ impl SettingsPage {
         }
     }
 
+    /// The recorder's state (`--smoke settings` reads it).
+    pub fn capture(&self) -> Capture {
+        self.capture
+    }
+
     /// The stored keybinding overrides.
     fn overrides(&self) -> Vec<Override> {
         let entries = match apply::effect_of(defs::KEYBINDING_OVERRIDES.key, &self.stored) {
@@ -194,6 +199,12 @@ impl Host {
         true
     }
 
+    /// The shell's sidebar mode changed: the page's Sidebar row shows it (`render_page` reads it
+    /// from the window, the one owner).
+    pub(crate) fn settings_sidebar_seen(&mut self) {
+        self.render_settings();
+    }
+
     pub(crate) fn setting_reset(&mut self, key: &str) {
         if let Some(default) = apply::default_of(key) {
             self.write_setting(key, default);
@@ -205,8 +216,15 @@ impl Host {
     /// asked twice; the last Space stays).
     pub(crate) fn setting_entry_removed(&mut self, key: &str, entry: &str) {
         if key == pages::SPACES_LIST {
-            if let Ok(id) = entry.parse::<u32>() {
-                self.dispatch(Command::DeleteSpace(SpaceId(id)));
+            if let Ok(id) = entry.parse::<u32>().map(SpaceId) {
+                // an agent Space goes as the Spaces popup's dustbin takes it: its session is
+                // stopped (its teardown deletes the Space and the container), never left
+                // holding a Space that is gone
+                if self.model.spaces.iter().any(|s| s.id == id && s.agent) {
+                    self.agent_space_cleared(id);
+                } else {
+                    self.dispatch(Command::DeleteSpace(id));
+                }
             }
             return;
         }
@@ -308,8 +326,11 @@ impl Host {
         let (state, bind) = keys::capture(self.settings.capture, event, &self.keymap);
         self.settings.capture = state;
         match bind {
-            Some((action, chord)) => self
+            Some((action, Some(chord))) => self
                 .write_overrides(|ov| keys::set_binding(ov, Platform::current(), action, chord).0),
+            Some((action, None)) => {
+                self.write_overrides(|ov| keys::clear_binding(ov, Platform::current(), action))
+            }
             None => self.render_settings(),
         }
     }
@@ -326,8 +347,16 @@ impl Host {
         }
     }
 
+    pub(crate) fn binding_clear(&mut self, id: &str) {
+        if let Some(action) = Action::from_id(id) {
+            self.settings.capture = Capture::Idle;
+            self.write_overrides(|ov| keys::clear_binding(ov, Platform::current(), action));
+        }
+    }
+
     /// While a chord is being recorded every key goes to the recorder first, before any
-    /// shortcut: Escape cancels, a chord is taken. Returns whether the key was taken.
+    /// shortcut: Escape cancels, Backspace/Delete while armed unbinds, a chord is taken.
+    /// Returns whether the key was taken.
     pub(crate) fn capture_key(&mut self, chord: Option<Chord>) -> bool {
         if self.settings.capture == Capture::Idle {
             return false;
@@ -335,6 +364,16 @@ impl Host {
         match chord {
             Some(c) if c.key == keys::Key::Escape && !c.ctrl && !c.alt && !c.cmd => {
                 self.capture_event(CaptureEvent::Cancel)
+            }
+            Some(c)
+                if matches!(self.settings.capture, Capture::Armed(_))
+                    && matches!(c.key, keys::Key::Backspace | keys::Key::Delete)
+                    && !c.ctrl
+                    && !c.alt
+                    && !c.cmd
+                    && !c.shift =>
+            {
+                self.capture_event(CaptureEvent::Clear)
             }
             Some(c) => self.capture_event(CaptureEvent::Pressed(c)),
             None => {}
@@ -467,10 +506,11 @@ fn render_page(window: &AppWindow, host: &Host) {
     let bindings: Vec<_> = keys::binding_rows(Platform::current(), &overrides)
         .into_iter()
         .filter(|r| {
-            needle.is_empty()
-                || r.action.label().to_lowercase().contains(&needle)
-                || r.chord
-                    .is_some_and(|c| c.to_string().to_lowercase().contains(&needle))
+            pages::binding_matches(
+                &r.action.label(),
+                &r.chord.map(|c| c.to_string()).unwrap_or_default(),
+                &page.query,
+            )
         })
         .collect();
     crate::bind::sync(
@@ -489,12 +529,14 @@ fn render_page(window: &AppWindow, host: &Host) {
             action,
             chord,
             other,
+            other_is_edit,
         } => CaptureView {
             action: action.id().into(),
             armed: false,
             conflict: true,
             chord: chord.to_string().into(),
             other: other.label().into(),
+            other_is_edit,
         },
     });
 

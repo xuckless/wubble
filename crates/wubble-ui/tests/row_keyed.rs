@@ -75,6 +75,7 @@ fn task(pid: i32, memory: &str) -> TaskItem {
         cpu: Default::default(),
         busy: Default::default(),
         never_sleep: false,
+        can_sleep: false,
         can_discard: false,
         can_end: true,
     }
@@ -84,7 +85,9 @@ fn login(id: &str) -> LoginItem {
     LoginItem {
         id: id.into(),
         site: format!("{id}.test").into(),
+        origin: format!("https://{id}.test").into(),
         username: "me".into(),
+        readable: true,
         revealed: Default::default(),
         has_revealed: false,
     }

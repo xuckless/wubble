@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+use crate::passwords_smoke::VaultPhase;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
 pub use crate::load_run::Variant;
@@ -89,7 +90,8 @@ struct Cli {
     /// Also write `--measure`'s samples as CSV to this file.
     #[arg(long, value_name = "PATH", requires = "measure")]
     out: Option<PathBuf>,
-    /// Page for `--smoke frames=N` instead of the bundled test page.
+    /// Page for `--smoke frames=N` instead of the bundled test page; the page
+    /// `--smoke autofill=probe` looks at.
     #[arg(long, requires = "smoke", conflicts_with = "measure")]
     url: Option<String>,
     /// Profile directory (database and CEF cache) instead of the per-user one.
@@ -147,14 +149,17 @@ enum SmokeArg {
     Nav,
     Tabs,
     Split,
+    Pinch,
     Page,
     Parity,
+    Dnd,
     Block,
     Settings,
     Pages,
     Gallery,
     Session,
     Autofill,
+    AutofillProbe,
     Windows,
     Media,
     Builtins,
@@ -172,6 +177,10 @@ enum SmokeArg {
     },
     Start,
     SessionPhase(Phase),
+    Passwords,
+    PasswordsPhase(VaultPhase),
+    Data,
+    DataPhase(crate::data_smoke::Ending),
     /// `extensions` or `extensions-none`.
     Extensions {
         installed: bool,
@@ -186,6 +195,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
+        None if value == "pinch" => Ok(SmokeArg::Pinch),
+        None if value == "dnd" => Ok(SmokeArg::Dnd),
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
@@ -194,6 +205,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "gallery" => Ok(SmokeArg::Gallery),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
+        Some(("autofill", "probe")) => Ok(SmokeArg::AutofillProbe),
         None if value == "windows" => Ok(SmokeArg::Windows),
         None if value == "media" => Ok(SmokeArg::Media),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
@@ -210,15 +222,23 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
+        None if value == "passwords" => Ok(SmokeArg::Passwords),
+        Some(("passwords-phase", "1")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Write)),
+        Some(("passwords-phase", "2")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Read)),
+        Some(("passwords-phase", "3")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Broken)),
+        Some(("passwords-phase", "4")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Lost)),
+        None if value == "data" => Ok(SmokeArg::Data),
+        Some(("data-phase", "quit")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Quit)),
+        Some(("data-phase", "kill")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Kill)),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
-             `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
+            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
+             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
-             `extensions-none` or `session-phase=1|2`"
+             `extensions-none`, `data` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -248,10 +268,16 @@ pub enum Smoke {
     /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
     /// pixels, then unsplit.
     Split,
+    /// A trackpad pinch through the host's pinch path on a loopback page: Blink's visual
+    /// viewport scale, never the page zoom; a page keeping the Ctrl+wheel; split panes apart.
+    Pinch,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
     /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
     Parity,
+    /// The bundled `dnd.html`: a page's drags inside the window (`dnd_smoke.rs`).
+    /// `--shot-dir DIR`: a PNG of the window mid-drag, per item that asks.
+    Dnd { dir: Option<PathBuf> },
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Open wubble://settings, flip a setting through its toggle, read the store back.
@@ -262,8 +288,9 @@ pub enum Smoke {
     Gallery { dir: PathBuf },
     /// Runs both session phases on a temporary profile.
     Session,
-    /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
-    Autofill,
+    /// The sign-in corpus on loopback: fill from the key menu, submit, save, the vault rows.
+    /// With `probe`, a real page instead, read-only: what the chip would offer (by hand).
+    Autofill { probe: Option<String> },
     /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
     /// check sizes and hashes.
     Media,
@@ -290,6 +317,18 @@ pub enum Smoke {
     Overlay { dark: bool, dir: Option<PathBuf> },
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
+    /// The passwords page across restarts on a temporary profile (`passwords_smoke.rs`).
+    Passwords,
+    /// One process of `Passwords`, on the profile in `profile`.
+    PasswordsPhase { phase: VaultPhase, profile: PathBuf },
+    /// The built-in pages and their data on a loopback server, one run that quits and one that
+    /// is killed, the database compared with the pages after each (`data_smoke.rs`).
+    Data,
+    /// One run of `Data`, on the profile in `profile`.
+    DataPhase {
+        ending: crate::data_smoke::Ending,
+        profile: PathBuf,
+    },
     /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
     /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
     Start { dir: Option<PathBuf> },
@@ -403,7 +442,10 @@ impl TryFrom<Cli> for Command {
             }));
         }
         let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
-        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. } | SmokeArg::Start));
+        let overlay = matches!(
+            cli.smoke,
+            Some(SmokeArg::Overlay { .. } | SmokeArg::Start | SmokeArg::Dnd)
+        );
         if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
         }
@@ -418,10 +460,28 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::SessionPhase(phase)), None, Some(profile)) => {
                 Smoke::SessionPhase { phase, profile }
             }
+            (Some(SmokeArg::DataPhase(ending)), None, Some(profile)) => {
+                Smoke::DataPhase { ending, profile }
+            }
+            (Some(SmokeArg::DataPhase(_)), _, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke data-phase=quit|kill needs --profile",
+                ));
+            }
             (Some(SmokeArg::SessionPhase(_)), _, None) => {
                 return Err(Cli::command().error(
                     ErrorKind::MissingRequiredArgument,
                     "--smoke session-phase=N needs --profile",
+                ));
+            }
+            (Some(SmokeArg::PasswordsPhase(phase)), None, Some(profile)) => {
+                Smoke::PasswordsPhase { phase, profile }
+            }
+            (Some(SmokeArg::PasswordsPhase(_)), _, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke passwords-phase=N needs --profile",
                 ));
             }
             (Some(_), _, Some(_)) => {
@@ -430,6 +490,15 @@ impl TryFrom<Cli> for Command {
                 );
             }
             (Some(SmokeArg::Frames(frames)), url, None) => Smoke::Frames { frames, url },
+            (Some(SmokeArg::AutofillProbe), Some(url), None) => Smoke::Autofill {
+                probe: Some(wubble_core::url::from_cli_arg(&url)),
+            },
+            (Some(SmokeArg::AutofillProbe), None, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke autofill=probe needs --url",
+                ));
+            }
             (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
@@ -437,8 +506,10 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
+            (Some(SmokeArg::Pinch), None, None) => Smoke::Pinch,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
+            (Some(SmokeArg::Dnd), None, None) => Smoke::Dnd { dir: cli.shot_dir },
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
@@ -446,7 +517,9 @@ impl TryFrom<Cli> for Command {
                 dir: cli.shot_dir.expect("checked with the smoke above"),
             },
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
-            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
+            (Some(SmokeArg::Passwords), None, None) => Smoke::Passwords,
+            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
+            (Some(SmokeArg::Data), None, None) => Smoke::Data,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Media), None, None) => Smoke::Media,
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
@@ -895,6 +968,43 @@ mod tests {
             );
         }
         assert!(parse(["wubble", "--smoke", "session", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn smoke_data_and_its_runs() {
+        use crate::data_smoke::Ending;
+        assert_eq!(
+            parse(["wubble", "--smoke", "data"]).ok(),
+            Some(Command::Smoke(Smoke::Data))
+        );
+        for (arg, ending) in [
+            ("data-phase=quit", Ending::Quit),
+            ("data-phase=kill", Ending::Kill),
+        ] {
+            assert_eq!(
+                parse(["wubble", "--smoke", arg, "--profile", "/tmp/p"]).ok(),
+                Some(Command::Smoke(Smoke::DataPhase {
+                    ending,
+                    profile: "/tmp/p".into()
+                })),
+                "{arg}"
+            );
+            assert!(
+                parse(["wubble", "--smoke", arg]).is_err(),
+                "{arg} needs a profile"
+            );
+        }
+        assert!(parse(["wubble", "--smoke", "data", "--profile", "/tmp/p"]).is_err());
+        assert!(
+            parse([
+                "wubble",
+                "--smoke",
+                "data-phase=stop",
+                "--profile",
+                "/tmp/p"
+            ])
+            .is_err()
+        );
     }
 
     fn measure(scenario: Scenario, seconds: u32, out: Option<&str>) -> Option<Command> {

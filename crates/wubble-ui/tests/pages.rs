@@ -51,6 +51,7 @@ fn visit(title: &str, url: &str) -> HistoryLineItem {
         label: Default::default(),
         title: title.into(),
         url: url.into(),
+        time: Default::default(),
         favicon: Default::default(),
     }
 }
@@ -82,7 +83,9 @@ fn login(id: &str) -> LoginItem {
     LoginItem {
         id: id.into(),
         site: "a.test".into(),
+        origin: "https://a.test".into(),
         username: "me".into(),
+        readable: true,
         revealed: Default::default(),
         has_revealed: false,
     }
@@ -102,6 +105,7 @@ fn page_scenarios() {
         label: "Today".into(),
         title: Default::default(),
         url: Default::default(),
+        time: Default::default(),
         favicon: Default::default(),
     };
     app.set_history_lines(model(vec![
@@ -179,6 +183,7 @@ fn page_scenarios() {
             cpu: if i < 30 { "".into() } else { "0.0 %".into() },
             busy: "".into(),
             never_sleep: false,
+            can_sleep: i < 30,
             can_discard: i < 30,
             can_end: true,
         })

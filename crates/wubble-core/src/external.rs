@@ -49,11 +49,17 @@ pub fn key_for(url: &str, page: &str) -> Option<String> {
     Some(key(&scheme(url)?, &site::origin_of(page)?))
 }
 
+/// Schemes never handed to the OS even with a user gesture or a remembered decision.
+const DENIED_SCHEMES: &[&str] = &["search-ms", "ms-msdt", "shell", "smb", "dav", "vbscript"];
+
 /// What a link to `url` from the page `page` gets. A link the page opened without a user
 /// gesture never opens another app (Chromium blocks it too); otherwise a remembered choice for
 /// the site and scheme applies, and the rest is asked.
 pub fn decide(url: &str, page: &str, gesture: bool, table: &SitePermissions) -> Verdict {
-    if !gesture || scheme(url).is_none() {
+    let Some(scheme) = scheme(url) else {
+        return Verdict::Block;
+    };
+    if !gesture || DENIED_SCHEMES.contains(&scheme.as_str()) {
         return Verdict::Block;
     }
     let remembered = key_for(url, page).and_then(|k| table.get(&k, Permission::ExternalLinks));
@@ -138,5 +144,31 @@ mod tests {
             "opaque pages ask"
         );
         assert_eq!(decide("nonsense", PAGE, true, &t), Verdict::Block);
+    }
+
+    #[test]
+    fn dangerous_schemes_are_always_blocked() {
+        let mut t = SitePermissions::default();
+        for url in [
+            "search-ms:query=x",
+            "SEARCH-MS:query=x",
+            "ms-msdt:/id",
+            "Ms-Msdt:/id",
+            "shell:desktop",
+            "smb://host/share",
+            "SMB://host/share",
+            "dav://host/path",
+            "vbscript:msgbox(1)",
+            "VBScript:msgbox(1)",
+        ] {
+            if let Some(k) = key_for(url, PAGE) {
+                t.set(&k, Permission::ExternalLinks, Decision::Allow);
+            }
+            assert_eq!(
+                decide(url, PAGE, true, &t),
+                Verdict::Block,
+                "{url} must be blocked even with gesture and remembered Allow"
+            );
+        }
     }
 }

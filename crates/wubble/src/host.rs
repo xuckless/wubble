@@ -21,6 +21,7 @@ mod ax;
 mod boost;
 mod builtins;
 mod busy;
+mod data;
 mod devtools;
 mod downloads;
 mod drag;
@@ -42,6 +43,7 @@ mod overlay;
 mod pages;
 mod panes;
 mod parity;
+mod pinch;
 mod preview;
 mod print;
 mod settings;
@@ -57,9 +59,11 @@ mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
+pub(crate) use data::DataSmoke;
 pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
+pub(crate) use pinch::fixture as pinch_fixture;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;
@@ -294,6 +298,10 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub start_smoke: Option<crate::start_smoke::StartSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub passwords_smoke: Option<crate::passwords_smoke::PasswordsSmoke>,
+    pub data_smoke: Option<DataSmoke>,
+    /// `--smoke pinch` (`host/pinch.rs`).
+    pub pinch_smoke: Option<crate::pinch_smoke::Run>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
@@ -375,12 +383,18 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    /// `--smoke pinch` passed, with its last scale.
+    pub pinch_passed: Option<String>,
+    /// `--smoke pinch`'s questions to the pages.
+    pinch_asked: pinch::Asked,
     /// `--smoke parity` passed: the known gaps that failed as expected.
     pub parity_passed: Option<Vec<&'static str>>,
     pub windows_passed: bool,
     pub settings_passed: bool,
     pub start_passed: bool,
     pub pages_passed: bool,
+    pub passwords_passed: bool,
+    pub data_passed: bool,
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
@@ -389,6 +403,10 @@ pub struct Host {
     gallery_burst_start: std::time::Instant,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
+    /// Steps of the settings smoke's script the window has taken.
+    settings_acted: u32,
+    /// ... and where the page's scroll was at the last look.
+    settings_scroll_seen: f32,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -397,11 +415,14 @@ pub struct Host {
     /// Session changes not yet saved.
     save: SaveState,
     /// `None` until the first-run choice.
-    /// A page's drag inside the window, and the pointer it last went to
-    /// (relative to the drag's page).
     autoscroll: autoscroll::AutoscrollPointer,
-    page_drag: crate::page_drag::PageDrag,
-    drag_point: Point,
+    /// Every drag (a tab row's, a page's: `wubble_core::drag`): one pointer, so one for every
+    /// window (`drag.rs`, `tab_drag.rs`).
+    drag: wubble_core::drag::Drag<wubble_engine::page::DragData>,
+    /// Where a page drag's pointer last was, window px.
+    drag_win: (f32, f32),
+    /// The page drag's image, decoded once.
+    drag_ghost: Option<drag::Ghost>,
     /// A drag from another app over the window (`drag.rs`).
     external_drag: Option<drag::ExternalDrag>,
     /// Touchpad pinch and history swipe (`gesture.rs`).
@@ -428,9 +449,7 @@ pub struct Host {
     /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
     /// until the page commits another URL; the address pill offers them.
     held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
-    /// A tab dragged from a sidebar row (`drag.rs`): one pointer, so one for every window.
-    tab_drag: wubble_core::tabdrag::Drag,
-    /// Where the pointer was at the drag's last event, window px.
+    /// Where the pointer was at the tab drag's last event, window px.
     drag_at: wubble_core::tabdrag::Point,
     /// The window the drag started in: its pointer drives the drag, its ghost shows it.
     drag_window: WindowId,
@@ -632,15 +651,21 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            pinch_passed: None,
+            pinch_asked: pinch::Asked::default(),
             parity_passed: None,
             windows_passed: false,
             settings_passed: false,
             start_passed: false,
             pages_passed: false,
+            passwords_passed: false,
+            data_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
             gallery_burst_start: std::time::Instant::now(),
             settings_read: None,
+            settings_acted: 0,
+            settings_scroll_seen: 0.0,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
             keymap: Keymap::defaults(Platform::current()),
@@ -648,8 +673,9 @@ impl Host {
             store,
             save: SaveState::default(),
             autoscroll: Default::default(),
-            page_drag: Default::default(),
-            drag_point: Point { x: 0.0, y: 0.0 },
+            drag: Default::default(),
+            drag_win: (0.0, 0.0),
+            drag_ghost: None,
             external_drag: None,
             gestures: Default::default(),
             print: Default::default(),
@@ -667,7 +693,6 @@ impl Host {
             failure: None,
             surfaces: BTreeMap::new(),
             held_popups: BTreeMap::new(),
-            tab_drag: wubble_core::tabdrag::Drag::Idle,
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
             drag_window: WindowId(0),
             drag_timer: slint::Timer::default(),
@@ -901,13 +926,31 @@ impl Host {
         if persist::changes_session(&command) {
             self.save = self.save.changed();
         }
-        if let Command::CloseTab(tab) = command {
-            self.remember_closed(tab);
-        }
+        let pre_close = matches!(
+            command,
+            Command::CloseTab(_)
+                | Command::CloseTabs(_)
+                | Command::CloseOthers(_)
+                | Command::DeleteSpace(_)
+                | Command::CloseWindow(_)
+                | Command::CloseGlance(_)
+        )
+        .then(|| {
+            self.model
+                .tabs
+                .keys()
+                .copied()
+                .map(|tab| (tab, self.closed_tab_entry(tab)))
+                .collect::<Vec<_>>()
+        });
         if matches!(
             command,
             Command::ActivateTab(_)
                 | Command::CloseTab(_)
+                | Command::CloseTabs(_)
+                | Command::CloseOthers(_)
+                | Command::DeleteSpace(_)
+                | Command::CloseGlance(_)
                 | Command::SwitchSpace(_)
                 | Command::MoveTab { .. }
         ) {
@@ -923,9 +966,17 @@ impl Host {
             self.pending.extend(effects);
             queue.extend(self.flush());
         }
+        if let Some(before) = pre_close {
+            for (tab, closed) in before {
+                if !self.model.tabs.contains_key(&tab) {
+                    self.finish_closed(tab, closed);
+                }
+            }
+        }
         // Surfaces outlive a sleeping tab's view, not the tab.
         let tabs = &self.model.tabs;
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
+        self.committed.retain(|tab, _| tabs.contains_key(tab));
         self.held_popups.retain(|tab, _| tabs.contains_key(tab));
         self.preview.forget_except(|tab| tabs.contains_key(tab));
         // a tab moved into or out of a session's Space: its navigation rule follows the model
@@ -989,7 +1040,7 @@ impl Host {
                     Ok(id) => {
                         measure::mark(measure::Stage::FirstView);
                         self.views.insert(tab, id);
-                        // Page drags run inside the window (`page_drag`).
+                        // Page drags run inside the window (`drag.rs`).
                         if let Some(view) = self.engine.view(id) {
                             view.set_drag_source(true);
                         }
@@ -1204,7 +1255,9 @@ impl Host {
         {
             return;
         }
-        if let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone()) {
+        if !self.agent_drives(tab)
+            && let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone())
+        {
             self.store.put_favicon(&url, &icon, now_ms());
         }
         self.favicons.insert(
@@ -1337,6 +1390,8 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        self.passwords_smoke_step();
+        self.data_smoke_step();
         self.start_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
@@ -1348,6 +1403,7 @@ impl Host {
         }
         let presented = self.stats.accelerated != presented;
         self.split_smoke_step(&window);
+        self.pinch_smoke_worked(&window);
         self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();
@@ -1609,7 +1665,8 @@ impl Host {
             }
             WebEvent::TitleChanged(title) => {
                 self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
-                if let Some(url) = self.committed.get(&tab)
+                if !self.agent_drives(tab)
+                    && let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {
                     self.store.update_title(url, &title);
@@ -1760,9 +1817,12 @@ impl Host {
     pub(crate) fn open_external(&mut self, message: crate::instance::Message) {
         match message {
             crate::instance::Message::Open(url) => {
-                let space =
-                    wubble_core::routing::resolve(&self.model, &self.routing_rules, &url).space;
-                self.dispatch(Command::OpenLittle { url, space })
+                let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+                self.dispatch(Command::OpenLittle {
+                    url,
+                    space: routed.space,
+                    container: routed.container,
+                })
             }
             crate::instance::Message::Focus => self.raise_window(self.model.focused()),
         }
@@ -2192,34 +2252,39 @@ impl Host {
 
     // ----- persistence
 
-    /// Called before a tab closes: it goes on the recently-closed list.
-    fn remember_closed(&mut self, tab: TabId) {
-        self.media_tab_closed(tab);
-        self.committed.remove(&tab);
-        self.typed_nav.ended(tab);
-        if self.archiving.contains_key(&tab) {
-            return; // filed in the Archive instead
+    /// Snapshot of a tab for the recently-closed list, taken before the model drops it.
+    fn closed_tab_entry(&self, tab: TabId) -> Option<ClosedTab> {
+        if self.archiving.contains_key(&tab) || self.model.is_glance(tab) {
+            return None; // filed in the Archive or transient peek
         }
         // an agent session's tab is none of the user's, nor is one of an agent Space the owner
         // clears with its dustbin, kept or not (as the session's own teardown)
         let cleared = self.model.location(tab).map(|(sp, _)| sp) == self.agents.clearing
             && self.agents.clearing.is_some();
         if self.agent_drives(tab) || cleared {
-            return;
+            return None;
         }
-        let Some(t) = self.model.tabs.get(&tab) else {
-            return;
-        };
+        let t = self.model.tabs.get(&tab)?;
         if t.url.is_empty() {
-            return;
+            return None;
         }
-        self.store.push_closed(ClosedTab {
+        Some(ClosedTab {
             url: t.url.clone(),
             title: t.title.clone(),
             container: t.container,
             space: self.model.location(tab).map(|(space, _)| space),
             closed_at_ms: now_ms(),
-        });
+        })
+    }
+
+    /// Cleans up per-tab host state for a tab the model removed and records it if eligible.
+    fn finish_closed(&mut self, tab: TabId, closed: Option<ClosedTab>) {
+        self.media_tab_closed(tab);
+        self.committed.remove(&tab);
+        self.typed_nav.ended(tab);
+        if let Some(entry) = closed {
+            self.store.push_closed(entry);
+        }
     }
 
     /// The engine committed `url` in `tab`: a history visit unless it only
@@ -2227,6 +2292,9 @@ impl Host {
     /// with `TitleChanged`.
     fn record_visit(&mut self, tab: TabId, url: &str) {
         let previous = self.committed.insert(tab, url.to_string());
+        if previous.as_deref().is_some_and(|p| p != url) {
+            self.drag_gone(tab);
+        }
         let typed = self.typed_nav.committed(tab);
         // an agent session's loads are none of the user's history
         if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
@@ -2720,6 +2788,9 @@ impl Host {
             self.checks.settings_smoke = Some(state);
             return;
         };
+        let scroll = window.global::<wubble_ui::PageScroll>().get_y();
+        let found = settings_smoke::drive::look(&window);
+        let look = found.clone().unwrap_or_default();
         let seen = settings_smoke::Seen {
             ready: self.frame_rate.is_some(),
             on_settings: self
@@ -2731,8 +2802,43 @@ impl Host {
             views: self.engine.view_count(),
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
-            scroll: window.global::<wubble_ui::PageScroll>().get_y(),
+            scroll,
+            still: (scroll - self.settings_scroll_seen).abs() < 0.01,
+            sidebar_row: settings_smoke::drive::sidebar_row(&window),
+            sidebar_shell: wubble_core::seam::SidebarMode::from(window.get_sidebar_mode())
+                .id()
+                .to_owned(),
+            sidebar_stored: self
+                .settings
+                .stored
+                .get(wubble_core::settings::SIDEBAR_MODE.key)
+                .cloned()
+                .unwrap_or_default(),
+            shortcuts_found: settings_smoke::drive::shortcuts_found(&window),
+            capture: match self.settings.capture() {
+                wubble_core::keys::Capture::Idle => "idle",
+                wubble_core::keys::Capture::Armed(_) => "armed",
+                wubble_core::keys::Capture::Conflict { .. } => "conflict",
+            },
+            runs: settings_smoke::PROBED
+                .iter()
+                .map(|c| {
+                    let chord = wubble_core::keys::Chord::parse(c).expect("a probed chord parses");
+                    (*c, self.keymap.action_for(chord).map(|(a, _)| a.id()))
+                })
+                .collect(),
+            select_found: found.is_some(),
+            select_open: look.0,
+            select_shown: look.1,
+            engine_stored: wubble_core::apply::value_of(
+                &wubble_core::settings::SEARCH_ENGINE,
+                &self.settings.stored,
+            )
+            .to_owned(),
+            engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
+            acted: self.settings_acted,
         };
+        self.settings_scroll_seen = scroll;
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
@@ -2765,6 +2871,42 @@ impl Host {
                                 });
                             });
                         })
+                    });
+                });
+            }
+            Some(settings_smoke::Action::Drive(settings_smoke::Do::Chord(chord))) => {
+                // the keyboard's way in: the host's key path, then the step is done
+                match wubble_core::keys::Chord::parse(chord)
+                    .ok()
+                    .and_then(crate::parity::key_inputs)
+                {
+                    Some(keys) => self.smoke_keys(keys),
+                    None => self.fail(format!("no keys for the chord {chord:?}")),
+                }
+                let _ = slint::invoke_from_event_loop(|| {
+                    with_host(|host| host.settings_acted += 1);
+                });
+            }
+            Some(settings_smoke::Action::Drive(act)) => {
+                // as the pointer and keys come: from the event loop, outside the host; the step
+                // counts as done a turn of the loop later, when what it set going has settled
+                let _ = self.w.window.upgrade_in_event_loop(move |window| {
+                    let done = || {
+                        let _ = slint::invoke_from_event_loop(|| {
+                            with_host(|host| host.settings_acted += 1);
+                        });
+                    };
+                    if let Err(why) = settings_smoke::drive::run(&window, act, done) {
+                        with_host(|host| host.fail(why));
+                    }
+                });
+            }
+            Some(settings_smoke::Action::Read { key }) => {
+                self.settings_read = None;
+                self.store.read_settings(move |rows| {
+                    let value = rows.get(key).cloned().unwrap_or_default();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.settings_read = Some(value));
                     });
                 });
             }
@@ -2831,6 +2973,84 @@ impl Host {
             }
             Some(pages_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
+        }
+    }
+
+    /// `--smoke passwords`: what the passwords page shows, and the page's own callbacks.
+    fn passwords_smoke_step(&mut self) {
+        use crate::passwords_smoke::{self as smoke, Shown};
+        use slint::Model;
+        let Some(state) = self.checks.passwords_smoke.take() else {
+            return;
+        };
+        let Some(window) = self.w.window.upgrade() else {
+            self.checks.passwords_smoke = Some(state);
+            return;
+        };
+        let view = window.get_passwords_view();
+        let seen = smoke::Seen {
+            ready: self.frame_rate.is_some(),
+            on_page: self.shown_page() == Some(InternalPage::Passwords),
+            shown: match view.state {
+                wubble_ui::VaultState::Locked => Shown::Locked,
+                wubble_ui::VaultState::Unlocked => Shown::Unlocked,
+                wubble_ui::VaultState::Unavailable => Shown::Unavailable,
+                wubble_ui::VaultState::Unreadable => Shown::Unreadable,
+                wubble_ui::VaultState::KeyLost => Shown::KeyLost,
+            },
+            body: view.body.to_string(),
+            notice: view.notice.to_string(),
+            rows: window
+                .get_logins()
+                .iter()
+                .map(|l| smoke::Row {
+                    id: l.id.to_string(),
+                    origin: l.origin.to_string(),
+                    username: l.username.to_string(),
+                    revealed: l.has_revealed.then(|| l.revealed.to_string()),
+                })
+                .collect(),
+        };
+        let (state, actions) = smoke::next(state, &seen);
+        self.checks.passwords_smoke = Some(state);
+        let weak = self.w.window.clone();
+        // the page's own callbacks, as a click sends them: later, outside the host
+        let call = |f: Box<dyn FnOnce(AppWindow) + Send>| {
+            let _ = weak.upgrade_in_event_loop(f);
+        };
+        for action in actions {
+            match action {
+                smoke::Action::OpenPage => self.perform(Action::OpenPasswords),
+                smoke::Action::Leave => self.perform(Action::NewTab),
+                smoke::Action::Unlock => call(Box::new(|w| w.invoke_passwords_unlock())),
+                smoke::Action::Add {
+                    site,
+                    user,
+                    password,
+                } => call(Box::new(move |w| {
+                    w.invoke_login_added(site.into(), user.into(), password.into())
+                })),
+                smoke::Action::Edit {
+                    id,
+                    site,
+                    user,
+                    password,
+                } => call(Box::new(move |w| {
+                    w.invoke_login_edited(id.into(), site.into(), user.into(), password.into())
+                })),
+                smoke::Action::Reveal(id) => {
+                    call(Box::new(move |w| w.invoke_login_reveal(id.into())))
+                }
+                smoke::Action::Delete(id) => {
+                    call(Box::new(move |w| w.invoke_login_deleted(id.into())))
+                }
+                smoke::Action::Pass => {
+                    println!("smoke: passwords {:?} ok", state.phase);
+                    self.passwords_passed = true;
+                    quit();
+                }
+                smoke::Action::Fail(reason) => self.fail(reason),
+            }
         }
     }
 
@@ -3075,6 +3295,7 @@ impl Host {
                     .borrow_mut()
                     .pointer_move(position.x, position.y);
                 self.tab_drag_pointer(position.x, position.y, false);
+                self.drag_window_pointer(false);
             }
             // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
             WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
@@ -3120,10 +3341,15 @@ impl Host {
                         (p.x, p.y)
                     });
                 self.tab_drag_pointer(at.0, at.1, true);
+                self.drag_window_pointer(true);
             }
             WindowEvent::Focused(focused) => {
                 // before Slint sees it: the start page's capsule keeps the bar through it
                 window.set_window_active(*focused);
+                // a page drag inside the window ends with nothing dropped (an OS drag goes on)
+                if !*focused {
+                    self.drag_cancelled();
+                }
                 let current = self.model.focused() == self.w.id;
                 if let Some(focused) = input::window_focus(current, *focused) {
                     self.input.window_focused = focused;

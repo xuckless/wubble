@@ -149,6 +149,15 @@ pub fn mouse_event(point: Point, m: &Modifiers) -> cef::MouseEvent {
     }
 }
 
+/// A Ctrl+wheel at `point` with precise (pixel) deltas, as a trackpad pinch's wheel is
+/// (`pinch.rs`), whatever keys are held.
+pub fn ctrl_wheel_event(point: Point) -> cef::MouseEvent {
+    cef::MouseEvent {
+        modifiers: flag::CONTROL | flag::PRECISION_SCROLLING_DELTA,
+        ..mouse_event(point, &Modifiers::default())
+    }
+}
+
 pub fn cef_button(button: MouseButton) -> cef::MouseButtonType {
     match button {
         MouseButton::Left => cef::MouseButtonType::LEFT,

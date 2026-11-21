@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use wubble_core::download::{DownloadEntry, DownloadState};
+use wubble_core::space::ContainerId;
 
 use crate::*;
 
@@ -26,6 +27,7 @@ fn read(r: &turso::Row) -> Result<DownloadEntry> {
         state: DownloadState::parse(&state, error)
             .ok_or_else(|| Error::Corrupt(format!("download state {state:?}")))?,
         started_ms: r.get(8)?,
+        container: ContainerId::DEFAULT,
     })
 }
 
@@ -123,6 +125,7 @@ mod tests {
             total: (id % 2 == 0).then_some(100),
             state,
             started_ms: 1_000 + id,
+            container: ContainerId::DEFAULT,
         }
     }
 

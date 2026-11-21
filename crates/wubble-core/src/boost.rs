@@ -186,6 +186,67 @@ impl Pattern {
         scheme_ok && host_ok && glob(&self.path, &path)
     }
 
+    /// Whether a cookie (`domain` as CEF's cookie manager names it: a leading dot for a domain
+    /// cookie, none for a host-only one; `path`; `secure`) would be sent to some page of this
+    /// pattern (RFC 6265 5.1.3 domain-match, 5.1.4 path-match; a secure cookie never over
+    /// http). Any host (`*://*/*`) answers no: it names no site. The agent sheet's "Use my
+    /// sign-ins" copies exactly these (`agent::shares_cookie`).
+    pub fn sends_cookie(&self, domain: &str, path: &str, secure: bool) -> bool {
+        if secure && self.scheme == Scheme::Http {
+            return false;
+        }
+        let (host, domain_cookie) = match domain.strip_prefix('.') {
+            Some(h) => (h.to_ascii_lowercase(), true),
+            None => (domain.to_ascii_lowercase(), false),
+        };
+        if host.is_empty() {
+            return false;
+        }
+        let under = |sub: &str, parent: &str| {
+            sub == parent
+                || (sub.ends_with(parent) && sub[..sub.len() - parent.len()].ends_with('.'))
+        };
+        let host_ok = match &self.host {
+            Host::Any => false,
+            // a page of `h` is sent a host-only cookie of `h`, and a domain cookie of `h` or a
+            // parent of it
+            Host::Exact(h) => *h == host || (domain_cookie && under(h, &host)),
+            // pages of `d` and its subdomains: also a cookie of a subdomain of `d`
+            Host::Domain(d) => under(&host, d) || (domain_cookie && under(d, &host)),
+        };
+        host_ok && self.sends_path(if path.is_empty() { "/" } else { path })
+    }
+
+    /// Whether some page of the pattern path-matches a cookie path `c` (RFC 6265 5.1.4: the
+    /// page's path is `c`, or starts with `c` where `c` ends in `/` or the next character is
+    /// `/`). Pages of the pattern start with its literal part (before any `*`); with a `*` they
+    /// may go on.
+    fn sends_path(&self, c: &str) -> bool {
+        let literal = self.path.split('*').next().unwrap_or("");
+        let open = self.path.contains('*');
+        // a page under `c` itself (`c`, or `c/...`, when the pattern allows it)
+        if glob(&self.path, c) || glob(&self.path, &format!("{}/", c.trim_end_matches('/'))) {
+            return true;
+        }
+        // `c` above every page of the pattern: a path-prefix of its literal start
+        literal.starts_with(c)
+            && (c.ends_with('/')
+                || literal.as_bytes().get(c.len()) == Some(&b'/')
+                || (literal.len() == c.len() && open))
+    }
+
+    /// Whether the pattern names a site sign-ins can be shared for: an IP address, or a host
+    /// with a registrable domain (not a public suffix such as `com`, `co.uk` or `github.io`,
+    /// nor a single label): sharing `*.co.uk` would carry every cookie under it.
+    pub fn names_a_site(&self) -> bool {
+        let host = match &self.host {
+            Host::Any => return false,
+            Host::Exact(h) | Host::Domain(h) => h,
+        };
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        bare.parse::<std::net::IpAddr>().is_ok() || psl::domain_str(bare).is_some()
+    }
+
     /// The pattern as data for the page kit's `matches` (`kit.js`): `s` the scheme (`web` for
     /// http and https), `h` the kind of host (`any`, `domain`, `exact`) and `n` its name, `p` the
     /// glob over path and query.
@@ -387,6 +448,76 @@ mod tests {
             id,
             order,
             ..Boost::for_host(site)
+        }
+    }
+
+    #[test]
+    fn a_pattern_says_which_cookies_its_pages_are_sent() {
+        let p = |s: &str| Pattern::parse(s).unwrap();
+        let bare = p("github.com");
+        // host-only cookies of the site and its subdomains; a parent's domain cookie
+        assert!(bare.sends_cookie("github.com", "/", true));
+        assert!(bare.sends_cookie("gist.github.com", "/", false));
+        assert!(bare.sends_cookie(".github.com", "/", true));
+        assert!(!bare.sends_cookie("github.io", "/", false));
+        assert!(!bare.sends_cookie("notgithub.com", "/", false));
+        // an exact host is sent its own cookies and its parents' domain cookies only
+        let exact = p("https://accounts.google.com/*");
+        assert!(exact.sends_cookie("accounts.google.com", "/", true));
+        assert!(exact.sends_cookie(".google.com", "/", true));
+        assert!(
+            !exact.sends_cookie("google.com", "/", true),
+            "host-only of the parent"
+        );
+        assert!(!exact.sends_cookie("mail.google.com", "/", true));
+        assert!(!exact.sends_cookie(".mail.google.com", "/", true));
+        // a secure cookie never goes over http
+        assert!(!p("http://a.test/*").sends_cookie("a.test", "/", true));
+        assert!(p("http://a.test/*").sends_cookie("a.test", "/", false));
+        // paths: a cookie under the pattern's pages, or above them
+        let docs = p("https://a.test/docs/*");
+        assert!(docs.sends_cookie("a.test", "/", false));
+        assert!(docs.sends_cookie("a.test", "/docs", false));
+        assert!(docs.sends_cookie("a.test", "/docs/x", false));
+        assert!(!docs.sends_cookie("a.test", "/admin", false));
+        // RFC 6265 5.1.4: `/d` is not a path-prefix of `/docs/...` (no `/` after it)
+        assert!(!docs.sends_cookie("a.test", "/d", false));
+        assert!(!docs.sends_cookie("a.test", "/doc", false));
+        assert!(docs.sends_cookie("a.test", "/docs/", false));
+        let exact_path = p("https://a.test/docs");
+        assert!(exact_path.sends_cookie("a.test", "/docs", false));
+        assert!(!exact_path.sends_cookie("a.test", "/do", false));
+        assert!(!exact_path.sends_cookie("a.test", "/docs/x", false));
+        // any host is no site; an empty domain is nothing
+        assert!(!p("*://*/*").sends_cookie("a.test", "/", false));
+        assert!(!bare.sends_cookie("", "/", false));
+        assert!(!bare.sends_cookie(".", "/", false));
+    }
+
+    #[test]
+    fn only_a_pattern_of_a_registrable_site_names_one() {
+        let p = |s: &str| Pattern::parse(s).unwrap();
+        for site in [
+            "github.com",
+            "*.github.com",
+            "a.github.io",
+            "example.co.uk",
+            "127.0.0.1",
+            "https://accounts.google.com/*",
+            "signin.localhost",
+        ] {
+            assert!(p(site).names_a_site(), "{site}");
+        }
+        for suffix in [
+            "com",
+            "*.co.uk",
+            "co.uk",
+            "github.io",
+            "*.github.io",
+            "localhost",
+            "*://*/*",
+        ] {
+            assert!(!p(suffix).names_a_site(), "{suffix}");
         }
     }
 

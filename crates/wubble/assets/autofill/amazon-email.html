@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Amazon Sign-In</title>
+<!-- Modelled on amazon.com/ap/signin's first page: an email field (no autocomplete attribute;
+     its class names it a username), hidden fields, Continue a submit input. -->
+<form name="signIn" method="post" novalidate action="/f/amazon/ap/password" class="auth-validate-form auth-real-time-validation a-spacing-none">
+<input type="hidden" name="appActionToken" value="fixture"><input type="hidden" name="appAction" value="SIGNIN_PWD_COLLECT">
+<div class="a-section"><label for="ap_email" class="a-form-label">Email or mobile phone number</label>
+<input type="email" maxlength="128" id="ap_email" name="email" tabindex="1" class="a-input-text a-span12 auth-autofill-username auth-required-field"></div>
+<span class="a-button a-button-span12 a-button-primary"><span class="a-button-inner"><input id="continue" tabindex="5" class="a-button-input go" type="submit" aria-labelledby="continue-announce"><span id="continue-announce" class="a-button-text" aria-hidden="true">Continue</span></span></span>
+</form>
+<script>
+// Someone else's account typed over the fill.
+fx.expect([["#ap_email", "carol@amazon.test"]], "filled ok", () => fx.type("#ap_email", "dave@amazon.test"));
+</script>

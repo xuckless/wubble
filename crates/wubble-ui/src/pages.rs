@@ -13,8 +13,13 @@ use crate::{
     BookmarkLineItem, FolderChoiceItem, HistoryLineItem, LoginItem, PasswordsView, VaultState,
 };
 
-/// The history page's lines.
-pub fn history_items(lines: &[HistoryLine], icon: impl Fn(&str) -> Image) -> Vec<HistoryLineItem> {
+/// The history page's lines. When `tz_offset_min` is `Some`, each visit carries its local `HH:MM`
+/// timestamp.
+pub fn history_items(
+    lines: &[HistoryLine],
+    tz_offset_min: Option<i32>,
+    icon: impl Fn(&str) -> Image,
+) -> Vec<HistoryLineItem> {
     lines
         .iter()
         .map(|line| match line {
@@ -24,6 +29,7 @@ pub fn history_items(lines: &[HistoryLine], icon: impl Fn(&str) -> Image) -> Vec
                 label: label.as_str().into(),
                 title: Default::default(),
                 url: Default::default(),
+                time: Default::default(),
                 favicon: Image::default(),
             },
             HistoryLine::Visit(row) => HistoryLineItem {
@@ -39,6 +45,10 @@ pub fn history_items(lines: &[HistoryLine], icon: impl Fn(&str) -> Image) -> Vec
                 .as_str()
                 .into(),
                 url: row.url.as_str().into(),
+                time: tz_offset_min
+                    .map(|tz| pages::format_local_time(row.visit_ms, tz))
+                    .unwrap_or_default()
+                    .into(),
                 favicon: icon(&row.url),
             },
         })
@@ -110,6 +120,7 @@ pub fn passwords_view(status: &VaultStatus, notice: &str) -> PasswordsView {
             VaultStatus::Unlocked => VaultState::Unlocked,
             VaultStatus::Unavailable(_) => VaultState::Unavailable,
             VaultStatus::Unreadable { .. } => VaultState::Unreadable,
+            VaultStatus::KeyLost { .. } => VaultState::KeyLost,
         },
         title: title.into(),
         body: body.as_str().into(),
@@ -125,7 +136,9 @@ pub fn login_items(rows: &[LoginView], revealed: Option<(&str, &str)>) -> Vec<Lo
             LoginItem {
                 id: r.id.as_str().into(),
                 site: r.site().into(),
+                origin: r.origin.as_str().into(),
                 username: r.username.as_deref().unwrap_or("(cannot be read)").into(),
+                readable: r.username.is_some(),
                 revealed: shown.unwrap_or_default().into(),
                 has_revealed: shown.is_some(),
             }
@@ -157,11 +170,18 @@ mod tests {
             visit("https://a.test/", "A"),
             visit("https://b.test/", ""),
         ];
-        let items = history_items(&lines, |_| Image::default());
+        let items = history_items(&lines, Some(0), |_| Image::default());
         assert_eq!(items.len(), 3);
-        assert!(items[0].header && items[0].label == "Today");
-        assert!(!items[1].header && items[1].title == "A" && items[1].url == "https://a.test/");
+        assert!(items[0].header && items[0].label == "Today" && items[0].time.is_empty());
+        assert!(
+            !items[1].header
+                && items[1].title == "A"
+                && items[1].url == "https://a.test/"
+                && items[1].time == "00:00"
+        );
         assert_eq!(items[2].title, "https://b.test/");
+        let no_time = history_items(&lines, None, |_| Image::default());
+        assert!(no_time[1].time.is_empty());
     }
 
     fn row(id: i64, parent: Option<i64>, folder: bool, title: &str) -> BookmarkRow {
@@ -214,6 +234,21 @@ mod tests {
         assert_eq!(items[0].site, "a.test");
         let none = login_items(&rows, None);
         assert!(none.iter().all(|i| !i.has_revealed));
+    }
+
+    #[test]
+    fn an_unreadable_login_is_marked_so_it_offers_no_edit() {
+        let row = |username: Option<&str>| LoginView {
+            id: "1".into(),
+            origin: "https://a.test".into(),
+            username: username.map(Into::into),
+            created_ms: 0,
+            last_used_ms: None,
+            times_used: 0,
+        };
+        let items = login_items(&[row(Some("me")), row(None)], None);
+        assert!(items[0].readable && items[0].username == "me");
+        assert!(!items[1].readable && items[1].username == "(cannot be read)");
     }
 
     #[test]

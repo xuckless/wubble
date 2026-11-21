@@ -23,11 +23,12 @@ RELEASES=${WUBBLE_RELEASES:-https://github.com/xuckless/wubble/releases/download
 
 usage() {
     cat <<EOF
-usage: install.sh [--channel preview|stable] [--version V] [--uninstall]
+usage: install.sh [--channel preview|stable] [--version V] [--allow-unsigned] [--uninstall]
 
-  --channel C   follow the preview (default) or stable releases
-  --version V   install this version instead of the channel's newest
-  --uninstall   remove wubble (your profile is kept)
+  --channel C       follow the preview (default) or stable releases
+  --version V       install this version instead of the channel's newest
+  --allow-unsigned  allow installing without minisign signature verification
+  --uninstall       remove wubble (your profile is kept)
 
 WUBBLE_RELEASES overrides the download base ($RELEASES), for testing
 against a local server or a file:// folder of the same shape.
@@ -44,6 +45,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 channel=preview
 version=
 action=install
+allow_unsigned=0
 while [ $# -gt 0 ]; do
     case $1 in
     --channel)
@@ -53,6 +55,10 @@ while [ $# -gt 0 ]; do
     --version)
         version=${2:?--version needs a version}
         shift 2
+        ;;
+    --allow-unsigned)
+        allow_unsigned=1
+        shift
         ;;
     --uninstall)
         action=uninstall
@@ -93,13 +99,34 @@ apps=$data_home/applications
 icons=$data_home/icons/hicolor
 mac_support="$HOME/Library/Application Support/wubble"
 
+case $RELEASES in
+http://*) curl_proto='=https,http' ;;
+file://*) curl_proto='=https,http,file' ;;
+*) curl_proto='=https' ;;
+esac
+
 fetch() { # url file
     if have curl; then
-        curl -fsSL --proto '=https,http,file' -o "$2" "$1"
+        curl -fsSL --proto "$curl_proto" --proto-redir "$curl_proto" -o "$2" "$1"
     elif have wget; then
         wget -q -O "$2" "$1"
     else
         die "needs curl or wget"
+    fi
+}
+
+verify_sig() { # url file label
+    if [ "$PUBLIC_KEY" = "$PLACEHOLDER" ]; then
+        say "warning: this script has no signing key yet; the signature of $3 was not checked"
+    elif have minisign; then
+        fetch "$1.minisig" "$2.minisig" || die "no signature for $3"
+        minisign -V -q -P "$PUBLIC_KEY" -m "$2" -x "$2.minisig" ||
+            die "the signature of $3 does not match: not installed"
+        say "signature ok ($3)"
+    elif [ "$allow_unsigned" = 1 ]; then
+        say "warning: minisign is not installed; skipping signature check for $3 (--allow-unsigned)"
+    else
+        die "minisign is required to verify $3; install minisign (dnf, apt or brew: minisign) or re-run with --allow-unsigned"
     fi
 }
 
@@ -179,13 +206,19 @@ if [ "$action" = uninstall ]; then
     exit 0
 fi
 
+if [ "$PUBLIC_KEY" != "$PLACEHOLDER" ] && ! have minisign && [ "$allow_unsigned" != 1 ]; then
+    die "minisign is required to verify the release signature; install minisign (dnf, apt or brew: minisign) or re-run with --allow-unsigned"
+fi
+
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/wubble-install.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' INT TERM
 
 if [ -z "$version" ]; then
     say "asking for the newest $channel release"
-    fetch "$RELEASES/updates/$channel.json" "$tmp/manifest.json" || die "cannot fetch the $channel manifest"
+    manifest_url=$RELEASES/updates/$channel.json
+    fetch "$manifest_url" "$tmp/manifest.json" || die "cannot fetch the $channel manifest"
+    verify_sig "$manifest_url" "$tmp/manifest.json" "$channel manifest"
     version=$(tr -d '\n\r' <"$tmp/manifest.json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     [ -n "$version" ] || die "the manifest names no version"
 fi
@@ -201,17 +234,7 @@ got=$(sha256_of "$tmp/$name")
 [ "$want" = "$got" ] || die "the checksum of $name does not match ($got, want $want)"
 say "checksum ok"
 
-if [ "$PUBLIC_KEY" = "$PLACEHOLDER" ]; then
-    say "warning: this script has no signing key yet; the signature was not checked"
-elif have minisign; then
-    fetch "$url.minisig" "$tmp/$name.minisig" || die "no signature for $name"
-    minisign -V -q -P "$PUBLIC_KEY" -m "$tmp/$name" -x "$tmp/$name.minisig" ||
-        die "the signature of $name does not match: not installed"
-    say "signature ok"
-else
-    say "minisign is not installed, so the signature was not checked (only the checksum);"
-    say "install minisign (dnf, apt or brew: minisign) to have it checked"
-fi
+verify_sig "$url" "$tmp/$name" "$name"
 
 install_linux() {
     have xz || die "needs xz to unpack (install xz-utils or xz)"
@@ -249,7 +272,12 @@ install_linux() {
     fi
     if [ -f "$dest/share/applications/wubble.desktop" ]; then
         mkdir -p "$apps"
-        sed "s|^Exec=wubble|Exec=$launcher|" "$dest/share/applications/wubble.desktop" >"$apps/wubble.desktop"
+        while IFS= read -r line || [ -n "$line" ]; do
+            case $line in
+            Exec=wubble*) printf 'Exec=%s%s\n' "$launcher" "${line#Exec=wubble}" ;;
+            *) printf '%s\n' "$line" ;;
+            esac
+        done <"$dest/share/applications/wubble.desktop" >"$apps/wubble.desktop"
         say "installed $apps/wubble.desktop"
     fi
     refresh_desktop

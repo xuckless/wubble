@@ -67,9 +67,12 @@ pub enum Event {
 /// browser, so a file found here is a crash's and goes.
 pub fn bind(path: &Path) -> io::Result<Listener> {
     crate::instance::remove_stale(path)?;
+    // Only `Hosted::stop` removes the file, before it returns: a listener reclaiming its name on
+    // drop would do it later, from the accept thread winding down, and could take the socket a
+    // following `start` just bound at the same path.
     let options = || {
         path.to_fs_name::<GenericFilePath>()
-            .map(|name| ListenerOptions::new().name(name))
+            .map(|name| ListenerOptions::new().name(name).reclaim_name(false))
     };
     // Only this user may connect (set before `listen`, so no umask race).
     #[cfg(unix)]
@@ -85,31 +88,44 @@ pub fn bind(path: &Path) -> io::Result<Listener> {
 }
 
 /// Binds where a socket's mode cannot be set before `bind` (macOS: `fchmod` on a socket fails,
-/// which interprocess reports as `Unsupported`): the socket is bound inside a new directory
-/// only this user may enter, given its mode there, then renamed into place (a bound socket
-/// keeps listening under its new name). It is never reachable by another user, and the
-/// process's umask is left alone (other threads make files meanwhile).
+/// which interprocess reports as `Unsupported`): the socket is bound inside a unique `0o700`
+/// temporary directory only this user may enter, given its `0o600` mode there, then linked or
+/// renamed into place (a bound socket keeps listening under its new name). It is never reachable
+/// by another user, and the process's umask is left alone (other threads make files meanwhile).
 #[cfg(unix)]
 fn private_by_dir(path: &Path) -> io::Result<Listener> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    private_by_dir_impl(path, false)
+}
+
+#[cfg(unix)]
+pub(crate) fn private_by_dir_impl(path: &Path, exclusive: bool) -> io::Result<Listener> {
+    use std::os::unix::fs::PermissionsExt;
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
-    // short names: a socket path has a small limit, and `path` already fits it
-    let dir = parent.join(".m");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    let inside = dir.join("s");
-    let made = (|| {
-        let listener = ListenerOptions::new()
-            .name(inside.as_path().to_fs_name::<GenericFilePath>()?)
-            // the file is renamed away: nothing of this name is left to reclaim
-            .reclaim_name(false)
-            .create_sync()?;
-        std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o600))?;
+    // short unique name: a socket path has a small limit, and `path` already fits it;
+    // `tempfile::Builder::tempdir_in` creates the directory with mode 0o700 on Unix.
+    let dir = tempfile::Builder::new()
+        .prefix(".m-")
+        .rand_bytes(4)
+        .tempdir_in(parent)?;
+    let inside = dir.path().join("s");
+    let listener = ListenerOptions::new()
+        .name(inside.as_path().to_fs_name::<GenericFilePath>()?)
+        // the file is moved/linked away: nothing of this name is left to reclaim
+        .reclaim_name(false)
+        .create_sync()?;
+    std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o600))?;
+    if exclusive {
+        std::fs::hard_link(&inside, path).map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                io::Error::from(io::ErrorKind::AddrInUse)
+            } else {
+                e
+            }
+        })?;
+    } else {
         std::fs::rename(&inside, path)?;
-        Ok(listener)
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    made
+    }
+    Ok(listener)
 }
 
 /// Connection ids, process-wide: a connection left from an earlier hosting run never shares
@@ -382,13 +398,22 @@ pub fn hosting_browsers() -> Vec<Manifest> {
         .filter_map(|p| {
             let m = Manifest::from_json(&std::fs::read_to_string(&p).ok()?)?;
             let socket = Path::new(&m.socket);
+            if !private_to_me(socket, Kind::Socket) {
+                #[cfg(unix)]
+                if std::fs::symlink_metadata(socket)
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+                {
+                    let _ = std::fs::remove_file(&p);
+                }
+                return None;
+            }
             match crate::instance::probe(socket) {
-                crate::instance::Probe::Live if private_to_me(socket, Kind::Socket) => Some(m),
+                crate::instance::Probe::Live => Some(m),
                 crate::instance::Probe::Dead => {
                     let _ = std::fs::remove_file(&p);
                     None
                 }
-                _ => None,
+                crate::instance::Probe::Unknown => None,
             }
         })
         .collect()
@@ -412,6 +437,10 @@ const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 /// `wubble mcp`: stdio to the socket at `path` and back, until either side ends. With no
 /// browser there, every request on stdin gets the [`NOT_RUNNING`] error.
 pub fn relay(path: &Path) -> io::Result<()> {
+    if !private_to_me(path, Kind::Socket) {
+        eprintln!("wubble mcp: {NOT_RUNNING}");
+        return answer_offline(io::stdin().lock(), io::stdout().lock());
+    }
     let stream = match Stream::connect(path.to_fs_name::<GenericFilePath>()?) {
         Ok(stream) => stream,
         Err(_) => {
@@ -419,6 +448,11 @@ pub fn relay(path: &Path) -> io::Result<()> {
             return answer_offline(io::stdin().lock(), io::stdout().lock());
         }
     };
+    #[cfg(unix)]
+    if !crate::instance::peer_is_me(&stream) {
+        eprintln!("wubble mcp: refused socket owned by another user");
+        return answer_offline(io::stdin().lock(), io::stdout().lock());
+    }
     let stream = Arc::new(stream);
     let send = Arc::clone(&stream);
     std::thread::Builder::new()
@@ -483,8 +517,14 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(
-            !dir.path().join(".m").exists(),
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            [std::ffi::OsStr::new("m.sock")],
             "the directory it was made in is gone"
         );
         Stream::connect(path.as_path().to_fs_name::<GenericFilePath>().unwrap()).unwrap();

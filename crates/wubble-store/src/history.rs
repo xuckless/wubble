@@ -6,7 +6,7 @@ use turso::Connection;
 use wubble_core::omnibox::HistoryEntry;
 use wubble_core::pages::HistoryRow;
 
-use crate::{HistoryRetentionDays, Result, Store, ids, narrow};
+use crate::{HistoryRetentionDays, Result, SCAN_CHUNK, Store, contains_folded, ids, narrow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transition {
@@ -106,7 +106,7 @@ impl Store {
     /// One page of the history page's rows: visits strictly before the `(visit_ms, visit_id)`
     /// cursor of the last row already shown (`None`: from the newest), newest first, at most
     /// `limit`. The id breaks ties between visits with the same millisecond. `query` keeps the
-    /// visits whose title or url contains it (SQLite `lower()`, so case-insensitive for ASCII only; empty keeps all), so a search
+    /// visits whose title or url contains it, in any case (empty keeps all), so a search
     /// reaches rows older than any loaded page. Day grouping is
     /// `wubble_core::pages::history_page`.
     pub async fn list_visits(
@@ -115,6 +115,47 @@ impl Store {
         before: Option<(i64, i64)>,
         query: &str,
     ) -> Result<Vec<HistoryRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let needle = query.trim().to_lowercase();
+        if needle.is_ascii() {
+            return self.visits_matching(limit, before, &needle).await;
+        }
+        // SQLite's `lower()` folds ASCII only: a query with other letters is matched here, over
+        // the rows in order.
+        let mut out = Vec::new();
+        let mut cursor = before;
+        loop {
+            let chunk = self.visits_matching(SCAN_CHUNK, cursor, "").await?;
+            let last = chunk.last().map(|r| (r.visit_ms, r.visit_id));
+            let read = chunk.len();
+            for r in chunk {
+                if contains_folded(&r.title, &needle) || contains_folded(&r.url, &needle) {
+                    out.push(r);
+                    if out.len() == limit {
+                        return Ok(out);
+                    }
+                }
+            }
+            if read < SCAN_CHUNK {
+                return Ok(out);
+            }
+            cursor = last;
+        }
+    }
+
+    /// [`Self::list_visits`] where the SQL does the matching: `needle` is lowercase ASCII.
+    async fn visits_matching(
+        &self,
+        limit: usize,
+        before: Option<(i64, i64)>,
+        needle: &str,
+    ) -> Result<Vec<HistoryRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut rows = self
             .conn
             .query(
@@ -124,7 +165,7 @@ impl Store {
                  ORDER BY v.visit_time DESC, v.id DESC LIMIT ?3",
                 {
                     let (ms, id) = before.unwrap_or((i64::MAX, i64::MAX));
-                    (ms, id, limit as i64, query.trim().to_lowercase())
+                    (ms, id, limit, needle.to_owned())
                 },
             )
             .await?;
@@ -148,34 +189,59 @@ impl Store {
         now_ms: i64,
         limit: usize,
     ) -> Result<Vec<HistoryEntry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         let key = url_key(prefix);
         if key.is_empty() {
             return Ok(Vec::new());
         }
         let title_needle = prefix.trim().to_lowercase();
+        // SQLite's `lower()` folds ASCII only: a title is matched here for a query with other
+        // letters, so the SQL ranks every page and the limit applies after the match.
+        let in_rust = !title_needle.is_ascii();
+        let sql = if in_rust {
+            QUERY.replace("instr(lower(title), ?3) > 0", "?3 <> ''")
+        } else {
+            QUERY.to_owned()
+        };
         let mut rows = self
             .conn
             .query(
-                QUERY,
+                sql,
                 (
                     key.as_str(),
                     prefix_upper(&key),
-                    title_needle,
+                    title_needle.clone(),
                     now_ms,
                     DAY_MS,
-                    limit as i64,
+                    if in_rust {
+                        i64::MAX
+                    } else {
+                        i64::try_from(limit).unwrap_or(i64::MAX)
+                    },
                 ),
             )
             .await?;
         let mut hits = Vec::new();
         while let Some(r) = rows.next().await? {
+            let url: String = r.get(0)?;
+            let title: String = r.get(1)?;
+            if in_rust
+                && !(url_key(&url).starts_with(&key) || contains_folded(&title, &title_needle))
+            {
+                continue;
+            }
             hits.push(HistoryEntry {
-                url: r.get(0)?,
-                title: r.get(1)?,
+                url,
+                title,
                 visit_count: narrow(r.get(2)?, "visit_count")?,
                 typed_count: narrow(r.get(3)?, "typed_count")?,
                 last_visit_ms: r.get(4)?,
             });
+            if hits.len() == limit {
+                break;
+            }
         }
         Ok(hits)
     }
@@ -257,7 +323,13 @@ impl Store {
     ) -> Result<HistoryDeleted> {
         let tx = self.conn.transaction().await?;
         let out = delete_visits_between(&tx, from_ms, to_ms).await?;
+        tx.execute(
+            "DELETE FROM recently_closed WHERE closed_at >= ?1 AND closed_at < ?2",
+            (from_ms, to_ms),
+        )
+        .await?;
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -266,7 +338,10 @@ impl Store {
         let tx = self.conn.transaction().await?;
         let found = ids(&tx, "SELECT id FROM urls WHERE url = ?1", [url]).await?;
         let out = delete_urls(&tx, &found).await?;
+        tx.execute("DELETE FROM recently_closed WHERE url = ?1", [url])
+            .await?;
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -293,7 +368,20 @@ impl Store {
         }
         drop(rows);
         let out = delete_urls(&tx, &found).await?;
+        let mut closed_rows = tx.query("SELECT id, url FROM recently_closed", ()).await?;
+        let mut closed_ids = Vec::new();
+        while let Some(r) = closed_rows.next().await? {
+            if on_site(&url_key(&r.get::<String>(1)?), host_key) {
+                closed_ids.push(r.get::<i64>(0)?);
+            }
+        }
+        drop(closed_rows);
+        for id in closed_ids {
+            tx.execute("DELETE FROM recently_closed WHERE id = ?1", [id])
+                .await?;
+        }
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -391,6 +479,157 @@ mod tests {
             assert_eq!(next[0].url, "https://a.test/one");
             assert!(s.list_visits(10, None, "zzz").await.unwrap().is_empty());
             assert_eq!(s.list_visits(10, None, "").await.unwrap().len(), 4);
+        });
+    }
+
+    #[test]
+    fn clearing_history_also_forgets_closed_tabs_and_unreferenced_icons() {
+        use crate::{ClosedTab, Favicon};
+        use wubble_core::space::ContainerId;
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let icon = |u: &str| Favicon {
+                icon_url: format!("{u}icon.png"),
+                width: 1,
+                height: 1,
+                rgba: vec![1; 4],
+            };
+            let all = [
+                "https://seen.test/",
+                "https://kept.test/",
+                "https://other.test/",
+            ];
+            for (i, url) in all.into_iter().enumerate() {
+                s.record_visit(url, "T", 10 + i as i64, Transition::Link)
+                    .await
+                    .unwrap();
+                s.put_favicon(url, &icon(url), 1).await.unwrap();
+            }
+            s.add_bookmark(None, "Kept", "https://kept.test/", 1)
+                .await
+                .unwrap();
+            s.push_closed(&ClosedTab {
+                url: "https://seen.test/".into(),
+                title: "T".into(),
+                container: ContainerId::DEFAULT,
+                space: None,
+                closed_at_ms: 50,
+            })
+            .await
+            .unwrap();
+            // One page forgotten: its closed tab and its icon go, the others stay.
+            s.delete_history_url("https://other.test/").await.unwrap();
+            let got = s.favicons_for(&all).await.unwrap();
+            assert!(!got.contains_key("https://other.test/"));
+            assert!(got.contains_key("https://seen.test/"));
+            // Everything: the closed tab and the icon of a site no bookmark keeps go too.
+            s.delete_history_range(i64::MIN, i64::MAX).await.unwrap();
+            assert_eq!(s.pop_closed().await.unwrap(), None);
+            let got = s.favicons_for(&all).await.unwrap();
+            assert_eq!(got.keys().collect::<Vec<_>>(), ["https://kept.test/"]);
+        });
+    }
+
+    #[test]
+    fn delete_history_site_cleans_recently_closed_and_favicons() {
+        use crate::{ClosedTab, Favicon};
+        use wubble_core::space::ContainerId;
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let icon = |u: &str| Favicon {
+                icon_url: format!("{u}icon.png"),
+                width: 1,
+                height: 1,
+                rgba: vec![1; 4],
+            };
+            let target = "https://www.example.com/page";
+            let sibling = "https://example.community/page";
+            for url in [target, sibling] {
+                s.record_visit(url, "T", 10, Transition::Link)
+                    .await
+                    .unwrap();
+                s.put_favicon(url, &icon(url), 1).await.unwrap();
+                s.push_closed(&ClosedTab {
+                    url: url.into(),
+                    title: "T".into(),
+                    container: ContainerId::DEFAULT,
+                    space: None,
+                    closed_at_ms: 20,
+                })
+                .await
+                .unwrap();
+            }
+            s.delete_history_site("example.com").await.unwrap();
+            let closed = s.recently_closed().await.unwrap();
+            assert_eq!(closed.len(), 1);
+            assert_eq!(closed[0].url, sibling);
+            let icons = s.favicons_for(&[target, sibling]).await.unwrap();
+            assert!(!icons.contains_key(target));
+            assert!(icons.contains_key(sibling));
+        });
+    }
+
+    #[test]
+    fn limit_zero_returns_empty() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.record_visit("https://a.test/", "Привет", 10, Transition::Link)
+                .await
+                .unwrap();
+            assert!(s.list_visits(0, None, "").await.unwrap().is_empty());
+            assert!(s.list_visits(0, None, "привет").await.unwrap().is_empty());
+            assert!(s.query_history("a.test", 20, 0).await.unwrap().is_empty());
+            assert!(s.query_history("привет", 20, 0).await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn list_visits_searches_non_latin_titles_in_any_case() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for (i, (url, title)) in [
+                ("https://a.test/", "Привет мир"),
+                ("https://b.test/", "ÄRGER im Büro"),
+                ("https://c.test/", "日本語のページ"),
+                ("https://d.test/", "Plain"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                s.record_visit(url, title, 10 + i as i64, Transition::Link)
+                    .await
+                    .unwrap();
+            }
+            for (query, want) in [
+                ("привет", "https://a.test/"),
+                ("ПРИВЕТ", "https://a.test/"),
+                ("Привет", "https://a.test/"),
+                ("ärger", "https://b.test/"),
+                ("ÄRGER", "https://b.test/"),
+                ("büro", "https://b.test/"),
+                ("日本語", "https://c.test/"),
+            ] {
+                let hits = s.list_visits(10, None, query).await.unwrap();
+                let urls: Vec<&str> = hits.iter().map(|r| r.url.as_str()).collect();
+                assert_eq!(urls, [want], "query {query:?}");
+            }
+            // The command bar's title match, and a match older than a page of rows.
+            let hits = s.query_history("ПРИВЕТ", 1_000, 5).await.unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].url, "https://a.test/");
+            for n in 0..(SCAN_CHUNK as i64 * 2 + 3) {
+                s.record_visit(
+                    &format!("https://x.test/{n}"),
+                    "x",
+                    100 + n,
+                    Transition::Link,
+                )
+                .await
+                .unwrap();
+            }
+            let hits = s.list_visits(10, None, "日本").await.unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].url, "https://c.test/");
         });
     }
 
