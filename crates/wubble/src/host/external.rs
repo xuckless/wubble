@@ -33,6 +33,18 @@ impl Host {
     /// The page in `tab` went to a link another app handles. `gesture` is CEF's word on a user
     /// gesture, when it gave one; without it the link is treated as made without one.
     pub(super) fn external_link(&mut self, tab: TabId, url: String, gesture: Option<bool>) {
+        if self.agent_drives(tab) {
+            if let Some((session, _)) = self.agent_grant_of(tab) {
+                self.agent_log(
+                    &session,
+                    "external_link",
+                    Some(url.clone()),
+                    wubble_core::agent::log::Outcome::Refused,
+                );
+            }
+            eprintln!("wubble: agent: {url}: external link refused");
+            return;
+        }
         let page = self.committed.get(&tab).cloned().unwrap_or_default();
         match external::decide(&url, &page, gesture == Some(true), &self.site_permissions) {
             Verdict::Open => self.open_in_app(&url),

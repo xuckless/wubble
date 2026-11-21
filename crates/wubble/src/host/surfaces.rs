@@ -252,6 +252,15 @@ impl Host {
     /// Runs one permission event: remembered decisions are stored, every
     /// answer goes to the engine.
     pub(super) fn apply_permission(&mut self, tab: TabId, event: PermissionEvent) {
+        if self.agent_drives(tab) {
+            if let PermissionEvent::Requested(req) = event
+                && let crate::prompt::Ask::Engine { id, .. } = req.ask
+                && let Some(view) = self.tab_view(tab)
+            {
+                view.answer_permission(id, &[]);
+            }
+            return;
+        }
         let s = self.surfaces.entry(tab).or_default();
         let (next, answers) = prompt::permission(
             std::mem::take(&mut s.permission),
@@ -853,6 +862,22 @@ impl Host {
         frame: String,
         request: ClipboardRequest,
     ) {
+        if self.agent_drives(tab) {
+            match request {
+                ClipboardRequest::Copy(_) | ClipboardRequest::Primary(_) => {}
+                ClipboardRequest::Paste { .. } => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.answer_clipboard(&frame, "", None);
+                    }
+                }
+                ClipboardRequest::Read(id) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.answer_clipboard(&frame, "", Some(id));
+                    }
+                }
+            }
+            return;
+        }
         let load = |host: &mut Self, buffer| {
             host.clipboard
                 .load(window.window(), buffer)
