@@ -214,10 +214,37 @@ impl Pattern {
             // pages of `d` and its subdomains: also a cookie of a subdomain of `d`
             Host::Domain(d) => under(&host, d) || (domain_cookie && under(d, &host)),
         };
-        // a page under the cookie's path: the path itself, or the pattern's literal start
-        let path = if path.is_empty() { "/" } else { path };
+        host_ok && self.sends_path(if path.is_empty() { "/" } else { path })
+    }
+
+    /// Whether some page of the pattern path-matches a cookie path `c` (RFC 6265 5.1.4: the
+    /// page's path is `c`, or starts with `c` where `c` ends in `/` or the next character is
+    /// `/`). Pages of the pattern start with its literal part (before any `*`); with a `*` they
+    /// may go on.
+    fn sends_path(&self, c: &str) -> bool {
         let literal = self.path.split('*').next().unwrap_or("");
-        host_ok && (glob(&self.path, path) || literal.starts_with(path))
+        let open = self.path.contains('*');
+        // a page under `c` itself (`c`, or `c/...`, when the pattern allows it)
+        if glob(&self.path, c) || glob(&self.path, &format!("{}/", c.trim_end_matches('/'))) {
+            return true;
+        }
+        // `c` above every page of the pattern: a path-prefix of its literal start
+        literal.starts_with(c)
+            && (c.ends_with('/')
+                || literal.as_bytes().get(c.len()) == Some(&b'/')
+                || (literal.len() == c.len() && open))
+    }
+
+    /// Whether the pattern names a site sign-ins can be shared for: an IP address, or a host
+    /// with a registrable domain (not a public suffix such as `com`, `co.uk` or `github.io`,
+    /// nor a single label): sharing `*.co.uk` would carry every cookie under it.
+    pub fn names_a_site(&self) -> bool {
+        let host = match &self.host {
+            Host::Any => return false,
+            Host::Exact(h) | Host::Domain(h) => h,
+        };
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        bare.parse::<std::net::IpAddr>().is_ok() || psl::domain_str(bare).is_some()
     }
 
     /// The pattern as data for the page kit's `matches` (`kit.js`): `s` the scheme (`web` for
@@ -453,10 +480,45 @@ mod tests {
         assert!(docs.sends_cookie("a.test", "/docs", false));
         assert!(docs.sends_cookie("a.test", "/docs/x", false));
         assert!(!docs.sends_cookie("a.test", "/admin", false));
+        // RFC 6265 5.1.4: `/d` is not a path-prefix of `/docs/...` (no `/` after it)
+        assert!(!docs.sends_cookie("a.test", "/d", false));
+        assert!(!docs.sends_cookie("a.test", "/doc", false));
+        assert!(docs.sends_cookie("a.test", "/docs/", false));
+        let exact_path = p("https://a.test/docs");
+        assert!(exact_path.sends_cookie("a.test", "/docs", false));
+        assert!(!exact_path.sends_cookie("a.test", "/do", false));
+        assert!(!exact_path.sends_cookie("a.test", "/docs/x", false));
         // any host is no site; an empty domain is nothing
         assert!(!p("*://*/*").sends_cookie("a.test", "/", false));
         assert!(!bare.sends_cookie("", "/", false));
         assert!(!bare.sends_cookie(".", "/", false));
+    }
+
+    #[test]
+    fn only_a_pattern_of_a_registrable_site_names_one() {
+        let p = |s: &str| Pattern::parse(s).unwrap();
+        for site in [
+            "github.com",
+            "*.github.com",
+            "a.github.io",
+            "example.co.uk",
+            "127.0.0.1",
+            "https://accounts.google.com/*",
+            "signin.localhost",
+        ] {
+            assert!(p(site).names_a_site(), "{site}");
+        }
+        for suffix in [
+            "com",
+            "*.co.uk",
+            "co.uk",
+            "github.io",
+            "*.github.io",
+            "localhost",
+            "*://*/*",
+        ] {
+            assert!(!p(suffix).names_a_site(), "{suffix}");
+        }
     }
 
     #[test]
