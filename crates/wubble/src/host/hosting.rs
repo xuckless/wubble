@@ -20,8 +20,9 @@ pub struct McpPlace {
     /// This browser's binary (the relay's command).
     pub exe: PathBuf,
     /// Where the agent apps' files are looked for: the home directory, or a scratch one in a
-    /// smoke's profile (a check never writes the owner's apps).
-    pub home: PathBuf,
+    /// smoke's profile (a check never writes the owner's apps); `None` when it could not be
+    /// found: then nothing is read or written.
+    pub home: Option<PathBuf>,
 }
 
 /// The hosting state and what runs it.

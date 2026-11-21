@@ -1774,8 +1774,8 @@ fn run(
             default_profile,
             exe: std::env::current_exe().unwrap_or_default(),
             home: match mode {
-                Mode::Browse { .. } => std::env::home_dir().unwrap_or_default(),
-                _ => profile.join("agent-apps-home"),
+                Mode::Browse { .. } => std::env::home_dir(),
+                _ => Some(profile.join("agent-apps-home")),
             },
         })
     });

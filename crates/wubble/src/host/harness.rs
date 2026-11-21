@@ -19,27 +19,118 @@ fn exists(p: &Path) -> bool {
     p.exists()
 }
 
-/// `text` written to `file`: a backup of what was there first (once), then the new text in
-/// whole, through a temporary file beside it.
-fn write_file(file: &Path, before: Option<&str>, text: &str) -> std::io::Result<()> {
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
+/// Why a write did not happen.
+#[derive(Debug)]
+enum WriteError {
+    /// The file changed between wubble's read and its write: nothing was written.
+    Changed,
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for WriteError {
+    fn from(e: std::io::Error) -> Self {
+        WriteError::Io(e)
     }
-    let backup = harness::backup_of(file);
-    if let Some(before) = before
-        && !backup.exists()
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteError::Changed => f.write_str("the file changed while wubble wrote it"),
+            WriteError::Io(e) => e.fmt(f),
+        }
+    }
+}
+
+/// A new file created with exactly `mode` (never wider, not even briefly), or failing.
+fn create_with_mode(path: &Path, mode: u32) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
-        std::fs::write(&backup, before)?;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(mode);
+        let file = options.open(path)?;
+        // the umask may have narrowed it: exactly the original's
+        if let Err(e) = file.set_permissions(std::fs::Permissions::from_mode(mode)) {
+            let _ = std::fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(file)
     }
-    let mut tmp = file.as_os_str().to_owned();
-    tmp.push(".wubble-tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, text)?;
-    // keep the file's mode (a config can be private)
-    if let Ok(meta) = std::fs::metadata(file) {
-        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        options.open(path)
     }
-    std::fs::rename(&tmp, file)
+}
+
+/// `text` written to `file` in whole, `before` being what wubble read (`None`: no file). A
+/// symlinked file is written at its target, the link kept; the new file and the backup have the
+/// original's mode (0600 for a new one) from their creation; `backup` (the text holds no entry of
+/// wubble's yet) saves `before` beside it once, never over an older backup; the new text is
+/// synced before it replaces the file, and nothing is written if the file changed since it was
+/// read.
+fn write_file(
+    file: &Path,
+    before: Option<&str>,
+    backup: bool,
+    text: &str,
+) -> Result<(), WriteError> {
+    use std::io::Write;
+    let target = match std::fs::symlink_metadata(file) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(file)?,
+        _ => file.to_owned(),
+    };
+    let dir = target
+        .parent()
+        .ok_or_else(|| std::io::Error::other("a file with no directory"))?;
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&target).map_or(0o600, |m| m.permissions().mode() & 0o7777)
+    };
+    #[cfg(not(unix))]
+    let mode = 0o600;
+    if let Some(before) = before
+        && backup
+    {
+        let path = harness::backup_of(&target);
+        match create_with_mode(&path, mode) {
+            Ok(mut f) => {
+                f.write_all(before.as_bytes())?;
+                f.sync_all()?;
+            }
+            // an older backup is the pre-wubble state: kept
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.wubble-tmp-{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let written = (|| -> Result<(), WriteError> {
+        let mut f = create_with_mode(&tmp, mode)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        let now = match read(&target)? {
+            Found::Missing => None,
+            Found::Text(t) => Some(t),
+        };
+        if now.as_deref() != before {
+            return Err(WriteError::Changed);
+        }
+        std::fs::rename(&tmp, &target)?;
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// What one app's file says now.
@@ -57,8 +148,14 @@ fn read(file: &Path) -> std::io::Result<Found> {
 }
 
 impl Host {
+    /// The home directory the apps' files are under: none (nothing is read or written) when it
+    /// could not be resolved to an absolute path.
     fn harness_home(&self) -> Option<PathBuf> {
-        self.hosting.place.as_ref().map(|p| p.home.clone())
+        self.hosting
+            .place
+            .as_ref()
+            .and_then(|p| p.home.clone())
+            .filter(|h| h.is_absolute())
     }
 
     fn stored_list(&self, def: &defs::SettingDef) -> Vec<String> {
@@ -121,14 +218,32 @@ impl Host {
     }
 
     fn harness_plan_run(&mut self, h: &'static Harness, moment: Moment) -> Result<Plan, String> {
-        let home = self.harness_home().ok_or("no home directory")?;
-        let file = h.file(Os::current(), &home, &exists).ok_or("no file")?;
-        let before = match read(&file).map_err(|e| e.to_string())? {
+        // a file that changed under wubble is read again once
+        match self.harness_plan_try(h, moment) {
+            Err(WriteError::Changed) => self.harness_plan_try(h, moment),
+            other => other,
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    fn harness_plan_try(
+        &mut self,
+        h: &'static Harness,
+        moment: Moment,
+    ) -> Result<Plan, WriteError> {
+        let fail = |e: String| WriteError::Io(std::io::Error::other(e));
+        let home = self
+            .harness_home()
+            .ok_or_else(|| fail("no home directory".into()))?;
+        let file = h
+            .file(Os::current(), &home, &exists)
+            .ok_or_else(|| fail("no file".into()))?;
+        let before = match read(&file)? {
             Found::Missing => None,
             Found::Text(t) => Some(t),
         };
         let text = before.as_deref().unwrap_or("");
-        let existing = h.existing(text).map_err(|e| e.to_string())?;
+        let existing = h.existing(text).map_err(|e| fail(e.to_string()))?;
         let mut records = self.records();
         let wanted = h.entry(&self.mcp_command());
         let plan = harness::plan(moment, existing.as_ref(), records.get(h.id), &wanted);
@@ -139,9 +254,10 @@ impl Host {
             Plan::Adopt | Plan::NotManaged | Plan::Absent => None,
         };
         if let Some(after) = after {
-            let after = after.map_err(|e| e.to_string())?;
+            let after = after.map_err(|e| fail(e.to_string()))?;
             if after != text {
-                write_file(&file, before.as_deref(), &after).map_err(|e| e.to_string())?;
+                // a backup only of a state without wubble's entry
+                write_file(&file, before.as_deref(), existing.is_none(), &after)?;
             }
         }
         if plan.owned() {
@@ -325,5 +441,67 @@ impl Host {
         crate::bind::sync(window.get_settings_agent_apps(), apps, |m| {
             window.set_settings_agent_apps(m)
         });
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("wubble-harness-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn mode(p: &Path) -> u32 {
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn a_link_is_kept_and_its_target_written_with_its_mode() {
+        let dir = scratch("link");
+        let real = dir.join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_file(&link, Some("{}"), true, "{\"a\": 1}").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"a\": 1}");
+        assert_eq!(mode(&real), 0o600);
+        let backup = harness::backup_of(&real);
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{}");
+        assert_eq!(mode(&backup), 0o600);
+        // a later write keeps the first backup
+        write_file(&link, Some("{\"a\": 1}"), true, "{\"a\": 2}").unwrap();
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "{}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_changed_since_it_was_read_is_not_written() {
+        let dir = scratch("changed");
+        let file = dir.join("c.json");
+        std::fs::write(&file, "{\"theirs\": 1}").unwrap();
+        let r = write_file(&file, Some("{}"), false, "{\"ours\": 1}");
+        assert!(matches!(r, Err(WriteError::Changed)));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"theirs\": 1}");
+        // and no temporary file is left
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        // a new file: 0600, no backup
+        let new = dir.join("n.json");
+        write_file(&new, None, true, "{}").unwrap();
+        assert_eq!(mode(&new), 0o600);
+        assert!(!harness::backup_of(&new).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

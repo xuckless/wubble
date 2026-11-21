@@ -3399,7 +3399,7 @@ impl Host {
             .hosting
             .place
             .as_ref()
-            .map(|p| p.home.clone())
+            .and_then(|p| p.home.clone())
             .ok_or("no MCP place")?;
         let io = |e: std::io::Error| e.to_string();
         std::fs::create_dir_all(home.join(".codex")).map_err(io)?;
@@ -3484,7 +3484,7 @@ impl Host {
             return Err(format!("left behind: {socket:?} {manifest:?}"));
         }
         // the agent apps: wubble's entries out, the rest of each file as it was
-        if let Some(home) = self.hosting.place.as_ref().map(|p| p.home.clone()) {
+        if let Some(home) = self.hosting.place.as_ref().and_then(|p| p.home.clone()) {
             let opencode = std::fs::read_to_string(home.join(".config/opencode/opencode.jsonc"))
                 .unwrap_or_default();
             let codex =
