@@ -749,10 +749,7 @@ mod tests {
         assert_eq!(pick(None), Some(bundled.clone()));
         std::fs::remove_file(&bundled).unwrap();
         assert_eq!(pick(None), Some(onpath));
-        assert_eq!(
-            pick_ffmpeg(None, Some(&bin), &[]).is_some_and(|p| p.starts_with(&bin)),
-            false
-        );
+        assert!(!pick_ffmpeg(None, Some(&bin), &[]).is_some_and(|p| p.starts_with(&bin)));
         let _ = std::fs::remove_dir_all(d);
     }
 

@@ -1407,16 +1407,17 @@ impl Host {
                 } else {
                     vec![]
                 };
-                // One MPEG-TS (HLS) becomes an MP4 when an ffmpeg is there; it keeps its `.ts`
-                // name if the conversion fails.
-                let remux = parts.len() == 1
-                    && container == Container::Ts
-                    && wubble_engine::save::find_ffmpeg().is_some();
-                let (output, container, fallback) = if remux {
+                // MPEG-TS (HLS), one track or a pair, becomes an MP4 when an ffmpeg is there (a
+                // `.ts` plays almost nowhere); one that cannot be converted keeps its `.ts` name.
+                let to_mp4 =
+                    container == Container::Ts && wubble_engine::save::find_ffmpeg().is_some();
+                let remux = to_mp4 && parts.len() == 1;
+                let (output, container, fallback) = if to_mp4 {
                     let mp4 = self
                         .media_path(&name::media_file_name(&title, &note, Container::Mp4))
                         .unwrap_or_else(|_| output.with_extension("mp4"));
-                    (mp4, Container::Mp4, vec![output])
+                    let fallback = if remux { vec![output] } else { fallback };
+                    (mp4, Container::Mp4, fallback)
                 } else {
                     (output, container, fallback)
                 };
