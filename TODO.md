@@ -193,6 +193,7 @@ Open, to build or check:
 - [ ] One audit: walk every gallery surface against the three effects
 
 ## Shelved ideas
+- [ ] Read aloud with an on-device voice (tiny-voca or the OS voice); a voice, not a screen reader ([docs/research/tts.md](docs/research/tts.md))
 - [ ] OS password managers and passkey keychains, as a passthrough in a dedicated build after extensions ([docs/research/apple-passwords.md](docs/research/apple-passwords.md))
 
 ## M6: Own engine (ungoogled Chromium + CEF)
