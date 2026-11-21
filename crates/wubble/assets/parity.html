@@ -66,7 +66,7 @@ input, textarea, [contenteditable] { font: 16px monospace; }
 <script>
 const $ = (id) => document.getElementById(id);
 // What the page saw, for the smoke's checks.
-const seen = { keys: [], drops: [], files: [], custom: [], effect: '', dragstart: 0, grab: false, neutral: 0 };
+const seen = { keys: [], drops: [], files: [], custom: [], effect: '', dragstart: 0, grab: false, neutral: 0, space: [], spaceRepeat: [], grabSpace: false };
 // The page's pixel ratio at 100 %: browser zoom scales it.
 const dpr = devicePixelRatio;
 const parity = {
@@ -109,8 +109,11 @@ const parity = {
     const r = document.createRange(); r.setStart(t, from); r.setEnd(t, to);
     getSelection().removeAllRanges(); getSelection().addRange(r);
   },
+  // Space as a video player takes it (YouTube): every keydown, keypress and keyup it gets,
+  // its default action prevented.
+  grabSpace() { seen.grabSpace = true; return true; },
   reset() {
-    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.ownUndo = false; seen.neutral = 0; seen.clip = {}; seen.copied = '';
+    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.ownUndo = false; seen.neutral = 0; seen.clip = {}; seen.copied = ''; seen.space = []; seen.spaceRepeat = []; seen.grabSpace = false;
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
     scrollTo(0, 0);
@@ -130,6 +133,16 @@ addEventListener('keydown', (e) => {
   // A page with its own undo (a drawing app's) when asked to: Mod+Z is the page's.
   if (seen.ownUndo && (e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); seen.keys.push('undone'); }
 });
+// What a player sees of Space (`parity.grabSpace`): `type key code` per event, the
+// keydowns' `repeat`.
+for (const type of ['keydown', 'keypress', 'keyup']) {
+  addEventListener(type, (e) => {
+    if (!seen.grabSpace || e.code !== 'Space') return;
+    e.preventDefault();
+    seen.space.push(`${type.slice(3)} ${JSON.stringify(e.key)} ${e.code}`);
+    if (type === 'keydown') seen.spaceRepeat.push(e.repeat);
+  });
+}
 $('drag').addEventListener('dragstart', (e) => {
   seen.dragstart++;
   e.dataTransfer.setData('text/plain', 'payload');

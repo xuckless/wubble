@@ -341,6 +341,12 @@ impl KeyId {
 /// cefclient GTK: Enter types `\r`, Ctrl types the control character, Alt
 /// marks a system key. Command/Super chords type nothing.
 pub fn key_events(key: &KeyInput) -> Vec<CefKey> {
+    key_events_with(key, Current::named_key_character)
+}
+
+/// [`key_events`] with a platform's named-key characters (`Platform::named_key_character`),
+/// so one OS's translation is testable on another.
+fn key_events_with(key: &KeyInput, named_key_character: fn(i32) -> Option<u16>) -> Vec<CefKey> {
     let windows_key_code = without_location(vkey(key));
     let mods = &key.modifiers.keys;
     let modifiers = cef_modifiers(&key.modifiers)
@@ -351,7 +357,7 @@ pub fn key_events(key: &KeyInput) -> Vec<CefKey> {
             _ => 0,
         }
         | if key.repeat { flag::REPEAT } else { 0 };
-    let named = Current::named_key_character(windows_key_code);
+    let named = named_key_character(windows_key_code);
     let unmodified = match &key.unmodified {
         _ if windows_key_code == vk::RETURN => Some('\r' as u16),
         Key::Character(text) => text.encode_utf16().next(),
@@ -411,7 +417,11 @@ fn native_key_code(scancode: Option<u32>) -> i32 {
 /// `Platform::named_key_character`.
 /// CEF's macOS key events are NSEvents built from `character` / `unmodified_character`
 /// (`key_event_util_mac.mm` `GetLegacyWebKeyEvent`), and both zero makes a flags-changed
-/// event: Backspace and the arrows then acted twice (a key-up read as a second press).
+/// event: Backspace and the arrows then acted twice (a key-up read as a second press), and
+/// Space's key-up (winit names Space, so its release carries no text) reached the page as a
+/// second keydown and never as a keyup: YouTube's Space play/pause and hold-for-2x never fired.
+/// The keys winit's macOS `code_to_key` names (so no release text) are here, but for the
+/// modifiers (flags-changed is right for them), Num Lock (keypad Clear) and the volume keys.
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
 pub(crate) fn appkit_character(windows_key_code: i32) -> Option<u16> {
     let f = |n: i32| windows_key_code == vk::F1 + n;
@@ -419,6 +429,7 @@ pub(crate) fn appkit_character(windows_key_code: i32) -> Option<u16> {
         vk::BACK => 0x7F,
         vk::TAB => 0x09,
         vk::ESCAPE => 0x1B,
+        vk::SPACE => 0x20,
         vk::UP => 0xF700,
         vk::DOWN => 0xF701,
         vk::LEFT => 0xF702,
@@ -1104,6 +1115,94 @@ mod tests {
         let up = key_events(&up);
         let want = Current::named_key_character(vk::BACK).unwrap_or(0);
         assert_eq!(up[0].unmodified_character, want);
+    }
+
+    /// Whether CEF's macOS `TranslateWebKeyEvent` builds a flags-changed NSEvent from this
+    /// event (`browser_platform_delegate_native_mac.mm`): both characters zero. Chromium's
+    /// `IsKeyUpEvent` reads a flags-changed non-modifier key as a press.
+    fn mac_flags_changed(e: &CefKey) -> bool {
+        e.character == 0 && e.unmodified_character == 0
+    }
+
+    /// Space as winit reports it on macOS and Linux: a named key, its press typing " ".
+    fn space(pressed: bool, repeat: bool) -> KeyInput {
+        KeyInput {
+            pressed,
+            repeat,
+            text: pressed.then(|| " ".into()),
+            ..key(KeyCode::Space, Key::Named(NamedKey::Space), None)
+        }
+    }
+
+    /// A Space tap on macOS: RAWKEYDOWN and CHAR " ", then a KEYUP the page sees as a keyup
+    /// (YouTube toggles play on it), not a flags-changed event read as a second keydown.
+    #[test]
+    fn mac_space_tap_is_keydown_then_keyup() {
+        use KeyKind::*;
+        let down = key_events_with(&space(true, false), appkit_character);
+        let up = key_events_with(&space(false, false), appkit_character);
+        assert_eq!(
+            kinds(&down),
+            [(RawKeyDown, vk::SPACE, 0x20), (Char, vk::SPACE, 0x20)]
+        );
+        assert_eq!(kinds(&up), [(KeyUp, vk::SPACE, 0x20)]);
+        assert!(!down.iter().chain(&up).any(mac_flags_changed));
+    }
+
+    /// Space held (YouTube's hold-for-2x): repeats carry the repeat flag, the release is a
+    /// KEYUP; on both platforms' tables.
+    #[test]
+    fn space_hold_repeats_then_keyup() {
+        use KeyKind::*;
+        let tables: [fn(i32) -> Option<u16>; 2] = [appkit_character, |_| None];
+        for table in tables {
+            let first = key_events_with(&space(true, false), table);
+            let again = key_events_with(&space(true, true), table);
+            let up = key_events_with(&space(false, false), table);
+            assert_eq!(first[0].modifiers & flag::REPEAT, 0);
+            assert!(again.iter().all(|e| e.modifiers & flag::REPEAT != 0));
+            assert_eq!(kinds(&again)[0], (RawKeyDown, vk::SPACE, 0x20));
+            assert_eq!(up.len(), 1);
+            assert_eq!((up[0].kind, up[0].windows_key_code), (KeyUp, vk::SPACE));
+        }
+    }
+
+    /// No key winit's macOS `code_to_key` names is released as a flags-changed event, but for
+    /// the modifiers (for which it is right), the keypad's Clear and the volume keys.
+    #[test]
+    fn mac_named_key_releases_are_key_ups() {
+        use NamedKey as N;
+        let named = [
+            (KeyCode::Enter, N::Enter),
+            (KeyCode::Tab, N::Tab),
+            (KeyCode::Space, N::Space),
+            (KeyCode::Backspace, N::Backspace),
+            (KeyCode::Escape, N::Escape),
+            (KeyCode::Insert, N::Insert),
+            (KeyCode::Home, N::Home),
+            (KeyCode::PageUp, N::PageUp),
+            (KeyCode::Delete, N::Delete),
+            (KeyCode::End, N::End),
+            (KeyCode::PageDown, N::PageDown),
+            (KeyCode::ArrowLeft, N::ArrowLeft),
+            (KeyCode::ArrowRight, N::ArrowRight),
+            (KeyCode::ArrowDown, N::ArrowDown),
+            (KeyCode::ArrowUp, N::ArrowUp),
+            (KeyCode::F1, N::F1),
+            (KeyCode::F12, N::F12),
+            (KeyCode::F20, N::F20),
+        ];
+        for (code, n) in named {
+            let mut up = key(code, Key::Named(n), None);
+            up.pressed = false;
+            let up = key_events_with(&up, appkit_character);
+            assert!(!mac_flags_changed(&up[0]), "{code:?}");
+        }
+        let mut shift = key(KeyCode::ShiftLeft, Key::Named(N::Shift), None);
+        shift.pressed = false;
+        assert!(mac_flags_changed(
+            &key_events_with(&shift, appkit_character)[0]
+        ));
     }
 
     #[test]

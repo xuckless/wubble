@@ -126,6 +126,7 @@ Open, to build or check:
 - [ ] Narrow Settings (content width 759 px or less): the slider and select rows do not wrap to full width as the design's narrow block does (`settings.css`:120-130); repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
 - [ ] The built-in pages' list rows take Tab and Enter but not Up/Down, and a focused row is not scrolled into view
 - [ ] `FocusKeys` with `native-button: false` fires again on key repeat (a held Enter or Space)
+- [ ] macOS: a held key's repeats reach the page with `repeat: false` (CEF 156 builds its NSEvent with `isARepeat:NO`): a one-line CEF patch, then drop parity's `A.space-repeat` Mac gap; check YouTube's Space tap and hold-for-2x on the Mac
 - [ ] The settings search no longer finds "Your own filter lists" (the setting moved to `Section::Hidden`; the Filter lists section is not searchable)
 - [ ] A Space button opened by keyboard does not give the Spaces menu the keyboard focus
 - [ ] The popovers' scroll thumbs' touch area covers the rows' right edge

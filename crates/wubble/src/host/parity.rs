@@ -102,6 +102,7 @@ fn slint_text(key: &KeyInput) -> Option<slint::SharedString> {
         _ => return None,
     };
     let s = match named {
+        NamedKey::Space => S::Space,
         NamedKey::Escape => S::Escape,
         NamedKey::Enter => S::Return,
         NamedKey::Tab => S::Tab,
@@ -411,6 +412,13 @@ impl Host {
                     .filter_map(parity::key_inputs)
                     .flatten()
                     .collect();
+                self.smoke_keys(keys);
+            }
+            Step::Hold(spec, repeats) => {
+                let keys = parity::chords(spec)
+                    .and_then(|c| c.into_iter().next())
+                    .and_then(|c| parity::held_inputs(c, repeats))
+                    .unwrap_or_default();
                 self.smoke_keys(keys);
             }
             Step::Type(text) => {
