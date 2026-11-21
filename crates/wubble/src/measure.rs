@@ -981,6 +981,9 @@ struct Session {
     recorder: Recorder,
     /// The first frame; recording starts at the first tick [`Scenario::warmup`] later.
     first_frame: Option<Instant>,
+    /// The page measured is drawn by the shell (the start page), so no CEF frame comes: the
+    /// first Slint render counts as the first frame.
+    shell_page: bool,
     /// When recording started and whether it has ended: every count and the CPU times cover
     /// this one window, which the rates divide by.
     started: Option<Instant>,
@@ -1014,6 +1017,7 @@ impl Session {
             warmup: warmup.unwrap_or_else(|| scenario.warmup()),
             recorder: Recorder::default(),
             first_frame: None,
+            shell_page: false,
             started: None,
             ended: false,
             ticks: 0,
@@ -1139,6 +1143,12 @@ pub fn begin(scenario: Scenario, seconds: u32, warmup: Option<Duration>) {
     STARTUP.store(scenario == Scenario::Startup, Ordering::Relaxed);
 }
 
+/// The page measured is one the shell draws (`--measure-page wubble://start`): no CEF frame
+/// starts the session, the first render does.
+pub fn shell_page() {
+    with_session(|s| s.shell_page = true);
+}
+
 /// Counts `count` while a session records (a thread-local lookup and nothing else otherwise).
 pub fn count(count: Count) {
     with_session(|s| {
@@ -1179,6 +1189,9 @@ pub fn rendered() {
     count(Count::SlintRender);
     with_session(|s| {
         let now = Instant::now();
+        if s.shell_page {
+            s.frame_arrived(now);
+        }
         if s.recording(now) {
             s.recorder.record(Event::Rendered(now));
         }

@@ -317,6 +317,13 @@ fn main() -> ExitCode {
                 m.seconds.get(),
                 m.warmup.map(|w| Duration::from_secs(w.get().into())),
             );
+            // the start page is the scene's: no CEF view paints it
+            if m.page.as_deref().is_some_and(|p| {
+                wubble_core::pages::InternalPage::from_url(p)
+                    == Some(wubble_core::pages::InternalPage::Start)
+            }) {
+                measure::shell_page();
+            }
             let load = (m.scenario == measure::Scenario::Load)
                 .then(|| load_server::LoadServer::start(0, false).map(|s| (s, m.load.variant)))
                 .transpose();

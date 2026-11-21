@@ -30,19 +30,22 @@ base="http://127.0.0.1:$port"
 tree() { local out=$1 k; for k in $(pgrep -P "$1"); do out="$out $(tree "$k")"; done; echo "$out"; }
 # CPU ticks and context switches of every thread of the tree
 sample() {
-  local t=0 c=0 p f
+  local t=0 c=0 p f x
   for p in $(tree "$1"); do
     for f in /proc/$p/task/*; do
       set -- $(sed 's/.*) //' "$f/stat" 2>/dev/null); t=$((t + ${12:-0} + ${13:-0}))
-      c=$((c + $(awk '/ctxt_switches/ {s += $2} END {print s + 0}' "$f/status" 2>/dev/null)))
+      x=$(awk '/ctxt_switches/ {s += $2} END {print s + 0}' "$f/status" 2>/dev/null); c=$((c + ${x:-0}))
     done
   done
   echo "$t $c"
 }
 hz=$(getconf CLK_TCK)
+has_page=$("$bin" --help 2>/dev/null | grep -- --measure-page)
 printf "%-10s %6s %8s %7s %8s %8s %7s %s\n" scenario cpu_s/s wakeups/s cef/s slint/s scene/s pump/s gpu
 run() {
   local name=$1; shift
+  # builds before 2026-11-21 have no --measure-page
+  case "$*" in *--measure-page*) [ -n "$has_page" ] || { printf "%-10s (this build has no --measure-page)\n" "$name"; return; } ;; esac
   "$bin" "$@" --seconds $((secs + 12)) >"$work/$name.out" 2>&1 &
   local w=$!
   sleep 9
