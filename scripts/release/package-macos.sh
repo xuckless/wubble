@@ -83,6 +83,7 @@ res=$app/Contents/Resources
 cp "$repo/dist/ffmpeg/COPYING.LGPLv2.1" "$res/COPYING.LGPLv2.1"
 printf '{"version":"%s","platform":"%s","commit":"%s"}\n' "$version" "$platform" "$commit" >"$res/release.json"
 cp LICENSE THIRD_PARTY_NOTICES.md "$res/"
+cp crates/wubble-engine/assets/dictionaries/README_en_US.txt "$res/DICTIONARY_NOTICE_en_US.txt"
 if [ -f "$cef_dir/CREDITS.html" ]; then cp "$cef_dir/CREDITS.html" "$res/CREDITS.html"; fi
 cef_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$cef_dir/archive.json")
 cat >"$res/SOURCE.md" <<EOF

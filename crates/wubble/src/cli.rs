@@ -145,6 +145,7 @@ enum SmokeArg {
     Boot,
     Update,
     Quit,
+    Spell,
     Frames(NonZeroU32),
     Nav,
     Tabs,
@@ -193,6 +194,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "boot" => Ok(SmokeArg::Boot),
         None if value == "update" => Ok(SmokeArg::Update),
         None if value == "quit" => Ok(SmokeArg::Quit),
+        None if value == "spell" => Ok(SmokeArg::Spell),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
@@ -237,7 +239,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
+            "expected `boot`, `update`, `quit`, `spell`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `media=probe`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none`, `data` or `session-phase=1|2`"
@@ -256,6 +258,9 @@ pub enum Smoke {
     /// Inspect on a selection, DevTools windows shown and counted, one more
     /// asked for just before the quit; the quit is clean (`quit_smoke.rs`).
     Quit,
+    /// A misspelt word in a textarea on loopback is marked, with suggestions, from the bundled
+    /// dictionary and no request off the machine (`spell_smoke.rs`).
+    Spell,
     /// Show `frames` accelerated frames of `url` (the bundled page if `None`).
     Frames {
         frames: NonZeroU32,
@@ -517,6 +522,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
             (Some(SmokeArg::Quit), None, None) => Smoke::Quit,
+            (Some(SmokeArg::Spell), None, None) => Smoke::Spell,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
@@ -887,6 +893,10 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "quit"]).ok(),
             Some(Command::Smoke(Smoke::Quit))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "spell"]).ok(),
+            Some(Command::Smoke(Smoke::Spell))
         );
         assert_eq!(
             parse(["wubble", "--smoke", "update"]).ok(),

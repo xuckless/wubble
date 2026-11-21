@@ -30,6 +30,7 @@ mod media_smoke;
 mod memory;
 mod menu;
 mod nav_smoke;
+mod net_audit;
 mod orbs;
 mod os_motion;
 mod os_scope;
@@ -57,6 +58,7 @@ mod shell;
 mod shot;
 mod shot_io;
 mod slint_backend;
+mod spell_smoke;
 mod split_smoke;
 mod sponsor_net;
 mod start_smoke;
@@ -127,6 +129,8 @@ pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 /// `--smoke pinch`'s fixture, served on loopback (`autofill_smoke::serve`).
 pub const PINCH_PAGE: &str = include_str!("../assets/pinch.html");
+/// `--smoke spell`'s fixture, served on loopback.
+pub const SPELL_PAGE: &str = include_str!("../assets/spell.html");
 pub const DND_PAGE: &str = include_str!("../assets/dnd.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
@@ -208,6 +212,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("smoke: quit FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Spell) => match with_smoke_dir(spell_smoke::run) {
+            Ok(line) => {
+                println!("smoke: spell ok {line}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: spell FAILED: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -401,6 +415,7 @@ fn main() -> ExitCode {
                 Smoke::Boot
                 | Smoke::Update
                 | Smoke::Quit
+                | Smoke::Spell
                 | Smoke::Codecs { .. }
                 | Smoke::Extensions { .. }
                 | Smoke::Session
@@ -742,6 +757,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                 .env("PATH", std::env::join_paths(dirs)?)
                 // no session bus: Show in folder would otherwise reach the person's file manager
                 .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+                // the quit run's net log is audited below (a killed run leaves none to read)
+                .env(
+                    "WUBBLE_PROBE_SWITCHES",
+                    net_audit::probe_switch(&profile.join(data_smoke::NET_LOG)),
+                )
                 .status()?;
             match ending {
                 data_smoke::Ending::Quit if !status.success() => {
@@ -751,6 +771,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(format!("the {word} run was not killed: {status}").into());
                 }
                 _ => {}
+            }
+            if ending == data_smoke::Ending::Quit {
+                let log = std::fs::read_to_string(profile.join(data_smoke::NET_LOG))?;
+                let report = net_audit::audit(&log)?;
+                println!("smoke: data: {}", report.line());
             }
             let shown = std::fs::read_to_string(profile.join(data_smoke::SUMMARY))?;
             let db = Profile {

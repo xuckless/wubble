@@ -24,6 +24,9 @@ const FIRST_CHUNK: usize = 16 * 1024;
 /// The title of `/uni`: Cyrillic and a Latin letter with a diacritic, in capitals as titles are.
 pub const UNI_TITLE: &str = "Привет мир ÄRGER";
 
+/// The net log the quit run writes (`net_audit`), in its profile directory.
+pub const NET_LOG: &str = "net-log.json";
+
 /// The session bus address the runs get: nothing listens there, so a download's Show in folder
 /// (a D-Bus call to the file manager) fails and falls back to the opener's stand-in.
 pub const NO_BUS: &str = "unix:path=/nonexistent/wubble-data-smoke-bus";
@@ -145,6 +148,16 @@ fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         "/page" => html(&mut stream, "", &page("Page One")),
         "/other" => html(&mut stream, "", &page("Page Two")),
         "/uni" => html(&mut stream, "", &page(UNI_TITLE)),
+        // a sign-in form and a textarea: what Chromium's own autofill and spelling services ask
+        // their servers about (`net_audit`)
+        "/form" => html(
+            &mut stream,
+            "",
+            "<!doctype html><meta charset=utf-8><title>Form</title>\
+             <form action=/form method=post><input name=user autocomplete=username>\
+             <input name=pass type=password autocomplete=current-password></form>\
+             <textarea spellcheck=true>teh wrod</textarea>",
+        ),
         // a persistent cookie for the whole site
         "/set" => html(
             &mut stream,

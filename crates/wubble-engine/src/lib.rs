@@ -9,6 +9,7 @@ pub mod app;
 pub mod cdp;
 pub mod cosmetic;
 pub mod devtools;
+pub mod dictionary;
 pub mod download;
 pub mod drag;
 pub mod ext_api;
