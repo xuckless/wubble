@@ -42,15 +42,26 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    `xcrun notarytool store-credentials`). It signs inside out with
    `scripts/release/macos/entitlements.plist`, notarises and staples the app and the DMG, and
    writes `dist/wubble-<V>-macos-aarch64.tar.xz`, `.dmg` and their `.sha256`.
-4. Make the release with both machines' files:
-   `gh release create v<V> --prerelease --title "wubble <V>" --notes "..." dist/wubble-<V>-*`
-   on one, `gh release upload v<V> dist/wubble-<V>-*` on the other.
-5. Sign: `gh workflow run release-sign.yml -f tag=v<V>` (`.github/workflows/release-sign.yml`).
-   It checks the `.sha256` files, signs every archive and the DMG, writes and signs
-   `latest.json`, uploads them, and copies the manifest into the `updates` release.
-6. Check: `latest.json` and `updates/preview.json` are there; on a clean user account,
-   `curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh`
-   installs it, and an older install shows the update in Settings > Updates.
+4. Sign on this box (the key never leaves it: `~/.config/wubble-release/`), with the key's text and
+   its password in two environment variables:
+   `wubble-release sign --key-env K --password-env P dist/wubble-<V>-<platform>.tar.xz`, then
+   `wubble-release make-manifest --version <V> --base-url https://github.com/xuckless/wubble/releases/download/v<V> --out dist/latest.json dist`
+   and sign `dist/latest.json` the same way.
+5. Test before publishing: a folder shaped like the releases (`v<V>/...`, `updates/preview.json`)
+   and `WUBBLE_RELEASES=file://<folder> sh scripts/release/install.sh` in a throwaway `HOME`: a
+   fresh install, an install over the previous version, a tampered archive refused; then the
+   installed binary's `--smoke boot` and `--smoke page`. Smokes that find elements by id
+   (`mcp`, `settings`, `tabs`, `video`) need a `dist` build with `SLINT_EMIT_DEBUG_INFO=1`.
+6. Publish (the owner's go, every release): push the commit and the tag;
+   `gh release create v<V> --prerelease --verify-tag --title "wubble <V>" --notes-file ... dist/wubble-<V>-* dist/latest.json*`;
+   then copy `latest.json` and its `.minisig` to the rolling `updates` release as `preview.json`
+   (`gh release upload updates ... --clobber`): from then on installs offer the update.
+7. Check: a fresh `install.sh` from GitHub gives `<V>`; an install of the previous version, run
+   once, stages `<V>` (`updates/launch.json`) and starts as it the next time.
+8. macOS, after the tag is pushed: the owner runs `package-macos.sh` on the Mac (step 3); its
+   archive is signed here, added to `latest.json` (`make-manifest` again with both archives in
+   `dist/`), and the manifest, its signature and the Mac files are uploaded; `preview.json` is
+   replaced again. `.github/workflows/release-sign.yml` (signing in CI) is not used.
 
 ## What ships in each bundle
 

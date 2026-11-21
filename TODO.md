@@ -8,7 +8,7 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 ## Status (2026-11-20)
 `main` (bcada3e) builds, lints and passes 2046 tests; every window smoke passes on the invisible test display
 (`scripts/headless.sh`), and an idle window draws nothing. M0 to M5 and the built-ins work on Linux; the first Linux
-preview (`0.1.0-preview.1`, with codecs) is released. The design-fidelity phase ended with the owner's sign-off: what
+previews are released (`0.1.0-preview.2`, 2026-11-20: the MCP server; Linux, with codecs; the macOS build follows from the same tag). The design-fidelity phase ended with the owner's sign-off: what
 reviews raise is fixed as it comes up ("Review findings"). Merged today: the MCP server's basic version (off by
 default) and extensions on our own Chromium (install from a file; `chrome.tabs`, `windows` and actions need the patched
 engine in `~/Dev/wubble-wt/cef-ext`, which the released build does not have). macOS is driven only from the owner's
@@ -163,7 +163,6 @@ Open, to build or check:
 - [~] HDR output: researched and spiked; needs the own build (F16 capture) and a Slint renderer patch
 
 ## M7: Ship
-- [ ] At the next version: `docs/release.md` still describes signing in CI: rewrite its steps for local signing (as done for preview.1)
 - [ ] At the next version: confirm by hand that an installed build's update check reads the live manifest (Settings → Updates → Check now)
 - [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
       usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
