@@ -32,6 +32,7 @@ on the same build; the numbers to beat are in [docs/measurements.md](docs/measur
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
+- [ ] Build the engine with patch 40, then verify the touchpad pinch road (`--smoke pinch` takes it when the marker is there; unit-tested only so far); macOS engine too, and a real trackpad on GNOME and the Mac (the smoke injects through `Host::pinch`)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap

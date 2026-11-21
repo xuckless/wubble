@@ -1,14 +1,17 @@
-//! Touchpad gestures over the window (`wubble_core::gesture`): pinch zooms the visible page in
-//! the zoom keys' steps, a sideways swipe over a page goes back or forward with the edge chip
+//! Touchpad gestures over the window (`wubble_core::gesture`): a pinch magnifies the page under
+//! the pointer like a picture (Blink's visual viewport, `wubble_engine::pinch`; the page zoom
+//! the zoom keys set is left alone), a sideways swipe over a page goes back or forward with the edge chip
 //! (`swipe-chip.slint`) following the fingers, unless the page scrolls sideways with it.
 //! Wayland reports both through `crate::wl`; macOS pinch is winit's `PinchGesture`. Nothing
 //! reports a history swipe elsewhere yet (macOS's would be winit's `PanGesture`), so its half is
 //! unused there.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use wubble_core::gesture::{self, Pinch, PinchInput, Swipe, SwipeEffect, SwipeInput};
+use wubble_core::gesture::{self, PinchInput, Swipe, SwipeEffect, SwipeInput};
 use wubble_core::motion;
 use wubble_core::tab::TabId;
+use wubble_engine::input::Point;
+use wubble_engine::pinch::Gesture;
 use wubble_ui::AppWindow;
 
 use super::Host;
@@ -20,7 +23,8 @@ const CHIP_BAND: f64 = 34.0;
 
 #[derive(Default)]
 pub(super) struct Gestures {
-    pinch: Pinch,
+    /// The page a pinch is over, from its begin to its end.
+    pinch: Option<TabId>,
     swipe: Swipe,
     /// The page a swipe is over, and its root's horizontal scroll at the begin.
     page: Option<(TabId, f64)>,
@@ -34,11 +38,61 @@ fn chip_shift(progress: f64, overshoot: f64) -> f64 {
 
 impl Host {
     pub(super) fn pinch(&mut self, input: PinchInput) {
-        let (next, steps) = self.gestures.pinch.input(input);
-        self.gestures.pinch = next;
-        for step in steps {
-            self.perform(step);
+        match input {
+            PinchInput::Begin => {
+                self.pinch(PinchInput::End);
+                let Some(window) = self.w.window.upgrade() else {
+                    return;
+                };
+                if let Some((tab, at)) = self.pinch_target(&window) {
+                    self.gestures.pinch = Some(tab);
+                    if let Some(view) = self.tab_view(tab) {
+                        view.pinch(Gesture::Begin(at));
+                    }
+                }
+            }
+            PinchInput::Scaled(f) => {
+                if let Some(view) = self.gestures.pinch.and_then(|t| self.tab_view(t)) {
+                    view.pinch(Gesture::Scaled(f));
+                }
+            }
+            PinchInput::End => {
+                if let Some(view) = self.gestures.pinch.take().and_then(|t| self.tab_view(t)) {
+                    view.pinch(Gesture::End);
+                }
+            }
         }
+    }
+
+    /// The page a pinch begun now is over, and the pointer in it (view-relative): the pane
+    /// under the pointer, else the shown page at its middle. None over the shell (the
+    /// sidebar, the shell's own pages, which have no view), over a pane showing its tab's
+    /// snapshot, and over a tab an agent session drives (its coordinates are the agent's).
+    fn pinch_target(&mut self, window: &AppWindow) -> Option<(TabId, Point)> {
+        let (tab, at) = match self.input.pointer {
+            Some(p) => {
+                let tab = self.pane_under(window, (p.x, p.y))?;
+                let (x, y) = self.view_origin(window, tab);
+                (
+                    tab,
+                    Point {
+                        x: p.x - x,
+                        y: p.y - y,
+                    },
+                )
+            }
+            None => {
+                let tab = self.shown()?;
+                let rect = self.pane_rects(window).into_iter().find(|r| r.tab == tab)?;
+                let at = Point {
+                    x: rect.width as f32 / 2.0,
+                    y: window.get_content_height() / 2.0,
+                };
+                (tab, at)
+            }
+        };
+        let page = !self.snapshots.standing_in(tab) && !self.agent_drives(tab);
+        (page && self.tab_view(tab).is_some()).then_some((tab, at))
     }
 
     /// A swipe's input; a begin `at` a window point (a two-finger scroll) counts only over a
@@ -102,7 +156,11 @@ impl Host {
     ) {
         use slint::winit_030::winit::event::TouchPhase as P;
         match phase {
-            P::Started | P::Moved => self.pinch(PinchInput::Scaled(1.0 + delta)),
+            P::Started => {
+                self.pinch(PinchInput::Begin);
+                self.pinch(PinchInput::Scaled(1.0 + delta));
+            }
+            P::Moved => self.pinch(PinchInput::Scaled(1.0 + delta)),
             P::Ended | P::Cancelled => self.pinch(PinchInput::End),
         }
     }

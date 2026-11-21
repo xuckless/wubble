@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>wubble pinch</title>
+<style>
+  body { margin: 0; font: 18px/1.5 sans-serif; background: #fff; color: #222; }
+  #hov { position: absolute; left: 40px; top: 40px; width: 420px; height: 300px;
+         background: #cfe3f7; padding: 12px; box-sizing: border-box; }
+  #hov:hover { background: #f7d9a8; }
+  #bar { position: fixed; right: 0; top: 0; padding: 4px 10px; background: #333; color: #fff; }
+  article { position: absolute; left: 40px; top: 380px; right: 40px; }
+</style>
+</head>
+<body>
+<div id="hov">Hover me. The quick brown fox jumps over the lazy dog: a pinch magnifies this
+  like a picture, and the text stays sharp.</div>
+<div id="bar">fixed</div>
+<article>
+<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut
+labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris
+nisi ut aliquip ex ea commodo consequat.</p>
+<p>Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla
+pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt
+mollit anim id est laborum.</p>
+</article>
+<script>
+  // `--smoke pinch` (pinch_smoke.rs) asks `pinchLook()`; `?prevent` keeps every Ctrl+wheel, as a
+  // map or a design tool that zooms itself does.
+  const seen = { click: 0, dblclick: 0, auxclick: 0, contextmenu: 0, touchstart: 0,
+                 pointerdown: 0, ctrlWheels: 0 };
+  for (const type of Object.keys(seen)) {
+    if (type !== 'ctrlWheels') addEventListener(type, () => { seen[type]++; }, { capture: true, passive: true });
+  }
+  const prevent = location.search.includes('prevent');
+  addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    seen.ctrlWheels++;
+    if (prevent) e.preventDefault();
+  }, { passive: false });
+  window.pinchLook = () => ({
+    scale: visualViewport.scale,
+    width: document.documentElement.clientWidth,
+    dpr: devicePixelRatio,
+    search: location.search,
+    seen,
+    selection: String(getSelection()),
+    hover: document.querySelector('#hov:hover') !== null,
+    active: document.querySelector(':active') !== null,
+    coarse: matchMedia('(pointer: coarse)').matches,
+    anyCoarse: matchMedia('(any-pointer: coarse)').matches,
+    hoverNone: matchMedia('(hover: none)').matches,
+  });
+</script>
+</body>
+</html>

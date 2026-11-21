@@ -149,6 +149,7 @@ enum SmokeArg {
     Nav,
     Tabs,
     Split,
+    Pinch,
     Page,
     Parity,
     Block,
@@ -193,6 +194,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
+        None if value == "pinch" => Ok(SmokeArg::Pinch),
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
@@ -231,7 +233,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
+            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none`, `data` or `session-phase=1|2`"
@@ -264,6 +266,9 @@ pub enum Smoke {
     /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
     /// pixels, then unsplit.
     Split,
+    /// A trackpad pinch through the host's pinch path on a loopback page: Blink's visual
+    /// viewport scale, never the page zoom; a page keeping the Ctrl+wheel; split panes apart.
+    Pinch,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
     /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
@@ -493,6 +498,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
+            (Some(SmokeArg::Pinch), None, None) => Smoke::Pinch,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
