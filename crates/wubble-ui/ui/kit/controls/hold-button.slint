@@ -44,10 +44,13 @@ component HoldLabel inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             spacing: SettingsCss.st-hold-done--gap;
-            Icon {
-                size: Tsx.hold-done-icon;
-                path: Glyph.check;
-                tint: root.ink;
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: Tsx.hold-done-icon;
+                    path: Glyph.check;
+                    tint: root.ink;
+                }
             }
             KitText {
                 role: Role.wb-st-hold;

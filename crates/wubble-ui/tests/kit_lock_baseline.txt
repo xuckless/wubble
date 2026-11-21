@@ -38,7 +38,6 @@ components/sidebar.slint	paint	fill	1
 components/sidebar.slint	token	Radius	1
 kit/chrome/split-view.slint	kit-literal	14px	1
 kit/chrome/split-view.slint	kit-literal	1px	2
-kit/chrome/split-view.slint	kit-literal	28px	2
 kit/chrome/tab-row.slint	kit-literal	22px	4
 kit/chrome/tab-row.slint	kit-literal	2px	1
 kit/derived.slint	kit-literal	0.5px	1

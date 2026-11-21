@@ -99,13 +99,15 @@ export component BDock inherits Rectangle {
     tw := BOverlapTween {
         on: root.shown;
     }
-    OverlapLook {
+    look := OverlapLook {
         e: tw.t;
         entering: root.shown;
         GlassPanel {
             key: root.key;
             over-layer: root.layer;
             present: tw.t > 0;
+            scene-alpha: tw.t;
+            scene-scale: look.zoom;
             tier: GlassTier.thin;
             radius: TouchCss.tp-dock--border-radius;
             over-content: true;
@@ -134,7 +136,7 @@ export component BDockTab inherits Rectangle {
     tw := BOverlapTween {
         on: root.shown;
     }
-    OverlapLook {
+    tab-look := OverlapLook {
         e: tw.t;
         entering: root.shown;
         // in from the page's edge and back out to it (`.tp-sw-x`'s across shift, outward)
@@ -146,6 +148,8 @@ export component BDockTab inherits Rectangle {
             key: root.key;
             over-layer: root.layer;
             present: tw.t > 0;
+            scene-alpha: tw.t;
+            scene-scale: tab-look.zoom;
             tier: GlassTier.thin;
             radius: TouchCss.tp-dock--border-radius / 2;
             over-content: true;
