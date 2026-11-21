@@ -351,6 +351,23 @@ pub(super) struct Agents {
     answer: (i32, &'static str),
     /// DevTools calls whose answers mean nothing (an object group released).
     ignored: Vec<u64>,
+    /// What the sheet knows of the vault for its login pickers (fetched as a sheet asking for
+    /// secrets shows).
+    sheet_vault: SheetVault,
+    /// The values `fill_secret` typed, per session: redacted from every reply it gets.
+    filled: BTreeMap<SessionId, Vec<Secret>>,
+}
+
+/// The vault as the agent sheet's login pickers see it.
+#[derive(Default)]
+enum SheetVault {
+    /// Not asked yet (no sheet asked for secrets).
+    #[default]
+    Unknown,
+    /// Locked, or unusable: the note says which; the sheet offers its Unlock.
+    Closed(String),
+    /// Unlocked: the saved logins (no password), as the vault listed them.
+    Open(Vec<wubble_core::pages::LoginView>),
 }
 
 impl Agents {
@@ -504,6 +521,31 @@ fn capped(text: &str, max: usize) -> String {
     out
 }
 
+/// The text a filled secret is replaced with in a reply.
+const REDACTED: &str = "[secret]";
+
+/// Takes every value `fill_secret` typed for the session out of `result`'s text (a page's
+/// echo of a username, a field's value in a read, a script's return), longest first. Values
+/// under three characters are left: they would blank ordinary text. Pixels are not text: a
+/// screenshot still shows what the page draws.
+fn redact(result: &mut ToolResult, values: &[Secret]) {
+    let mut values: Vec<&str> = values
+        .iter()
+        .map(Secret::expose)
+        .filter(|v| v.chars().count() >= 3)
+        .collect();
+    values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    for content in &mut result.content {
+        if let wubble_mcp::Content::Text(text) = content {
+            for v in &values {
+                if text.contains(v) {
+                    *text = text.replace(v, REDACTED);
+                }
+            }
+        }
+    }
+}
+
 /// What a sheet asks about a session: who asks, the window it asked for, and whether it is a
 /// sheet for more (`request_more`: only what is new, no window choice).
 struct Ask {
@@ -512,8 +554,63 @@ struct Ask {
     more: bool,
 }
 
+/// The owner's Spaces sign-ins may come from (never an agent's): (id, name, container).
+fn source_spaces(model: &wubble_core::model::Model) -> Vec<(SpaceId, String, ContainerId)> {
+    model
+        .spaces
+        .iter()
+        .filter(|s| !s.agent)
+        .map(|s| (s.id, s.name.clone(), s.container))
+        .collect()
+}
+
+/// The Space "Use my sign-ins" takes them from: the one picked, else the one the owner is in,
+/// else the first of the owner's.
+fn source_of(
+    spaces: &[(SpaceId, String, ContainerId)],
+    picked: Option<SpaceId>,
+    active: SpaceId,
+) -> Option<usize> {
+    let at = |id: SpaceId| spaces.iter().position(|(s, ..)| *s == id);
+    picked
+        .and_then(at)
+        .or_else(|| at(active))
+        .or((!spaces.is_empty()).then_some(0))
+}
+
+/// The logins a name may stand for, in the pickers' order: those of the sheet's sites first
+/// (by the grant's own patterns), then the rest, each group as the vault listed them.
+fn picker_logins<'a>(
+    logins: &'a [wubble_core::pages::LoginView],
+    sites: &[String],
+) -> Vec<&'a wubble_core::pages::LoginView> {
+    let scope = agent::cookie_scope(sites);
+    let on_site = |l: &wubble_core::pages::LoginView| {
+        scope.iter().any(|p| p.matches(&format!("{}/", l.origin)))
+    };
+    let (mut first, rest): (Vec<_>, Vec<_>) = logins
+        .iter()
+        .filter(|l| l.username.is_some())
+        .partition(|l| on_site(l));
+    first.extend(rest);
+    first
+}
+
+/// What the sheet shows beyond the lists: the Spaces to share from, the logins to bind to.
+struct SheetData<'a> {
+    spaces: &'a [(SpaceId, String, ContainerId)],
+    source: Option<usize>,
+    vault: &'a SheetVault,
+}
+
 /// The sheet's window view of what it shows.
-fn sheet_view(ask: &Ask, lists: &agent::Lists, serial: i32, answer: (i32, &str)) -> AgentSheetView {
+fn sheet_view(
+    ask: &Ask,
+    lists: &agent::Lists,
+    data: &SheetData,
+    serial: i32,
+    answer: (i32, &str),
+) -> AgentSheetView {
     // one column each: the name, the site
     let rows = |v: &[String]| -> slint::ModelRc<wubble_ui::EntryItem> {
         let entries: Vec<wubble_core::pages::Entry> = v
@@ -526,6 +623,64 @@ fn sheet_view(ask: &Ask, lists: &agent::Lists, serial: i32, answer: (i32, &str))
             .collect();
         wubble_ui::settings::entry_items(&entries).as_slice().into()
     };
+    let entry = |label: String| wubble_ui::MenuEntry {
+        label: label.into(),
+        enabled: true,
+        ..Default::default()
+    };
+    let logins = match data.vault {
+        SheetVault::Open(all) => picker_logins(all, &lists.sites),
+        _ => vec![],
+    };
+    let options: Vec<wubble_ui::MenuEntry> = std::iter::once(entry("Not bound".into()))
+        .chain(logins.iter().map(|l| {
+            entry(format!(
+                "{} on {}",
+                l.username.as_deref().unwrap_or_default(),
+                l.site()
+            ))
+        }))
+        .collect();
+    let bindings: Vec<wubble_ui::AgentBindingItem> = lists
+        .secrets
+        .iter()
+        .map(|name| {
+            let bound = lists.bound.get(name);
+            let index = bound
+                .and_then(|b| logins.iter().position(|l| l.id == b.login.0))
+                .map_or(0, |i| i + 1);
+            let part = match agent::part_of(name) {
+                agent::Part::Username => "username",
+                agent::Part::Password => "password",
+            };
+            wubble_ui::AgentBindingItem {
+                name: name.as_str().into(),
+                title: format!("{name} types the {part} of").into(),
+                options: options.as_slice().into(),
+                index: i32::try_from(index).unwrap_or(0),
+            }
+        })
+        .collect();
+    let (vault_locked, vault_note) = match data.vault {
+        SheetVault::Closed(note) if !lists.secrets.is_empty() => (true, note.clone()),
+        _ => (false, String::new()),
+    };
+    let from = data.source.and_then(|i| data.spaces.get(i));
+    let share_note = match from {
+        Some((_, name, _)) => format!(
+            "Cookies for {} are copied from your Space {name} into the agent's own Space before \
+             it starts; your own tabs stay signed in. Stopping the session deletes the copies; a \
+             Space it hands to you keeps them until you delete it. Sign-ins kept in a site's \
+             local storage are not copied.",
+            lists.sites.join(", ")
+        ),
+        None => "You have no Space to take sign-ins from.".into(),
+    };
+    let spaces: Vec<wubble_ui::MenuEntry> = data
+        .spaces
+        .iter()
+        .map(|(_, n, _)| entry(n.clone()))
+        .collect();
     AgentSheetView {
         open: true,
         serial,
@@ -536,6 +691,14 @@ fn sheet_view(ask: &Ask, lists: &agent::Lists, serial: i32, answer: (i32, &str))
         note: answer.1.into(),
         headless: ask.headless,
         more: ask.more,
+        may_share: lists.may_share() && !data.spaces.is_empty(),
+        share: lists.share,
+        share_from: spaces.as_slice().into(),
+        share_from_index: data.source.and_then(|i| i32::try_from(i).ok()).unwrap_or(0),
+        share_note: share_note.into(),
+        bindings: bindings.as_slice().into(),
+        vault_locked,
+        vault_note: vault_note.into(),
     }
 }
 
@@ -752,6 +915,9 @@ impl Host {
                 }
                 self.agent_sheet_pump();
             }
+            Effect::CopyCookies { from, space, sites } => {
+                self.agent_copy_cookies(id, from, space, sites)
+            }
             Effect::AnswerMore(answer) => {
                 let Some(reply) = self.agents.sessions.get_mut(id).and_then(|s| s.more.take())
                 else {
@@ -769,8 +935,8 @@ impl Host {
                         let body = json!({
                             "granted": {"sites": more.sites, "secrets": more.secrets},
                             "sites": sites,
-                            "note": "a secret name is granted once the user binds it to a saved \
-                                login, which the sheet cannot do yet",
+                            "note": "a secret name is granted only when the user bound it to a \
+                                saved login on the sheet; fill_secret types it on that login's site",
                         });
                         self.agent_send(reply, ToolResult::text(body.to_string()), Outcome::Done);
                     }
@@ -791,6 +957,108 @@ impl Host {
         }
     }
 
+    /// "Use my sign-ins": copies container `from`'s cookies for `sites` into the session's
+    /// container (`wubble_engine::app::Engine::copy_cookies`, the edge), logs the copy (the
+    /// sites, the Space and a count: never a name or value) and lets the session go on.
+    fn agent_copy_cookies(
+        &mut self,
+        id: &SessionId,
+        from: ContainerId,
+        space: String,
+        sites: Vec<String>,
+    ) {
+        let Some((_, to)) = self.agents.sessions.get(id).and_then(|s| s.space) else {
+            return self.agent_event(id, Event::CookiesCopied);
+        };
+        let scope = agent::cookie_scope(&sites);
+        let filter: wubble_engine::storage::CookieFilter = Box::new(move |domain, path, secure| {
+            agent::shares_cookie(&scope, domain, path, secure)
+        });
+        let session = id.clone();
+        let done = Box::new(move |report: wubble_engine::storage::CopyReport| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| {
+                    host.mcp_smoke_copied(from, to, &report);
+                    host.agent_cookies_copied(&session, &sites, &space, Ok(report));
+                });
+            });
+        });
+        if let Err(e) = self.engine.copy_cookies(from, to, filter, done) {
+            let session = id.clone();
+            let sites = self
+                .agents
+                .sessions
+                .get(id)
+                .and_then(|s| s.state.grant())
+                .map(|g| g.signin_sites().map(str::to_owned).collect::<Vec<_>>())
+                .unwrap_or_default();
+            self.agent_cookies_copied(&session, &sites, "", Err(e.to_string()));
+        }
+    }
+
+    fn agent_cookies_copied(
+        &mut self,
+        id: &SessionId,
+        sites: &[String],
+        space: &str,
+        report: Result<wubble_engine::storage::CopyReport, String>,
+    ) {
+        let (target, outcome) = match &report {
+            Ok(r) => (
+                format!(
+                    "cookies for {} copied from Space {space} ({} of {})",
+                    sites.join(", "),
+                    r.set,
+                    r.taken
+                ),
+                Outcome::Done,
+            ),
+            Err(why) => (
+                format!("cookies for {} not copied: {why}", sites.join(", ")),
+                Outcome::Failed,
+            ),
+        };
+        self.agent_log(id, "share_sign_ins", Some(target), outcome);
+        self.agent_event(id, Event::CookiesCopied);
+    }
+
+    /// `--smoke mcp`: a copy ended. Keeps its report and container, and counts the owner's
+    /// cookies for the shared site, which the copy must have left where they were.
+    fn mcp_smoke_copied(
+        &mut self,
+        from: ContainerId,
+        to: ContainerId,
+        report: &wubble_engine::storage::CopyReport,
+    ) {
+        let Some(run) = self.checks.mcp_smoke.as_mut() else {
+            return;
+        };
+        run.copied.push(*report);
+        run.signin_container = Some(to);
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = seen.clone();
+        // a copy into itself that takes nothing: a count
+        let filter: wubble_engine::storage::CookieFilter = Box::new(move |domain, _, _| {
+            if domain.trim_start_matches('.') == crate::mcp_smoke::SIGNIN_HOST {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            false
+        });
+        let done = Box::new(move |_| {
+            let n = seen.load(std::sync::atomic::Ordering::Relaxed);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|h| {
+                    if let Some(run) = h.checks.mcp_smoke.as_mut() {
+                        run.owner_kept = Some(n);
+                    }
+                });
+            });
+        });
+        if let Err(e) = self.engine.copy_cookies(from, from, filter, done) {
+            self.fail(format!("the owner's cookies cannot be counted: {e}"));
+        }
+    }
+
     // ----- the approval sheet
 
     /// Shows the first waiting session's sheet when the overlays let it (one modal at a time:
@@ -801,13 +1069,13 @@ impl Host {
             return;
         }
         // the session that has waited longest (the session table is the one owner of who waits)
-        let Some((id, ask, lists)) = self
+        let Some((id, lists)) = self
             .agents
             .sessions
             .iter()
-            .filter_map(|(id, s)| Some((s.asked, id.clone(), asking(s)?, s.lists.clone())))
+            .filter_map(|(id, s)| Some((s.asked, id.clone(), asking(s).map(|_| s.lists.clone())?)))
             .min_by_key(|(asked, ..)| *asked)
-            .map(|(_, id, ask, lists)| (id, ask, lists))
+            .map(|(_, id, lists)| (id, lists))
         else {
             return;
         };
@@ -819,8 +1087,12 @@ impl Host {
         }
         self.agents.sheets += 1;
         self.agents.answer = (0, "");
-        window.set_agent_sheet_view(sheet_view(&ask, &lists, self.agents.sheets, (0, "")));
         self.agents.sheet = Some((window.as_weak(), id));
+        // the login pickers need the vault's list (nothing while it is locked)
+        if !lists.secrets.is_empty() {
+            self.agent_sheet_vault(wubble_vault::VaultCommand::List);
+        }
+        self.agent_sheet_render();
         self.render_surfaces(&window);
         if self.checks.mcp_smoke.is_some() {
             let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
@@ -843,10 +1115,22 @@ impl Host {
         let Some(s) = self.agents.sessions.get(&id) else {
             return;
         };
+        // the Space the sign-ins come from, resolved now (an approval switches the window to
+        // the session's Space)
+        let spaces = source_spaces(&self.model);
+        let from = source_of(&spaces, s.lists.from, self.model.active_space()).map(|i| {
+            let (_, space, container) = &spaces[i];
+            agent::Source {
+                container: *container,
+                space: space.clone(),
+            }
+        });
         let event = match &s.state {
             // a sheet for more: Allow widens the grant by what the owner left on it
-            State::AskingMore { grant, .. } => agent::answer_more(grant, &s.lists.sites, allow),
-            _ => agent::answer(&s.lists.sites, allow, headless),
+            State::AskingMore { grant, .. } => {
+                agent::answer_more(grant, &s.lists, allow, from.as_ref())
+            }
+            _ => agent::answer(&s.lists, allow, headless, from.as_ref()),
         };
         // the session's transition dismisses the sheet and shows the next
         self.agent_event(&id, event);
@@ -902,12 +1186,103 @@ impl Host {
         let Some(ask) = asking(s) else {
             return;
         };
+        let spaces = source_spaces(&self.model);
+        let data = SheetData {
+            source: source_of(&spaces, s.lists.from, self.model.active_space()),
+            spaces: &spaces,
+            vault: &self.agents.sheet_vault,
+        };
         window.set_agent_sheet_view(sheet_view(
             &ask,
             &s.lists,
+            &data,
             self.agents.sheets,
             self.agents.answer,
         ));
+    }
+
+    /// "Use my sign-ins for these sites", flipped on the sheet.
+    pub(crate) fn agent_sheet_share(&mut self, on: bool) {
+        let _ = self.agent_sheet_edit(agent::ListEdit::Share(on));
+        self.agent_sheet_render();
+    }
+
+    /// The Space the sign-ins come from, picked on the sheet (its index among the owner's).
+    pub(crate) fn agent_sheet_share_from(&mut self, index: i32) {
+        let spaces = source_spaces(&self.model);
+        if let Some((space, ..)) = usize::try_from(index).ok().and_then(|i| spaces.get(i)) {
+            let _ = self.agent_sheet_edit(agent::ListEdit::ShareFrom(*space));
+        }
+        self.agent_sheet_render();
+    }
+
+    /// A secret name's picker: option `index` (0: none) of the logins the sheet lists.
+    pub(crate) fn agent_sheet_bound(&mut self, name: &str, index: i32) {
+        let Some((_, id)) = &self.agents.sheet else {
+            return;
+        };
+        let sites = self
+            .agents
+            .sessions
+            .get(id)
+            .map(|s| s.lists.sites.clone())
+            .unwrap_or_default();
+        let binding =
+            match (&self.agents.sheet_vault, usize::try_from(index)) {
+                (SheetVault::Open(all), Ok(i)) if i > 0 => picker_logins(all, &sites)
+                    .get(i - 1)
+                    .map(|l| agent::SecretBinding {
+                        login: agent::LoginRef(l.id.clone()),
+                        origin: l.origin.clone(),
+                        part: agent::part_of(name),
+                    }),
+                _ => None,
+            };
+        let _ = self.agent_sheet_edit(agent::ListEdit::Bind {
+            name,
+            login: binding.as_ref(),
+        });
+        self.agent_sheet_render();
+    }
+
+    /// The sheet's Unlock: the owner unlocks the vault (the OS keyring may ask), then its logins
+    /// are listed for the pickers.
+    pub(crate) fn agent_sheet_unlock_vault(&mut self) {
+        self.agent_sheet_vault(wubble_vault::VaultCommand::Unlock);
+    }
+
+    /// Asks the vault for the sheet's pickers; an unlock is followed by the list.
+    fn agent_sheet_vault(&mut self, command: wubble_vault::VaultCommand) {
+        self.store.vault_command(command, move |answer| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.agent_sheet_vault_answered(answer));
+            });
+        });
+    }
+
+    fn agent_sheet_vault_answered(&mut self, answer: wubble_vault::VaultAnswer) {
+        use wubble_core::pages::VaultStatus;
+        use wubble_vault::VaultAnswer;
+        match answer {
+            VaultAnswer::Entries(rows) => self.agents.sheet_vault = SheetVault::Open(rows),
+            VaultAnswer::Status(VaultStatus::Unlocked | VaultStatus::Unreadable { .. }) => {
+                return self.agent_sheet_vault(wubble_vault::VaultCommand::List);
+            }
+            VaultAnswer::Status(VaultStatus::Locked) => {
+                self.agents.sheet_vault =
+                    SheetVault::Closed("Unlock them to pick the login each name stands for".into());
+            }
+            VaultAnswer::Status(VaultStatus::Unavailable(why)) | VaultAnswer::Failed(why) => {
+                self.agents.sheet_vault = SheetVault::Closed(format!("They cannot be used: {why}"));
+            }
+            VaultAnswer::Revealed(_) | VaultAnswer::Done | VaultAnswer::Imported(_) => {}
+        }
+        self.agent_sheet_render();
+        if let Some(run) = self.checks.mcp_smoke.as_mut()
+            && std::mem::take(&mut run.waiting_vault)
+        {
+            let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
+        }
     }
 
     /// The sheet is showing (the overlay stack's read).
@@ -951,7 +1326,8 @@ impl Host {
         if !approved {
             return;
         }
-        self.agent_event(&id, agent::answer(&[GALLERY_SITE.to_string()], true, false));
+        let lists = agent::Lists::asked(&[], &[GALLERY_SITE.to_string()]);
+        self.agent_event(&id, agent::answer(&lists, true, false, None));
         let Some((space, _)) = self.agents.sessions.get(&id).and_then(|s| s.space) else {
             return;
         };
@@ -1001,6 +1377,39 @@ impl Host {
                 secrets: vec!["NPM_TOKEN".into()],
             },
         );
+    }
+
+    /// `--smoke gallery`: the sheet with the owner's sign-ins shared and GITHUB_TOKEN bound to
+    /// a saved github.com login (saved in the run's throwaway vault, then listed for the
+    /// pickers).
+    pub(super) fn gallery_agent_signins(&mut self) {
+        self.gallery_agent(false);
+        let _ = self.agent_sheet_edit(agent::ListEdit::Share(true));
+        self.agent_sheet_render();
+        self.store.vault(|vault| {
+            for (origin, username) in [
+                ("https://github.com", "octocat"),
+                ("https://example.org", "me@example.org"),
+            ] {
+                let Ok(origin) = wubble_vault::Origin::parse(origin) else {
+                    continue;
+                };
+                let login = wubble_vault::NewLogin {
+                    origin,
+                    form_action_origin: None,
+                    username: username.into(),
+                    password: zeroize::Zeroizing::new("gallery-pw".into()),
+                };
+                let _ = vault.save(login, 0);
+            }
+            let answer = vault.run(wubble_vault::VaultCommand::List, now_ms());
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|h| {
+                    h.agent_sheet_vault_answered(answer);
+                    h.agent_sheet_bound("GITHUB_TOKEN", 1);
+                });
+            });
+        });
     }
 
     /// `--smoke gallery`: entries for the activity page.
@@ -1173,8 +1582,14 @@ impl Host {
             return;
         };
         let (conn, space) = (s.conn, s.space.map(|(sp, _)| sp));
-        let headless =
-            matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Headless);
+        let grant = s.state.grant();
+        let headless = grant.is_some_and(|g| g.mode == Mode::Headless);
+        let secrets: Vec<String> = grant
+            .map(|g| g.secret_names().map(str::to_owned).collect())
+            .unwrap_or_default();
+        let signed_in: Vec<String> = grant
+            .map(|g| g.signin_sites().map(str::to_owned).collect())
+            .unwrap_or_default();
         let first = space.and_then(|sp| self.model.order(sp).first().copied());
         let reply = Reply {
             conn,
@@ -1187,7 +1602,8 @@ impl Host {
             "session": token.expose(),
             "tab": first.map(|t| t.0.to_string()),
             "headless": headless,
-            "secrets": Vec::<String>::new(),
+            "secrets": secrets,
+            "signed_in_sites": signed_in,
         });
         self.agent_log(id, "session_started", None, Outcome::Done);
         match first {
@@ -1208,6 +1624,7 @@ impl Host {
         let Some(s) = self.agents.sessions.remove(id) else {
             return;
         };
+        self.agents.filled.remove(id);
         let State::Stopped(reason) = s.state else {
             return;
         };
@@ -2070,6 +2487,13 @@ impl Host {
         view.edit(EditCommand::SelectAll);
         view.ime_commit(text.expose());
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        if let Some(session) = &reply.session {
+            self.agents
+                .filled
+                .entry(session.clone())
+                .or_default()
+                .push(text);
+        }
         self.agent_send(reply, ToolResult::text("filled"), Outcome::Done);
     }
 
@@ -2358,7 +2782,12 @@ impl Host {
             .tab_view(tab)
             .map(|v| v.nav().page.url.clone())
             .unwrap_or_default();
-        let Some(login) = self
+        let mut reply = reply;
+        reply.target = Some(match wubble_core::autofill::web_origin(&url) {
+            Some(origin) => format!("{name} on {origin}"),
+            None => name.to_owned(),
+        });
+        let Some(binding) = self
             .agent_grant(session)
             .and_then(|g| g.secret_for(name, &url, &url))
             .cloned()
@@ -2380,10 +2809,16 @@ impl Host {
         };
         self.agent_wait(reply, wait, WAIT);
         self.store.vault(move |vault| {
-            let value = vault
-                .reveal(&RecordId(login.0))
-                .map(|p| Secret::new(p.as_str()))
-                .ok();
+            let id = RecordId(binding.login.0);
+            let value = match binding.part {
+                agent::Part::Password => vault.reveal(&id).map(|p| Secret::new(p.as_str())).ok(),
+                agent::Part::Username => vault
+                    .entries()
+                    .ok()
+                    .and_then(|rows| rows.into_iter().find(|(m, _)| m.id == id))
+                    .and_then(|(_, user)| user)
+                    .map(Secret::new),
+            };
             let _ = slint::invoke_from_event_loop(move || {
                 with_host(|host| host.agent_vault(nonce, value));
             });
@@ -2530,7 +2965,7 @@ impl Host {
     }
 
     /// The grant of the session that drives `tab`.
-    fn agent_grant_of(&self, tab: TabId) -> Option<(SessionId, agent::Grant)> {
+    pub(super) fn agent_grant_of(&self, tab: TabId) -> Option<(SessionId, agent::Grant)> {
         let sessions: Vec<_> = self
             .agents
             .sessions
@@ -2957,8 +3392,11 @@ impl Host {
     }
 
     /// The call's answer on its connection, logged.
-    fn agent_send(&mut self, reply: Reply, result: ToolResult, outcome: Outcome) {
+    fn agent_send(&mut self, reply: Reply, mut result: ToolResult, outcome: Outcome) {
         let session = reply.session.clone().unwrap_or(SessionId("-".into()));
+        if let Some(values) = self.agents.filled.get(&session) {
+            redact(&mut result, values);
+        }
         self.agent_log(&session, reply.tool, reply.target.clone(), outcome);
         if let Some(conn) = self.agents.conns.get(&reply.conn) {
             conn.out.send(wubble_mcp::tool_response(&reply.id, &result));
@@ -2972,6 +3410,19 @@ impl Host {
         target: Option<String>,
         outcome: Outcome,
     ) {
+        if let Some(run) = self.checks.mcp_smoke.as_mut() {
+            let text = target.as_deref().unwrap_or_default();
+            if [
+                crate::mcp_smoke::SIGNIN_USER,
+                crate::mcp_smoke::SIGNIN_PASSWORD,
+            ]
+            .iter()
+            .any(|v| text.contains(v))
+            {
+                return self.fail(format!("the activity log holds a filled value: {text}"));
+            }
+            run.copy_logged |= tool == "share_sign_ins" && text.starts_with("cookies for ");
+        }
         let entry = Entry {
             session: session.clone(),
             at_ms: now_ms(),
@@ -3003,6 +3454,13 @@ impl Host {
         let Some(want) = SHEETS.get(run.sheets) else {
             return self.fail(format!("an approval sheet more than the {}", SHEETS.len()));
         };
+        // its pickers list the vault's logins once the vault answered
+        if want.press == Press::ShareBindAllow
+            && !matches!(self.agents.sheet_vault, SheetVault::Open(_))
+        {
+            run.waiting_vault = true;
+            return;
+        }
         run.sheets += 1;
         let n = run.sheets;
         if view.more != want.more
@@ -3038,15 +3496,18 @@ impl Host {
             };
             let steps = || -> Result<(), String> {
                 let w = weak.upgrade().ok_or("no window")?;
-                if !more {
+                // (the sign-ins sheet scrolls: its window choice is below the fold of the
+                // smoke's window, where the query does not reach; the other sheets check it)
+                if !more && press != Press::ShareBindAllow {
                     let asked = if headless { "Headless" } else { "Windowed" };
                     if sheet::chosen(&w)?.as_deref() != Some(asked) {
                         return Err(format!(
-                            "the sheet's window choice shows {:?} selected, the client asked {asked}",
-                            sheet::chosen(&w)?
+                            "the sheet's window choice shows {:?} selected, the client asked {asked} ({})",
+                            sheet::chosen(&w)?,
+                            sheet::tabs(&w)
                         ));
                     }
-                } else if sheet::chosen(&w)?.is_some() {
+                } else if more && sheet::chosen(&w)?.is_some() {
                     return Err("a sheet for more shows a window choice".into());
                 }
                 if windowed {
@@ -3057,6 +3518,34 @@ impl Host {
                             "a press on Windowed at {at:?} left {:?} selected",
                             sheet::chosen(&w)?
                         ));
+                    }
+                }
+                if press == Press::ShareBindAllow {
+                    let share = "Use my sign-ins for these sites";
+                    if !w.get_agent_sheet_view().may_share {
+                        return Err("the sheet offers no sign-ins for its sites".into());
+                    }
+                    sheet::click(&w, sheet::switch(&w, share)?);
+                    let v = w.get_agent_sheet_view();
+                    if !v.share || !v.share_note.contains(crate::mcp_smoke::SIGNIN_HOST) {
+                        return Err(format!(
+                            "a press on {share:?} left it {} ({:?})",
+                            v.share, v.share_note
+                        ));
+                    }
+                    for name in ["SIGNIN_USER", "SIGNIN_PASSWORD"] {
+                        with_host(|h| h.agent_sheet_bound(name, 1));
+                    }
+                    let v = w.get_agent_sheet_view();
+                    let bound = v.bindings.iter().all(|b| {
+                        b.index == 1
+                            && b.options.row_data(1).is_some_and(|o| {
+                                o.label.contains(crate::mcp_smoke::SIGNIN_USER)
+                                    && o.label.contains(crate::mcp_smoke::SIGNIN_HOST)
+                            })
+                    });
+                    if !bound || v.bindings.row_count() != 2 {
+                        return Err("the names are not bound to the saved login".into());
                     }
                 }
                 if press == Press::EscapeDraftThenAllow {
@@ -3096,6 +3585,8 @@ impl Host {
                         Press::WindowedAllow => "Windowed, then ",
                         Press::EscapeDraftThenAllow =>
                             "+, typed x.test, Escape (the draft went, the sheet stayed), then ",
+                        Press::ShareBindAllow =>
+                            "Use my sign-ins, bound both names to the saved login, then ",
                         _ => "",
                     }
                 );
@@ -3134,6 +3625,25 @@ impl Host {
             Ok(done) => done,
             Err(e) => return self.fail(e),
         };
+        if let Some(run) = &self.checks.mcp_smoke {
+            let gone = run
+                .signin_container
+                .is_some_and(|c| !self.model.containers.iter().any(|k| k.id == c));
+            let want = [wubble_engine::storage::CopyReport { taken: 2, set: 2 }];
+            if run.copied != want || run.owner_kept != Some(2) || !run.copy_logged || !gone {
+                return self.fail(format!(
+                    "sign-ins: copies {:?} (want {want:?}), the owner keeps {:?} of 2, logged {}, \
+                     the session's container gone {gone}",
+                    run.copied, run.owner_kept, run.copy_logged
+                ));
+            }
+            println!(
+                "smoke: mcp sign-ins ok 2 of the owner's cookies copied (not {}), the owner \
+                 keeps both, the copy logged, the stopped session's container (and its \
+                 copies) gone",
+                crate::mcp_smoke::OTHER_HOST
+            );
+        }
         let kept = TabId(done.kept);
         let space = self
             .model

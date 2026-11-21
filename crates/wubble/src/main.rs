@@ -39,6 +39,7 @@ mod pages_smoke;
 mod pagescripts;
 mod panes;
 mod parity;
+mod passwords_smoke;
 mod perform;
 mod persist;
 mod pixels;
@@ -246,6 +247,19 @@ fn main() -> ExitCode {
         Command::Smoke(Smoke::SessionPhase { phase, profile }) => {
             with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
         }
+        Command::Smoke(Smoke::Passwords) => match smoke_passwords() {
+            Ok(()) => {
+                println!("smoke: passwords ok");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: passwords FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::PasswordsPhase { phase, profile }) => {
+            with_smoke_dir(|config, _| report_run(Mode::Passwords(phase), config, &profile))
+        }
         Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
             println!("{}", blocking::measure());
             ExitCode::SUCCESS
@@ -349,7 +363,9 @@ fn main() -> ExitCode {
                 | Smoke::Codecs { .. }
                 | Smoke::Extensions { .. }
                 | Smoke::Session
-                | Smoke::SessionPhase { .. } => {
+                | Smoke::SessionPhase { .. }
+                | Smoke::Passwords
+                | Smoke::PasswordsPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
             };
@@ -563,6 +579,27 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// `--smoke passwords`: its three processes on one temporary profile (`passwords_smoke.rs`).
+fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
+    use passwords_smoke::VaultPhase;
+    let exe = std::env::current_exe()?;
+    let profile = std::env::temp_dir().join(format!("wubble-passwords-{}", std::process::id()));
+    let result = (|| {
+        let no_sandbox = app::no_sandbox_requested(std::env::args_os());
+        for phase in [VaultPhase::Write, VaultPhase::Read, VaultPhase::Broken] {
+            let status = std::process::Command::new(&exe)
+                .args(session_phase_args(phase.arg(), &profile, no_sandbox))
+                .status()?;
+            if !status.success() {
+                return Err(format!("{} exited with {status}", phase.arg()).into());
+            }
+        }
+        Ok(())
+    })();
+    remove_cache(&profile);
+    result
+}
+
 /// One `--smoke session` phase's command line; the parent's `--no-sandbox` goes with it,
 /// so a debugging run is unsandboxed in both phases too.
 fn session_phase_args(phase: &str, profile: &Path, no_sandbox: bool) -> Vec<std::ffi::OsString> {
@@ -650,6 +687,8 @@ struct Outcome {
     /// `--smoke start` reached its end.
     start_passed: bool,
     pages_passed: bool,
+    /// `--smoke passwords` (this process's phase) reached its end.
+    passwords_passed: bool,
     gallery_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
@@ -721,6 +760,8 @@ enum Mode {
     Overlay { dark: bool },
     /// One phase of `--smoke session`.
     Session(Phase),
+    /// One process of `--smoke passwords`.
+    Passwords(passwords_smoke::VaultPhase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
     /// CEF paced by external begin frames if `begin_frames`; the samples
     /// also go to `out` as CSV.
@@ -1249,6 +1290,18 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_agent_sheet_site_submitted(move |text| {
         with_host_in(win, |host| host.agent_sheet_site_submitted(&text))
     });
+    window.on_agent_sheet_share_toggled(move |on| {
+        with_host_in(win, |host| host.agent_sheet_share(on))
+    });
+    window.on_agent_sheet_share_from_picked(move |i| {
+        with_host_in(win, |host| host.agent_sheet_share_from(i))
+    });
+    window.on_agent_sheet_bound(move |name, i| {
+        with_host_in(win, |host| host.agent_sheet_bound(&name, i))
+    });
+    window.on_agent_sheet_unlock_vault(move || {
+        with_host_in(win, |host| host.agent_sheet_unlock_vault())
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });
@@ -1276,6 +1329,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_login_deleted(move |id| with_host_in(win, |host| host.login_deleted(&id)));
     window.on_login_added(move |site, user, password| {
         with_host_in(win, |host| host.login_added(&site, &user, &password))
+    });
+    window.on_login_edited(move |id, site, user, password| {
+        with_host_in(win, |host| host.login_edited(&id, &site, &user, &password))
     });
     window
         .on_passwords_import_requested(move || with_host_in(win, Host::passwords_import_requested));
@@ -1368,6 +1424,19 @@ fn run(
             pages_smoke::seed(&db, &keyring)?;
             Box::new(keyring)
         }
+        // a key that outlives the process, in a file of the throwaway profile; or, only on a
+        // private D-Bus session with a throwaway keyring (`WUBBLE_SMOKE_KEYRING=os`), the OS one
+        Mode::Passwords(phase) => {
+            let broken = *phase == passwords_smoke::VaultPhase::Broken;
+            if !broken && std::env::var("WUBBLE_SMOKE_KEYRING").as_deref() == Ok("os") {
+                Box::new(wubble_vault::OsKeyRing)
+            } else {
+                Box::new(wubble_vault::FileKeyRing::new(
+                    profile.join("smoke-keyring"),
+                    broken,
+                ))
+            }
+        }
         _ => Box::new(wubble_vault::FakeKeyRing::default()),
     };
     // The database loads, and the GPU device is made (about 150 ms on the Linux box, as long
@@ -1412,6 +1481,7 @@ fn run(
         settings_smoke: None,
         start_smoke: None,
         pages_smoke: None,
+        passwords_smoke: None,
         gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
@@ -1576,8 +1646,11 @@ fn run(
                 ..none
             },
         ),
+        // the owner signed in to the sites a session shares (`mcp_smoke::sign_in`)
         Mode::Mcp => (
-            Some(bundled()),
+            autofill_port
+                .map(mcp_smoke::sign_in)
+                .or_else(|| Some(bundled())),
             Checks {
                 mcp_smoke: Some(Default::default()),
                 ..none
@@ -1623,6 +1696,13 @@ fn run(
             None,
             Checks {
                 session_smoke: Some(SessionSmoke::new(*phase)),
+                ..none
+            },
+        ),
+        Mode::Passwords(phase) => (
+            None,
+            Checks {
+                passwords_smoke: Some(passwords_smoke::PasswordsSmoke::new(*phase)),
                 ..none
             },
         ),
@@ -1911,6 +1991,7 @@ fn run(
         settings_passed: host.settings_passed,
         start_passed: host.start_passed,
         pages_passed: host.pages_passed,
+        passwords_passed: host.passwords_passed,
         gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,

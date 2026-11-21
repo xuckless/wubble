@@ -106,14 +106,44 @@ document.getElementById('src').addEventListener('mousedown', () => { from = 'Sou
 document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' on ' + (e.target.id || e.target.tagName)); from = null; });
 </script></body></html>"##;
 
+/// The site whose sign-ins the owner shares with a session, and one the owner is signed in to
+/// that the session's sites leave out (`.localhost`: loopback).
+pub const SIGNIN_HOST: &str = "signin.localhost";
+pub const OTHER_HOST: &str = "other.localhost";
+/// The owner's saved login on [`SIGNIN_HOST`] (seeded), bound on the sheet.
+pub const SIGNIN_USER: &str = "agent-user";
+pub const SIGNIN_PASSWORD: &str = "s1gn-in-pass";
+
+/// Where the owner's first tab goes: the server signs the owner in to both sites (cookies set
+/// on redirects, so each is the site's own) and ends on the echo page.
+pub fn sign_in(port: u16) -> String {
+    format!("http://{SIGNIN_HOST}:{port}/mcp/cookies/set")
+}
+
+/// The echo page: the cookies its request carried (an httpOnly one too: the server sees it,
+/// the page's script does not), and a login form whose input is echoed into the page.
+const COOKIES: &str = r##"<!doctype html><html lang="en"><head><title>cookies</title></head>
+<body style="font:16px sans-serif">
+<p>sent: SENT</p>
+<label for="u">User</label> <input id="u" autocomplete="username" oninput="document.getElementById('echo').textContent='typed '+this.value">
+<label for="p">Pass</label> <input id="p" type="password" autocomplete="current-password">
+<p id="echo">nothing typed</p>
+</body></html>"##;
+
 /// The pages and redirects the smoke's server answers under `/mcp`.
 pub enum Route {
     Page(String),
     Redirect(String),
+    /// A redirect that sets cookies (`Set-Cookie` values).
+    SetCookies {
+        cookies: Vec<String>,
+        to: String,
+    },
 }
 
-/// What `path` answers (`autofill_smoke::serve`); `None`: not found.
-pub fn route(path: &str, port: u16) -> Option<Route> {
+/// What `path` answers (`autofill_smoke::serve`), given the request's `Cookie` header; `None`:
+/// not found.
+pub fn route(path: &str, port: u16, cookie: &str) -> Option<Route> {
     let page = |p: &str| Some(Route::Page(p.to_owned()));
     // a loopback host the first session's sites leave out until `request_more` adds it
     let elsewhere = format!("http://a.localhost:{port}/mcp/next");
@@ -130,6 +160,27 @@ pub fn route(path: &str, port: u16) -> Option<Route> {
         // a server's redirect off the web: Chromium must not follow it for a session
         "/mcp/to-file" => Some(Route::Redirect("file:///etc/passwd".into())),
         "/mcp/to-chrome" => Some(Route::Redirect("chrome://version".into())),
+        // the owner's sign-ins: a host-only httpOnly cookie and a domain one on the shared
+        // site, then an httpOnly one on the other site
+        "/mcp/cookies/set" => Some(Route::SetCookies {
+            cookies: vec![
+                "sid=owner-signin; HttpOnly; Path=/; SameSite=Lax".into(),
+                format!("pref=owner-pref; Domain={SIGNIN_HOST}; Path=/; Max-Age=3600"),
+            ],
+            to: format!("http://{OTHER_HOST}:{port}/mcp/cookies/set-other"),
+        }),
+        "/mcp/cookies/set-other" => Some(Route::SetCookies {
+            cookies: vec!["other=owner-other; HttpOnly; Path=/".into()],
+            to: format!("http://{SIGNIN_HOST}:{port}/mcp/cookies"),
+        }),
+        "/mcp/cookies" => Some(Route::Page(COOKIES.replace(
+            "SENT",
+            &if cookie.is_empty() {
+                "none".to_owned()
+            } else {
+                cookie.replace(['<', '>', '&'], "")
+            },
+        ))),
         _ => None,
     }
 }
@@ -145,6 +196,9 @@ pub enum Press {
     /// A site typed into the Sites editor's draft, Escape (through the host's own key path:
     /// it must drop the draft, not deny), then Allow.
     EscapeDraftThenAllow,
+    /// "Use my sign-ins for these sites" pressed on, each secret name bound to the seeded
+    /// login (through the pickers' callback), then Allow.
+    ShareBindAllow,
 }
 
 /// One sheet: what it must show, and the press that answers it.
@@ -185,6 +239,22 @@ pub const SHEETS: &[Sheet] = &[
         sites: &["a.localhost"],
         headless: true,
         press: Press::EscapeDraftThenAllow,
+    },
+    // the owner's sign-ins shared and both names bound to the saved login
+    Sheet {
+        more: false,
+        secrets: &["SIGNIN_USER", "SIGNIN_PASSWORD"],
+        sites: &[SIGNIN_HOST],
+        headless: true,
+        press: Press::ShareBindAllow,
+    },
+    // more: the other site, its sign-ins not shared (the sheet's default)
+    Sheet {
+        more: true,
+        secrets: &[],
+        sites: &[OTHER_HOST],
+        headless: true,
+        press: Press::Allow,
     },
     Sheet {
         more: false,
@@ -619,6 +689,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
         "stop_session",
         "keep_tabs: the tab stays, the handle is dead (list_tabs, read_page, stop_session refused)",
     );
+    signins(&mut c, &base)?;
     // Left running: the browser's quit must end it and close its Space (checked by the host).
     // The sheet makes it windowed; two tabs on the still page, which the host switches between
     // in the window (`Host::mcp_smoke_switch`).
@@ -665,6 +736,120 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     let kept = own;
     let steps = c.steps;
     Ok((Done { steps, kept }, c))
+}
+
+/// "Use my sign-ins": a session on [`SIGNIN_HOST`] with the owner's cookies copied in and its
+/// two secret names bound on the sheet. The server sees the copied cookies (the httpOnly one
+/// too, which the page's script must not see); the other site's cookie is not copied (it is
+/// granted later, unshared, and arrives with none); the bound names fill only on the login's
+/// site, and no reply carries a filled value.
+fn signins(c: &mut Client, base: &str) -> Result<(), String> {
+    let signin = base.replace("127.0.0.1", SIGNIN_HOST);
+    let other = base.replace("127.0.0.1", OTHER_HOST);
+    let r = c.ok(
+        "start_session",
+        json!({"purpose": "signed in", "headless": true, "sites": [SIGNIN_HOST],
+            "secrets": ["SIGNIN_USER", "SIGNIN_PASSWORD"]}),
+    )?;
+    let (session, tab) = started(&r)?;
+    let v = json_of(&r)?;
+    if v["signed_in_sites"] != json!([SIGNIN_HOST])
+        || v["secrets"] != json!(["SIGNIN_PASSWORD", "SIGNIN_USER"])
+    {
+        return Err(format!("start_session with sign-ins: {v}"));
+    }
+    let s = |extra: Value| {
+        let mut m = json!({"session": session, "tab": tab});
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            m[k] = v.clone();
+        }
+        m
+    };
+    c.ok(
+        "navigate",
+        s(json!({"url": format!("{signin}/mcp/cookies")})),
+    )?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let sent = read
+        .lines()
+        .find(|l| l.contains("sent: "))
+        .ok_or(format!("the echo page: {read}"))?;
+    if !sent.contains("sid=owner-signin")
+        || !sent.contains("pref=owner-pref")
+        || sent.contains("other=")
+    {
+        return Err(format!("the session's request carried: {sent}"));
+    }
+    let script = text(&c.ok("evaluate", s(json!({"script": "return document.cookie"})))?);
+    if script.contains("sid") || !script.contains("pref=owner-pref") {
+        return Err(format!(
+            "the page's script sees cookies {script} (sid is httpOnly)"
+        ));
+    }
+    c.step(
+        "sign-ins",
+        format!("the owner's {SIGNIN_HOST} cookies arrived in the session (the server saw the httpOnly sid, the page's script did not); {OTHER_HOST}'s did not"),
+    );
+    let field = |c: &mut Client, label: &str| -> Result<String, String> {
+        let read = text(&c.ok("read_page", s(json!({})))?);
+        ref_of(&read, &format!("- textField \"{label}\""))
+            .ok_or(format!("no {label} field: {read}"))
+    };
+    let user = field(c, "User")?;
+    c.ok(
+        "fill_secret",
+        s(json!({"ref": user, "secret": "SIGNIN_USER"})),
+    )?;
+    let pass = field(c, "Pass")?;
+    c.ok(
+        "fill_secret",
+        s(json!({"ref": pass, "secret": "SIGNIN_PASSWORD"})),
+    )?;
+    let typed = text(&c.ok(
+        "evaluate",
+        s(json!({"script": "return [document.getElementById('u').value, document.getElementById('p').value.length, document.getElementById('echo').textContent]"})),
+    )?);
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    for answer in [&typed, &read] {
+        if answer.contains(SIGNIN_USER) || answer.contains(SIGNIN_PASSWORD) {
+            return Err(format!("a reply carries a filled value: {answer}"));
+        }
+    }
+    if !typed.contains("[secret]") || !typed.contains(&SIGNIN_PASSWORD.len().to_string()) {
+        return Err(format!("the filled fields: {typed}"));
+    }
+    // more: the other site, unshared; a bound name is refused there
+    let granted = json_of(&c.ok(
+        "request_more",
+        json!({"session": session, "sites": [OTHER_HOST]}),
+    )?)?;
+    if granted["granted"]["sites"] != json!([OTHER_HOST]) {
+        return Err(format!("request_more {OTHER_HOST}: {granted}"));
+    }
+    c.ok(
+        "navigate",
+        s(json!({"url": format!("{other}/mcp/cookies")})),
+    )?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    if !read.contains("sent: none") {
+        return Err(format!(
+            "{OTHER_HOST} unshared, yet the request carried cookies: {read}"
+        ));
+    }
+    let user = field(c, "User")?;
+    match c.tool(
+        "fill_secret",
+        s(json!({"ref": user, "secret": "SIGNIN_USER"})),
+    )? {
+        Err(e) if e.contains("not the login's site") => {}
+        r => return Err(format!("fill_secret on {OTHER_HOST}: {r:?}")),
+    }
+    c.step(
+        "fill_secret",
+        format!("both names filled on {SIGNIN_HOST} (no reply carries a value: [secret]), refused on {OTHER_HOST}, which came unshared and cookieless"),
+    );
+    c.ok("stop_session", json!({"session": session}))?;
+    Ok(())
 }
 
 /// `evaluate`: statements, a top-level return, promises, values JSON cannot carry, a throw
@@ -1158,6 +1343,16 @@ pub struct McpSmoke {
     pub switch: Option<(usize, wubble_core::tab::TabId)>,
     /// The panes' frame size before the switch hid the sidebar.
     pub sized: Option<(u32, u32)>,
+    /// What each "Use my sign-ins" copy did, in order.
+    pub copied: Vec<wubble_engine::storage::CopyReport>,
+    /// The owner's [`SIGNIN_HOST`] cookies counted after the copy (the source keeps them).
+    pub owner_kept: Option<usize>,
+    /// The container the copy went into: gone once its session stopped.
+    pub signin_container: Option<wubble_core::space::ContainerId>,
+    /// The activity log's copy line was written.
+    pub copy_logged: bool,
+    /// A [`Press::ShareBindAllow`] sheet waits for the vault's list before it is answered.
+    pub waiting_vault: bool,
     pub deadline: slint::Timer,
 }
 
@@ -1186,6 +1381,17 @@ pub mod sheet {
             .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
             .map(|e| centre(&e))
             .ok_or_else(|| format!("no {label:?} button"))
+    }
+
+    /// The centre of the sheet's switch `label` ("Use my sign-ins for these sites").
+    pub fn switch(window: &AppWindow, label: &str) -> Result<LogicalPosition, String> {
+        root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Switch)
+            .match_accessible_label(label)
+            .find_first()
+            .map(|e| centre(&e))
+            .ok_or_else(|| format!("no {label:?} switch on the sheet"))
     }
 
     /// The centre of the sheet's button `label` (Allow, Deny).
@@ -1217,9 +1423,31 @@ pub mod sheet {
             .match_accessible_role(AccessibleRole::Tab)
             .find_all()
             .into_iter()
-            .find(|e| e.accessible_item_selected() == Some(true))
-            .and_then(|e| e.accessible_label())
-            .map(|l| l.to_string()))
+            .filter(|e| e.accessible_item_selected() == Some(true))
+            .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+            // a login picker's options are tabs too
+            .find(|l| l == "Windowed" || l == "Headless"))
+    }
+
+    /// Every tab on screen, its label and selection: what a failed [`chosen`] saw.
+    pub fn tabs(window: &AppWindow) -> String {
+        root(window)
+            .map(|r| {
+                r.query_descendants()
+                    .match_accessible_role(AccessibleRole::Tab)
+                    .find_all()
+                    .into_iter()
+                    .map(|e| {
+                        format!(
+                            "{:?}={:?}",
+                            e.accessible_label(),
+                            e.accessible_item_selected()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
     }
 
     /// The Sites list editor on the sheet.

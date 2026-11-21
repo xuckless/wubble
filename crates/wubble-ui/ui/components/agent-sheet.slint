@@ -3,6 +3,9 @@ import { AgentSheetView } from "model.slint";
 import { Segmented } from "../kit/controls/segmented.slint";
 import { BCard, BRow, BStackRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
 import { ListEditor, ListEditorAdds, ListEditorMode } from "../kit/controls/list-editor.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { Select } from "../kit/controls/select.slint";
+import { Button, ButtonKind } from "../kit/controls/button.slint";
 
 // An agent session's approval sheet (docs/research/mcp-server.md section 6): who asks (the
 // calling program, as the host found it), the secrets it asks for by name, the sites it limits
@@ -22,6 +25,13 @@ export component AgentSheet inherits SheetFrame {
     callback removed(bool, string);
     // the Sites editor's draft (`pages::submission`); the host answers with `answer` / `note`
     callback site-submitted(string);
+    // "Use my sign-ins for these sites" flipped; the Space they come from picked
+    callback share-toggled(bool);
+    callback share-from-picked(int);
+    // a secret name now stands for option `index` of its logins (0: none)
+    callback bound(string, int);
+    // the owner unlocks the vault here, so its logins can be picked
+    callback unlock-vault();
     // A list editor holds a draft (or an edit): Escape drops that, not the sheet (the host's
     // Escape for the overlay stack waits while this is on).
     out property <bool> editing;
@@ -63,7 +73,7 @@ export component AgentSheet inherits SheetFrame {
     // wired the registry, sharing slot 0 with a menu (no indicator, presses on the menu's slot).
     if root.view.serial > 0: BCard {
         // the secret names asked for: the owner may remove one (none can be added: a name is
-        // only what a client asks for, and none is bound to a login yet)
+        // only what a client asks for) and binds each to a saved login below
         BStackRow {
             title: "Secrets";
             ListEditor {
@@ -109,6 +119,51 @@ export component AgentSheet inherits SheetFrame {
                 }
             }
         }
+        // the owner's sign-ins for the listed sites, copied into the session's own Space
+        if root.view.may-share: BRow {
+            title: "Use my sign-ins for these sites";
+            Toggle {
+                size: ToggleSize.sm;
+                on: root.view.share;
+                label: "Use my sign-ins for these sites";
+                toggled => {
+                    root.share-toggled(!root.view.share);
+                }
+            }
+        }
+        if root.view.may-share && root.view.share: BRow {
+            title: "From the Space";
+            Select {
+                options: root.view.share-from;
+                value: root.view.share-from-index;
+                label: "From the Space";
+                picked(i) => {
+                    root.share-from-picked(i);
+                }
+            }
+        }
+        if root.view.vault-locked: BRow {
+            title: "Saved passwords";
+            note: root.view.vault-note;
+            Button {
+                kind: ButtonKind.ghost;
+                text: "Unlock";
+                clicked => {
+                    root.unlock-vault();
+                }
+            }
+        }
+        for binding in root.view.bindings: BStackRow {
+            title: binding.title;
+            Select {
+                options: binding.options;
+                value: binding.index;
+                label: binding.name;
+                picked(i) => {
+                    root.bound(binding.name, i);
+                }
+            }
+        }
         if !root.view.more: BRow {
             title: "Window";
             Segmented {
@@ -123,7 +178,10 @@ export component AgentSheet inherits SheetFrame {
         }
     }
     if root.view.secrets.length > 0: BNote {
-        text: "The agent never sees a secret's value, and none is bound to a saved login yet, so none is granted.";
+        text: "The agent never sees a secret's value: wubble types it into the login's own site. A name left unbound is not granted.";
+    }
+    if root.view.may-share && root.view.share: BNote {
+        text: root.view.share-note;
     }
     BNote {
         text: "Stop an agent from its mark on the tab, from the command bar (Stop All Agents), or by closing wubble.";

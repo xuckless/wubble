@@ -85,6 +85,8 @@ pub enum Overlay {
     AgentSpaces,
     /// The same session asking for more (`request_more`): the sheet lists only what is new.
     AgentMore,
+    /// The sheet with "Use my sign-ins" on and a secret name bound to a saved login.
+    AgentSignIns,
     /// The shown tab plays sound and / or is muted (the sound badge's states).
     Sound {
         audible: bool,
@@ -501,6 +503,7 @@ pub const SCENES: &[Scene] = &[
     on("agent-activity", InternalPage::AgentLog),
     over("agent-sheet", Overlay::AgentSheet),
     over("agent-sheet-more", Overlay::AgentMore),
+    over("agent-sheet-signins", Overlay::AgentSignIns),
     over("agent-tabs", Overlay::AgentTabs),
 ];
 

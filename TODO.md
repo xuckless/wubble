@@ -47,9 +47,12 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Later (owner, 2026-11-20): "Move tab to" in a tab's right-click menu, a two-level menu: hovering the row (with its ">") opens the list of user-created Spaces; moving a tab out of an agent Space makes it an ordinary tab of that Space
 - [ ] Later (owner, 2026-11-20): clearing an agent Space that still has tabs asks first: "Close anyway", or "Move tabs", which opens the list of user-created Spaces downward and moves them before the Space is cleared (until then the dustbin clears at once)
-- [ ] Bind a requested secret name to a vault login on the sheet (a grant holds no secret until then; `fill_secret` is refused cleanly)
+- [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
+- [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
+- [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
+- [ ] Passwords: the owner's "saved by hand, then gone" not reproduced on Linux; run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
-- [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, redaction of filled values, the airlocks
+- [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, the airlocks
 
 ## Review findings (perpetual)
 The design-fidelity phase is over; this list never closes and gates nothing: findings from reviews, QA rounds and the
@@ -118,7 +121,7 @@ Open, to build or check:
 ## M4: DevTools and built-ins
 - [ ] DevTools bottom dock (no design source; needs vertical pane rects)
 - [ ] Inspect-at-point in the docked panel (no protocol path; the detached window today)
-- [ ] Zen/Arc password import (CSV only) and a notice when the keyring is unavailable
+- [ ] Zen/Arc password import (CSV only)
 
 ## M5: Arc-style features
 - [ ] Sync (deferred)

@@ -326,6 +326,7 @@ impl Host {
                 self.gallery_agent_kept();
             }
             Overlay::AgentMore => self.gallery_agent_more(),
+            Overlay::AgentSignIns => self.gallery_agent_signins(),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),

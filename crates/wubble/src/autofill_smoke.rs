@@ -858,6 +858,8 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
     let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
     let path = target.split('?').next().unwrap_or("/").to_owned();
     let mut length = 0;
+    // `--smoke mcp` echoes the cookies a request carried
+    let mut cookie = String::new();
     loop {
         let mut header = String::new();
         if reader.read_line(&mut header)? == 0 || header == "\r\n" {
@@ -865,6 +867,9 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         }
         if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
             length = value.trim().parse().unwrap_or(0);
+        }
+        if header.to_ascii_lowercase().starts_with("cookie:") {
+            cookie = header["cookie:".len()..].trim().to_owned();
         }
     }
     // The posted form is read and dropped.
@@ -890,8 +895,19 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         "/parity" => crate::PARITY_PAGE.to_owned(),
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
         // `--smoke mcp`'s pages and redirects: an agent session navigates to them on loopback.
-        p if p.starts_with("/mcp") => match crate::mcp_smoke::route(&target, port) {
+        p if p.starts_with("/mcp") => match crate::mcp_smoke::route(&target, port, &cookie) {
             Some(crate::mcp_smoke::Route::Page(page)) => page,
+            Some(crate::mcp_smoke::Route::SetCookies { cookies, to }) => {
+                let set: String = cookies
+                    .iter()
+                    .map(|c| format!("Set-Cookie: {c}\r\n"))
+                    .collect();
+                return write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\n{set}Location: {to}\r\nContent-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                );
+            }
             Some(crate::mcp_smoke::Route::Redirect(to)) => {
                 return write!(
                     stream,

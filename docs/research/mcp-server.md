@@ -200,9 +200,9 @@ credentials, passkeys: not carried.
    tab (`read_page`, `read_text`, `evaluate`) have the values filled into it redacted; the activity page records
    each `fill_secret` as its name and origin. A screenshot is pixels: a password field shows bullets, but a username,
    or a password the page shows in plain text (a "show password" toggle, an echo), is visible in it.
-5. With "Use my sign-ins" on and a saved login for a granted site, the session's tabs get the **normal autofill**
-   for that site (the key chip, for the owner watching a windowed session): the agent never receives the secret.
-   Otherwise a session's tabs get no autofill, and they never offer to save a password.
+5. A session's tabs get no autofill and never offer to save a password. (Planned: the normal key chip on a shared
+   site, for the owner watching a windowed session. Built and taken out: with the key menu on, the agent's click on
+   the username field left it unfocused for `fill_secret`'s check; open in TODO.md.)
 
 **(c) Visible and revocable.** The sheet states which sites' sign-ins and which logins are shared; the activity page
 records each copy and each fill; Stop and the dustbin remove the copies (the container goes).

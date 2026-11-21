@@ -159,9 +159,12 @@ impl Host {
         let never_save = origin.is_some_and(|o| {
             self.site_permissions.get(&o, Permission::SavePasswords) == Some(Decision::Block)
         });
+        // an agent session's tab: no key menu and no save prompt (its sign-ins come by
+        // `fill_secret`; the key menu took the field's focus from it: TODO.md)
+        let session = self.agent_grant_of(tab).is_some();
         Policy {
-            autofill: self.autofill.settings.autofill,
-            offer_to_save: self.autofill.settings.offer_to_save,
+            autofill: self.autofill.settings.autofill && !session,
+            offer_to_save: self.autofill.settings.offer_to_save && !session,
             never_save,
         }
     }
@@ -260,13 +263,13 @@ impl Host {
                     password: Zeroizing::new(creds.password.expose().to_owned()),
                 };
                 if let Err(e) = vault.save(login, now_ms()) {
-                    eprintln!("wubble: the password was not saved: {e}");
+                    vault_failed("saved", &e);
                 }
             }),
             Effect::Update { record, creds } => self.store.vault(move |vault| {
                 let id = RecordId(record);
                 if let Err(e) = vault.update(&id, &creds.username, creds.password.expose()) {
-                    eprintln!("wubble: the password was not updated: {e}");
+                    vault_failed("updated", &e);
                 }
             }),
             Effect::Never { origin } => {
@@ -491,6 +494,20 @@ impl Host {
             Action::Fail(reason) => self.fail(reason),
         }
     }
+}
+
+/// A save the owner asked for did not happen: the log, and a toast that says so plainly (the
+/// prompt already closed, as if it had). Runs on the store thread.
+fn vault_failed(what: &'static str, e: &wubble_vault::VaultError) {
+    eprintln!("wubble: the password was not {what}: {e}");
+    let text = format!("The password was not {what}: {e}");
+    let _ = slint::invoke_from_event_loop(move || {
+        with_host(|host| {
+            if let Some(window) = host.w.window.upgrade() {
+                host.toast(&window, &text);
+            }
+        });
+    });
 }
 
 /// One line per form of a report: the frame's origin, the form's class and
