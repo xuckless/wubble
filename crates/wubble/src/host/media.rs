@@ -1455,6 +1455,10 @@ impl Host {
         let kept = run.job == Job::Joining { cancelled: false };
         if let Ok(paths) = &result {
             run.saved.clone_from(paths);
+            if let Some(first) = paths.first() {
+                // Where the file really is: a conversion that failed kept the stream as it came.
+                run.output.clone_from(first);
+            }
             if kept && let Some(first) = paths.first() {
                 self.set_download_path(job, first);
             }
