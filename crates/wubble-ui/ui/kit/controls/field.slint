@@ -5,7 +5,8 @@
 // and the ring). Otherwise the capsule's thin glass at the control height (36) and the control
 // radius (12), the same padding, icon and type, the film rim while it has the focus; no clear
 // button (that is the search's). `numeric` aligns the number right; `secret` masks it. Escape
-// in a plain field calls `escaped()` and is consumed (a sheet around it cancels).
+// in a plain field calls `escaped()` and is consumed (a sheet around it cancels, a panel with a
+// draft leaves the field: `blur()`).
 
 import { SettingsCss } from "../gen/css.slint";
 import { TouchMenu } from "../gen/tokens.slint";
@@ -39,6 +40,10 @@ export component Field inherits Rectangle {
         } else {
             input.focus();
         }
+    }
+    // leaves the plain field (a panel whose Escape must keep its unsaved draft)
+    public function blur() {
+        input.clear-focus();
     }
     // selects the plain field's text (a prompt's proposed text comes selected)
     public function select-all() {
