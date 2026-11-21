@@ -178,7 +178,7 @@ export component AgentSheet inherits SheetFrame {
         }
     }
     if root.view.secrets.length > 0: BNote {
-        text: "The agent never sees a secret's value: wubble types it into the login's own site. A name left unbound is not granted.";
+        text: "wubble types a bound login into that login's own site; the page there, and the scripts it loads, can read it, the agent's tools cannot, though a screenshot of a field made visible can show it. A name left unbound is not granted.";
     }
     if root.view.may-share && root.view.share: BNote {
         text: root.view.share-note;

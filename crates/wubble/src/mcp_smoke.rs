@@ -796,6 +796,14 @@ fn signins(c: &mut Client, base: &str) -> Result<(), String> {
             .ok_or(format!("no {label} field: {read}"))
     };
     let user = field(c, "User")?;
+    // a password is typed only into a password field
+    match c.tool(
+        "fill_secret",
+        s(json!({"ref": user, "secret": "SIGNIN_PASSWORD"})),
+    )? {
+        Err(e) if e.contains("only into a password field") => {}
+        r => return Err(format!("the password into a text field: {r:?}")),
+    }
     c.ok(
         "fill_secret",
         s(json!({"ref": user, "secret": "SIGNIN_USER"})),
@@ -805,18 +813,34 @@ fn signins(c: &mut Client, base: &str) -> Result<(), String> {
         "fill_secret",
         s(json!({"ref": pass, "secret": "SIGNIN_PASSWORD"})),
     )?;
-    let typed = text(&c.ok(
-        "evaluate",
-        s(json!({"script": "return [document.getElementById('u').value, document.getElementById('p').value.length, document.getElementById('echo').textContent]"})),
-    )?);
+    // the page echoes the typed username into its text
+    c.ok("wait_for", s(json!({"text": "typed "})))?;
     let read = text(&c.ok("read_page", s(json!({})))?);
-    for answer in [&typed, &read] {
-        if answer.contains(SIGNIN_USER) || answer.contains(SIGNIN_PASSWORD) {
-            return Err(format!("a reply carries a filled value: {answer}"));
-        }
+    if read.contains(SIGNIN_USER)
+        || read.contains(SIGNIN_PASSWORD)
+        || !read.contains("typed [secret]")
+    {
+        return Err(format!("read_page after the fills: {read}"));
     }
-    if !typed.contains("[secret]") || !typed.contains(&SIGNIN_PASSWORD.len().to_string()) {
-        return Err(format!("the filled fields: {typed}"));
+    // no script where a secret was typed: this tab, and a new one on the same site
+    match c.tool(
+        "evaluate",
+        s(json!({"script": "return document.getElementById('u').value"})),
+    )? {
+        Err(e) if e.contains("a secret was filled") => {}
+        r => return Err(format!("evaluate in the filled tab: {r:?}")),
+    }
+    let again = json_of(&c.ok(
+        "open_tab",
+        json!({"session": session, "url": format!("{signin}/mcp/cookies")}),
+    )?)?;
+    let again = again["tab"].as_str().unwrap_or_default().to_owned();
+    match c.tool(
+        "evaluate",
+        json!({"session": session, "tab": again, "script": "1"}),
+    )? {
+        Err(e) if e.contains("a secret was filled") => {}
+        r => return Err(format!("evaluate in a new tab on the filled site: {r:?}")),
     }
     // more: the other site, unshared; a bound name is refused there
     let granted = json_of(&c.ok(
@@ -844,9 +868,21 @@ fn signins(c: &mut Client, base: &str) -> Result<(), String> {
         Err(e) if e.contains("not the login's site") => {}
         r => return Err(format!("fill_secret on {OTHER_HOST}: {r:?}")),
     }
+    // the new tab moved off the filled site: a tab never filled into may run scripts again
+    c.ok(
+        "navigate",
+        json!({"session": session, "tab": again, "url": format!("{other}/mcp/cookies")}),
+    )?;
+    let two = text(&c.ok(
+        "evaluate",
+        json!({"session": session, "tab": again, "script": "return 1+1"}),
+    )?);
+    if two != "2" {
+        return Err(format!("evaluate in a tab never filled into: {two}"));
+    }
     c.step(
         "fill_secret",
-        format!("both names filled on {SIGNIN_HOST} (no reply carries a value: [secret]), refused on {OTHER_HOST}, which came unshared and cookieless"),
+        format!("both names filled on {SIGNIN_HOST} (no reply carries a value: [secret]; the password refused in a text field); evaluate refused in the filled tab and in a new tab on its site, allowed once that tab left it; refused on {OTHER_HOST}, which came unshared and cookieless"),
     );
     c.ok("stop_session", json!({"session": session}))?;
     Ok(())

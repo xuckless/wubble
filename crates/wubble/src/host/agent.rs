@@ -117,7 +117,23 @@ struct Session {
     asked: u64,
     /// The `request_more` call waiting for the owner's answer.
     more: Option<Reply>,
+    /// Where a filled secret could be read back by a script (`agent::Tainted`).
+    tainted: agent::Tainted,
+    /// The sign-ins copy in flight (`Effect::CopyCookies`), while one is.
+    copy: Option<CopyRun>,
 }
+
+/// A copy of the owner's sign-ins in flight: its serial (a late answer to an older one is
+/// dropped), its stop, and its bound ([`COPY_BOUND`]).
+struct CopyRun {
+    serial: u64,
+    cancel: wubble_engine::storage::CopyCancel,
+    _bound: slint::Timer,
+}
+
+/// How long a sign-ins copy may take before the session's start (or its `request_more`)
+/// fails: CEF answers a copy of a few thousand cookies well inside it.
+const COPY_BOUND: Duration = Duration::from_secs(20);
 
 /// What a call's answer is logged and sent with.
 #[derive(Clone)]
@@ -175,13 +191,26 @@ enum Load {
 }
 
 /// Asks the page whether the click at `(x, y)` focused the element there, in the top
-/// document (not a frame): its URL if so, else `null`.
+/// document (not a frame): `P` (a password field) or `T`, then its URL, if so; else `null`.
 fn focus_script(x: f64, y: f64) -> String {
     format!(
         "(()=>{{const e=document.activeElement,h=document.elementFromPoint({x},{y});\
          return e&&e!==document.body&&!/^I?FRAME$/.test(e.tagName)&&h&&(e===h||e.contains(h))\
-         ?location.href:null}})()"
+         ?(e.type==='password'?'P':'T')+location.href:null}})()"
     )
+}
+
+/// Whether the focused field may take `part`: a password only into a password field (one a
+/// show-password toggle turned into text is refused: turn it back), a username never into one.
+fn field_takes(part: agent::Part, password_field: bool) -> Result<(), &'static str> {
+    match (part, password_field) {
+        (agent::Part::Password, true) | (agent::Part::Username, false) => Ok(()),
+        (agent::Part::Password, false) => Err(
+            "a password is typed only into a password field (if a show-password toggle made it \
+             text, turn it back)",
+        ),
+        (agent::Part::Username, true) => Err("a username is not typed into a password field"),
+    }
 }
 
 /// Where locating an element is (DevTools: `DOM.scrollIntoViewIfNeeded`, then
@@ -521,27 +550,54 @@ fn capped(text: &str, max: usize) -> String {
     out
 }
 
+/// Why `evaluate` (and `wait_for` in field values) is refused after a fill.
+const TAINTED: &str = "not in this tab: a secret was filled into it, or into a page of its \
+    site, in this session, and a script there could read it back (evaluate and wait_for with \
+    in_values stay off here for the rest of the session)";
+
 /// The text a filled secret is replaced with in a reply.
 const REDACTED: &str = "[secret]";
 
-/// Takes every value `fill_secret` typed for the session out of `result`'s text (a page's
-/// echo of a username, a field's value in a read, a script's return), longest first. Values
-/// under three characters are left: they would blank ordinary text. Pixels are not text: a
-/// screenshot still shows what the page draws.
+/// The shortest value `fill_secret` types: a shorter one could not be told apart from
+/// ordinary text in a reply, so it is not typed at all (the call says why).
+const MIN_SECRET: usize = 3;
+
+/// The spellings a reply can carry `value` in: as typed, JSON-escaped (an `evaluate` result,
+/// once or as a JSON string inside JSON), and Rust-escaped (`read_page` quotes names and values
+/// with `{:?}`). A value with nothing to escape is spelt the same each way.
+fn spellings(value: &str) -> Vec<String> {
+    let inner = |quoted: String| quoted[1..quoted.len() - 1].to_owned();
+    let json = inner(serde_json::to_string(value).unwrap_or_default());
+    let json2 = inner(serde_json::to_string(&json).unwrap_or_default());
+    let debug = inner(format!("{value:?}"));
+    let mut all = vec![value.to_owned(), json, json2, debug];
+    all.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    all.dedup();
+    all
+}
+
+/// `text` with every spelling of each of `values` replaced by [`REDACTED`], longest first.
+fn redact_text(text: &str, values: &[&str]) -> String {
+    let mut all: Vec<String> = values.iter().flat_map(|v| spellings(v)).collect();
+    all.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    let mut text = text.to_owned();
+    for v in all.iter().filter(|v| !v.is_empty()) {
+        if text.contains(v.as_str()) {
+            text = text.replace(v.as_str(), REDACTED);
+        }
+    }
+    text
+}
+
+/// Takes every value `fill_secret` typed for the session out of `result`'s text, in each
+/// spelling a reply carries ([`spellings`]). What it cannot catch: a value a page or script
+/// changed (split, reversed, encoded otherwise), and pixels (a screenshot of a field made
+/// visible); `evaluate` is refused where a secret was typed (`agent::Tainted`).
 fn redact(result: &mut ToolResult, values: &[Secret]) {
-    let mut values: Vec<&str> = values
-        .iter()
-        .map(Secret::expose)
-        .filter(|v| v.chars().count() >= 3)
-        .collect();
-    values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    let values: Vec<&str> = values.iter().map(Secret::expose).collect();
     for content in &mut result.content {
         if let wubble_mcp::Content::Text(text) = content {
-            for v in &values {
-                if text.contains(v) {
-                    *text = text.replace(v, REDACTED);
-                }
-            }
+            *text = redact_text(text, &values);
         }
     }
 }
@@ -596,6 +652,23 @@ fn picker_logins<'a>(
     first
 }
 
+/// A name's picker after "Not bound": each login twice, its username and its password, the
+/// part the name suggests first ([`agent::suggested_part`]); the owner's pick is the part.
+fn binding_choices<'a>(
+    logins: &[&'a wubble_core::pages::LoginView],
+    name: &str,
+) -> Vec<(&'a wubble_core::pages::LoginView, agent::Part)> {
+    let first = agent::suggested_part(name);
+    let other = match first {
+        agent::Part::Username => agent::Part::Password,
+        agent::Part::Password => agent::Part::Username,
+    };
+    logins
+        .iter()
+        .flat_map(|l| [(*l, first), (*l, other)])
+        .collect()
+}
+
 /// What the sheet shows beyond the lists: the Spaces to share from, the logins to bind to.
 struct SheetData<'a> {
     spaces: &'a [(SpaceId, String, ContainerId)],
@@ -632,30 +705,36 @@ fn sheet_view(
         SheetVault::Open(all) => picker_logins(all, &lists.sites),
         _ => vec![],
     };
-    let options: Vec<wubble_ui::MenuEntry> = std::iter::once(entry("Not bound".into()))
-        .chain(logins.iter().map(|l| {
-            entry(format!(
-                "{} on {}",
-                l.username.as_deref().unwrap_or_default(),
-                l.site()
-            ))
-        }))
-        .collect();
     let bindings: Vec<wubble_ui::AgentBindingItem> = lists
         .secrets
         .iter()
         .map(|name| {
-            let bound = lists.bound.get(name);
-            let index = bound
-                .and_then(|b| logins.iter().position(|l| l.id == b.login.0))
+            let choices = binding_choices(&logins, name);
+            let options: Vec<wubble_ui::MenuEntry> = std::iter::once(entry("Not bound".into()))
+                .chain(choices.iter().map(|(l, part)| {
+                    let part = match part {
+                        agent::Part::Username => "username",
+                        agent::Part::Password => "password",
+                    };
+                    entry(format!(
+                        "The {part} of {} on {}",
+                        l.username.as_deref().unwrap_or_default(),
+                        l.site()
+                    ))
+                }))
+                .collect();
+            let index = lists
+                .bound
+                .get(name)
+                .and_then(|b| {
+                    choices
+                        .iter()
+                        .position(|(l, p)| l.id == b.login.0 && *p == b.part)
+                })
                 .map_or(0, |i| i + 1);
-            let part = match agent::part_of(name) {
-                agent::Part::Username => "username",
-                agent::Part::Password => "password",
-            };
             wubble_ui::AgentBindingItem {
                 name: name.as_str().into(),
-                title: format!("{name} types the {part} of").into(),
+                title: format!("{name} stands for").into(),
                 options: options.as_slice().into(),
                 index: i32::try_from(index).unwrap_or(0),
             }
@@ -666,13 +745,30 @@ fn sheet_view(
         _ => (false, String::new()),
     };
     let from = data.source.and_then(|i| data.spaces.get(i));
+    let unshareable = lists.unshareable();
+    let shared: Vec<&str> = lists
+        .sites
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !unshareable.contains(s))
+        .collect();
+    let never = if unshareable.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Never shared for {}: each is a whole domain ending, not one site.",
+            unshareable.join(", ")
+        )
+    };
     let share_note = match from {
+        Some(_) if shared.is_empty() => format!("No sign-ins can be shared.{never}"),
         Some((_, name, _)) => format!(
             "Cookies for {} are copied from your Space {name} into the agent's own Space before \
-             it starts; your own tabs stay signed in. Stopping the session deletes the copies; a \
-             Space it hands to you keeps them until you delete it. Sign-ins kept in a site's \
-             local storage are not copied.",
-            lists.sites.join(", ")
+             it starts, with the cookies their parent domain sets for all its sites (sharing \
+             accounts.google.com shares the google.com sign-in); your own tabs stay signed in. \
+             Stopping the session deletes the copies; a Space it hands to you keeps them until \
+             you delete it. Sign-ins kept in a site's local storage are not copied.{never}",
+            shared.join(", ")
         ),
         None => "You have no Space to take sign-ins from.".into(),
     };
@@ -735,6 +831,9 @@ fn stopped_text(reason: StopReason, note: Option<&str>) -> String {
         StopReason::Released => "the session ended; its tabs are the user's now".into(),
         StopReason::ClientGone => "the client went away".into(),
         StopReason::BrowserQuit => "the browser quit".into(),
+        StopReason::SignInsNotCopied => {
+            "the user's sign-ins could not be copied into the session: it did not start".into()
+        }
     }
 }
 
@@ -881,6 +980,10 @@ impl Host {
                 self.agent_started(id, &token);
             }
             Effect::Teardown => {
+                // a copy in flight sets nothing more into the container going now
+                if let Some(run) = self.agents.sessions.get_mut(id).and_then(|s| s.copy.take()) {
+                    run.cancel.cancel();
+                }
                 if let Some((space, container)) = self
                     .agents
                     .sessions
@@ -952,14 +1055,20 @@ impl Host {
                     MoreAnswer::Busy => {
                         self.agent_refuse(reply, "the user is already being asked for more")
                     }
+                    MoreAnswer::NotCopied => self.agent_fail(
+                        reply,
+                        "the user allowed it with their sign-ins, but those could not be copied: \
+                         nothing was granted, the session runs on with what it had",
+                    ),
                 }
             }
         }
     }
 
     /// "Use my sign-ins": copies container `from`'s cookies for `sites` into the session's
-    /// container (`wubble_engine::app::Engine::copy_cookies`, the edge), logs the copy (the
-    /// sites, the Space and a count: never a name or value) and lets the session go on.
+    /// container (`wubble_engine::app::Engine::copy_cookies`, the edge), within
+    /// [`COPY_BOUND`]; logs the copy (the sites, the Space and a count: never a name or value)
+    /// and tells the session, once: copied, or not (refused, or out of time).
     fn agent_copy_cookies(
         &mut self,
         id: &SessionId,
@@ -968,58 +1077,85 @@ impl Host {
         sites: Vec<String>,
     ) {
         let Some((_, to)) = self.agents.sessions.get(id).and_then(|s| s.space) else {
-            return self.agent_event(id, Event::CookiesCopied);
+            let why = "the session has no Space to copy into".to_owned();
+            return self.agent_cookies_copied(id, None, &sites, &space, Err(why));
         };
+        let serial = self.agents.fresh();
         let scope = agent::cookie_scope(&sites);
         let filter: wubble_engine::storage::CookieFilter = Box::new(move |domain, path, secure| {
             agent::shares_cookie(&scope, domain, path, secure)
         });
-        let session = id.clone();
+        let (session, names, named) = (id.clone(), sites.clone(), space.clone());
         let done = Box::new(move |report: wubble_engine::storage::CopyReport| {
             let _ = slint::invoke_from_event_loop(move || {
                 with_host(|host| {
                     host.mcp_smoke_copied(from, to, &report);
-                    host.agent_cookies_copied(&session, &sites, &space, Ok(report));
+                    host.agent_cookies_copied(&session, Some(serial), &names, &named, Ok(report));
                 });
             });
         });
-        if let Err(e) = self.engine.copy_cookies(from, to, filter, done) {
-            let session = id.clone();
-            let sites = self
-                .agents
-                .sessions
-                .get(id)
-                .and_then(|s| s.state.grant())
-                .map(|g| g.signin_sites().map(str::to_owned).collect::<Vec<_>>())
-                .unwrap_or_default();
-            self.agent_cookies_copied(&session, &sites, "", Err(e.to_string()));
+        match self.engine.copy_cookies(from, to, filter, done) {
+            Ok(cancel) => {
+                let bound = slint::Timer::default();
+                let session = id.clone();
+                bound.start(slint::TimerMode::SingleShot, COPY_BOUND, move || {
+                    let why = format!("it did not finish in {} s", COPY_BOUND.as_secs());
+                    with_host(|h| {
+                        h.agent_cookies_copied(&session, Some(serial), &sites, &space, Err(why))
+                    });
+                });
+                if let Some(s) = self.agents.sessions.get_mut(id) {
+                    s.copy = Some(CopyRun {
+                        serial,
+                        cancel,
+                        _bound: bound,
+                    });
+                }
+            }
+            Err(e) => self.agent_cookies_copied(id, None, &sites, &space, Err(e.to_string())),
         }
     }
 
+    /// The end of a copy: `serial` names the run (`None`: one that never started); an answer
+    /// to a run no longer in flight (out of time already, or the session gone) is dropped.
     fn agent_cookies_copied(
         &mut self,
         id: &SessionId,
+        serial: Option<u64>,
         sites: &[String],
         space: &str,
         report: Result<wubble_engine::storage::CopyReport, String>,
     ) {
-        let (target, outcome) = match &report {
+        if let Some(serial) = serial {
+            let Some(s) = self.agents.sessions.get_mut(id) else {
+                return;
+            };
+            match s.copy.take() {
+                Some(run) if run.serial == serial => run.cancel.cancel(),
+                other => {
+                    s.copy = other;
+                    return;
+                }
+            }
+        }
+        let sites = sites.join(", ");
+        let (target, outcome, event) = match &report {
             Ok(r) => (
                 format!(
-                    "cookies for {} copied from Space {space} ({} of {})",
-                    sites.join(", "),
-                    r.set,
-                    r.taken
+                    "cookies for {sites} copied from Space {space} ({} of {})",
+                    r.set, r.taken
                 ),
                 Outcome::Done,
+                Event::CookiesCopied,
             ),
             Err(why) => (
-                format!("cookies for {} not copied: {why}", sites.join(", ")),
+                format!("cookies for {sites} from Space {space} not copied: {why}"),
                 Outcome::Failed,
+                Event::CookiesNotCopied,
             ),
         };
         self.agent_log(id, "share_sign_ins", Some(target), outcome);
-        self.agent_event(id, Event::CookiesCopied);
+        self.agent_event(id, event);
     }
 
     /// `--smoke mcp`: a copy ended. Keeps its report and container, and counts the owner's
@@ -1227,17 +1363,18 @@ impl Host {
             .get(id)
             .map(|s| s.lists.sites.clone())
             .unwrap_or_default();
-        let binding =
-            match (&self.agents.sheet_vault, usize::try_from(index)) {
-                (SheetVault::Open(all), Ok(i)) if i > 0 => picker_logins(all, &sites)
+        let binding = match (&self.agents.sheet_vault, usize::try_from(index)) {
+            (SheetVault::Open(all), Ok(i)) if i > 0 => {
+                binding_choices(&picker_logins(all, &sites), name)
                     .get(i - 1)
-                    .map(|l| agent::SecretBinding {
+                    .map(|(l, part)| agent::SecretBinding {
                         login: agent::LoginRef(l.id.clone()),
                         origin: l.origin.clone(),
-                        part: agent::part_of(name),
-                    }),
-                _ => None,
-            };
+                        part: *part,
+                    })
+            }
+            _ => None,
+        };
         let _ = self.agent_sheet_edit(agent::ListEdit::Bind {
             name,
             login: binding.as_ref(),
@@ -1271,6 +1408,10 @@ impl Host {
             VaultAnswer::Status(VaultStatus::Locked) => {
                 self.agents.sheet_vault =
                     SheetVault::Closed("Unlock them to pick the login each name stands for".into());
+            }
+            VaultAnswer::Status(status @ VaultStatus::KeyLost { .. }) => {
+                let (_, body) = wubble_core::pages::status_text(&status);
+                self.agents.sheet_vault = SheetVault::Closed(body);
             }
             VaultAnswer::Status(VaultStatus::Unavailable(why)) | VaultAnswer::Failed(why) => {
                 self.agents.sheet_vault = SheetVault::Closed(format!("They cannot be used: {why}"));
@@ -1311,6 +1452,8 @@ impl Host {
                 note: None,
                 asked: 0,
                 more: None,
+                tainted: agent::Tainted::default(),
+                copy: None,
             },
         );
         let request = Request {
@@ -1814,6 +1957,10 @@ impl Host {
                 timeout_ms,
                 ..
             } => {
+                // a field's value matched against a guess is a way to read a secret back
+                if in_values && self.agent_tainted(&session, tab) {
+                    return self.agent_refuse(reply, TAINTED);
+                }
                 let text = |text: String, gone: bool| Wait::Text {
                     tab,
                     text,
@@ -1839,6 +1986,9 @@ impl Host {
             AgentCall::Evaluate {
                 script, timeout_ms, ..
             } => {
+                if self.agent_tainted(&session, tab) {
+                    return self.agent_refuse(reply, TAINTED);
+                }
                 let timeout = timeout_ms.unwrap_or(WAIT.as_millis() as u32);
                 self.agent_evaluate(reply, tab, script, timeout, Evaluating::First);
             }
@@ -1873,6 +2023,8 @@ impl Host {
                 note: None,
                 asked: 0,
                 more: None,
+                tainted: agent::Tainted::default(),
+                copy: None,
             },
         );
         let request = Request {
@@ -1893,6 +2045,15 @@ impl Host {
         let (space, container) = self.agents.sessions.get(session)?.space?;
         let tab = TabId(handle.parse().ok()?);
         self.model.holds(space, container, tab).then_some(tab)
+    }
+
+    /// Whether a secret was typed where `tab` is ([`agent::Tainted`]).
+    fn agent_tainted(&self, session: &SessionId, tab: TabId) -> bool {
+        let url = self.agent_url(tab);
+        self.agents
+            .sessions
+            .get(session)
+            .is_some_and(|s| s.tainted.refuses_scripts(tab, &url))
     }
 
     fn agent_grant(&self, session: &SessionId) -> Option<&Grant> {
@@ -2469,17 +2630,29 @@ impl Host {
 
     /// The page's answer to [`focus_script`]: the secret is typed only into the element that
     /// was clicked, in the top document, while the page is still on the login's site.
-    fn agent_focused(&mut self, reply: Reply, tab: TabId, text: Secret, name: &str, href: &str) {
-        let granted = reply
+    fn agent_focused(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        text: Secret,
+        name: &str,
+        href: &str,
+        password_field: bool,
+    ) {
+        let part = reply
             .session
             .as_ref()
             .and_then(|s| self.agent_grant(s))
-            .is_some_and(|g| g.secret_for(name, href, href).is_some());
-        if !granted {
+            .and_then(|g| g.secret_for(name, href, href))
+            .map(|b| b.part);
+        let Some(part) = part else {
             return self.agent_refuse(
                 reply,
                 "the field did not take focus in the login site's own page",
             );
+        };
+        if let Err(why) = field_takes(part, password_field) {
+            return self.agent_refuse(reply, why);
         }
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
@@ -2488,6 +2661,9 @@ impl Host {
         view.ime_commit(text.expose());
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
         if let Some(session) = &reply.session {
+            if let Some(s) = self.agents.sessions.get_mut(session) {
+                s.tainted.filled(tab, href);
+            }
             self.agents
                 .filled
                 .entry(session.clone())
@@ -2842,6 +3018,11 @@ impl Host {
             return;
         };
         match value {
+            Some(text) if text.expose().chars().count() < MIN_SECRET => self.agent_refuse(
+                p.reply,
+                "the saved value is under 3 characters: too short to keep out of replies, so it \
+                 is not typed",
+            ),
             Some(text) => self.agent_act(p.reply, tab, &target, None, Act::Fill { text, name }),
             None => self.agent_fail(p.reply, "the vault has no such login"),
         }
@@ -3205,13 +3386,19 @@ impl Host {
                 else {
                     return true;
                 };
-                let href = result
+                // `P` or `T` (a password field or not), then the page's address
+                let answer = result
                     .as_deref()
                     .ok()
                     .and_then(|t| serde_json::from_str::<Option<String>>(t).ok())
                     .flatten()
                     .unwrap_or_default();
-                self.agent_focused(p.reply, tab, text, &name, &href);
+                let (password, href) = match answer.split_at_checked(1) {
+                    Some(("P", href)) => (true, href.to_owned()),
+                    Some(("T", href)) => (false, href.to_owned()),
+                    _ => (false, String::new()),
+                };
+                self.agent_focused(p.reply, tab, text, &name, &href, password);
             }
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
@@ -4099,3 +4286,88 @@ const GALLERY_PAGES: [&str; 3] = [
     "http://github.localhost/releases",
     "http://github.localhost/issues/new",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(result: &ToolResult) -> &str {
+        match &result.content[0] {
+            wubble_mcp::Content::Text(t) => t,
+            _ => panic!("not text"),
+        }
+    }
+
+    #[test]
+    fn a_filled_value_is_redacted_in_every_spelling_a_reply_carries() {
+        for value in [
+            "pa\"ss",
+            "back\\slash",
+            "tab\there",
+            "new\nline",
+            "plain-pw",
+            "ünï\u{1}",
+        ] {
+            let secret = Secret::new(value);
+            // as `read_page` prints a value (Rust's escaping), as `evaluate` returns it (JSON,
+            // also a JSON string inside JSON), and as typed
+            let json = serde_json::to_string(value).unwrap();
+            for reply in [
+                format!("- textField \"User\" value={value:?}"),
+                format!("{{\"result\":{json}}}"),
+                serde_json::to_string(&format!("{{\"result\":{json}}}")).unwrap(),
+                format!("typed {value} here"),
+            ] {
+                let mut r = ToolResult::text(reply.clone());
+                redact(&mut r, std::slice::from_ref(&secret));
+                let out = text(&r);
+                assert!(out.contains(REDACTED), "{value:?} in {reply:?}: {out}");
+                for spelling in spellings(value) {
+                    assert!(!out.contains(&spelling), "{value:?} left in {out}");
+                }
+            }
+        }
+        // other text is left alone
+        let mut r = ToolResult::text("nothing secret");
+        redact(&mut r, &[Secret::new("pa\"ss")]);
+        assert_eq!(text(&r), "nothing secret");
+    }
+
+    #[test]
+    fn a_part_goes_only_into_its_kind_of_field() {
+        assert!(field_takes(agent::Part::Password, true).is_ok());
+        assert!(field_takes(agent::Part::Password, false).is_err());
+        assert!(field_takes(agent::Part::Username, false).is_ok());
+        assert!(field_takes(agent::Part::Username, true).is_err());
+    }
+
+    #[test]
+    fn a_name_is_offered_each_part_of_each_login_its_suggestion_first() {
+        let login = |id: &str| wubble_core::pages::LoginView {
+            id: id.into(),
+            origin: "https://a.test".into(),
+            username: Some("me".into()),
+            created_ms: 0,
+            last_used_ms: None,
+            times_used: 0,
+        };
+        let (a, b) = (login("a"), login("b"));
+        let parts = |name| -> Vec<(String, agent::Part)> {
+            binding_choices(&[&a, &b], name)
+                .into_iter()
+                .map(|(l, p)| (l.id.clone(), p))
+                .collect()
+        };
+        use agent::Part::{Password, Username};
+        assert_eq!(
+            parts("GH_USER"),
+            [
+                ("a".into(), Username),
+                ("a".into(), Password),
+                ("b".into(), Username),
+                ("b".into(), Password)
+            ]
+        );
+        assert_eq!(parts("GH_ID")[0], ("a".into(), Password));
+    }
+}
