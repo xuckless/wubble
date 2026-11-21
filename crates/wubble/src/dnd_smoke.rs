@@ -243,6 +243,9 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::BookmarksTab),
             Settle(20),
             Until(H(C::Visible(0))),
+            // showing the first tab again replays its entrance: a press before it ends lands
+            // where the page is drawn then (scaled in), off the link
+            Until(H(C::PageEntered)),
             LINK[0],
             LINK[1],
             LINK[2],
@@ -267,6 +270,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SecondTab),
             Settle(20),
             Until(H(C::Visible(0))),
+            Until(H(C::PageEntered)),
             LINK[0],
             LINK[1],
             LINK[2],

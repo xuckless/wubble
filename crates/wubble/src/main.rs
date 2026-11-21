@@ -1785,7 +1785,9 @@ fn run(
             autofill_port.map(dnd_smoke::home),
             Checks {
                 parity: autofill_port.map(|port| {
-                    host::ParityRun::suite("dnd", dnd_smoke::home(port), dnd_smoke::ITEMS.to_vec())
+                    let filter = std::env::var("WUBBLE_PARITY").ok();
+                    let items = parity::pick(dnd_smoke::ITEMS, filter.as_deref());
+                    host::ParityRun::suite("dnd", dnd_smoke::home(port), items)
                 }),
                 ..none
             },

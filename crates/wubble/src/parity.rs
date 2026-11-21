@@ -1776,7 +1776,13 @@ pub fn menu_lists(labels: &[(String, bool)], want: &[&str]) -> Result<(), String
 /// The items whose names contain one of `filter`'s comma-separated parts (all without one):
 /// `WUBBLE_PARITY=B.,D.html` runs a few by hand.
 pub fn selected(filter: Option<&str>) -> Vec<Item> {
-    ITEMS
+    pick(ITEMS, filter)
+}
+
+/// The items of `items` whose names contain one of `filter`'s comma-separated parts (all
+/// without one), in their order.
+pub fn pick(items: &[Item], filter: Option<&str>) -> Vec<Item> {
+    items
         .iter()
         .filter(|i| filter.is_none_or(|f| f.split(',').any(|part| i.name.contains(part))))
         .copied()
