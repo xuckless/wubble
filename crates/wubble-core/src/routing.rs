@@ -62,6 +62,16 @@ fn valid_host(h: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// A host as a rule names it: ASCII as typed, an internationalised name as the punycode a URL's
+/// host has (`bücher.de` is `xn--bcher-kva.de`), so the rule can match it.
+fn ascii_host(h: &str) -> Option<String> {
+    if h.is_ascii() {
+        Some(h.to_owned())
+    } else {
+        site_host(h)
+    }
+}
+
 impl Rule {
     /// `None` for anything that is not a rule: no `->`, a bad host, or no name at all.
     pub fn parse(text: &str) -> Option<Rule> {
@@ -69,13 +79,17 @@ impl Rule {
         if target.contains("->") {
             return None;
         }
-        let pattern = pattern.trim().to_ascii_lowercase();
+        let pattern = pattern.trim().to_lowercase();
         let pattern = pattern.strip_suffix('.').unwrap_or(&pattern);
         let pattern = match pattern.strip_prefix("*.") {
-            Some(base) if valid_host(base) => Pattern::Subdomains(base.to_owned()),
-            Some(_) => return None,
-            None if valid_host(pattern) => Pattern::Host(pattern.to_owned()),
-            None => return None,
+            Some(base) => match ascii_host(base).filter(|b| valid_host(b)) {
+                Some(base) => Pattern::Subdomains(base),
+                None => return None,
+            },
+            None => match ascii_host(pattern).filter(|h| valid_host(h)) {
+                Some(host) => Pattern::Host(host),
+                None => return None,
+            },
         };
         let (space, container) = match target.split_once(',') {
             Some((s, c)) => (s, c),
@@ -96,6 +110,37 @@ impl Rule {
             space,
             container,
         })
+    }
+}
+
+/// The host a typed site stands for, as the site lists keep it: lowercase, no scheme, port, path
+/// or credentials, no leading `*.` (an entry covers its subdomains already) and no trailing dot;
+/// an internationalised name as its punycode. `None` for what is no site: empty, or with a space.
+pub fn site_host(text: &str) -> Option<String> {
+    let text = text.trim();
+    let text = text.strip_prefix("*.").unwrap_or(text);
+    if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c == '@') {
+        return None;
+    }
+    let host = if text.contains("://") {
+        host_key(text)
+    } else {
+        host_key(&format!("http://{text}"))
+    };
+    host.filter(|h| !h.starts_with('.') && !h.contains(".."))
+}
+
+/// Whether two rule texts are one rule: the same sites and the same names (case aside, as
+/// [`resolve`] reads names).
+pub fn same_rule(a: &str, b: &str) -> bool {
+    match (Rule::parse(a), Rule::parse(b)) {
+        (Some(a), Some(b)) => {
+            let lower = |n: Option<String>| n.map(|n| n.to_lowercase());
+            a.pattern == b.pattern
+                && lower(a.space) == lower(b.space)
+                && lower(a.container) == lower(b.container)
+        }
+        _ => a == b,
     }
 }
 
@@ -224,6 +269,53 @@ mod tests {
         ] {
             assert_eq!(Rule::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn an_international_name_is_a_rule_on_its_punycode() {
+        let r = Rule::parse("Bücher.de -> Work").unwrap();
+        assert_eq!(r.pattern, Pattern::Host("xn--bcher-kva.de".into()));
+        let w = Rule::parse("*.bücher.de -> Work").unwrap();
+        assert_eq!(w.pattern, Pattern::Subdomains("xn--bcher-kva.de".into()));
+        // the URL's host is punycode: both rules reach it
+        assert!(route(&[r], "https://bücher.de/").is_some());
+        assert!(route(&[w], "https://shop.xn--bcher-kva.de/").is_some());
+    }
+
+    #[test]
+    fn site_host_is_the_one_entry_a_site_list_keeps() {
+        for (typed, host) in [
+            ("example.com", "example.com"),
+            ("  Example.COM. ", "example.com"),
+            ("https://www.Example.com:8443/a/b?c#d", "www.example.com"),
+            ("example.com:8080", "example.com"),
+            ("*.example.com", "example.com"),
+            ("127.0.0.1:3000", "127.0.0.1"),
+            ("[::1]:80", "[::1]"),
+            ("bücher.de", "xn--bcher-kva.de"),
+            ("localhost", "localhost"),
+        ] {
+            assert_eq!(site_host(typed).as_deref(), Some(host), "{typed}");
+        }
+        for bad in [
+            "",
+            "  ",
+            "a b.com",
+            "me@example.com",
+            "http://",
+            "a..b",
+            "\u{0}",
+        ] {
+            assert_eq!(site_host(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_rule_typed_twice_is_one_rule() {
+        assert!(same_rule("A.com -> Work, Bank", "a.com->work ,bank"));
+        assert!(same_rule("a.com. -> Work", "a.com -> Work"));
+        assert!(!same_rule("a.com -> Work", "a.com -> Home"));
+        assert!(!same_rule("a.com -> Work", "*.a.com -> Work"));
     }
 
     #[test]

@@ -392,6 +392,8 @@ pub enum Refusal {
     Blank,
     /// `routing.rules`: not `site -> Space, Container`.
     NotARule,
+    /// A site list: no host in it (`routing::site_host`).
+    NotASite,
     Duplicate,
 }
 
@@ -401,6 +403,7 @@ impl Refusal {
             Refusal::NotAList => "This list cannot be changed here",
             Refusal::Blank => "Type something to add",
             Refusal::NotARule => "Needs a site and a Space, a container or both",
+            Refusal::NotASite => "Needs a site, such as example.com",
             Refusal::Duplicate => "Already in the list",
         }
     }
@@ -426,15 +429,28 @@ pub fn put_entry(
     if key == settings::ROUTING_RULES.key && Rule::parse(entry).is_none() {
         return Err(Refusal::NotARule);
     }
+    // a site is kept as its host, the way the matchers read a URL's: a scheme, a port or a path
+    // typed with it would never match anything
+    let site = settings::SITE_LISTS.contains(&key);
+    let entry = if site {
+        crate::routing::site_host(entry).ok_or(Refusal::NotASite)?
+    } else {
+        entry.to_owned()
+    };
+    let same = |item: &str| match key {
+        _ if site => crate::routing::site_host(item).is_some_and(|h| h == entry),
+        k if k == settings::ROUTING_RULES.key => crate::routing::same_rule(item, &entry),
+        _ => item == entry,
+    };
     if items
         .iter()
-        .any(|i| i == entry && Some(i.as_str()) != replacing)
+        .any(|i| same(i) && Some(i.as_str()) != replacing)
     {
         return Err(Refusal::Duplicate);
     }
     match replacing.and_then(|r| items.iter().position(|i| i == r)) {
-        Some(at) => entry.clone_into(&mut items[at]),
-        None => items.push(entry.to_owned()),
+        Some(at) => items[at] = entry,
+        None => items.push(entry),
     }
     Ok(serde_json::to_string(&items).expect("a list of strings serialises"))
 }
@@ -709,6 +725,50 @@ mod tests {
             Err(Refusal::NotAList)
         );
         assert!(!Refusal::NotARule.note().is_empty());
+    }
+
+    #[test]
+    fn a_site_is_kept_as_its_host_and_a_rule_typed_twice_is_refused() {
+        let key = "blocker.exceptions";
+        let s = stored(&[(key, r#"["a.test"]"#)]);
+        for (typed, kept) in [
+            ("https://B.test:8443/x?y", "b.test"),
+            ("  *.B.TEST. ", "b.test"),
+            ("bücher.de", "xn--bcher-kva.de"),
+            ("127.0.0.1:3000", "127.0.0.1"),
+        ] {
+            assert_eq!(
+                put_entry(key, &s, None, typed).unwrap(),
+                format!(r#"["a.test","{kept}"]"#),
+                "{typed}"
+            );
+        }
+        // the same site, however it is typed, is one entry; a name with a space is none
+        assert_eq!(put_entry(key, &s, None, "A.test."), Err(Refusal::Duplicate));
+        assert_eq!(
+            put_entry(key, &s, None, "http://a.test:99/"),
+            Err(Refusal::Duplicate)
+        );
+        assert_eq!(put_entry(key, &s, None, "a b"), Err(Refusal::NotASite));
+        assert_eq!(
+            put_entry(key, &s, None, "me@a.test"),
+            Err(Refusal::NotASite)
+        );
+        assert!(!Refusal::NotASite.note().is_empty());
+        // an entry stored by an older version, with its port, still counts as the site
+        let old = stored(&[(key, r#"["Old.test:8080"]"#)]);
+        assert_eq!(
+            put_entry(key, &old, None, "old.test"),
+            Err(Refusal::Duplicate)
+        );
+        // rules
+        let rules = stored(&[("routing.rules", r#"["a.test -> Work, Bank"]"#)]);
+        assert_eq!(
+            put_entry("routing.rules", &rules, None, "A.TEST. -> work,bank"),
+            Err(Refusal::Duplicate)
+        );
+        assert!(put_entry("routing.rules", &rules, None, "a.test -> Home").is_ok());
+        assert!(put_entry("routing.rules", &rules, None, "bücher.de -> Home").is_ok());
     }
 
     #[test]
