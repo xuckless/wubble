@@ -358,7 +358,8 @@ impl Host {
     /// The Agents (MCP) group: read now, so an app installed since shows up.
     pub(super) fn render_agents(&self, window: &AppWindow) {
         let state = &self.hosting.state;
-        let on = value_of(&defs::AGENT_MCP_ENABLED, &self.settings.stored) == "1";
+        // the switch is the hosting machine's state (one owner), not the stored setting
+        let on = state.switch_on();
         let remote_port = defs::remote_port(
             value_of(&defs::DEVTOOLS_REMOTE_PORT, &self.settings.stored)
                 .parse()

@@ -192,6 +192,14 @@ impl Host {
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
         }
+        // a scene that clicks a section by its place starts with the list at the top (an
+        // earlier scene's wheel may have scrolled it)
+        if scene.page == Some(wubble_core::pages::InternalPage::Settings)
+            && scene.click.is_some()
+            && let Some(window) = self.w.window.upgrade()
+        {
+            window.invoke_settings_scroll_to_top();
+        }
         // a plain page under the scene: loaded once, kept for the scenes after it on the same
         if let (Some(tab), Some(url)) = (self.shown(), ground_url(scene.ground))
             && self.model.tabs.get(&tab).is_some_and(|t| t.url != url)

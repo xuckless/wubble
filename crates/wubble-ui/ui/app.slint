@@ -675,6 +675,11 @@ export component AppWindow inherits Window {
     public function settings-type-query(q: string) {
         settings-ui.type-query(q);
     }
+    // the settings page and its section list back at the top (the gallery, before it clicks a
+    // section by its place)
+    public function settings-scroll-to-top() {
+        settings-ui.scroll-to-top();
+    }
 
     // Puts `text` on the clipboard through Slint's own (no clipboard crate): a hidden field
     // selects it and copies.

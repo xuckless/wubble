@@ -72,6 +72,13 @@ pub fn transition(state: Hosting, event: Event) -> (Hosting, Vec<Effect>) {
 }
 
 impl Hosting {
+    /// Where the Settings switch is drawn: on from the owner's press until it is turned off,
+    /// through Starting and a failed bind (whose status says why), so it never shows on while
+    /// nothing was asked, nor off while the switch is on.
+    pub fn switch_on(&self) -> bool {
+        *self != Hosting::Off
+    }
+
     /// Whether sessions may be served (the socket is up).
     pub fn serving(&self) -> bool {
         *self == Hosting::On
@@ -187,5 +194,13 @@ mod tests {
             transition(Hosting::On, Event::Resume),
             (Hosting::On, vec![])
         );
+    }
+
+    #[test]
+    fn the_switch_is_drawn_from_the_state() {
+        assert!(!Hosting::Off.switch_on());
+        assert!(Hosting::Starting { by_owner: true }.switch_on());
+        assert!(Hosting::On.switch_on());
+        assert!(Hosting::Failed("in use".into()).switch_on());
     }
 }
