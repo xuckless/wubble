@@ -121,6 +121,7 @@ Open, to build or check:
 - [ ] The settings search no longer finds "Your own filter lists" (the setting moved to `Section::Hidden`; the Filter lists section is not searchable)
 - [ ] A Space button opened by keyboard does not give the Spaces menu the keyboard focus
 - [ ] The popovers' scroll thumbs' touch area covers the rows' right edge
+- [ ] The Settings Select clips a long value at its width ("Ask on first sea" for the search engine with none chosen; on main since the placeholder came, before PR #2): fit the control to its longest label, or elide
 - [ ] A popover's entrance marks the whole window dirty (the glass's scene scale and alpha change each frame), so partial rendering does not help during it
 
 ## M0: Frame path

@@ -288,6 +288,37 @@ mod tests {
         assert!(keys.len() >= 2);
     }
 
+    /// A choice made after the page was drawn reaches the shown row through the in-place sync
+    /// the host uses (`same_setting_item`): the engine's Select goes from "Ask on first search"
+    /// (none chosen) to the engine, and back.
+    #[test]
+    fn a_changed_engine_reaches_the_synced_row() {
+        let engine_row = |stored: &HashMap<String, String>| {
+            let items = setting_items(&wubble_core::pages::settings_page(stored));
+            let i = items.iter().position(|r| r.key == "search.engine").unwrap();
+            (items, i)
+        };
+        let (items, i) = engine_row(&HashMap::new());
+        assert_eq!(items[i].selected, -1);
+        assert_eq!(items[i].placeholder, "Ask on first search");
+        let model = VecModel::from(items);
+        let chosen = HashMap::from([("search.engine".to_owned(), "duckduckgo".to_owned())]);
+        let (next, _) = engine_row(&chosen);
+        assert!(crate::sync_by(&model, next, same_setting_item));
+        let row = model.row_data(i).unwrap();
+        assert_eq!(row.value, "duckduckgo");
+        assert_eq!(
+            row.options.row_data(row.selected as usize).unwrap().label,
+            "DuckDuckGo"
+        );
+        // the same view again changes nothing
+        let (again, _) = engine_row(&chosen);
+        assert!(!crate::sync_by(&model, again, same_setting_item));
+        let (none, _) = engine_row(&HashMap::new());
+        assert!(crate::sync_by(&model, none, same_setting_item));
+        assert_eq!(model.row_data(i).unwrap().selected, -1);
+    }
+
     #[test]
     fn same_item_compares_inner_models_by_content() {
         let page = wubble_core::pages::settings_page(&HashMap::new());
