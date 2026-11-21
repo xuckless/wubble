@@ -26,7 +26,7 @@ import { Button, ButtonKind } from "../kit/controls/button.slint";
 import { Field } from "../kit/controls/field.slint";
 import { ListEditor, ListEditorAdds } from "../kit/controls/list-editor.slint";
 import { Fold } from "../kit/motion/fold.slint";
-import { PageTitle, SearchCount, PageScroller, SettingsLayout } from "../kit/settings/page.slint";
+import { PageTitle, SearchCount, PageScroller, NavScroller, SettingsLayout } from "../kit/settings/page.slint";
 import { NavRow, NavIndicator, NavGroup } from "../kit/settings/nav.slint";
 import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours, PageLinkRow } from "../kit/settings/section.slint";
 import { ResetButton } from "../kit/settings/reset.slint";
@@ -430,6 +430,7 @@ export component SettingsPage inherits Rectangle {
     }
     public function scroll-to-top() {
         page.reset();
+        nav-scroll.reset();
         root.tracked = 0;
     }
     // `q` typed into the search (the gallery's search scene)
@@ -478,6 +479,12 @@ export component SettingsPage inherits Rectangle {
     out property <int> current: root.picked >= 0 ? root.picked : root.at-end ? root.last : root.tracked;
     property <length> pitch: Shell.nav-row + Shell.nav-row-gap;
 
+    // the list scrolls the current section's row into view when the section changes
+    changed current => {
+        if root.current >= 0 {
+            nav-scroll.reveal(root.current * root.pitch, Shell.nav-row);
+        }
+    }
     function pick(index: int) {
         root.picked = index;
         root.goto-index = index;
@@ -1062,12 +1069,13 @@ export component SettingsPage inherits Rectangle {
     }
 
     // .st-pin: the title, the search, the count and the section list, held 24 below the top
-    // once the page scrolls; the wheel over it scrolls the page.
+    // once the page scrolls; the wheel over the title scrolls the page, over the list the list
+    // when it is taller than the window (derived-review.md), else the page.
     side := TouchArea {
         x: root.grid-x;
         y: max(Shell.settings-pin, Shell.settings-top - page.scroll);
         width: Shell.settings-side;
-        height: pin.preferred-height;
+        height: min(pin.preferred-height, root.height - self.y - Shell.settings-pin);
         scroll-event(e) => {
             page.wheel(-e.delta-y);
             accept
@@ -1098,6 +1106,11 @@ export component SettingsPage inherits Rectangle {
                 SearchCount {
                     text: !root.searching ? "" : root.page-matches.length == 0 ? (root.matches == 0 ? "No matches" : root.settings-count) : root.matches == 0 ? root.pages-count : root.settings-count + ", " + root.pages-count;
                 }
+            }
+            nav-scroll := NavScroller {
+            open: root.open;
+            overflow(d) => {
+                page.wheel(d);
             }
             // .st-nav: the table's sections (one per first row), then the page's own
             nav := Rectangle {
@@ -1165,6 +1178,7 @@ export component SettingsPage inherits Rectangle {
                         root.page-requested(link.action);
                     }
                 }
+            }
             }
         }
     }

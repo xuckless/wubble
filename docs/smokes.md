@@ -68,7 +68,7 @@ find bar; permission prompt (and Block hovered); autofill menu (and a login hove
 dialog sheet and prompt; bookmark sheet; print sheet; toast; link status bubble; error and certificate
 error pages; over a plain white page (`assets/ground.html`) the sidebar, page menu, tab menu, command bar,
 find bar, bookmark sheet, reload tooltip and peeking sidebar, and over its dark variant the menus, command
-bar and find bar (the glass's contrast); Settings at four scroll positions; Settings' list editors (routing rules with a row
+bar and find bar (the glass's contrast); Settings at four scroll positions and its section list scrolled to its end; Settings' list editors (routing rules with a row
 selected, a new rule's draft, Spaces with the second selected, Sites); Settings' Agents (MCP) section (hosting is on from the run's start, with Claude Code, Codex and VS Code in a scratch home under the profile, never the owner's); history, bookmarks, downloads,
 passwords (locked, unlocked), archive, task manager; an agent's approval sheet, its sheet asking for more (`request_more`: only what is new), an approved agent's marked tabs and Space, the agent activity page; the start page; a history row hovered (its
 actions shown); the rail with its tab hovered (the close badge). The agent widgets' specimen: every thinking orb state at 16, 20, 24, 32 and 64 on glass, the library's stage, its paper and the page (white, then dark), at 160, paused, and a burst of the large ones moving (`--frozen-backdrop` holds the orbs' clock at 2 s).

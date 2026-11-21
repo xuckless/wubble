@@ -12,7 +12,7 @@ import { SettingsCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
 import { WubbleScroller } from "../controls/scroller.slint";
-import { PageScroll } from "../../components/page-scroll.slint";
+import { PageScroll, NavScroll } from "../../components/page-scroll.slint";
 
 // The page's values that are not one rule's: the accent before a Space gives one (the design's
 // `--tp-accent` default, sky), the narrow container (`@container (max-width: 759px)`), and
@@ -45,16 +45,76 @@ export component SearchCount inherits KitText {
     vertical-alignment: center;
 }
 
+// The scroller body both of the settings page's scrollers share: the kit scroller with its
+// offset and thumb in (from the driver's `Scroller`), its sizes and its input out. `PageScroller`
+// and `NavScroller` bind it to their global; `sized` is a change of the viewport or content.
+component ScrollerBody inherits Rectangle {
+    in property <bool> open;
+    // where the content is (rubber-banded past the ends), and the thumb
+    in property <length> offset;
+    in property <length> thumb-top;
+    in property <length> thumb-height;
+    in property <bool> thumb-visible;
+    // how far it can go
+    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
+    out property <length> viewport: scroller.viewport-height;
+    out property <length> content: scroller.content-height;
+    callback sized();
+    callback wheel-by(length);
+    callback touch-down(length);
+    callback touch-move(length);
+    callback touch-up();
+    callback thumb-down(length);
+    callback thumb-move(length);
+    callback thumb-up();
+    scroller := WubbleScroller {
+        content-y: root.offset;
+        thumb-visible: root.open && root.thumb-visible;
+        thumb-height: root.thumb-height;
+        thumb-top: root.thumb-top;
+        changed viewport-height => {
+            root.sized();
+        }
+        changed content-height => {
+            root.sized();
+        }
+        wheel(d) => {
+            root.wheel-by(d);
+        }
+        touch-down(y) => {
+            root.touch-down(y);
+        }
+        touch-move(y) => {
+            root.touch-move(y);
+        }
+        touch-up => {
+            root.touch-up();
+        }
+        thumb-down(y) => {
+            root.thumb-down(y);
+        }
+        thumb-move(y) => {
+            root.thumb-move(y);
+        }
+        thumb-up => {
+            root.thumb-up();
+        }
+        @children
+    }
+}
+
 // The scroller every native page shares: the page's colour on the design's scroll physics
 // (the PageScroll global, stepped by the driver). The open page reports its sizes there and
 // takes its input from here; `wheeled` is any scroll by hand (wheel, touch, thumb).
-export component PageScroller inherits Rectangle {
-    in property <bool> open;
-    // where the content is (rubber-banded past the ends), and how far it can go
+export component PageScroller inherits ScrollerBody {
+    // where the content is (rubber-banded past the ends)
     out property <length> scroll: root.open ? PageScroll.y : 0px;
-    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
     callback wheeled();
     background: Palette.web;
+    offset: root.scroll;
+    thumb-top: PageScroll.thumb-top;
+    thumb-height: PageScroll.thumb-height;
+    thumb-visible: PageScroll.thumb-visible;
     public function wheel(d: length) {
         PageScroll.wheel(d);
         root.wheeled();
@@ -75,44 +135,105 @@ export component PageScroller inherits Rectangle {
     }
     function report() {
         if root.open {
-            PageScroll.viewport = scroller.viewport-height;
-            PageScroll.content = scroller.content-height;
+            PageScroll.viewport = root.viewport;
+            PageScroll.content = root.content;
         }
     }
-    scroller := WubbleScroller {
-        content-y: root.scroll;
-        thumb-visible: root.open && PageScroll.thumb-visible;
-        thumb-height: PageScroll.thumb-height;
-        thumb-top: PageScroll.thumb-top;
-        changed viewport-height => {
+    sized => {
+        root.report();
+    }
+    wheel-by(d) => {
+        root.wheel(d);
+    }
+    touch-down(y) => {
+        PageScroll.touch-down(y);
+        root.wheeled();
+    }
+    touch-move(y) => {
+        PageScroll.touch-move(y);
+    }
+    touch-up => {
+        PageScroll.touch-up();
+    }
+    thumb-down(y) => {
+        PageScroll.thumb-down(y);
+        root.wheeled();
+    }
+    thumb-move(y) => {
+        PageScroll.thumb-move(y);
+    }
+    thumb-up => {
+        PageScroll.thumb-up();
+    }
+}
+
+// The settings page's side column under its title and search (derived, docs/fidelity/
+// derived-review.md): the same scroller on its own offset (the NavScroll global), so a window
+// shorter than the section list scrolls the list under the pointer and leaves the page alone.
+// Its height is the list's, less when the window runs out of room; a wheel with nowhere to go
+// here (the list fits) is `overflow`, for the page's scroller.
+export component NavScroller inherits ScrollerBody {
+    out property <length> scroll: root.open ? NavScroll.y : 0px;
+    callback overflow(length);
+    preferred-height: root.content;
+    min-height: 0px;
+    offset: root.scroll;
+    thumb-top: NavScroll.thumb-top;
+    thumb-height: NavScroll.thumb-height;
+    thumb-visible: NavScroll.thumb-visible;
+    // glide to `y`
+    public function to(y: length) {
+        NavScroll.to(y);
+    }
+    public function reset() {
+        NavScroll.reset();
+    }
+    // bring the row at `top`, `h` long, into view (the least travel)
+    public function reveal(top: length, h: length) {
+        if top < root.scroll {
+            NavScroll.to(top);
+        } else if top + h > root.scroll + root.viewport {
+            NavScroll.to(top + h - root.viewport);
+        }
+    }
+    changed open => {
+        if root.open {
+            NavScroll.reset();
             root.report();
         }
-        changed content-height => {
-            root.report();
+    }
+    function report() {
+        if root.open {
+            NavScroll.viewport = root.viewport;
+            NavScroll.content = root.content;
         }
-        wheel(d) => {
-            root.wheel(d);
+    }
+    sized => {
+        root.report();
+    }
+    wheel-by(d) => {
+        if root.room > 0px {
+            NavScroll.wheel(d);
+        } else {
+            root.overflow(d);
         }
-        touch-down(y) => {
-            PageScroll.touch-down(y);
-            root.wheeled();
-        }
-        touch-move(y) => {
-            PageScroll.touch-move(y);
-        }
-        touch-up => {
-            PageScroll.touch-up();
-        }
-        thumb-down(y) => {
-            PageScroll.thumb-down(y);
-            root.wheeled();
-        }
-        thumb-move(y) => {
-            PageScroll.thumb-move(y);
-        }
-        thumb-up => {
-            PageScroll.thumb-up();
-        }
-        @children
+    }
+    touch-down(y) => {
+        NavScroll.touch-down(y);
+    }
+    touch-move(y) => {
+        NavScroll.touch-move(y);
+    }
+    touch-up => {
+        NavScroll.touch-up();
+    }
+    thumb-down(y) => {
+        NavScroll.thumb-down(y);
+    }
+    thumb-move(y) => {
+        NavScroll.thumb-move(y);
+    }
+    thumb-up => {
+        NavScroll.thumb-up();
     }
 }
