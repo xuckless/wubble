@@ -855,15 +855,17 @@ impl Host {
     }
 
     fn data_lock_downloads_dir(&mut self, _: &mut DataSmoke) {
-        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
         if let Some(dir) = self.downloads.dir() {
+            use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555));
         }
     }
 
     fn data_unlock_downloads_dir(&mut self, _: &mut DataSmoke) {
-        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
         if let Some(dir) = self.downloads.dir() {
+            use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
         }
     }
