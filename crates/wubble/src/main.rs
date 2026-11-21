@@ -178,7 +178,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Mcp { profile } => match mcp_relay(profile) {
+        Command::Mcp { profile, list } => match mcp_relay(profile, list) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("wubble mcp: {e}");
@@ -444,6 +444,8 @@ fn browse(
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     // One browser per profile, decided before anything opens the store or starts CEF.
     std::fs::create_dir_all(&profile.dir)?;
+    // sockets and manifests that dead browsers left behind
+    instance::sweep(&instance::runtime_dir());
     let socket = instance::socket_path(&profile.dir, &instance::runtime_dir());
     let message = url
         .clone()
@@ -469,20 +471,57 @@ fn browse(
         downloads,
         listener,
     };
+    let primary = matches!(
+        mode,
+        Mode::Browse {
+            listener: Some(_),
+            ..
+        }
+    );
     let code = report_run(mode, config, &profile.dir);
+    // a clean exit leaves no socket of ours behind (the MCP one went with hosting)
+    if primary {
+        let _ = instance::remove_stale(&socket);
+    }
     updater::relaunch_if_requested();
     Ok(code)
 }
 
-/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile` (`mcp.rs`). It
-/// opens nothing else: no store, GPU or CEF.
-fn mcp_relay(profile: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
-    let socket = instance::path_of(
-        instance::Socket::Mcp,
-        &profile.dir,
-        &instance::runtime_dir(),
-    );
+/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile`, or of the one
+/// hosting browser the manifests name (`mcp.rs`); `--list` prints them. It opens nothing else:
+/// no store, GPU or CEF.
+fn mcp_relay(profile: Option<PathBuf>, list: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let live = mcp::hosting_browsers();
+    if list {
+        for m in &live {
+            println!("{}\t{}\t{}\tpid {}", m.profile, m.socket, m.version, m.pid);
+        }
+        if live.is_empty() {
+            eprintln!("wubble mcp: no browser hosts MCP (Settings > Agents (MCP))");
+        }
+        return Ok(());
+    }
+    let socket = match profile {
+        Some(dir) => {
+            let profile = Profile::resolve(Some(dir)).ok_or(EngineError::CacheDir)?;
+            instance::path_of(
+                instance::Socket::Mcp,
+                &profile.dir,
+                &instance::runtime_dir(),
+            )
+        }
+        None => {
+            use wubble_core::agent::manifest::{Pick, pick, pick_error};
+            match pick(live) {
+                Pick::One(m) => PathBuf::from(m.socket),
+                other => {
+                    let why = pick_error(&other).unwrap_or_default();
+                    eprintln!("wubble mcp: {why}");
+                    return Ok(mcp::answer_offline_with(&why)?);
+                }
+            }
+        }
+    };
     Ok(mcp::relay(&socket)?)
 }
 
@@ -1583,17 +1622,6 @@ fn run(
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.
     let mut loaded = loaded;
-    // `--smoke mcp` runs the MCP server, off by default.
-    if matches!(mode, Mode::Mcp) {
-        loaded.settings.stored.insert(
-            wubble_core::settings::AGENT_MCP_ENABLED.key.into(),
-            "1".into(),
-        );
-    }
-    let mcp_on = wubble_core::apply::value_of(
-        &wubble_core::settings::AGENT_MCP_ENABLED,
-        &loaded.settings.stored,
-    ) == "1";
     if smoke_page {
         loaded.settings.stored.insert(
             wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
@@ -1730,27 +1758,25 @@ fn run(
             || with_host(Host::updates_healthy),
         );
     }
-    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, only when on.
-    if mcp_on {
-        let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
-        match mcp::bind(&socket) {
-            Ok(mcp) => {
-                mcp::listen(mcp, |event| {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.mcp_event(event))
-                    });
-                });
-                if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
-                    mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
-                }
-            }
-            Err(e) => {
-                eprintln!("wubble: no MCP server: {}: {e}", socket.display());
-                if matches!(mode, Mode::Mcp) {
-                    with_host(|host| host.fail(format!("the MCP socket: {e}")));
-                }
-            }
-        }
+    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, hosted while the
+    // setting is on (`host/hosting.rs`, switched live from Settings).
+    let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
+    let default_profile = app::user_data_dir().is_some_and(|d| d == profile);
+    with_host(|host| {
+        host.set_mcp(host::McpPlace {
+            socket: socket.clone(),
+            manifest: mcp::manifest_path(profile),
+            profile: profile.to_owned(),
+            default_profile,
+            exe: std::env::current_exe().unwrap_or_default(),
+        })
+    });
+    // `--smoke mcp`: hosting turned on through the setting, as Settings does, then the client
+    if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
+        with_host(|host| {
+            host.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "1");
+        });
+        mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
     }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {

@@ -580,6 +580,15 @@ impl Host {
             McpEvent::Connected { conn, out, client } => {
                 self.agents.conns.insert(conn, Conn { out, client });
             }
+            // hosting turned off while the connection was open: nothing is served on it
+            McpEvent::Call { conn, id, .. } if !self.mcp_serving() => {
+                if let Some(c) = self.agents.conns.get(&conn) {
+                    c.out.send(wubble_mcp::tool_response(
+                        &id,
+                        &ToolResult::error(crate::mcp::NOT_RUNNING),
+                    ));
+                }
+            }
             McpEvent::Call { conn, id, call } => self.agent_call(conn, id, call),
             McpEvent::Gone(conn) => {
                 self.agents.conns.remove(&conn);
@@ -614,8 +623,14 @@ impl Host {
         for id in all {
             self.agent_event(&id, Event::BrowserQuits);
         }
-        // `--smoke mcp` leaves a session running for this: its Space must be gone.
-        if self.checks.mcp_smoke.is_some() {
+        // `--smoke mcp` leaves a session running for this: its Space must be gone (unless the
+        // run turned hosting off first, which ended it the same way: `mcp_smoke_off`)
+        if self
+            .checks
+            .mcp_smoke
+            .as_ref()
+            .is_some_and(|r| !r.hosting_off)
+        {
             let left = spaces
                 .iter()
                 .any(|sp| self.model.spaces.iter().any(|s| s.id == *sp));
@@ -631,7 +646,7 @@ impl Host {
         use wubble_core::settings as defs;
         let stored = &self.settings.stored;
         Env {
-            mcp_enabled: value_of(&defs::AGENT_MCP_ENABLED, stored) == "1",
+            mcp_enabled: self.mcp_serving(),
             remote_port: defs::remote_port(
                 value_of(&defs::DEVTOOLS_REMOTE_PORT, stored)
                     .parse()
@@ -3355,6 +3370,9 @@ impl Host {
                          other runs on; {users:?} has none; the popup stayed open"
                     );
                     window.set_spaces_open(false);
+                    if let Err(e) = h.mcp_smoke_off() {
+                        return h.fail(format!("hosting off: {e}"));
+                    }
                     let steps = h.checks.mcp_smoke.as_ref().map_or(0, |r| r.steps);
                     h.store.pop_closed(move |closed| {
                         let _ = slint::invoke_from_event_loop(move || {
@@ -3369,6 +3387,55 @@ impl Host {
                 }
             });
         });
+    }
+
+    /// `--smoke mcp`: hosting turned off through its setting while a session runs: the session
+    /// ends and its Space closes, the socket and the manifest go, a new connection is refused.
+    fn mcp_smoke_off(&mut self) -> Result<(), String> {
+        let (socket, manifest) = self.mcp_files().ok_or("no MCP place")?;
+        if !socket.exists() || !manifest.exists() {
+            return Err(format!("not hosting: {socket:?} {manifest:?}"));
+        }
+        let listed = crate::mcp::hosting_browsers()
+            .iter()
+            .any(|m| std::path::Path::new(&m.socket) == socket);
+        if !listed {
+            return Err("the manifest does not list this browser".into());
+        }
+        let spaces = self.agents.spaces();
+        if spaces.is_empty() {
+            return Err("no session runs".into());
+        }
+        self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "0");
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.hosting_off = true;
+        }
+        if !self.agents.sessions.is_empty() {
+            return Err("a session runs on".into());
+        }
+        if spaces
+            .iter()
+            .any(|sp| self.model.spaces.iter().any(|s| s.id == *sp))
+        {
+            return Err("a session's Space stayed open".into());
+        }
+        if socket.exists() || manifest.exists() {
+            return Err(format!("left behind: {socket:?} {manifest:?}"));
+        }
+        use interprocess::local_socket::prelude::*;
+        let name = socket
+            .as_path()
+            .to_fs_name::<interprocess::local_socket::GenericFilePath>()
+            .map_err(|e| e.to_string())?;
+        if interprocess::local_socket::Stream::connect(name).is_ok() {
+            return Err("a new connection was taken".into());
+        }
+        println!(
+            "smoke: mcp hosting ok on through its setting at run time, off through it with a \
+             session running: the session ended and its Space closed, socket and manifest gone, \
+             a new connection refused"
+        );
+        Ok(())
     }
 
     fn mcp_smoke_history(&mut self, steps: usize) {

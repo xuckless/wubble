@@ -7,8 +7,10 @@
 //! [`Grant::secret_for`] says the page's origin is the login's. Generating a token, showing the
 //! sheet, opening and tearing down the session's Space are [`Effect`]s the host executes.
 
+pub mod hosting;
 pub mod keys;
 pub mod log;
+pub mod manifest;
 pub mod refs;
 pub mod spot;
 

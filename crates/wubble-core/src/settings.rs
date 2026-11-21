@@ -524,15 +524,38 @@ pub const DEVTOOLS_REMOTE_PORT: SettingDef = SettingDef {
     restart: true,
 };
 
-/// The MCP server for agent sessions (`agent`). Off by default: with it off nothing listens.
-/// A session is also refused while `devtools.remote_port` is set.
+/// The MCP server for agent sessions (`agent::hosting`). Off by default: with it off nothing
+/// listens. Switched live from its own Settings group (Agents (MCP)), not a table row. A session
+/// is also refused while `devtools.remote_port` is set.
 pub const AGENT_MCP_ENABLED: SettingDef = SettingDef {
     key: "agent.mcp_enabled",
     kind: SettingKind::Bool,
     default: "0",
-    label: "Let agents drive wubble over MCP (experimental): each session needs your approval",
-    section: Section::Privacy,
-    restart: true,
+    label: "Host wubble's MCP server for agents on this computer: each session needs your approval",
+    section: Section::Hidden,
+    restart: false,
+};
+
+/// The agent apps the owner took wubble out of (`agent::harness` ids): turning hosting on
+/// leaves them alone.
+pub const AGENT_MCP_OPTED_OUT: SettingDef = SettingDef {
+    key: "agent.mcp_opted_out",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Agent apps wubble is not added to",
+    section: Section::Hidden,
+    restart: false,
+};
+
+/// The agent apps wubble added its server entry to (`agent::harness` ids): turning hosting off
+/// removes exactly these.
+pub const AGENT_MCP_ADDED: SettingDef = SettingDef {
+    key: "agent.mcp_added",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Agent apps wubble added itself to",
+    section: Section::Hidden,
+    restart: false,
 };
 
 /// The port `DEVTOOLS_REMOTE_PORT`'s value asks for: `None` for 0 (off) and for the privileged
@@ -853,6 +876,8 @@ pub const ALL: &[&SettingDef] = &[
     &VIDEO_HARDWARE_DECODE,
     &DEVTOOLS_REMOTE_PORT,
     &AGENT_MCP_ENABLED,
+    &AGENT_MCP_OPTED_OUT,
+    &AGENT_MCP_ADDED,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
     &MEDIA_ENABLED,

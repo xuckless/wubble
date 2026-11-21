@@ -1150,6 +1150,8 @@ pub struct McpSmoke {
     pub navigations_refused: usize,
     /// The client's step count, kept while the host switches tabs.
     pub steps: usize,
+    /// The run turned hosting off before the quit (`Host::mcp_smoke_off`).
+    pub hosting_off: bool,
     /// The Space the first session left its tab in (`stop_session` with `keep_tabs`).
     pub kept_space: Option<wubble_core::space::SpaceId>,
     /// The switch's step and the tab whose frame it waits for (`Host::mcp_smoke_switch`).

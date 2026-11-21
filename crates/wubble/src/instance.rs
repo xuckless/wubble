@@ -124,7 +124,7 @@ pub fn path_of(socket: Socket, profile: &Path, runtime: &Path) -> PathBuf {
 }
 
 /// FNV-1a, 64 bit: a hash that stays the same across Rust releases (`DefaultHasher` does not).
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
@@ -205,6 +205,44 @@ pub(crate) fn remove_stale(path: &Path) -> io::Result<()> {
 pub(crate) fn remove_stale(_path: &Path) -> io::Result<()> {
     Ok(())
 }
+
+/// Removes the sockets in `runtime` that dead browsers left behind (a hashed name: a profile
+/// path too long for the socket address), instance and MCP alike, and the manifests of
+/// browsers that no longer host: a socket nobody listens on refuses a connection. A live one
+/// is only connected to and let go (it reads no message from an empty connection).
+#[cfg(unix)]
+pub fn sweep(runtime: &Path) {
+    let Ok(entries) = std::fs::read_dir(runtime) else {
+        return;
+    };
+    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !(name.starts_with("wubble-") && name.ends_with(".sock")) {
+            continue;
+        }
+        let refused = path
+            .as_path()
+            .to_fs_name::<GenericFilePath>()
+            .map(|n| Stream::connect(n))
+            .is_ok_and(|r| {
+                r.is_err_and(|e| {
+                    matches!(
+                        e.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    )
+                })
+            });
+        if refused {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    // the manifests: `mcp::hosting_browsers` removes the stale ones as it reads them
+    let _ = crate::mcp::hosting_browsers();
+}
+
+/// A named pipe leaves no file behind.
+#[cfg(not(unix))]
+pub fn sweep(_runtime: &Path) {}
 
 /// Accepts later starts on `listener` until the process ends, handing each one's message to
 /// `deliver`. On its own thread: `accept` blocks.

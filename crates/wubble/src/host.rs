@@ -31,6 +31,7 @@ mod gallery;
 pub(crate) mod gallery_orbs;
 mod gesture;
 mod gpu;
+mod hosting;
 mod hover;
 mod layers;
 mod look;
@@ -55,6 +56,7 @@ mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
+pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
 pub use swipe::Swipe;
@@ -524,6 +526,8 @@ pub struct Host {
     /// The extensions' shell: the list, the footer popover, the popup, the install prompt
     /// (`host/ext_ui.rs`).
     ext_ui: ext_ui::ExtUi,
+    /// Whether the MCP server is hosted (`host/hosting.rs`).
+    hosting: hosting::McpHosting,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
@@ -724,6 +728,7 @@ impl Host {
             look: look::Look::new(),
             glance_enabled: true,
             ext_ui: ext_ui::ExtUi::new(installed),
+            hosting: Default::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -2243,6 +2248,7 @@ impl Host {
     pub fn shutdown(&mut self, ui: UiState) {
         // agent sessions end with the browser, their Spaces closed before the last save
         self.agents_quit();
+        self.mcp_quit();
         self.media_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, &self.agents.spaces(), ui);

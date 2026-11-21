@@ -249,6 +249,12 @@ settings! {
     /// listens (`agent`); until then only the settings page and the tests touch the row.
     #[expect(dead_code, reason = "the MCP host is a later item")]
     AgentMcpEnabled: bool = defs::AGENT_MCP_ENABLED;
+    /// Agent apps the owner took wubble out of (`wubble_core::agent::harness` ids).
+    #[expect(dead_code, reason = "read through the text table by the host")]
+    AgentMcpOptedOut: Vec<String> = defs::AGENT_MCP_OPTED_OUT;
+    /// Agent apps wubble added itself to.
+    #[expect(dead_code, reason = "read through the text table by the host")]
+    AgentMcpAdded: Vec<String> = defs::AGENT_MCP_ADDED;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
     MediaEnabled: bool = defs::MEDIA_ENABLED;

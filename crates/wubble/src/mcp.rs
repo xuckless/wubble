@@ -16,7 +16,10 @@
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
+
+use wubble_core::agent::manifest::{self, Manifest};
 
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, Listener, ListenerOptions, Stream};
@@ -28,7 +31,7 @@ pub type ConnId = u64;
 
 /// What the error says when `wubble mcp` finds no browser to relay to.
 pub const NOT_RUNNING: &str = "wubble is not running on this profile, or its MCP server is off: \
-     start wubble with \"Let agents drive wubble over MCP\" on (agent.mcp_enabled)";
+     start wubble and turn hosting on in Settings > Agents (MCP)";
 
 /// The replies of one connection, written in order by its writer thread.
 #[derive(Clone, Debug)]
@@ -74,19 +77,58 @@ pub fn bind(path: &Path) -> io::Result<Listener> {
     options.create_sync()
 }
 
-/// Accepts connections on `listener` until the process ends; each one's events go to
-/// `deliver`, from that connection's thread.
-pub fn listen(listener: Listener, deliver: impl Fn(Event) + Send + Sync + 'static) {
+/// A bound, listening MCP socket: [`Hosted::stop`] stops accepting and removes it.
+pub struct Hosted {
+    path: std::path::PathBuf,
+    stop: Arc<AtomicBool>,
+}
+
+impl Hosted {
+    /// Binds `path` and accepts on it ([`listen`]) until stopped.
+    pub fn start(
+        path: &Path,
+        deliver: impl Fn(Event) + Send + Sync + 'static,
+    ) -> io::Result<Hosted> {
+        let listener = bind(path)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        listen_until(listener, Arc::clone(&stop), deliver);
+        Ok(Hosted {
+            path: path.to_owned(),
+            stop,
+        })
+    }
+
+    /// No new connection is taken, and the socket file goes. Connections already open end
+    /// with their next line (the host answers nothing on them meanwhile).
+    pub fn stop(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // wakes the accept loop, which sees the flag and ends
+        if let Ok(name) = self.path.as_path().to_fs_name::<GenericFilePath>() {
+            let _ = Stream::connect(name);
+        }
+        let _ = crate::instance::remove_stale(&self.path);
+    }
+}
+
+fn listen_until(
+    listener: Listener,
+    stop: Arc<AtomicBool>,
+    deliver: impl Fn(Event) + Send + Sync + 'static,
+) {
     let deliver = Arc::new(deliver);
     let spawned = std::thread::Builder::new()
         .name("wubble-mcp".into())
         .spawn(move || {
             for (n, stream) in listener.incoming().filter_map(Result::ok).enumerate() {
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 let conn = n as ConnId + 1;
                 let deliver = Arc::clone(&deliver);
+                let stop = Arc::clone(&stop);
                 let served = std::thread::Builder::new()
                     .name("wubble-mcp-conn".into())
-                    .spawn(move || serve(conn, stream, &*deliver));
+                    .spawn(move || serve(conn, stream, &stop, &*deliver));
                 if let Err(e) = served {
                     eprintln!("wubble: mcp connection {conn}: {e}");
                 }
@@ -98,7 +140,7 @@ pub fn listen(listener: Listener, deliver: impl Fn(Event) + Send + Sync + 'stati
 }
 
 /// One connection: reads until it ends, then says so.
-fn serve(conn: ConnId, stream: Stream, deliver: &(dyn Fn(Event) + Send + Sync)) {
+fn serve(conn: ConnId, stream: Stream, stop: &AtomicBool, deliver: &(dyn Fn(Event) + Send + Sync)) {
     let client = client_of(&stream);
     // `&Stream` reads and writes: one thread each.
     let stream = Arc::new(stream);
@@ -134,6 +176,9 @@ fn serve(conn: ConnId, stream: Stream, deliver: &(dyn Fn(Event) + Send + Sync)) 
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
         for line in framer.push(&buf[..n]) {
             match line {
                 Err(_) => out.send(RpcError::Parse.response(None)),
@@ -146,6 +191,63 @@ fn serve(conn: ConnId, stream: Stream, deliver: &(dyn Fn(Event) + Send + Sync)) 
         }
     }
     deliver(Event::Gone(conn));
+}
+
+/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`).
+pub fn manifest_dir() -> std::path::PathBuf {
+    manifest::DIR
+        .iter()
+        .fold(crate::instance::runtime_dir(), |d, p| d.join(p))
+}
+
+/// The manifest of the browser on `profile`.
+pub fn manifest_path(profile: &Path) -> std::path::PathBuf {
+    let hash = crate::instance::fnv1a(profile.as_os_str().as_encoded_bytes());
+    manifest_dir().join(format!("{hash:016x}.json"))
+}
+
+/// Writes `m` at `path`, the directory private to the user.
+pub fn write_manifest(path: &Path, m: &Manifest) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for d in [dir, dir.parent().unwrap_or(dir)] {
+                std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, m.to_json())?;
+    std::fs::rename(tmp, path)
+}
+
+/// The browsers hosting now: every manifest whose socket answers; a stale one (its browser
+/// gone) is removed on the way.
+pub fn hosting_browsers() -> Vec<Manifest> {
+    let Ok(entries) = std::fs::read_dir(manifest_dir()) else {
+        return vec![];
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter_map(|p| {
+            let m = Manifest::from_json(&std::fs::read_to_string(&p).ok()?);
+            let live = m.as_ref().is_some_and(|m| {
+                Path::new(&m.socket)
+                    .to_fs_name::<GenericFilePath>()
+                    .ok()
+                    .and_then(|n| Stream::connect(n).ok())
+                    .is_some()
+            });
+            if !live {
+                let _ = std::fs::remove_file(&p);
+            }
+            m.filter(|_| live)
+        })
+        .collect()
 }
 
 /// The peer's pid and executable, as the OS reports them (never the client's own claim).
@@ -165,7 +267,10 @@ fn client_of(stream: &Stream) -> String {
 pub fn relay(path: &Path) -> io::Result<()> {
     let stream = match Stream::connect(path.to_fs_name::<GenericFilePath>()?) {
         Ok(stream) => stream,
-        Err(_) => return answer_offline(io::stdin().lock(), io::stdout().lock()),
+        Err(_) => {
+            eprintln!("wubble mcp: {NOT_RUNNING}");
+            return answer_offline(io::stdin().lock(), io::stdout().lock());
+        }
     };
     let stream = Arc::new(stream);
     let send = Arc::clone(&stream);
@@ -180,10 +285,19 @@ pub fn relay(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Every request on stdin answered with `why`, until stdin ends.
+pub fn answer_offline_with(why: &str) -> io::Result<()> {
+    offline(io::stdin().lock(), io::stdout().lock(), why)
+}
+
 /// Every request line of `input` answered with the [`NOT_RUNNING`] error on `output`.
-fn answer_offline(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
+fn answer_offline(input: impl BufRead, output: impl Write) -> io::Result<()> {
+    offline(input, output, NOT_RUNNING)
+}
+
+fn offline(input: impl BufRead, mut output: impl Write, why: &str) -> io::Result<()> {
     for line in input.lines() {
-        if let Some(reply) = wubble_mcp::unavailable(&line?, NOT_RUNNING) {
+        if let Some(reply) = wubble_mcp::unavailable(&line?, why) {
             output.write_all(encode_line(&reply).as_bytes())?;
             output.flush()?;
         }
@@ -217,16 +331,16 @@ mod tests {
             dir.path(),
             &crate::instance::runtime_dir(),
         );
-        let listener = bind(&path).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let hosted = Hosted::start(&path, move |e| tx.send(e).unwrap()).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "only this user may connect");
         }
-        let (tx, rx) = mpsc::channel();
-        listen(listener, move |e| tx.send(e).unwrap());
-        let mut stream = Stream::connect(path.to_fs_name::<GenericFilePath>().unwrap()).unwrap();
+        let mut stream =
+            Stream::connect(path.as_path().to_fs_name::<GenericFilePath>().unwrap()).unwrap();
         let Event::Connected { conn, out, .. } = rx.recv().unwrap() else {
             panic!("connected first");
         };
@@ -259,5 +373,9 @@ mod tests {
         assert_eq!(answer["result"]["content"][0]["text"], "[]");
         drop(reader);
         assert!(matches!(rx.recv().unwrap(), Event::Gone(c) if c == conn));
+        // stopped: the socket is gone and a new connection is refused
+        hosted.stop();
+        assert!(!path.exists());
+        assert!(Stream::connect(path.to_fs_name::<GenericFilePath>().unwrap()).is_err());
     }
 }
