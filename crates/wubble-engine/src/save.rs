@@ -305,8 +305,12 @@ impl std::fmt::Debug for Writer {
 /// Folders searched for `ffmpeg` after the `PATH` (macOS GUI apps get a short `PATH`).
 const FFMPEG_DIRS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 
-/// The system `ffmpeg`, if one is installed.
+/// The system `ffmpeg`, if one is installed. `WUBBLE_FFMPEG` names another one (a Mac app's
+/// `PATH` is short), or, empty, says to use none (a test of the two-file fallback).
 pub fn find_ffmpeg() -> Option<PathBuf> {
+    if let Some(chosen) = std::env::var_os("WUBBLE_FFMPEG") {
+        return Some(PathBuf::from(chosen)).filter(|p| p.is_file());
+    }
     let name = if cfg!(windows) {
         "ffmpeg.exe"
     } else {
