@@ -68,3 +68,10 @@ From the design repo (its `node_modules` has rolldown), with an entry file outsi
     ./node_modules/.bin/rolldown entry.ts --format iife -o living.js
 
 then put the header comment back on top.
+
+## Deploying
+
+The site is served at wubble.cc by a Cloudflare Worker that only serves this folder as static
+assets (`wrangler.jsonc`; `.assetsignore` keeps this file, the config and the GitHub Pages files
+out). After `npx wrangler login` with the owner's Cloudflare account: `npx wrangler deploy` here.
+Deploying is publishing: the owner's go each time.

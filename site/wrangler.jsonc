@@ -1,0 +1,11 @@
+{
+  // wubble.cc: this folder served as static assets by a Cloudflare Worker (no code).
+  // Deploy: `npx wrangler deploy` in site/ (see README.md).
+  "name": "wubble",
+  "compatibility_date": "2026-11-19",
+  "assets": { "directory": "." },
+  "routes": [
+    { "pattern": "wubble.cc", "custom_domain": true },
+    { "pattern": "www.wubble.cc", "custom_domain": true }
+  ]
+}
