@@ -4,8 +4,10 @@
 //! (`wubble_core::pages`) and every change is one store request (`persist`), whose reply
 //! redraws it. The state here is the one owner of what each page shows; the store is the truth.
 
+use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::BuildHasher;
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
@@ -24,6 +26,7 @@ use zeroize::Zeroizing;
 
 use super::{Host, now_ms};
 use crate::bind::favicon_image;
+use crate::clipboard::{Bridge, Buffer};
 use crate::menu::MenuEvent;
 use crate::persist::{BookmarksPage, HistoryClear, VisitsPage};
 use crate::with_host;
@@ -157,7 +160,7 @@ pub(super) enum Then {
 }
 
 /// What the native pages hold of their own.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(super) struct PagesState {
     /// The page the window showed last: a page is fetched when it is entered.
     shown: Option<InternalPage>,
@@ -165,6 +168,21 @@ pub(super) struct PagesState {
     archive: History,
     bookmarks: Bookmarks,
     passwords: Passwords,
+    /// One-shot timer that clears a copied password from the clipboard after `REVEAL_FOR`
+    /// if the clipboard still holds it; lives here so leaving the Passwords page does not cancel it.
+    clipboard_clear_timer: slint::Timer,
+}
+
+impl fmt::Debug for PagesState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PagesState")
+            .field("shown", &self.shown)
+            .field("history", &self.history)
+            .field("archive", &self.archive)
+            .field("bookmarks", &self.bookmarks)
+            .field("passwords", &self.passwords)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Passwords {
@@ -539,9 +557,11 @@ impl Host {
             Feed::History => &self.pages.history,
             Feed::Archive => &self.pages.archive,
         };
-        let groups = pages::history_page(&h.rows, utc_offset_min(), now_ms());
+        let tz = utc_offset_min();
+        let groups = pages::history_page(&h.rows, tz, now_ms());
         let lines = pages::history_lines(&groups);
-        let items = wubble_ui::pages::history_items(&lines, |url| {
+        let time_tz = matches!(feed, Feed::History).then_some(tz);
+        let items = wubble_ui::pages::history_items(&lines, time_tz, |url| {
             h.icons
                 .get(url)
                 .map(|f| favicon_image(f.width, f.height, &f.rgba))
@@ -892,7 +912,17 @@ impl Host {
     fn vault_answered(&mut self, then: Then, answer: VaultAnswer) {
         let (next, copy) = self.pages.passwords.apply(then, answer, Instant::now());
         if let Some(password) = copy {
+            let hasher = RandomState::new();
+            let digest = hasher.hash_one(password.as_str());
             self.copy(&password);
+            drop(password);
+            self.pages.clipboard_clear_timer.start(
+                slint::TimerMode::SingleShot,
+                REVEAL_FOR,
+                move || {
+                    with_host(|host| host.clear_copied_password(&hasher, digest));
+                },
+            );
             if let Some(window) = self.w.window.upgrade() {
                 self.toast(&window, "Password copied");
             }
@@ -902,6 +932,18 @@ impl Host {
         }
         if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
+        }
+    }
+
+    /// Clears the clipboard if it still holds the password that was copied `REVEAL_FOR` ago.
+    fn clear_copied_password(&mut self, hasher: &RandomState, digest: u64) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        if let Some(current) = self.clipboard.load(window.window(), Buffer::Clipboard)
+            && hasher.hash_one(current.as_str()) == digest
+        {
+            self.copy("");
         }
     }
 

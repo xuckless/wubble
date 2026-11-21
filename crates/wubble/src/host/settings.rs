@@ -326,8 +326,11 @@ impl Host {
         let (state, bind) = keys::capture(self.settings.capture, event, &self.keymap);
         self.settings.capture = state;
         match bind {
-            Some((action, chord)) => self
+            Some((action, Some(chord))) => self
                 .write_overrides(|ov| keys::set_binding(ov, Platform::current(), action, chord).0),
+            Some((action, None)) => {
+                self.write_overrides(|ov| keys::clear_binding(ov, Platform::current(), action))
+            }
             None => self.render_settings(),
         }
     }
@@ -344,8 +347,16 @@ impl Host {
         }
     }
 
+    pub(crate) fn binding_clear(&mut self, id: &str) {
+        if let Some(action) = Action::from_id(id) {
+            self.settings.capture = Capture::Idle;
+            self.write_overrides(|ov| keys::clear_binding(ov, Platform::current(), action));
+        }
+    }
+
     /// While a chord is being recorded every key goes to the recorder first, before any
-    /// shortcut: Escape cancels, a chord is taken. Returns whether the key was taken.
+    /// shortcut: Escape cancels, Backspace/Delete while armed unbinds, a chord is taken.
+    /// Returns whether the key was taken.
     pub(crate) fn capture_key(&mut self, chord: Option<Chord>) -> bool {
         if self.settings.capture == Capture::Idle {
             return false;
@@ -353,6 +364,16 @@ impl Host {
         match chord {
             Some(c) if c.key == keys::Key::Escape && !c.ctrl && !c.alt && !c.cmd => {
                 self.capture_event(CaptureEvent::Cancel)
+            }
+            Some(c)
+                if matches!(self.settings.capture, Capture::Armed(_))
+                    && matches!(c.key, keys::Key::Backspace | keys::Key::Delete)
+                    && !c.ctrl
+                    && !c.alt
+                    && !c.cmd
+                    && !c.shift =>
+            {
+                self.capture_event(CaptureEvent::Clear)
             }
             Some(c) => self.capture_event(CaptureEvent::Pressed(c)),
             None => {}
@@ -508,12 +529,14 @@ fn render_page(window: &AppWindow, host: &Host) {
             action,
             chord,
             other,
+            other_is_edit,
         } => CaptureView {
             action: action.id().into(),
             armed: false,
             conflict: true,
             chord: chord.to_string().into(),
             other: other.label().into(),
+            other_is_edit,
         },
     });
 

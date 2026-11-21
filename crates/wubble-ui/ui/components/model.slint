@@ -520,6 +520,7 @@ export struct CaptureView {
     conflict: bool,
     chord: string,
     other: string,
+    other-is-edit: bool,
 }
 
 export struct SpaceSetting {
@@ -608,6 +609,7 @@ export struct TaskItem {
     cpu: string,
     busy: string,
     never-sleep: bool,
+    can-sleep: bool,
     can-discard: bool,
     can-end: bool,
 }
@@ -626,6 +628,7 @@ export struct HistoryLineItem {
     label: string,
     title: string,
     url: string,
+    time: string,
     favicon: image,
 }
 

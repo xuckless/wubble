@@ -201,39 +201,39 @@ pub const SCRIPT: &[Step] = &[
     Then(Runs("Ctrl+T", Some("new-tab"))),
     Then(Runs("Ctrl+Shift+Y", None)),
     // a chord with no modifier is refused; Escape stops the recording
-    Act(PressBinding("New tab")),
+    Act(PressBinding("New Tab")),
     Then(Capture("armed")),
     Act(Chord("Y")),
     Then(Capture("armed")),
     Act(Chord("Escape")),
     Then(Capture("idle")),
     // a free chord is taken: the new one runs the action at once, the old one no longer does
-    Act(PressBinding("New tab")),
+    Act(PressBinding("New Tab")),
     Act(Chord("Ctrl+Shift+Y")),
     Then(Capture("idle")),
     Then(Runs("Ctrl+Shift+Y", Some("new-tab"))),
     Then(Runs("Ctrl+T", None)),
     // a chord another action runs asks first; Cancel leaves both as they were
-    Act(PressBinding("New tab")),
+    Act(PressBinding("New Tab")),
     Act(Chord("Ctrl+W")),
     Then(Capture("conflict")),
     Act(PressButton("Cancel")),
     Then(Capture("idle")),
     Then(Runs("Ctrl+W", Some("close-tab"))),
     // Replace moves it: the other action is left without
-    Act(PressBinding("New tab")),
+    Act(PressBinding("New Tab")),
     Act(Chord("Ctrl+W")),
     Then(Capture("conflict")),
     Act(PressButton("Replace")),
     Then(Capture("idle")),
     Then(Runs("Ctrl+W", Some("new-tab"))),
     // Reset gives the row its own chord back, and the other action its chord
-    Act(BindingButton("New tab", "Reset")),
+    Act(BindingButton("New Tab", "Reset")),
     Then(Runs("Ctrl+T", Some("new-tab"))),
     Then(Runs("Ctrl+W", Some("close-tab"))),
     Then(Runs("Ctrl+Shift+Y", None)),
     // and a last change, kept for the read back
-    Act(PressBinding("New tab")),
+    Act(PressBinding("New Tab")),
     Act(Chord("Ctrl+Shift+Y")),
     Then(Runs("Ctrl+Shift+Y", Some("new-tab"))),
 ];
@@ -464,9 +464,9 @@ pub mod drive {
             .unwrap_or_default()
     }
 
-    /// Whether the first shortcut row ("New tab") is on screen.
+    /// Whether the first shortcut row ("New Tab") is on screen.
     pub fn shortcuts_found(window: &AppWindow) -> bool {
-        chord(window, "New tab").is_ok()
+        chord(window, "New Tab").is_ok()
     }
 
     /// The chord of the shortcut row `label`.
@@ -723,9 +723,16 @@ mod tests {
         fn record(&mut self, event: keys::CaptureEvent) {
             let (state, bind) = keys::capture(self.capture, event, &self.keymap());
             self.capture = state;
-            if let Some((action, chord)) = bind {
-                self.overrides =
-                    keys::set_binding(&self.overrides, keys::Platform::Linux, action, chord).0;
+            match bind {
+                Some((action, Some(chord))) => {
+                    self.overrides =
+                        keys::set_binding(&self.overrides, keys::Platform::Linux, action, chord).0;
+                }
+                Some((action, None)) => {
+                    self.overrides =
+                        keys::clear_binding(&self.overrides, keys::Platform::Linux, action);
+                }
+                None => {}
             }
         }
 

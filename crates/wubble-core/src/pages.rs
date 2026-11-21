@@ -45,7 +45,15 @@ pub struct DayGroup {
 /// Local day number of `ms` at a UTC offset in minutes (east positive). One offset for all
 /// rows: around a DST change an older visit can land on the neighbouring day.
 fn local_day(ms: i64, tz_offset_min: i32) -> i64 {
-    (ms + i64::from(tz_offset_min) * MIN_MS).div_euclid(DAY_MS)
+    ms.saturating_add(i64::from(tz_offset_min).saturating_mul(MIN_MS))
+        .div_euclid(DAY_MS)
+}
+
+/// Local wall-clock time (`HH:MM`, 24-hour) of `ms` at a UTC offset in minutes (east positive).
+pub fn format_local_time(ms: i64, tz_offset_min: i32) -> String {
+    let local_ms = ms.saturating_add(i64::from(tz_offset_min).saturating_mul(MIN_MS));
+    let total_min = local_ms.rem_euclid(DAY_MS) / MIN_MS;
+    format!("{:02}:{:02}", total_min / 60, total_min % 60)
 }
 
 fn day_label(day: i64, today: i64) -> DayLabel {
@@ -139,8 +147,8 @@ impl ClearRange {
     /// The `[from, to)` span for the store's range delete.
     pub fn bounds(self, now_ms: i64) -> (i64, i64) {
         match self {
-            ClearRange::LastHour => (now_ms - 60 * MIN_MS, i64::MAX),
-            ClearRange::LastDay => (now_ms - DAY_MS, i64::MAX),
+            ClearRange::LastHour => (now_ms.saturating_sub(60 * MIN_MS), i64::MAX),
+            ClearRange::LastDay => (now_ms.saturating_sub(DAY_MS), i64::MAX),
             ClearRange::All => (i64::MIN, i64::MAX),
         }
     }
@@ -1142,6 +1150,25 @@ mod tests {
             history_page(&far, 0, NOW)[0].label,
             DayLabel::Date(NaiveDate::from_ymd_opt(2000, 2, 29).unwrap())
         );
+    }
+
+    #[test]
+    fn format_local_time_and_saturating_bounds() {
+        // NOW is 2024-03-01T12:00:00Z
+        assert_eq!(format_local_time(NOW, 0), "12:00");
+        assert_eq!(format_local_time(NOW + 5 * MIN_MS, 0), "12:05");
+        assert_eq!(format_local_time(NOW, 330), "17:30");
+        assert_eq!(format_local_time(NOW, -300), "07:00");
+        // Midnight wrap across positive and negative offsets.
+        assert_eq!(format_local_time(NOW + 11 * HOUR + 30 * MIN_MS, 60), "00:30");
+        assert_eq!(format_local_time(NOW - 11 * HOUR - 30 * MIN_MS, -60), "23:30");
+        // Extreme timestamps saturate instead of panicking.
+        let _ = format_local_time(i64::MAX, 60);
+        let _ = format_local_time(i64::MIN, -60);
+        let _ = local_day(i64::MAX, 60);
+        let _ = local_day(i64::MIN, -60);
+        assert_eq!(ClearRange::LastHour.bounds(i64::MIN), (i64::MIN, i64::MAX));
+        assert_eq!(ClearRange::LastDay.bounds(i64::MIN), (i64::MIN, i64::MAX));
     }
 
     fn bm(id: i64, parent: Option<i64>, folder: bool, pos: u32, title: &str) -> BookmarkRow {

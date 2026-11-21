@@ -19,6 +19,7 @@ export component Select inherits Rectangle {
     in property <[MenuEntry]> options;
     in property <int> value;
     in property <string> label;
+    in property <string> placeholder: "Ask on first search";
     in property <color> accent: Palette.sky;
     // the view the menu must stay inside (window coordinates; the page's scroller), for the
     // upward flip; unbounded by default (it opens down)
@@ -59,7 +60,7 @@ export component Select inherits Rectangle {
         width: root.width;
         least-width: SettingsCss.wb-st-select-trig--min-width;
         trigger-height: SettingsCss.wb-st-select-trig--height;
-        text: root.current < root.options.length ? root.options[root.current].label : "";
+        text: root.value >= 0 && root.value < root.options.length ? root.options[root.value].label : root.placeholder;
         label: root.label;
         open: root.open;
         clicked(by-key) => {
@@ -80,7 +81,7 @@ export component Select inherits Rectangle {
         entries: root.options;
         label: root.label;
         checks: true;
-        checked: root.current;
+        checked: root.value;
         accent: root.accent;
         menu-width: TouchMenu.select-width;
         // the list sits in the page, under the scene's window-level glass: its panel is its own

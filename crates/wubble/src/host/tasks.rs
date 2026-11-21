@@ -80,7 +80,10 @@ fn item(row: &TaskRow, own_pid: u32) -> TaskItem {
             .into(),
         busy: row.note().into(),
         never_sleep: row.never_sleep,
-        can_discard: idle && matches!(row.state, Some(Liveness::Background | Liveness::Frozen)),
+        can_sleep: matches!(row.kind, Kind::Tab(_)) && !row.internal,
+        can_discard: !row.internal
+            && idle
+            && matches!(row.state, Some(Liveness::Background | Liveness::Frozen)),
         can_end: row.pid.is_some_and(|p| p != own_pid),
     }
 }
@@ -159,14 +162,30 @@ impl Host {
                     eprintln!("wubble: process {pid} is not one of wubble's; not ended");
                 }
             }
-            (TaskAction::Discard, Some(tab)) => self.dispatch(Command::DiscardNow(tab)),
-            (TaskAction::NeverSleep, Some(tab)) => {
-                let on = self
+            (TaskAction::Discard, Some(tab)) => {
+                let internal = self
                     .model
                     .tabs
                     .get(&tab)
-                    .is_some_and(|t| !t.busy.contains(Reason::NeverSleep));
-                self.set_busy(tab, Reason::NeverSleep, on);
+                    .is_some_and(|t| wubble_core::pages::InternalPage::from_url(&t.url).is_some());
+                if !internal {
+                    self.dispatch(Command::DiscardNow(tab));
+                }
+            }
+            (TaskAction::NeverSleep, Some(tab)) => {
+                let internal = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .is_some_and(|t| wubble_core::pages::InternalPage::from_url(&t.url).is_some());
+                if !internal {
+                    let on = self
+                        .model
+                        .tabs
+                        .get(&tab)
+                        .is_some_and(|t| !t.busy.contains(Reason::NeverSleep));
+                    self.set_busy(tab, Reason::NeverSleep, on);
+                }
             }
             (_, None) => {}
         }
@@ -192,6 +211,7 @@ mod tests {
             busy: vec![],
             shared_with: 1,
             never_sleep: false,
+            internal: false,
             space: None,
         }
     }
@@ -208,24 +228,32 @@ mod tests {
             (hidden.memory.as_str(), hidden.cpu.as_str()),
             ("12.3 MB", "2.2 %")
         );
-        assert!(hidden.can_discard && hidden.can_end);
+        assert!(hidden.can_discard && hidden.can_sleep && hidden.can_end);
+        let internal = item(
+            &TaskRow {
+                internal: true,
+                ..row(Kind::Tab(TabId(5)), Some(Liveness::Background), None)
+            },
+            1,
+        );
+        assert!(!internal.can_discard && !internal.can_sleep && !internal.can_end);
         let busy = TaskRow {
             busy: vec!["Playing audio"],
             shared_with: 2,
             ..row(Kind::Tab(TabId(3)), Some(Liveness::Background), Some(9))
         };
         let busy = item(&busy, 1);
-        assert!(!busy.can_discard);
+        assert!(!busy.can_discard && busy.can_sleep);
         assert_eq!(busy.busy, "Playing audio");
         assert_eq!(busy.memory, "12.3 MB (shared by 2)");
         let shown = item(
             &row(Kind::Tab(TabId(3)), Some(Liveness::Active), Some(9)),
             1,
         );
-        assert!(!shown.can_discard);
+        assert!(!shown.can_discard && shown.can_sleep);
         let browser = item(&row(Kind::Process("Browser".into()), None, Some(1)), 1);
         assert_eq!((browser.tab, browser.state.as_str()), (-1, ""));
-        assert!(!browser.can_end && !browser.can_discard);
+        assert!(!browser.can_end && !browser.can_discard && !browser.can_sleep);
         let gone = item(
             &TaskRow {
                 sample: None,

@@ -9,6 +9,7 @@
 pub enum Action {
     NewTab,
     CloseTab,
+    DuplicateTab,
     ReopenClosedTab,
     NewWindow,
     /// Close the focused window (the last Main window quits).
@@ -112,9 +113,10 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 67] = [
+const FIXED: [(&str, Action); 68] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
+    ("duplicate-tab", Action::DuplicateTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
     ("new-window", Action::NewWindow),
     ("close-window", Action::CloseWindow),
@@ -212,17 +214,28 @@ impl Action {
     }
 
     /// What the keybinding editor calls the action: its command-bar title, else its id in
-    /// words (`select-tab-3` reads "Select tab 3").
+    /// Title Case (`select-tab-3` reads "Select Tab 3").
     pub fn label(self) -> String {
+        match self {
+            Action::DevTools => return "DevTools".to_owned(),
+            Action::CopyUrl => return "Copy URL".to_owned(),
+            Action::MoveTabToNewWindow => return "Move Tab to New Window".to_owned(),
+            _ => {}
+        }
         if let Some(info) = PALETTE.iter().find(|i| i.action == self) {
             return info.title.to_owned();
         }
-        let words = self.id().replace('-', " ");
-        let mut chars = words.chars();
-        chars
-            .next()
-            .map(|c| c.to_uppercase().chain(chars).collect())
-            .unwrap_or_default()
+        self.id()
+            .split('-')
+            .map(|word| {
+                let mut chars = word.chars();
+                chars
+                    .next()
+                    .map(|c| c.to_uppercase().chain(chars).collect::<String>())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Whether the action is an edit command (undo, cut, copy ...): a shell text field
@@ -257,7 +270,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 30] = [
+pub const PALETTE: [ActionInfo; 31] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -267,6 +280,11 @@ pub const PALETTE: [ActionInfo; 30] = [
         action: Action::CloseTab,
         title: "Close Tab",
         keywords: "remove",
+    },
+    ActionInfo {
+        action: Action::DuplicateTab,
+        title: "Duplicate Tab",
+        keywords: "clone copy tab",
     },
     ActionInfo {
         action: Action::ReopenClosedTab,
@@ -407,7 +425,7 @@ pub const PALETTE: [ActionInfo; 30] = [
     ActionInfo {
         action: Action::ClearBrowsingData,
         title: "Clear Browsing Data",
-        keywords: "cookies cache site storage logins forget privacy delete container",
+        keywords: "cookies cache site storage logins forget privacy delete container history browsing",
     },
 ];
 
@@ -418,7 +436,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 85);
+        assert_eq!(all.len(), 86);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -445,7 +463,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 85);
+        assert_eq!(ids.len(), 86);
     }
 
     #[test]
@@ -469,9 +487,24 @@ mod tests {
     #[test]
     fn open_settings_and_labels() {
         assert_eq!(Action::from_id("open-settings"), Some(Action::OpenSettings));
+        assert_eq!(Action::from_id("duplicate-tab"), Some(Action::DuplicateTab));
         assert_eq!(Action::OpenSettings.label(), "Settings");
-        assert_eq!(Action::SelectTab(3).label(), "Select tab 3");
-        assert_eq!(Action::DevTools.label(), "Dev tools");
+        assert_eq!(Action::DuplicateTab.label(), "Duplicate Tab");
+        assert_eq!(Action::NewTab.label(), "New Tab");
+        assert_eq!(Action::CloseWindow.label(), "Close Window");
+        assert_eq!(Action::CopyUrl.label(), "Copy URL");
+        assert_eq!(Action::SelectTab(3).label(), "Select Tab 3");
+        assert_eq!(Action::DevTools.label(), "DevTools");
+        assert_eq!(
+            Action::MoveTabToNewWindow.label(),
+            "Move Tab to New Window"
+        );
+        let clear = PALETTE
+            .iter()
+            .find(|i| i.action == Action::ClearBrowsingData)
+            .expect("ClearBrowsingData in PALETTE");
+        assert!(clear.keywords.contains("history"));
+        assert!(clear.keywords.contains("browsing"));
     }
 
     #[test]

@@ -226,6 +226,7 @@ component BindingRow inherits Row {
     in property <CaptureView> capture;
     callback record(string);
     callback reset(string);
+    callback clear(string);
     callback confirm();
     callback cancel();
 
@@ -233,7 +234,11 @@ component BindingRow inherits Row {
     property <bool> asking: root.capture.conflict && root.capture.action == root.item.action;
     RowText {
         title: root.item.label;
-        note: root.asking ? root.capture.chord + " runs " + root.capture.other + " now" : "";
+        note: root.asking
+            ? (root.capture.other-is-edit
+                ? root.capture.chord + " runs " + root.capture.other + " (page editing) now"
+                : root.capture.chord + " runs " + root.capture.other + " now")
+            : "";
         tone: NoteTone.conflict;
     }
     RowControls {
@@ -242,6 +247,13 @@ component BindingRow inherits Row {
             text: "Replace";
             clicked => {
                 root.confirm();
+            }
+        }
+        if root.armed && root.item.chord != "": Button {
+            kind: ButtonKind.ghost;
+            text: "Clear";
+            clicked => {
+                root.clear(root.item.action);
             }
         }
         if root.asking || root.armed: Button {
@@ -408,6 +420,7 @@ export component SettingsPage inherits Rectangle {
     callback entry-added(string, string);
     callback binding-record(string);
     callback binding-reset(string);
+    callback binding-clear(string);
     callback capture-confirm();
     callback capture-cancel();
     callback space-renamed(int, string);
@@ -619,6 +632,9 @@ export component SettingsPage inherits Rectangle {
                             }
                             reset(a) => {
                                 root.binding-reset(a);
+                            }
+                            clear(a) => {
+                                root.binding-clear(a);
                             }
                             confirm => {
                                 root.capture-confirm();

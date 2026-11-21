@@ -1384,6 +1384,7 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
     });
     window.on_binding_record(move |id| with_host_in(win, |host| host.binding_record(&id)));
     window.on_binding_reset(move |id| with_host_in(win, |host| host.binding_reset(&id)));
+    window.on_binding_clear(move |id| with_host_in(win, |host| host.binding_clear(&id)));
     window.on_capture_confirm(move || {
         with_host_in(win, |host| host.capture_event(CaptureEvent::Confirm))
     });
