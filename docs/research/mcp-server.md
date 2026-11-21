@@ -412,7 +412,7 @@ them. Page tools take `session` and `tab` handles. 2026-07-28 requires `ttlMs`/`
 | `open_tab`, `close_tab` | url / tab | destructive | Closing a tab the session did not open |
 | `wait_for` | `tab`; text, ref, load or network idle; timeout | readOnly | |
 | `handle_dialog` | `tab`; accept / dismiss, prompt text | destructive | Answer a wubble prompt or airlock; leave-page dialogs answer only with the human present [I] |
-| `upload` | `tab`, `ref` of a file input; optional `{var: RESUME}` | destructive, openWorld | Name a path: a file variable was approved in the sheet, or the human picks in the native chooser |
+| `upload` (built as `upload_file`) | `tab`, `ref` of a file input or of a button that opens a chooser; `path` or `paths`, absolute | destructive, openWorld | Superseded by the owner's decision (2026-11-21, decisions.md "Agent file uploads"): any file the agent's process names is allowed, with no allow-list, deny-list, per-upload confirmation or sheet entry; the device's file permissions are the owner's, set up in their harness. A chooser whose page is off the session's sites is never answered |
 | `download_media` | `tab`, `ref` of a video | destructive | Bypass the download airlock (media downloader built-in [V decisions.md]) |
 | `request_human` | reason, optional `tab` | none | Ask for passwords, card numbers or codes |
 

@@ -69,6 +69,8 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] `read_page` lists no `<option>`, list box or `<select multiple>`/`size` (a collapsed select's options are AX-invisible; `listBox` and its options are no `wubble_ax` item kind): `select` takes an option's ref and a multiple list, but no ref reaches one yet
 - [ ] `select` on a `<select multiple>` sets one choice (the others cleared); adding a choice is not offered
 - [ ] `type`'s focus check runs in the top document: focus moving between fields inside one frame is not seen (a frame counts as editable), and a custom element whose shadow root is closed counts as editable once focus moved to it
+- [ ] `upload_file` into a frame of another site (its own process): the top target's DevTools session neither reaches its input (`DOM.setFileInputFiles`) nor intercepts its chooser, so the click's chooser is cancelled and the call fails; reaching it needs `Target.setAutoAttach` with flattened sessions through the engine
+- [ ] `upload_file`'s path check runs on a thread of its own per call: a path on a hung mount fails the call at 5 s, but its thread stays blocked until the file system answers
 - [ ] `evaluate`'s object group is shared by a tab's calls and not released when one times out or its session goes (`select`'s is per call and always released)
 - [ ] `drag` drives pointer events only: an HTML `draggable` drag runs in the window's own drag loop (dropped with nothing, the reply says so)
 - [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
