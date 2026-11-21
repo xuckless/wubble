@@ -12,10 +12,21 @@ use cef::application_mac::{CefAppProtocol, CrAppControlProtocol, CrAppProtocol};
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, define_class, extern_methods, msg_send,
     rc::Retained,
-    runtime::{Bool, NSObjectProtocol},
+    runtime::{AnyObject, Bool, NSObjectProtocol},
 };
 use objc2_app_kit::{NSApp, NSApplication, NSEvent};
 use std::cell::Cell;
+use std::sync::Mutex;
+
+static QUIT_HANDLER: Mutex<Option<fn()>> = Mutex::new(None);
+
+/// Registers or clears the callback invoked by `-[WubbleApplication terminate:]` instead of
+/// AppKit's default `exit(0)`, so `Cmd+Q` / Dock Quit runs orderly CEF shutdown.
+pub fn set_quit_handler(handler: Option<fn()>) {
+    if let Ok(mut slot) = QUIT_HANDLER.lock() {
+        *slot = handler;
+    }
+}
 
 #[derive(Default)]
 pub struct Ivars {
@@ -38,6 +49,16 @@ define_class!(
             let _: () = msg_send![super(self), sendEvent: event];
             if !was {
                 self.set_handling_send_event(false);
+            }
+        }
+
+        #[unsafe(method(terminate:))]
+        unsafe fn terminate(&self, sender: Option<&AnyObject>) {
+            let handler = QUIT_HANDLER.lock().ok().and_then(|g| *g);
+            if let Some(quit) = handler {
+                quit();
+            } else {
+                let _: () = msg_send![super(self), terminate: sender];
             }
         }
     }

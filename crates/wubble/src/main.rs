@@ -2144,6 +2144,7 @@ fn run(
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
     measure::mark(measure::Stage::SessionRestored);
+    wubble_engine::app::set_quit_handler(Some(quit));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {
@@ -2209,6 +2210,7 @@ fn run(
     };
     let code = Verdict::of(mode, &outcome).print();
     drain(&mut host.engine);
+    wubble_engine::app::set_quit_handler(None);
     Ok(code)
 }
 

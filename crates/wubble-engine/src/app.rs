@@ -458,6 +458,15 @@ pub fn prepare_process() {
     Current::prepare_process()
 }
 
+/// Registers or clears the callback invoked when macOS AppKit receives
+/// `-[NSApplication terminate:]` (e.g. `Cmd+Q`, menu bar Quit, or Dock Quit).
+/// Intercepting `terminate:` avoids AppKit's default `exit(0)` and lets the host
+/// exit the event loop and run orderly CEF shutdown. No-op on non-macOS platforms.
+pub fn set_quit_handler(_handler: Option<fn()>) {
+    #[cfg(target_os = "macos")]
+    crate::mac_app::set_quit_handler(_handler);
+}
+
 /// Whether hardware video decode is there to be asked for (Linux: [`nvidia_vaapi`]). Read once
 /// per process, so the environment `prepare_process` set and the switch agree.
 pub fn hardware_video_decode_found() -> bool {
