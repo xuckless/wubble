@@ -27,7 +27,7 @@ wubble is an open-source web browser for Linux and macOS. It runs on Chromium, s
 curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh
 ```
 
-No root needed. Linux x86_64 today; the macOS (Apple silicon) build of the current preview is being added and installs with the same command. To remove wubble, add `-s -- --uninstall`; your profile is kept.
+No root needed, on Linux (x86_64) and macOS (Apple silicon); on a Mac there is also a `.dmg` on the [Releases](https://github.com/xuckless/wubble/releases) page. To remove wubble, add `-s -- --uninstall`; your profile is kept.
 
 wubble updates itself: it checks GitHub when it opens and installs a new version on the next start, signature-checked. That check is the only request wubble makes by itself, and Settings → Updates turns it off.
 
@@ -49,7 +49,7 @@ Tested on Fedora (GNOME, Wayland). Ubuntu 23.10 and later restrict the sandbox C
 - Peek at a link without leaving the page (<kbd>Shift</kbd>+click)
 - Reader, find in page, zoom, PDF, print, screenshots, link hints, picture-in-picture
 - Video controls over any video: speed, loop, frame step, save
-- H.264 and AAC playback (protected, DRM video does not play)
+- H.264 and AAC playback on Linux (protected, DRM video does not play)
 
 **Privacy**
 - A content blocker built on Brave's [adblock-rust](https://github.com/brave/adblock-rust), with cookie-banner and tracking-parameter lists

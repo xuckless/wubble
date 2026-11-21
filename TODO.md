@@ -9,8 +9,8 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 `main` builds, lints and passes 2117 tests; every window smoke passes on the invisible test display
 (`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.2` for Linux (with codecs), which
 adds the MCP server (off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
-registered on turn-on); its macOS build is made by the owner on the Mac from the same tag
-(`sh /Users/Shared/wubble-preview2-mac.sh`), then signed, added to the manifest and uploaded from here. Extensions are
+registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
+(made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
 built but not released: they need the patched engine, which the release engine is not. The npm launcher
 (`packages/wubble-mcp`) is built, not published. Windows is not green in CI.
 
@@ -23,7 +23,6 @@ on the same build; the numbers to beat are in [docs/measurements.md](docs/measur
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
-- [ ] Finish preview.2: the Mac files into the release and the manifest (then the README's install line says both platforms)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
