@@ -41,6 +41,8 @@ Beside it, small and unordered:
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
+- [ ] macOS: the quarantine fix for updates (`settle_quarantine`, the updater's clear before placing) is compiled but never run on a Mac: on the owner's Mac, an install updated by wubble itself must start from `/Applications` (Settings → Updates not "managed elsewhere") and offer the next update; cut preview.5 after that check
+
 ## After the optimization pass (owner, 2026-11-21)
 
 Built as planned in the research, each as its own pass; nothing downloads or asks a server unless the owner turns it on.

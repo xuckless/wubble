@@ -107,6 +107,16 @@ next launch runs; Settings and a toast offer "Restart to update". A new version 
 3 times (no 20 s healthy run) falls back to the previous one, which is never offered again; after a
 healthy start, versions older than the previous one are deleted.
 
+macOS quarantine: wubble's `Info.plist` has `LSFileQuarantineEnabled` (cef-rs's bundler writes it, as
+Chrome's has it), so everything wubble downloads is quarantined, the update archive and the app
+unpacked from it too. A quarantined app that Finder did not move is started by macOS from a random
+read-only copy (App Translocation), where the updater finds no install ("managed elsewhere") and
+stops updating: previews 2 to 4 leave their update in that state. From preview.5 the updater takes
+the mark off the checked bundle before it is put in place, and a launch takes it off the install
+(and leaves a translocated copy for the install) (`updater/install.rs` `settle_quarantine`). An
+install stuck on preview.2 to 4: `xattr -dr com.apple.quarantine /Applications/wubble.app`, or drag
+the app from a new `.dmg`.
+
 ## The npm package `wubble-mcp`
 
 `packages/wubble-mcp/` (outside the Cargo workspace, no dependencies, no install scripts) is a launcher for agent

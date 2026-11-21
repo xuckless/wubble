@@ -213,6 +213,7 @@ impl Updater {
 /// The first thing a browser start does after it is the profile's one instance: a staged
 /// update applies, or a failing version rolls back (`install::on_launch`).
 pub fn on_launch() {
+    install::settle_quarantine();
     if let (_, Some(install)) = install::detect() {
         install::on_launch(install.as_ref());
     }

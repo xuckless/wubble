@@ -89,6 +89,81 @@ fn classify() -> InstallKind {
     }
 }
 
+/// macOS's mark on files a quarantining app wrote. wubble's `Info.plist` has
+/// `LSFileQuarantineEnabled` (cef-rs's bundler, as Chrome's has), so the update archive wubble
+/// downloads, and the app unpacked from it, carry the mark.
+const QUARANTINE: &str = "com.apple.quarantine";
+
+fn quarantined(app: &Path) -> bool {
+    std::process::Command::new("/usr/bin/xattr")
+        .args(["-p", QUARANTINE])
+        .arg(app)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// Takes the mark off `app` and everything in it (the system's `xattr`; the mark is no part
+/// of the code signature). Only for a bundle whose archive passed `verify_archive`, or the
+/// install itself. Whether it is gone.
+fn clear_quarantine(app: &Path) -> bool {
+    let _ = std::process::Command::new("/usr/bin/xattr")
+        .args(["-dr", QUARANTINE])
+        .arg(app)
+        .status();
+    !quarantined(app)
+}
+
+fn mac_version(app: &Path) -> Option<Version> {
+    let text = std::fs::read_to_string(app.join("Contents/Resources").join(RELEASE_FILE)).ok()?;
+    ReleaseInfo::parse(&text).ok().map(|i| i.version)
+}
+
+/// macOS, first at a launch: an install that an earlier wubble's update left quarantined.
+/// Started from its place, the mark is taken off. Started from an App Translocation copy
+/// (macOS runs a quarantined app Finder did not move from a random read-only folder, where
+/// the updater finds no install: "managed elsewhere", and no update), the mark is taken off
+/// the install of this same version and that one starts in this process's place.
+pub fn settle_quarantine() {
+    if !cfg!(target_os = "macos") || cfg!(debug_assertions) {
+        return;
+    }
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|e| std::fs::canonicalize(e).ok())
+    else {
+        return;
+    };
+    if !layout::translocated(&exe) {
+        if let InstallKind::Managed(l) = classify()
+            && quarantined(&l.bundle)
+        {
+            clear_quarantine(&l.bundle);
+        }
+        return;
+    }
+    let Some(home) = env_path("HOME") else {
+        return;
+    };
+    let running = wubble_core::update::current_version();
+    for app in layout::mac_places(&home) {
+        if mac_version(&app).as_ref() != Some(&running) || !quarantined(&app) {
+            continue;
+        }
+        if !clear_quarantine(&app) {
+            eprintln!("wubble: {} stays quarantined", app.display());
+            continue;
+        }
+        let exe = app.join("Contents/MacOS/wubble");
+        eprintln!(
+            "wubble: leaving the translocated copy: starting {}",
+            exe.display()
+        );
+        let e = exec(&exe);
+        eprintln!("wubble: cannot start {}: {e}", exe.display());
+        return;
+    }
+}
+
 pub fn read_record(l: &Layout) -> LaunchRecord {
     LaunchRecord::parse(&std::fs::read_to_string(l.record()).unwrap_or_default())
 }
@@ -324,8 +399,7 @@ pub struct Mac(pub Layout);
 
 impl Mac {
     fn version_of(&self, app: &Path) -> Option<Version> {
-        let text = std::fs::read_to_string(self.release_file(app)).ok()?;
-        ReleaseInfo::parse(&text).ok().map(|i| i.version)
+        mac_version(app)
     }
 }
 
@@ -366,6 +440,9 @@ impl Install for Mac {
         if bundle.file_name().is_none_or(|n| n != layout::MAC_APP) {
             return Err(format!("the archive does not hold {}", layout::MAC_APP));
         }
+        // checked (`verify_archive`, its release file): without this the swapped-in app is
+        // quarantined and macOS runs it translocated (`settle_quarantine`)
+        clear_quarantine(bundle);
         let staged = self.0.staged_app();
         remove_any(&staged).map_err(|e| e.to_string())?;
         move_bundle(bundle, &staged)

@@ -131,6 +131,22 @@ pub fn classify_mac(exe: &Path, home: &Path, data: &Path, released: bool) -> Ins
     }
 }
 
+/// macOS: whether `exe` runs from an App Translocation copy. macOS starts a quarantined app
+/// that Finder did not move from a read-only copy under a random
+/// `.../AppTranslocation/<id>/d/wubble.app`; from there the install is not in its place.
+pub fn translocated(exe: &Path) -> bool {
+    exe.components()
+        .any(|c| c.as_os_str() == "AppTranslocation")
+}
+
+/// macOS: where a managed `wubble.app` can be.
+pub fn mac_places(home: &Path) -> [PathBuf; 2] {
+    [
+        Path::new("/Applications").join(MAC_APP),
+        home.join("Applications").join(MAC_APP),
+    ]
+}
+
 fn development_or_elsewhere(exe: &Path) -> InstallKind {
     if exe.components().any(|c| c.as_os_str() == "target") {
         InstallKind::Development
@@ -304,6 +320,24 @@ mod tests {
 
     fn v(s: &str) -> Version {
         Version::parse(s).unwrap()
+    }
+
+    #[test]
+    fn a_translocated_copy_is_told_from_an_install() {
+        let copy = Path::new(
+            "/private/var/folders/ab/T/AppTranslocation/1F2E/d/wubble.app/Contents/MacOS/wubble",
+        );
+        assert!(translocated(copy));
+        assert!(!translocated(Path::new(
+            "/Applications/wubble.app/Contents/MacOS/wubble"
+        )));
+        assert_eq!(
+            mac_places(Path::new("/Users/u")),
+            [
+                PathBuf::from("/Applications/wubble.app"),
+                PathBuf::from("/Users/u/Applications/wubble.app")
+            ]
+        );
     }
 
     #[test]
