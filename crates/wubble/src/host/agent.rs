@@ -334,14 +334,78 @@ enum Wait {
         tab: TabId,
         answer: String,
     },
-    /// `fill_secret` clicked its element: the page's word on where focus went
+    /// `fill_secret` clicked its element at `at`: the page's word on where focus went
     /// ([`focus_script`]).
     Focus {
         id: u64,
         tab: TabId,
+        at: (f64, f64),
         text: Secret,
         name: String,
     },
+    /// An action's input was sent: the [`Fence`] after it, answered once the page has
+    /// handled all of it; then the action goes on.
+    Input {
+        id: u64,
+        tab: TabId,
+        /// A load the input began may begin before the fence answers.
+        load: Load,
+        then: Then,
+    },
+}
+
+/// The DevTools input event sent after an action's own input, through the same widget's input
+/// router: `Input.dispatch*Event` replies only once the renderer has acknowledged the event
+/// (`InputHandler::OnInputEventAck`, after the page's handlers ran), and the renderer handles a
+/// widget's input in order, so the reply means the page has handled everything before it
+/// (the pointer, keys, the select-all and the text commit share that pipe). A script or a
+/// DevTools call sent at once instead overtakes the input (another pipe, straight to the main
+/// thread) and sees the page as it was before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fence {
+    /// A pointer move where the action left the pointer (viewport CSS px).
+    Pointer(f64, f64),
+    /// A wheel of no distance there, behind the action's wheel ticks (wheel events queue
+    /// apart from other input, one at a time); DevTools first waits for a frame.
+    Wheel(f64, f64),
+    /// A key release of no key, after keys.
+    Key,
+}
+
+impl Fence {
+    /// The DevTools call that sends it.
+    fn call(self) -> (&'static str, Value) {
+        match self {
+            Fence::Pointer(x, y) => (
+                "Input.dispatchMouseEvent",
+                json!({ "type": "mouseMoved", "x": x, "y": y }),
+            ),
+            Fence::Wheel(x, y) => (
+                "Input.dispatchMouseEvent",
+                json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": 0 }),
+            ),
+            Fence::Key => ("Input.dispatchKeyEvent", json!({ "type": "keyUp" })),
+        }
+    }
+}
+
+/// What an action does once the page has handled its input (its [`Fence`] answered).
+enum Then {
+    /// The answer, after [`SETTLE`] (a navigation the input started may be refused).
+    Settle(String),
+    /// `type` with `submit`: waits as `navigate` does; no load begun within [`SUBMIT_GRACE`]
+    /// means none follows.
+    Submitted { before: Option<String> },
+    /// `fill_secret`'s click at `at`: the page is asked where focus went.
+    Focus {
+        at: (f64, f64),
+        text: Secret,
+        name: String,
+    },
+    /// A drag let go.
+    Dragged,
+    /// The answer now.
+    Answer(&'static str),
 }
 
 struct Pending {
@@ -431,6 +495,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Metrics { tab, .. }
         | Wait::Vault { tab, .. }
         | Wait::Focus { tab, .. }
+        | Wait::Input { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
     }
@@ -2439,7 +2504,7 @@ impl Host {
             Act::Hover => {
                 view.mouse_move(point, &Modifiers::default(), now);
                 self.pace(wubble_gfx::pacing::PaceEvent::Wake);
-                self.agent_send(reply, ToolResult::text("hovering"), Outcome::Done);
+                self.agent_fence(reply, tab, Fence::Pointer(x, y), Then::Answer("hovering"));
             }
             Act::Wheel { dx, dy } => {
                 view.mouse_move(point, &Modifiers::default(), now);
@@ -2463,7 +2528,8 @@ impl Host {
                     ..Modifiers::default()
                 };
                 view.mouse_button(MouseButton::Left, false, point, &held, now);
-                self.agent_dragged(reply);
+                self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+                self.agent_fence(reply, tab, Fence::Pointer(x, y), Then::Dragged);
             }
             Act::Reveal => self.agent_send(reply, ToolResult::text("in view"), Outcome::Done),
             Act::Shot => self.agent_fail(
@@ -2484,7 +2550,8 @@ impl Host {
         view.wheel(point, -step.0 as f32, -step.1 as f32, &Modifiers::default());
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
         if left <= 1 {
-            return self.agent_send(reply, ToolResult::text("scrolled"), Outcome::Done);
+            let (x, y) = (f64::from(point.x), f64::from(point.y));
+            return self.agent_fence(reply, tab, Fence::Wheel(x, y), Then::Answer("scrolled"));
         }
         slint::Timer::single_shot(WHEEL_TICK, move || {
             with_host(|h| h.agent_wheel(reply, tab, point, step, left - 1));
@@ -2506,7 +2573,8 @@ impl Host {
             &Modifiers::default(),
             now,
         );
-        self.agent_dragged(reply);
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        self.agent_fence(reply, tab, Fence::Pointer(to.0, to.1), Then::Dragged);
     }
 
     /// A drag was let go: a page's own drag and drop the press may have started (an HTML
@@ -2514,7 +2582,6 @@ impl Host {
     /// nothing, so the window is not left in it.
     fn agent_dragged(&mut self, reply: Reply) {
         let page_drag = self.drag_cancelled();
-        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
         let text = if page_drag {
             "dragged; the page began an HTML drag and drop, which agent drags do not carry: it was dropped with nothing"
         } else {
@@ -2579,7 +2646,7 @@ impl Host {
                 view.mouse_button(button, pressed, point, &modifiers, now);
             }
         }
-        let answer = match act {
+        let then = match act {
             Act::Type { text, submit } => {
                 view.edit(EditCommand::SelectAll);
                 view.ime_commit(text.expose());
@@ -2587,46 +2654,90 @@ impl Host {
                     if let Err(e) = self.agent_keys(tab, "Enter") {
                         return self.agent_fail(reply, &e);
                     }
-                    // as `navigate` when a load follows; a page that stays shows no load
-                    let wait = Wait::Navigated {
-                        tab,
-                        before,
-                        load: Load::Asked,
-                        answer: "typed and submitted; the page loaded".into(),
-                        grace: Some((
-                            Instant::now() + SUBMIT_GRACE,
-                            "typed and submitted; no page load followed".into(),
-                        )),
-                    };
-                    self.pace(wubble_gfx::pacing::PaceEvent::Wake);
-                    return self.agent_wait(reply, wait, WAIT);
+                    Then::Submitted { before }
+                } else {
+                    Then::Settle("typed".into())
                 }
-                "typed"
             }
-            Act::Fill { text, name } => {
-                let Some(id) = view.eval(&focus_script(x, y)) else {
+            Act::Fill { text, name } => Then::Focus {
+                at: (x, y),
+                text,
+                name,
+            },
+            _ => Then::Settle("clicked".into()),
+        };
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        self.agent_fence(reply, tab, Fence::Pointer(x, y), then);
+    }
+
+    /// The [`Fence`] after an action's input to `tab`, and `then` once the page answers it.
+    fn agent_fence(&mut self, reply: Reply, tab: TabId, fence: Fence, then: Then) {
+        let (method, params) = fence.call();
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_fail(reply, "the tab has no page");
+        };
+        match view.cdp(method, &params) {
+            Some(id) => {
+                let wait = Wait::Input {
+                    id: id.0,
+                    tab,
+                    load: Load::Asked,
+                    then,
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            None => self.agent_fail(reply, "the page cannot be reached now"),
+        }
+    }
+
+    /// The page has handled an action's input (its [`Fence`] answered; `load`: how far a load
+    /// it began came meanwhile): the action goes on.
+    fn agent_then(&mut self, reply: Reply, tab: TabId, load: Load, then: Then) {
+        match then {
+            Then::Settle(answer) => self.agent_settle(reply, tab, answer),
+            Then::Submitted { before } => {
+                // as `navigate` when a load follows; a page that stays shows no load
+                let wait = Wait::Navigated {
+                    tab,
+                    before,
+                    load,
+                    answer: "typed and submitted; the page loaded".into(),
+                    grace: Some((
+                        Instant::now() + SUBMIT_GRACE,
+                        "typed and submitted; no page load followed".into(),
+                    )),
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            Then::Focus { at, text, name } => {
+                let Some(id) = self
+                    .tab_view(tab)
+                    .and_then(|v| v.eval(&focus_script(at.0, at.1)))
+                else {
                     return self.agent_fail(reply, "the page cannot run scripts now");
                 };
                 let wait = Wait::Focus {
                     id: id.0,
                     tab,
+                    at,
                     text,
                     name,
                 };
-                return self.agent_wait(reply, wait, WAIT);
+                self.agent_wait(reply, wait, WAIT);
             }
-            _ => "clicked",
-        };
-        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
-        self.agent_settle(reply, tab, answer.into());
+            Then::Dragged => self.agent_dragged(reply),
+            Then::Answer(answer) => self.agent_send(reply, ToolResult::text(answer), Outcome::Done),
+        }
     }
 
     /// The page's answer to [`focus_script`]: the secret is typed only into the element that
     /// was clicked, in the top document, while the page is still on the login's site.
+    #[allow(clippy::too_many_arguments)]
     fn agent_focused(
         &mut self,
         reply: Reply,
         tab: TabId,
+        at: (f64, f64),
         text: Secret,
         name: &str,
         href: &str,
@@ -2663,7 +2774,12 @@ impl Host {
                 .or_default()
                 .push(text);
         }
-        self.agent_send(reply, ToolResult::text("filled"), Outcome::Done);
+        self.agent_fence(
+            reply,
+            tab,
+            Fence::Pointer(at.0, at.1),
+            Then::Answer("filled"),
+        );
     }
 
     /// `press_key`: the chord to the page, unless it is one of wubble's shortcuts
@@ -2677,7 +2793,7 @@ impl Host {
         let named = |host: &Host, action| host.keymap.tooltip_text(action).0;
         match agent::keys::plan(self.keymap.action_for(chord)) {
             KeyPlan::Page => match self.agent_keys(tab, name) {
-                Ok(()) => self.agent_settle(reply, tab, "pressed".into()),
+                Ok(()) => self.agent_fence(reply, tab, Fence::Key, Then::Settle("pressed".into())),
                 Err(e) => self.agent_fail(reply, &e),
             },
             KeyPlan::PageNotBrowser(action) => {
@@ -2687,7 +2803,7 @@ impl Host {
                     named(self, action)
                 );
                 match self.agent_keys(tab, name) {
-                    Ok(()) => self.agent_settle(reply, tab, text),
+                    Ok(()) => self.agent_fence(reply, tab, Fence::Key, Then::Settle(text)),
                     Err(e) => self.agent_fail(reply, &e),
                 }
             }
@@ -3059,7 +3175,8 @@ impl Host {
             (load, _) => load,
         };
         for p in &mut self.agents.pending {
-            if let Wait::Navigated { tab: t, load, .. } = &mut p.wait
+            if let Wait::Navigated { tab: t, load, .. } | Wait::Input { tab: t, load, .. } =
+                &mut p.wait
                 && *t == tab
             {
                 *load = step(*load);
@@ -3310,7 +3427,8 @@ impl Host {
             | Wait::Scroll { id: w, .. }
             | Wait::Locate { id: w, .. }
             | Wait::Metrics { id: w, .. }
-            | Wait::Focus { id: w, .. } => w == id,
+            | Wait::Focus { id: w, .. }
+            | Wait::Input { id: w, .. } => w == id,
             _ => false,
         }) else {
             return false;
@@ -3372,9 +3490,28 @@ impl Host {
                     None => self.agent_unpress(p.reply, tab, &act, "the page did not scroll"),
                 }
             }
+            (Wait::Input { .. }, PageEvent::CdpReply { result, .. }) => {
+                let Wait::Input {
+                    tab, load, then, ..
+                } = p.wait
+                else {
+                    return true;
+                };
+                match result {
+                    Ok(_) => self.agent_then(p.reply, tab, load, then),
+                    Err(e) => {
+                        let why = format!("the page did not take the input: {e}");
+                        self.agent_fail(p.reply, &why);
+                    }
+                }
+            }
             (Wait::Focus { .. }, PageEvent::EvalResult { result, .. }) => {
                 let Wait::Focus {
-                    tab, text, name, ..
+                    tab,
+                    at,
+                    text,
+                    name,
+                    ..
                 } = p.wait
                 else {
                     return true;
@@ -3391,7 +3528,7 @@ impl Host {
                     Some(("T", href)) => (false, href.to_owned()),
                     _ => (false, String::new()),
                 };
-                self.agent_focused(p.reply, tab, text, &name, &href, password);
+                self.agent_focused(p.reply, tab, at, text, &name, &href, password);
             }
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
@@ -3469,6 +3606,10 @@ impl Host {
             | Wait::Moved { tab, .. }
             | Wait::Settle { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
+            Wait::Input { .. } if late => {
+                self.agent_fail(p.reply, "the page did not handle the input in time");
+                return None;
+            }
             // answered by the page or the vault; only their deadline is checked here
             _ if late => {
                 self.agent_fail(p.reply, "the page did not answer in time");
@@ -4329,6 +4470,24 @@ mod tests {
         let mut r = ToolResult::text("nothing secret");
         redact(&mut r, &[Secret::new("pa\"ss")]);
         assert_eq!(text(&r), "nothing secret");
+    }
+
+    #[test]
+    fn each_fence_is_the_devtools_input_event_that_follows_its_input() {
+        let (method, params) = Fence::Pointer(12.0, 34.5).call();
+        assert_eq!(method, "Input.dispatchMouseEvent");
+        assert_eq!(params, json!({"type": "mouseMoved", "x": 12.0, "y": 34.5}));
+        let (method, params) = Fence::Wheel(1.0, 2.0).call();
+        assert_eq!(method, "Input.dispatchMouseEvent");
+        assert_eq!(params["type"], "mouseWheel");
+        assert_eq!(
+            (params["deltaX"].as_f64(), params["deltaY"].as_f64()),
+            (Some(0.0), Some(0.0))
+        );
+        assert_eq!(
+            Fence::Key.call(),
+            ("Input.dispatchKeyEvent", json!({"type": "keyUp"}))
+        );
     }
 
     #[test]
