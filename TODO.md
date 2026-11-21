@@ -24,10 +24,9 @@ this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --worksp
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
-in its order. First step: stop redrawing the shell per page frame (the flame graph's 76 % of the main thread).
-How to start it: measure first with the kept harness (`~/Dev/wubble-wt/notes/bench-2026-11-20/`: `runner.py`,
-`profile-lbr.sh`, `fold.py`; move them into `scripts/` as the first commit) so every step has a before and an after
-on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md) (2026-11-20). Measured by
+in its order. Steps 1 and 2 (partial rendering of the shell, CEF's damage through the frame path) are done.
+Measure with [scripts/bench/](scripts/bench/README.md) (`profile.sh`, `breakdown.py`, `runner.py`) so every step has a
+before and an after on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md). Measured by
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
@@ -229,8 +228,14 @@ Open, to build or check:
 
 ## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:
-- [ ] Stop redrawing the shell per page frame: a page frame redraws only its pane; the sidebar and bars are not re-walked or re-recorded (partial rendering in Slint's Skia renderer on wgpu, or the shell cached as a layer)
-- [ ] Partial rendering inside the page: CEF's damage rects through the frame path, so only the video or the moving part redraws
+- [ ] The shell's items are still walked twice per page frame (Slint's dirty-region pass and render walk): the roads and estimates are in docs/research/renderer-roads.md section 6; the owner decides on a core fork or waiting for slint#15028
+- [ ] An inset shadow (`inner-shadow-*`) at a fractional device position: its anti-aliased edge column comes out up to 5 levels different when a partial frame's clip covers it than in a whole frame, and stays until the item is redrawn (Settings' section pill, the address field; gallery 69 in 2 of 6 runs). Snapping the shadow image to the pixel grid removes it but moves the shadow's edges by up to 3 levels against upstream: the owner's call (measurements.md "Pixel questions")
+- [ ] Chromium's GPU process exits (133, a trap) right after the gallery's agent scenes 12 and 13 end their session (`agents_stop`) in most runs, on main too; when it happens with the page alive, that page lays out again with smaller body text until it is reloaded (`42-toast-question`; reproduced on main by killing the GPU process)
+- [ ] A scene render (ambience, 8 to 10 a second during video and scroll) marks the whole window dirty; mark only what the scene shows through
+- [ ] A page's damage far from the glass (a spinner mid-page) still rebuilds the page blur for the ambience at 8 Hz, a whole-window frame: build it only when the damage is within the ambience's reach (about 130 px of a pane edge) or under overlay glass
+- [ ] The start page renders the scene and the window at the display's rate for as long as it shows (57/s here, 120 on the owner's Mac): a lower rate for its liquid and bubble is the owner's call (measurements.md "Energy per scenario")
+- [ ] The CEF pump wakes 30 times a second on a still page (its 33 ms ceiling, a recorded decision): report the energy case to the owner before changing it
+- [ ] macOS: the window is transparent (`background: transparent`, so the Metal layer is not opaque) and WindowServer blends the whole window on every present; an opaque window where the shell covers it all, after a look on the Mac
 - [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`
 - [ ] Profile again with kernel time (needs root for `perf`): GPU driver calls and present, about a third of the main process's CPU, unseen so far
 - [ ] The CEF message pump on the main thread (14 % during video): what runs there per frame
@@ -239,7 +244,7 @@ Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchma
 - [ ] Memory breakdown per allocation in the main and GPU processes, before any memory change
 - [ ] Hidden tabs free their frame targets; the blur pyramid exists only while glass is open; revisit Skia's 256 MiB layer budget
 - [ ] A page frame touches the scene and the blur pyramid only while overlay glass or motion is on screen (1.3 % today: low value)
-- [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step; keep the harness and the profile scripts in `scripts/`
+- [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step (`scripts/bench/`; the Speedometer and MotionMark checkouts are not kept: fetch them into a scratch directory)
 - [ ] Only if plain video still costs far more than Chromium after the above: the page on a native OS surface with faked glass (overturns four frame-path decisions; owner decides)
 
 ## Open decisions (owner)

@@ -3,8 +3,9 @@ resolver = "3"
 members = ["crates/*"]
 # Vendored third-party code is not linted by `clippy --workspace`; its own
 # rustfmt.toml keeps `cargo fmt --all` off it. Built as a path dependency,
-# tested with `cargo test -p welding`; the renderer through wubble-ui's crisp_text test.
-exclude = ["vendor/welding"]
+# tested with `cargo test -p welding`; the renderer through wubble-ui's crisp_text and
+# partial_render tests.
+exclude = ["vendor/welding", "vendor/i-slint-renderer-skia"]
 
 [workspace.package]
 version = "0.1.0-preview.3"
@@ -69,3 +70,11 @@ panic = "abort"
 inherits = "release"
 lto = "fat"
 strip = "symbols"
+
+# Forked: Slint's Skia renderer 1.19.0 (GPL-3.0-only, one of its licence options) vendored with
+# wubble's changes (partial rendering on the wgpu surface: a page frame redraws its pane, not the
+# window), see vendor/i-slint-renderer-skia/WUBBLE_CHANGES.md. Moves with the `slint` pin: on a
+# Slint bump, re-vendor the new release and re-apply the changes, or drop the patch once
+# upstream has them.
+[patch.crates-io]
+i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }

@@ -66,6 +66,10 @@ struct Cli {
     /// scenario's own (`idle`: long enough for the scene to have settled).
     #[arg(long, value_name = "N", requires = "measure")]
     warmup: Option<NonZeroU32>,
+    /// `--measure idle` on this page instead of the bundled still one (the start page,
+    /// `wubble://start`; a page with a caret or a small animation), to see what it keeps drawing.
+    #[arg(long, value_name = "URL", requires = "measure")]
+    measure_page: Option<String>,
     /// `--measure` with CEF paced by external begin frames, one per Slint
     /// render, instead of CEF's own timer.
     #[arg(long, requires = "measure")]
@@ -386,6 +390,8 @@ pub struct Measure {
     pub out: Option<PathBuf>,
     pub begin_frames: bool,
     pub load: LoadArgs,
+    /// `--measure idle`'s page instead of the bundled one.
+    pub page: Option<String>,
 }
 
 /// `--measure load`'s own options.
@@ -433,6 +439,9 @@ impl TryFrom<Cli> for Command {
                     "--load-variant, --runs, --load-page, --load-back and --serve-only need --measure load",
                 );
             }
+            if scenario != Scenario::Idle && cli.measure_page.is_some() {
+                return conflict("--measure-page needs --measure idle");
+            }
             let defaults = LoadArgs::default();
             return Ok(Command::Measure(Measure {
                 scenario,
@@ -440,6 +449,10 @@ impl TryFrom<Cli> for Command {
                 warmup: cli.warmup,
                 out: cli.out,
                 begin_frames: cli.begin_frames,
+                page: cli
+                    .measure_page
+                    .as_deref()
+                    .map(wubble_core::url::from_cli_arg),
                 load: LoadArgs {
                     variant: cli.load_variant.unwrap_or(defaults.variant),
                     runs: cli.runs.unwrap_or(defaults.runs),
@@ -1039,6 +1052,7 @@ mod tests {
             out: out.map(PathBuf::from),
             begin_frames: false,
             load: LoadArgs::default(),
+            page: None,
         }))
     }
 
@@ -1094,7 +1108,33 @@ mod tests {
                 out: None,
                 begin_frames: true,
                 load: LoadArgs::default(),
+                page: None,
             }))
+        );
+    }
+
+    #[test]
+    fn measure_page_is_for_idle() {
+        let parsed = parse([
+            "wubble",
+            "--measure",
+            "idle",
+            "--measure-page",
+            "wubble://start",
+        ]);
+        assert!(matches!(
+            parsed,
+            Ok(Command::Measure(Measure { page: Some(ref p), .. })) if p == "wubble://start"
+        ));
+        assert!(
+            parse([
+                "wubble",
+                "--measure",
+                "video",
+                "--measure-page",
+                "wubble://start"
+            ])
+            .is_err()
         );
     }
 

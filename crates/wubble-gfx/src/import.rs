@@ -55,6 +55,9 @@ impl std::error::Error for GfxError {}
 /// hands it over unopened.
 pub struct NativeFrame(welding::NativeFrame);
 
+/// The part of a frame that changed since its view's previous frame, in the frame's pixels.
+pub use welding::Damage;
+
 /// When CEF painted a frame and what copying it cost the paint callback.
 /// Only frames copied inside the callback (Linux, macOS) carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +80,14 @@ impl NativeFrame {
     /// between two taken frames is frames replaced before they were taken.
     pub fn generation(&self) -> u64 {
         self.0.generation()
+    }
+
+    /// What changed since the view's previous frame, when CEF said (`None`: maybe all of it).
+    pub fn damage(&self) -> Option<Damage> {
+        match &self.0 {
+            welding::NativeFrame::Copied(c) => c.damage,
+            _ => None,
+        }
     }
 
     pub fn timing(&self) -> Option<FrameTiming> {
@@ -183,6 +194,7 @@ impl GpuContext {
             shrink: Blitter::new(&self.device, SHRINK_FS_WGSL, wgpu::FilterMode::Linear),
             ring: None,
             mask: EdgeMask::new(&self.device),
+            generation: None,
         }
     }
 }
@@ -317,6 +329,26 @@ impl Ring {
     }
 }
 
+/// The damage a frame may be written with in place, into the target on screen: `None` when it
+/// must be presented whole. In place needs all of: the frame says what changed (`damage`), and
+/// not everything; it is the generation after the one presented last (a frame replaced before
+/// it was taken changed things this damage does not cover); the ring's targets are the frame's
+/// size (a resized pane's first frame of the new size, or a frame of the old size after it,
+/// gets a new ring and is presented whole); and the image on screen is the ring's latest target.
+fn in_place(
+    damage: Option<Damage>,
+    last: Option<u64>,
+    generation: u64,
+    ring: Option<FrameSize>,
+    size: FrameSize,
+    shows_latest: bool,
+) -> Option<Damage> {
+    let damage = damage?;
+    let next = last.map(|g| g + 1) == Some(generation);
+    (next && ring == Some(size) && shows_latest && !damage.is_whole(size.width, size.height))
+        .then_some(damage)
+}
+
 /// Turns CEF frames into `slint::Image`s on the shared device.
 pub struct FramePresenter {
     ctx: HostWgpuContext,
@@ -326,6 +358,9 @@ pub struct FramePresenter {
     ring: Option<Ring>,
     /// The bowed-edge pass over the latest frame (`crate::mask`).
     mask: EdgeMask,
+    /// The generation (CEF's paint count) of the frame presented last: a frame's damage is
+    /// relative to the one before it, so it holds only for the next generation.
+    generation: Option<u64>,
 }
 
 impl FramePresenter {
@@ -334,6 +369,7 @@ impl FramePresenter {
     /// so it completes before Slint samples the image.
     pub fn present(&mut self, frame: NativeFrame) -> Result<slint::Image, GfxError> {
         let size = frame.size();
+        self.generation = Some(frame.generation());
         let imported = WgpuTextureImporter::import(frame.0, &self.ctx)
             .map_err(|e| GfxError::Import(e.to_string()))?;
         let ring = match self.ring.take() {
@@ -346,8 +382,49 @@ impl FramePresenter {
             &self.ctx.queue,
             &imported.view,
             &target.view,
+            None,
         );
         Ok(target.image.clone())
+    }
+
+    /// As [`FramePresenter::present`], but when the frame says what changed and `shown` is the
+    /// image this presenter returned last (still on screen, at the frame's size), only that part
+    /// is written, in place: the same image comes back with the damage, which the caller marks
+    /// dirty (Slint sees no new image). Otherwise the next ring target, whole, and `None`.
+    pub fn present_damaged(
+        &mut self,
+        frame: NativeFrame,
+        shown: &slint::Image,
+    ) -> Result<(slint::Image, Option<Damage>), GfxError> {
+        let shows_latest = self.ring.as_ref().is_some_and(|ring| {
+            shown.to_wgpu_30_texture().as_ref() == Some(&ring.latest().texture)
+        });
+        let in_place = in_place(
+            frame.damage(),
+            self.generation,
+            frame.generation(),
+            self.ring.as_ref().map(|ring| ring.size),
+            frame.size(),
+            shows_latest,
+        );
+        let Some(damage) = in_place else {
+            return self.present(frame).map(|image| (image, None));
+        };
+        self.generation = Some(frame.generation());
+        let ring = self.ring.as_ref().expect("matched above");
+        let target = ring.latest();
+        if damage.width > 0 && damage.height > 0 {
+            let imported = WgpuTextureImporter::import(frame.0, &self.ctx)
+                .map_err(|e| GfxError::Import(e.to_string()))?;
+            self.blit.run(
+                &self.ctx.device,
+                &self.ctx.queue,
+                &imported.view,
+                &target.view,
+                Some(damage),
+            );
+        }
+        Ok((target.image.clone(), Some(damage)))
     }
 
     /// The RGBA pixel at (`x`, `y`) (physical, clamped to the frame) of the
@@ -435,6 +512,7 @@ impl FramePresenter {
             &self.ctx.queue,
             &ring.latest().view,
             &view,
+            None,
         );
         let image = slint::Image::try_from(texture).map_err(|e| GfxError::Image(e.to_string()))?;
         let bytes = u64::from(size.width) * u64::from(size.height) * 4;
@@ -574,6 +652,8 @@ impl Blitter {
         queue: &wgpu::Queue,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
+        // only this part, over what the target holds (source and target one size)
+        region: Option<Damage>,
     ) {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("wubble blit"),
@@ -600,7 +680,10 @@ impl Blitter {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: match region {
+                            Some(_) => wgpu::LoadOp::Load,
+                            None => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -608,6 +691,9 @@ impl Blitter {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
+            if let Some(r) = region {
+                pass.set_scissor_rect(r.x, r.y, r.width, r.height);
+            }
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
@@ -630,6 +716,59 @@ mod tests {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         assert!(module.entry_points.iter().any(|p| p.name == "fs_main"));
+    }
+
+    /// A pane resize: the in-place path stays closed from the first frame of the new size (the
+    /// ring is the old size) until a frame of the new size has been presented whole, and a late
+    /// frame of the old size never writes into targets of the new one.
+    #[test]
+    fn a_pane_resize_presents_whole_until_a_frame_of_the_new_size_is_on_screen() {
+        let small = FrameSize::new(1080, 780);
+        let large = FrameSize::new(1280, 780);
+        let damage = Some(Damage {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        });
+        // steady at the old size: the next generation goes in place
+        assert_eq!(
+            in_place(damage, Some(4), 5, Some(small), small, true),
+            damage
+        );
+        // the pane grew: the first frame of the new size meets the old ring, whole
+        assert_eq!(in_place(damage, Some(5), 6, Some(small), large, true), None);
+        // presented whole, the ring is the new size: in place again
+        assert_eq!(
+            in_place(damage, Some(6), 7, Some(large), large, true),
+            damage
+        );
+        // a frame of the old size arriving late: whole (the ring is remade at its size)
+        assert_eq!(in_place(damage, Some(7), 8, Some(large), small, true), None);
+    }
+
+    #[test]
+    fn a_frame_is_written_in_place_only_after_the_one_on_screen() {
+        let size = FrameSize::new(800, 600);
+        let some = Some(Damage {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        });
+        let whole = Some(Damage {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        });
+        // no damage, a whole damage, a skipped generation, nothing presented yet, or another
+        // image on screen: whole
+        assert_eq!(in_place(None, Some(1), 2, Some(size), size, true), None);
+        assert_eq!(in_place(whole, Some(1), 2, Some(size), size, true), None);
+        assert_eq!(in_place(some, Some(1), 3, Some(size), size, true), None);
+        assert_eq!(in_place(some, None, 1, None, size, false), None);
+        assert_eq!(in_place(some, Some(1), 2, Some(size), size, false), None);
     }
 
     #[test]

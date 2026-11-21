@@ -740,6 +740,14 @@ impl Renderer {
         self.pages_stale = true;
     }
 
+    /// A pane's texture was written in place (its page's damage): the same textures, new
+    /// pixels, so `P` is out of date as after [`Renderer::set_pages`] with new ones.
+    pub fn pages_written(&mut self) {
+        if !self.pages.is_empty() {
+            self.pages_stale = true;
+        }
+    }
+
     /// Whether to build `P` on the next frame, from the glass and panes as they are now and no
     /// new backdrop: the host's `scene_due` input (`Build`) and its wake-up (`After`).
     pub fn page_verdict(&self, now: Instant) -> PageBlur {

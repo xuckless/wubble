@@ -166,6 +166,8 @@ impl Scenario {
 pub enum Count {
     /// A frame the host took from CEF, any view.
     CefFrame,
+    /// ... of which only CEF's damage was written, in place (`FramePresenter::present_damaged`).
+    CefFrameDamaged,
     SlintRender,
     /// A frame of the wgpu scene (the glass backdrop).
     SceneRender,
@@ -185,8 +187,9 @@ pub enum Count {
 }
 
 impl Count {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::CefFrame,
+        Self::CefFrameDamaged,
         Self::SlintRender,
         Self::SceneRender,
         Self::Pump,
@@ -212,6 +215,7 @@ impl Count {
             Self::Lifecycle => "lifecycle_ticks",
             Self::MeasureTick => "measure_ticks",
             Self::RunChange => "run_state_changes",
+            Self::CefFrameDamaged => "cef_frames_damaged",
         }
     }
 
@@ -981,6 +985,9 @@ struct Session {
     recorder: Recorder,
     /// The first frame; recording starts at the first tick [`Scenario::warmup`] later.
     first_frame: Option<Instant>,
+    /// The page measured is drawn by the shell (the start page), so no CEF frame comes: the
+    /// first Slint render counts as the first frame.
+    shell_page: bool,
     /// When recording started and whether it has ended: every count and the CPU times cover
     /// this one window, which the rates divide by.
     started: Option<Instant>,
@@ -1001,6 +1008,9 @@ struct Session {
     /// `nvidia-smi` sampling the GPU over the recording, then what it printed.
     gpu: Option<Child>,
     gpu_text: Option<String>,
+    /// Partial rendering's counts when recording started, then over the recording.
+    partial_start: Option<crate::partial::Totals>,
+    partial: Option<crate::partial::Totals>,
 }
 
 impl Session {
@@ -1011,6 +1021,7 @@ impl Session {
             warmup: warmup.unwrap_or_else(|| scenario.warmup()),
             recorder: Recorder::default(),
             first_frame: None,
+            shell_page: false,
             started: None,
             ended: false,
             ticks: 0,
@@ -1023,6 +1034,8 @@ impl Session {
             cpu_end: None,
             gpu: None,
             gpu_text: None,
+            partial_start: None,
+            partial: None,
         }
     }
 
@@ -1076,6 +1089,7 @@ impl Session {
         if self.scenario == Scenario::Startup {
             return;
         }
+        self.partial_start = Some(crate::partial::totals());
         // Long done: the warm-up is seconds, the walk tens of milliseconds.
         self.meter = self.finding.take().and_then(|t| t.join().ok());
         self.cpu_start = self.cpu_times().map(|times| (Instant::now(), times));
@@ -1088,6 +1102,7 @@ impl Session {
             return;
         }
         self.ended = true;
+        self.partial = self.partial_start.map(crate::partial::since);
         self.cpu_end = self.cpu_times().map(|times| (Instant::now(), times));
         if let Some(mut child) = self.gpu.take() {
             let _ = child.kill();
@@ -1132,6 +1147,12 @@ pub fn begin(scenario: Scenario, seconds: u32, warmup: Option<Duration>) {
     STARTUP.store(scenario == Scenario::Startup, Ordering::Relaxed);
 }
 
+/// The page measured is one the shell draws (`--measure-page wubble://start`): no CEF frame
+/// starts the session, the first render does.
+pub fn shell_page() {
+    with_session(|s| s.shell_page = true);
+}
+
 /// Counts `count` while a session records (a thread-local lookup and nothing else otherwise).
 pub fn count(count: Count) {
     with_session(|s| {
@@ -1172,6 +1193,9 @@ pub fn rendered() {
     count(Count::SlintRender);
     with_session(|s| {
         let now = Instant::now();
+        if s.shell_page {
+            s.frame_arrived(now);
+        }
         if s.recording(now) {
             s.recorder.record(Event::Rendered(now));
         }
@@ -1391,6 +1415,9 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
         None => "gpu: n/a (no nvidia-smi)".into(),
     };
     let _ = writeln!(report, "{gpu}");
+    if let Some(partial) = session.partial {
+        let _ = writeln!(report, "{}", crate::partial::report(partial));
+    }
     Some((report, csv))
 }
 

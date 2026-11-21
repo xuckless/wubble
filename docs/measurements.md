@@ -223,6 +223,181 @@ wubble is about 16 % behind Chromium on Speedometer and within one run's noise o
 
 Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
 
+## Pixel questions and the glass governor (pf/perf, 2026-11-21)
+
+One release build of pf/perf after the merge of main 8ac66cb, partial rendering on and off
+(`SLINT_SKIA_PARTIAL_RENDERING=off`), alternated, load under 3 (0.5 to 1.2) before each run.
+
+Whole-window frames (`--measure idle --seconds 10 --measure-page wubble://start`, the scene redraws the whole
+window every frame), 3 runs each:
+
+| | on | off |
+|---|---|---|
+| Slint render p50 / p95 | 0.72 to 0.73 / 1.19 to 1.24 ms | 0.63 to 0.65 / 1.09 to 1.14 ms |
+| present interval p99 | 17.3 to 19.8 ms | 17.5 to 17.7 ms |
+| missed vsyncs in 10 s | 2, 3, 2 | 2, 2, 2 |
+
+A whole-window frame costs 0.1 ms more on the CPU with partial rendering on (the dirty-region walk; the kept
+frame's copy to the swapchain is a GPU copy). It does not show in the frame intervals.
+
+The gallery (`--smoke gallery`), 6 runs each: the glass governor changed level in none of the 12 runs. The
+earlier steps to Flat (2 of 4 runs with partial on) were taken with the machine loaded; main's own build
+stepped down once under the same load.
+
+The gallery shots, with partial on against off (off's runs against each other give the noise):
+- The shell and page scenes are within off's own spread. The exceptions are the agent-orb, task-manager and
+  history scenes, which animate and differ in every run either way, and the first run of each set.
+- `66-settings-sites`: the Sites list's scrollbar thumb is still fading in some runs and gone in others, both
+  on and off (shot timing).
+- `58-settings`, `69-settings-search-pages` and `75-archive` (2 or 3 of 6 runs, partial on only): up to 6
+  levels on the edge columns of two inset-shadowed rounded rects, the Settings section pill and the address
+  field. The inset shadow image sits at a fractional device position (x 311.36 for the pill). Skia
+  anti-aliases its edge column differently when a partial frame's clip covers it, and the pixel then stays
+  until the item is redrawn. The evidence, from `--smoke settings` in verify mode:
+  - with inset shadows not drawn, the smoke has no mismatches;
+  - the shadow's device position is the same in the partial frame and in the whole redraw (logged);
+  - drawing the image through a shader instead leaves it;
+  - snapping the image to the pixel grid removes it, but moves the shadow's edges by up to 3 levels against
+    upstream (the owner's call, in TODO).
+- Verify's other mismatches in `--smoke settings`, single pixels of the section icons on frames drawn whole,
+  are not partial rendering's. They remain with every frame forced whole, and follow the draw order (drawing
+  the reference first moves them to it). They go away when the inset shadow images are rendered on a CPU
+  surface. A frame that renders a new shadow image starts a GPU offscreen surface mid-frame, and Skia then
+  rasterizes the icon paths after it slightly differently; verify's reference finds the image cached and
+  starts none. Upstream draws each frame once, so it shows the first draw, as the presented frame does.
+
+Against main (a49a1be, 3 runs, its own spread as the noise): every shot of the 12 pf/perf runs, partial on or
+off, is within main's spread, but for three kinds of difference. Settings' Agents page and its Updates group
+print the binary's path, which differs. The first sidebar scenes vary by 1000 to 2400 px in every pf/perf run,
+on and off alike. And the inset-shadow edges above.
+
+`42-toast-question` (1 run in 4 earlier) was not a stale frame. In that run Chromium's GPU process exited
+(133) while the page was alive, and from the next resize on the page laid out with smaller body text. Killing
+the GPU process at the same point (SIGTRAP to the helper with a `GpuWatchdog` thread, once scene 15 is shot)
+reproduces it on main's build, shot for shot. The in-place path presents whole on any size change (`import.rs` `in_place`, unit
+tested).
+
+## pf/perf against main, quiet machine (2026-11-21, numbers of record)
+
+The release builds of main at f43b5cf ("base") and of pf/perf at cc5a49a ("final": partial rendering, page damage in
+place, the energy fixes), run on the invisible display (60 Hz, 1360x880). The two builds alternated, base then final,
+3 rounds, each run waiting for a load average under 3 (one agent and the other lanes were idle or finished; per-run
+load averages are 0.8 to 3.4).
+
+Main thread, `scripts/bench/profile.sh` (20 s of `perf` LBR at 999 Hz each): samples, then shares.
+
+| | base 1, 2, 3 | final 1, 2, 3 |
+|---|---|---|
+| 1080p60 VP9 clip in a page: main-thread samples | 2932, 1882, 2064 | 1527, 1641, 2738 |
+| - Slint render of the window | 67.8, 65.5, 64.9 % | 59.7, 60.2, 60.2 % |
+| - item tree walk | 20.2, 18.0, 20.9 % | 28.6, 29.8, 31.7 % |
+| - Skia flush | 15.9, 17.3, 15.7 % | 7.5, 8.7, 6.8 % |
+| - recording (paths, text, rects, layers) | 20.5, 19.6, 17.9 % | 8.7, 8.4, 8.0 % |
+| - tree CPU, main process (user + system) | 64/16, 36/10, 42/11 % | 36/8, 36/9, 63/15 % |
+| 16 px CSS spinner: main-thread samples | 2633, 3359, 1941 | 1625, 1373, 3396 |
+| - tree CPU, main process | 23/14, 30/19, 15/10 % | 13/8, 12/8, 37/20 % |
+
+Each column has one run well above the others (the machine's other work); the medians are what to compare:
+video 2064 → 1641 main-thread samples (−20 %), spinner 2633 → 1625 (−38 %).
+
+`--measure scroll` (10 s): render p50 0.34, 0.33, 0.54 ms (base) against 0.23, 0.24, 0.22 ms; frame interval p99
+24.7 to 32.5 ms (base: a few late frames each run) against 17.3 to 18.8 ms.
+
+Energy table (`scripts/bench/energy.sh`, 10 s per scenario; base has no `--measure-page`, so only idle, scroll and
+canvas). CPU s/s and wake-ups/s, the three runs' range:
+
+| scenario | base | final |
+|---|---|---|
+| idle | 0.01, 519 to 520 (Slint 0.23/s) | 0.00 to 0.01, 505 to 506 (Slint 0 to 0.05/s) |
+| scroll | 0.15 to 0.17, 2558 to 2635 | 0.14 to 0.16, 2531 to 2602 |
+| canvas | 0.20 to 0.22, 3364 to 3463 | 0.17 to 0.21, 3107 to 3444 |
+| start page | | 0.08 to 0.09, 783 to 797 (scene and Slint 60/s) |
+| spinner | | 0.12 to 0.14, 2240 to 2360 |
+| caret | | 0.02, 643 to 648 |
+| video page | | 0.35 to 0.39, 4683 to 4845 |
+
+The tables below in this file from earlier on 2026-11-21 were taken with a load average of 11 to 40 and stay
+as the record of what was measured then, not as numbers to compare against.
+
+## Shell partial rendering (pf/perf step 1, 2026-11-21)
+
+Same machine, release builds (`release` profile, symbols kept) of the commit before and after, on the invisible
+display (`scripts/headless.sh`, 1360x880 at 60 Hz). The machine was **not quiet**: other work kept the load
+average between 11 and 40 for the whole session, so CPU shares and frame rates swing by 2x between runs of the
+same binary; the runs alternated base, step, base, step (3 each, `notes`-side script), so both saw the same
+spread. Read the per-sample shares below, not the absolute CPU.
+
+Main thread during the looping 1080p60 VP9 clip (`scripts/bench/profile.sh`, 20 s of `perf` LBR each), share of
+the main thread's user samples; base runs 1 to 3, then step 1's:
+
+| Main thread | base | step 1 |
+|---|---|---|
+| Slint render of the window, total | 63.2, 61.1, 61.5 | 53.2, 60.2, 59.9 |
+| - item tree walk and property evaluation | 18.7, 20.8, 20.8 | 24.3, 29.0, 27.3 |
+| - Skia flush to the GPU | 15.4, 14.2, 14.6 | 8.8, 9.7, 10.0 |
+| - recording paths, text, rectangles, layers | 18.0, 14.2, 14.1 | 7.0, 6.8, 8.4 |
+| - present and surface acquire | 5.7, 5.2, 6.2 | 6.3, 6.3, 7.0 |
+| page frame arrival (import, blit) | 13.2, 15.5, 12.9 | 18.0, 18.4, 14.9 |
+| CEF message pump | 18.4, 17.2, 20.2 | 22.6, 16.7, 19.5 |
+| wubble main process, share of the tree's user samples | 25.7, 20.6, 23.1 | 20.9, 19.0, 20.5 |
+
+`--measure video` and `--measure scroll` (10 s each): Slint render p50 0.51, 0.55, 1.00 ms (base) against 0.56,
+0.26, 0.38 ms (step 1) for video; 0.48, 1.53, 1.54 against 0.35, 0.82, 1.08 for scroll. Step 1's frames: 64 to 75 %
+redraw less than the whole window, 14 to 17 items drawn per frame (the whole shell is several hundred), dirty share
+0.68 to 0.82 of the window (a page frame redraws its pane, 82 % of this window; the scene's 8 to 10 renders a
+second, the ambience, mark the whole window).
+
+What it buys: recording and flushing the shell's items is gone from page frames (about 13 points of the main
+thread); the walk stays. Slint's partial renderer visits every item twice a frame (dirty regions, then the
+render walk, which skips only drawing), so the walk is now the largest part; skipping it needs changes in
+i-slint-core or a page path around Slint (decisions.md "Shell partial rendering"). `SLINT_SKIA_PARTIAL_RENDERING=verify`
+compared every presented frame with a whole redraw: 0 mismatches in `--measure video` and `scroll`; the `tabs`
+smoke shows 4 frames where the pane is drawn empty and filled in the whole redraw right after, frames drawn whole
+(not a partial-region miss), next to its snapshots; unexplained, TODO.md.
+
+Re-measure on a real display: `scripts/bench/profile.sh` against both builds (README there), and
+`SLINT_SKIA_PARTIAL_RENDERING=off` on the same build for an A/B without a rebuild.
+
+## Energy per scenario, Linux (2026-11-21)
+
+`scripts/bench/energy.sh` on the release build of 5c12553, invisible display (60 Hz, 1360x880), 10 s per
+scenario after a 9 s warm-up, one run each; load average 19 (other work on the machine). CPU is the whole tree's
+(user + system) in seconds per second; wake-ups are context switches of every thread of the tree; the GPU column
+(whole GPU, nvidia-smi) includes the desktop's own use.
+
+| scenario | CPU s/s | wake-ups/s | CEF fps | Slint renders/s | scene renders/s | pump runs/s | GPU |
+|---|---|---|---|---|---|---|---|
+| idle still page | 0.01 | 555 | 0 | 0 | 0 | 32.6 | 4.2 %, 22.9 W |
+| start page | 0.12 | 1257 | 0 | 56.8 | 56.8 | 30.1 | 4.4 %, 26.2 W |
+| 16 px CSS spinner | 0.23 | 2357 | 55.3 | 57.3 | 7.5 | 157 | 4.7 %, 26.5 W |
+| focused text field (caret) | 0.02 | 677 | 1.6 | 3.3 | 1.6 | 35.9 | 2.0 %, 20.8 W |
+| scroll (`--measure scroll`) | 0.36 | 2450 | 59.6 | 55.5 | 8.5 | 120 | 4.6 %, 23.9 W |
+| canvas (`--measure video`) | 0.74 | 3272 | 50.7 | 35.8 | 7.8 | 135 | 3.8 %, 27.8 W |
+| 1080p60 VP9 clip | 0.58 | 5061 | 55.9 | 56.4 | 7.4 | 61.7 | 6.5 %, 24.9 W |
+
+Read: a still page costs the CEF pump's 30 wake-ups a second (its 33 ms ceiling, decisions.md) and Chromium's own;
+the start page renders the scene and the whole window at the display's rate for as long as it is shown (its liquid
+and bubble); a 16 px spinner makes CEF paint the whole page at the display's rate and the shell redraw the pane
+with it. Occluded, minimised and another-workspace windows are not measurable on the headless compositor (it
+reports no occlusion); their pages stop by state since 239edd1.
+
+## Page damage in place (pf/perf step 2, 2026-11-21)
+
+`--measure` on the invisible display, the build with step 2 before its page-blur fix (load average 20 to 28,
+so CPU columns are not comparable with the table above; the frame shapes are): the share of the window each
+Slint frame redrew, the items drawn per frame, and the page frames written in place (CEF's
+`capture_update_rect` smaller than the frame).
+
+| page | step 1: dirty share, items | step 2: dirty share, items | frames in place |
+|---|---|---|---|
+| 16 px CSS spinner | about 0.8, 14 | 0.05, 9.2 | all but the first |
+| caret | | 0.000, 8.0 | all |
+| 854x480 VP9 clip in a page | 0.78, 15.6 | 0.39, 10.3 | 92 % |
+| `--measure scroll`, `--measure video` (whole-page change) | 0.8, 14 to 17 | the same | 0 |
+
+`SLINT_SKIA_PARTIAL_RENDERING=verify` over the spinner and the clip: 0 mismatches. The scene's ambience still
+redraws the whole window at 8 Hz while a page changes (TODO.md).
+
 ## One thinking orb (xm/orbs)
 
 2026-11-20, Linux release, RTX 5060, headless display (`scripts/headless.sh`, 60 Hz, 1360x880 at 1x), `--measure idle --seconds 8` on the idle page, with `WUBBLE_MEASURE_ORB=<state>` putting one 64 px orb, moving, on the library's stage (`host/gallery_orbs.rs` `measure_one`). Load average 12 to 17 (a build on the box).

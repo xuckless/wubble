@@ -202,3 +202,59 @@ Still to verify at the Mac console:
   rounded corners and the scene under them.
 - Snapshot during a rendering notifier (`render_snapshot` uses `try_borrow_mut` on the
   context) and multi-window on one shared Metal device.
+
+## 6. The two item walks per frame (2026-11-21, pf/perf)
+
+With partial rendering on (decisions.md "Shell partial rendering") a page frame records and draws only its
+pane. Slint still visits every item twice, and the walks are now the largest part of a Slint frame. During
+video they take 24 to 29 % of the main thread's samples (measurements.md "Shell partial rendering"). Research
+only: no core fork has been made.
+
+**What forces the visits** (i-slint-core 1.19.0):
+- **The dirty-region walk.** `partial_renderer.rs` `PartialRenderer::compute_dirty_regions` calls
+  `visit_items` over the whole tree, for every item. For each item it:
+  - evaluates the item's geometry and bounding rect (`CachedItemBoundingBoxAndTransform::new`, which reads
+    its geometry properties, and lays out text for its bounding rect);
+  - maps that rect to the screen;
+  - merges it into `tree_screen_rects`;
+  - looks up its cache entry;
+  - asks its rendering `PropertyTracker` whether it is dirty.
+
+  The walk skips children only under a clip that is empty on screen. It has no way to tell that a whole
+  subtree is unchanged without visiting it. The walk exists to register dependencies on every geometry and
+  tracker (module comment, steps 1 to 3).
+- **The render walk.** `item_rendering.rs` `render_item_children` visits every item. `PartialRenderer::filter_item`
+  answers "not drawn" for an item outside the dirty region, which skips that item's draw call but still
+  returns `ContinueRenderingChildren`. Its children are visited because they may lie outside their parent's
+  bounding rect.
+
+**Upstream:**
+- [slint-ui/slint#15028](https://github.com/slint-ui/slint/pull/15028), "core(perf): Compute the dirty region
+  from the items that changed", is open and under review. It keeps a tracker per item, so that only changed
+  items feed the dirty region, and falls back to the full walk on structure changes, resizes and popups.
+  Reviewers have raised problems: the fast path can give up halfway through after already updating the
+  cache, it can borrow the cache mutably while evaluating bindings, and it can queue an item twice.
+- [slint-ui/slint#9467](https://github.com/slint-ui/slint/pull/9467) removed the separate geometry tracker:
+  less memory, but geometry is recomputed for every item on every frame, with text bounding-rect layout the
+  main cost.
+
+Nothing upstream skips the render walk yet.
+
+**Smallest changes, with estimates:**
+1. **Render walk** (small, about 1 day with tests). Keep, per item tree (each repeated or conditional
+   component), the union of its items' screen rects. `compute_dirty_regions` already builds this as
+   `tree_screen_rects`. In `render_item_children`, skip a sub-tree that is not drawn and whose union misses
+   the dirty region. Correctness rests on `tree_screen_rects` being rebuilt every frame, which the
+   dirty-region walk already does. This saves roughly the walk's half for the shell's repeated rows
+   (tabs, Spaces, Settings rows), and nothing for the static items of the main component.
+2. **Dirty-region walk** (medium, 3 to 5 days, and upstream review is likely). Evaluate each item tree's
+   walk inside a per-tree `PropertyTracker`. When that tracker is clean and the tree's transform to the
+   screen is unchanged, skip the tree, keeping its `tree_screen_rects` and cache entries. This is #15028's
+   idea at tree granularity instead of per item. It is coarser, so there are fewer cases to get wrong, but
+   it needs the same care about borrowing the cache while evaluating.
+3. **Wait for #15028.** It is the upstream road, and wubble picks it up with the next Slint pin move
+   (`slint`, `wgpu`, `welding` and `cef` move together).
+
+Change 1 can be done in `vendor/` only if i-slint-core is vendored too, which is a second fork. That fork
+is the owner's decision. The expected win is at most the walk share above, during page frames only.
+Idle frames do not walk at all.

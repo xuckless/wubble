@@ -503,6 +503,12 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     page's custom types and the picture's bytes. No unit test (it needs a
     live CEF): wubble's `--smoke dnd` drops between two split panes.
 
+55. **A copied frame's damage.** `native_frame/mod.rs`: `CopiedFrame` gains
+    `damage: Option<Damage>`, CEF's `capture_update_rect` clamped to the frame
+    (`Damage::of_update_rect`), set by `OnAcceleratedPaint` on Linux and macOS
+    (`linux_cef/cef_backed.rs`, `macos_cef/cef_backed.rs`), so wubble writes and
+    redraws only what changed. `Damage` is re-exported from `lib.rs`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

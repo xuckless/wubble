@@ -566,6 +566,10 @@ fn overlay_glass_frosts_the_page_and_the_window_glass_picks_up_its_light() {
     kept.set_pages(vec![page(&green)]);
     kept.render_under_ui(w, h, dpr, 1.0 / 60.0);
     assert_eq!(kept.pages_built(), built + 1);
+    // the same texture written in place (a page's damage): built again too
+    kept.pages_written();
+    kept.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(kept.pages_built(), built + 2);
 
     // nothing over the page, no ambience: a new page frame builds nothing
     let mut idle = run(true, &[glass(Rect::new(8.0, 8.0, 100.0, 50.0), None)], 0.0);

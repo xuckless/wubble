@@ -440,6 +440,8 @@ impl Glass {
         // a changed window size is a change like a changed glass list: it wakes a still scene
         s.run
             .frame_done(window, animating, glass.is_some() || resized);
+        // the scene drew into the textures Slint already shows: Slint cannot see that
+        crate::partial::mark_window(window.window());
         true
     }
 
@@ -449,6 +451,17 @@ impl Glass {
     pub fn set_pages(&mut self, window: &AppWindow, pages: Vec<PagePane>) {
         if let Glass::Scene(s) = self {
             s.renderer.set_pages(pages);
+            if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
+                window.window().request_redraw();
+            }
+        }
+    }
+
+    /// A pane's texture was written in place (`Host::present_panes`): the page blur follows it
+    /// as it follows a new frame.
+    pub fn pages_written(&mut self, window: &AppWindow) {
+        if let Glass::Scene(s) = self {
+            s.renderer.pages_written();
             if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
                 window.window().request_redraw();
             }

@@ -88,7 +88,9 @@ pub(super) fn sync_rows<T: Clone + PartialEq + 'static>(
     set: impl FnOnce(slint::ModelRc<T>),
 ) {
     match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
-        Some(model) => wubble_ui::sync_by(model, rows, same),
+        Some(model) => {
+            wubble_ui::sync_by(model, rows, same);
+        }
         None => set(super::surfaces::model(rows)),
     }
 }
@@ -750,10 +752,25 @@ impl Host {
                 (Some(tab) == focused).then(|| measure::Frame::of(&frame, layout.frame_size()));
             let slot = self.slot_for(tab);
             let blit = Instant::now();
-            let image = self.w.presenters[slot]
-                .present(frame)
-                .map_err(|e| e.to_string())?;
+            // A pane at rest, showing this slot's last frame whole and 1:1, takes only what
+            // changed, written in place: the image stays, so the changed part is marked here.
+            let shown = self
+                .w
+                .frames
+                .get(&tab)
+                .filter(|f| f.view.is_live() && f.prev.is_none() && f.masked.is_none())
+                .filter(|f| f.clip == clip)
+                .map(|f| f.image.clone());
+            let (image, damage) = match shown {
+                Some(shown) => self.w.presenters[slot].present_damaged(frame, &shown),
+                None => self.w.presenters[slot].present(frame).map(|i| (i, None)),
+            }
+            .map_err(|e| e.to_string())?;
             measure::stage(measure::Metric::Blit, blit);
+            if let Some(damage) = damage {
+                measure::count(measure::Count::CefFrameDamaged);
+                self.mark_damage(window, tab, clip, damage);
+            }
             if let Some(measured) = measured {
                 let presenter = &self.w.presenters[slot];
                 measure::taken(measured, || {
@@ -797,6 +814,49 @@ impl Host {
             }
         }
         Ok(presented)
+    }
+
+    /// The part of `tab`'s pane that `damage` (in its frame's pixels, of which the pane shows
+    /// `clip`) covers is redrawn in the next frame; nothing when it is empty.
+    fn mark_damage(
+        &self,
+        window: &AppWindow,
+        tab: TabId,
+        clip: FrameSize,
+        damage: wubble_gfx::import::Damage,
+    ) {
+        if damage.width == 0 || damage.height == 0 || clip.width == 0 || clip.height == 0 {
+            return;
+        }
+        let Some(rect) = self.pane_rects(window).into_iter().find(|r| r.tab == tab) else {
+            return;
+        };
+        let (_, height) = content_size(window);
+        let (sx, sy) = (
+            rect.width / f64::from(clip.width),
+            height / f64::from(clip.height),
+        );
+        // A pane shown 1:1 (one frame pixel to one physical pixel, on whole pixels: app.slint
+        // `content`) draws a changed frame pixel into that physical pixel only. Scaled (a stale
+        // frame stretched to the pane), bilinear sampling spreads each frame pixel over its
+        // neighbours' footprint: one frame pixel more on each side. The renderer rounds the
+        // region out to whole physical pixels.
+        let scale = f64::from(window.window().scale_factor());
+        let one_to_one = (rect.width * scale - f64::from(clip.width)).abs() < 0.5
+            && (height * scale - f64::from(clip.height)).abs() < 0.5;
+        let (mx, my) = if one_to_one { (0.0, 0.0) } else { (sx, sy) };
+        let x = f64::from(window.get_content_x()) + rect.x + f64::from(damage.x) * sx - mx;
+        let y = f64::from(window.get_content_y()) + f64::from(damage.y) * sy - my;
+        let (w, h) = (
+            f64::from(damage.width) * sx + 2.0 * mx,
+            f64::from(damage.height) * sy + 2.0 * my,
+        );
+        crate::partial::mark_rect(window.window(), x as f32, y as f32, w as f32, h as f32);
+        window.window().request_redraw();
+        // the page blur (overlay glass, ambience) samples the same texture
+        if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
+            glass.pages_written(window);
+        }
     }
 
     /// `--smoke frames` and `--smoke split`: each pane of the snapshot shows its page.

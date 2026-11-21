@@ -173,7 +173,20 @@ cef::wrap_render_handler! {
                         .map_err(|error| format!("failed to copy CEF IOSurface: {error}"))
                 });
             match copied {
-                Ok(copy) => slot.store(crate::native_frame::NativeFrame::Copied(copy)),
+                Ok(mut copy) => {
+                    // wubble change: what changed since the last frame.
+                    let r = &info.extra.capture_update_rect;
+                    copy.damage = crate::native_frame::Damage::of_update_rect(
+                        info.extra.has_capture_update_rect != 0,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        copy.texture.size.width,
+                        copy.texture.size.height,
+                    );
+                    slot.store(crate::native_frame::NativeFrame::Copied(copy))
+                }
                 Err(error) => log::error!("{error}"),
             }
         }
