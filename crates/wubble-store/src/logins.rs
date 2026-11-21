@@ -126,6 +126,37 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// A login moved to another origin, in one transaction: `new` is inserted and the row
+    /// `old` deleted together, or neither (`false`: no row `old`; an error: nothing changed).
+    pub async fn move_login(&mut self, old: &str, new: LoginRow) -> Result<bool> {
+        let tx = self.conn.transaction().await?;
+        tx.execute(
+            "INSERT INTO logins(id, origin, form_action_origin, username_enc, password_enc, \
+             created_ms, last_used_ms, times_used) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (
+                new.id,
+                new.origin,
+                new.form_action_origin,
+                new.username_enc,
+                new.password_enc,
+                new.created_ms,
+                new.last_used_ms,
+                i64::from(new.times_used),
+            ),
+        )
+        .await?;
+        if tx
+            .execute("DELETE FROM logins WHERE id = ?1", [old])
+            .await?
+            == 0
+        {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn delete_login(&mut self, id: &str) -> Result<bool> {
         Ok(self
             .conn
@@ -328,6 +359,43 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(s.all_logins().await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_move_inserts_and_deletes_together_or_not_at_all() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.insert_login(login("id-a", "https://a.test", 1))
+                .await
+                .unwrap();
+            s.insert_login(login("id-b", "https://b.test", 2))
+                .await
+                .unwrap();
+            assert!(
+                s.move_login("id-a", login("id-c", "https://c.test", 1))
+                    .await
+                    .unwrap()
+            );
+            let ids = |all: Vec<LoginRow>| {
+                let mut ids: Vec<String> = all.into_iter().map(|r| r.id).collect();
+                ids.sort();
+                ids
+            };
+            assert_eq!(ids(s.all_logins().await.unwrap()), ["id-b", "id-c"]);
+            // no such row to move: the new one is not kept
+            assert!(
+                !s.move_login("id-x", login("id-d", "https://d.test", 4))
+                    .await
+                    .unwrap()
+            );
+            // the new id is taken: an error, and the old row stays
+            assert!(
+                s.move_login("id-c", login("id-b", "https://e.test", 5))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(ids(s.all_logins().await.unwrap()), ["id-b", "id-c"]);
         });
     }
 

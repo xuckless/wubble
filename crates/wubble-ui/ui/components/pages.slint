@@ -278,6 +278,8 @@ export component PasswordsPage inherits Rectangle {
     // a saved login changed by hand: (id, site, username, password; empty keeps the password)
     callback edited(string, string, string, string);
     callback import-requested();
+    // the key is lost: delete the logins sealed with it and make a new one
+    callback start-over();
 
     property <bool> adding: false;
     // the login the sheet edits; empty: it adds one
@@ -341,7 +343,7 @@ export component PasswordsPage inherits Rectangle {
                     }
                 }
                 // nothing can be saved without the keyring: the unlock is the retry
-                if root.view.state == VaultState.unavailable: VerticalLayout {
+                if root.view.state == VaultState.unavailable || root.view.state == VaultState.key-lost: VerticalLayout {
                     alignment: center;
                     Button {
                         kind: ButtonKind.pri;
@@ -351,7 +353,19 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: VerticalLayout {
+                if root.view.state == VaultState.key-lost: VerticalLayout {
+                    alignment: center;
+                    KeyedHoldButton {
+                        key: "start-over";
+                        compact: true;
+                        text: "Delete them and start over";
+                        done-text: "Deleted";
+                        done => {
+                            root.start-over();
+                        }
+                    }
+                }
+                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable && root.view.state != VaultState.key-lost: VerticalLayout {
                     alignment: center;
                     Button {
                         kind: ButtonKind.ghost;
@@ -362,7 +376,7 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: VerticalLayout {
+                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable && root.view.state != VaultState.key-lost: VerticalLayout {
                     alignment: center;
                     Button {
                         kind: ButtonKind.ghost;

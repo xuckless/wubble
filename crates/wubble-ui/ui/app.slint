@@ -547,6 +547,7 @@ export component AppWindow inherits Window {
     callback login-added(string, string, string);
     callback login-edited(string, string, string, string);
     callback passwords-import-requested();
+    callback passwords-start-over();
     callback settings-requested();
     callback settings-query-changed <=> settings-ui.query-changed;
     callback setting-changed <=> settings-ui.setting-changed;
@@ -1216,6 +1217,9 @@ export component AppWindow inherits Window {
                 }
                 import-requested => {
                     root.passwords-import-requested();
+                }
+                start-over => {
+                    root.passwords-start-over();
                 }
             }
             // The scene's glass of the overlays in the card (GlassOver.card), above the pages and

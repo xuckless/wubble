@@ -110,6 +110,7 @@ pub fn passwords_view(status: &VaultStatus, notice: &str) -> PasswordsView {
             VaultStatus::Unlocked => VaultState::Unlocked,
             VaultStatus::Unavailable(_) => VaultState::Unavailable,
             VaultStatus::Unreadable { .. } => VaultState::Unreadable,
+            VaultStatus::KeyLost { .. } => VaultState::KeyLost,
         },
         title: title.into(),
         body: body.as_str().into(),

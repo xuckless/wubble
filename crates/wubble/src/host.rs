@@ -2858,6 +2858,7 @@ impl Host {
                 wubble_ui::VaultState::Unlocked => Shown::Unlocked,
                 wubble_ui::VaultState::Unavailable => Shown::Unavailable,
                 wubble_ui::VaultState::Unreadable => Shown::Unreadable,
+                wubble_ui::VaultState::KeyLost => Shown::KeyLost,
             },
             body: view.body.to_string(),
             notice: view.notice.to_string(),

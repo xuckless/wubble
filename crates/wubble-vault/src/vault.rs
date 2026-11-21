@@ -19,6 +19,12 @@ pub enum VaultError {
     Crypto(#[from] CryptoError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// The keyring lost the key `rows` saved logins were sealed with ([`VaultState::KeyLost`]).
+    #[error("{rows} saved logins wait for the key they were saved with")]
+    KeyLost { rows: usize },
+    /// Starting over is only for a vault whose key is lost.
+    #[error("the saved logins open with the current key: nothing to start over")]
+    NotKeyLost,
     /// An edit would leave two logins with one site and username.
     #[error("Another saved login already has this site and username")]
     Taken,
@@ -41,6 +47,9 @@ pub enum UnlockOutcome {
     Unreadable { rows: usize },
     /// No usable keyring, or the store could not be read. The vault is not unlocked.
     Unavailable(String),
+    /// The keyring has no key, and `rows` logins were sealed with one: they are kept, and no
+    /// new key is made ([`VaultState::KeyLost`]).
+    KeyLost { rows: usize },
 }
 
 pub struct Vault<K: KeyRing, S: LoginStore> {
@@ -81,10 +90,11 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         }
         let created = self.dispatch(Event::UnlockRequested);
         let VaultState::Unlocked { key } = &self.state else {
-            return UnlockOutcome::Unavailable(match &self.state {
-                VaultState::Unavailable { reason } => reason.clone(),
-                _ => "unlock did not complete".into(),
-            });
+            return match &self.state {
+                VaultState::Unavailable { reason } => UnlockOutcome::Unavailable(reason.clone()),
+                VaultState::KeyLost { rows } => UnlockOutcome::KeyLost { rows: *rows },
+                _ => UnlockOutcome::Unavailable("unlock did not complete".into()),
+            };
         };
         let stored = match self.store.all() {
             Ok(rows) => rows,
@@ -107,6 +117,19 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         } else {
             UnlockOutcome::Unreadable { rows }
         }
+    }
+
+    /// The owner's way out of [`VaultState::KeyLost`]: deletes the logins whose key is gone,
+    /// then unlocks (making a new key). Refused in any other state.
+    pub fn start_over(&mut self) -> Result<UnlockOutcome, VaultError> {
+        if !matches!(self.state, VaultState::KeyLost { .. }) {
+            return Err(VaultError::NotKeyLost);
+        }
+        for row in self.store.all()? {
+            self.store.delete(&row.id)?;
+        }
+        self.state = VaultState::Locked;
+        Ok(self.unlock())
     }
 
     pub fn lock(&mut self) {
@@ -136,7 +159,10 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 Ok(key) => Event::KeyLoaded(Zeroizing::new(key)),
                 Err(_) => Event::KeyringFailed("stored vault key has the wrong length".into()),
             },
-            Ok(None) => Event::KeyMissing,
+            Ok(None) => match self.store.all() {
+                Ok(rows) => Event::KeyMissing { stored: rows.len() },
+                Err(e) => Event::KeyringFailed(format!("the saved logins cannot be read: {e}")),
+            },
             Err(e) => Event::KeyringFailed(e.to_string()),
         };
         match effect {
@@ -150,7 +176,7 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 // creation atomic: there must be one Vault per profile (the profile
                 // lock enforces it), or two creators could each keep a different key.
                 match read(&self.keyring) {
-                    Event::KeyMissing => Event::KeyringFailed("key not stored".into()),
+                    Event::KeyMissing { .. } => Event::KeyringFailed("key not stored".into()),
                     event => event,
                 }
             }
@@ -162,6 +188,7 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
             VaultState::Unlocked { key } => Ok(key),
             VaultState::Locked => Err(VaultError::NotUnlocked),
             VaultState::Unavailable { reason } => Err(VaultError::Unavailable(reason.clone())),
+            VaultState::KeyLost { rows } => Err(VaultError::KeyLost { rows: *rows }),
         }
     }
 
@@ -180,6 +207,33 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
             times_used: 0,
         })?;
         Ok(id)
+    }
+
+    /// `login` saved as a new row in place of row `old` (a move to another origin), in one
+    /// store step ([`LoginStore::replace`]).
+    pub fn save_in_place_of(
+        &mut self,
+        old: &RecordId,
+        login: NewLogin,
+        now_ms: i64,
+    ) -> Result<(), VaultError> {
+        let id = RecordId::generate();
+        let (username_enc, password_enc) =
+            self.encrypt(&id, &login.origin, &login.username, &login.password)?;
+        self.store.replace(
+            old,
+            StoredRecord {
+                id,
+                origin: login.origin,
+                form_action_origin: login.form_action_origin,
+                username_enc,
+                password_enc,
+                created_ms: now_ms,
+                last_used_ms: None,
+                times_used: 0,
+            },
+        )?;
+        Ok(())
     }
 
     /// Replace username and password, re-encrypting with fresh nonces.
@@ -547,13 +601,18 @@ mod tests {
         // Same key, same rows: Ready.
         v.lock();
         assert_eq!(v.unlock(), UnlockOutcome::Ready);
-        // The keyring entry is gone (wiped, new machine): a new key over two unreadable rows.
-        let mut wiped = Vault::new(
-            FakeKeyRing::default(),
-            std::mem::take(&mut v.store),
-            "default",
-        );
-        assert_eq!(wiped.unlock(), UnlockOutcome::NewKey { unreadable: 2 });
+        // The keyring entry is gone (reset, another keyring answering, new machine): no new
+        // key is made over the two rows, which wait for theirs; the keyring is left as it was.
+        let gone = FakeKeyRing::default();
+        let mut wiped = Vault::new(gone.clone(), std::mem::take(&mut v.store), "default");
+        assert_eq!(wiped.unlock(), UnlockOutcome::KeyLost { rows: 2 });
+        assert_eq!(wiped.state(), &VaultState::KeyLost { rows: 2 });
+        assert_eq!(gone.get("wubble", "vault-default").unwrap(), None);
+        assert_eq!(wiped.store.all().unwrap().len(), 2);
+        assert!(wiped.save(login("https://c.test", "u", "p"), 1).is_err());
+        // the key comes back (the keyring restored): the rows open again
+        gone.set("wubble", "vault-default", &[9; 32]).unwrap();
+        assert_eq!(wiped.unlock(), UnlockOutcome::Unreadable { rows: 2 });
         // A different key already in the keyring: loaded fine, rows do not open.
         let other = FakeKeyRing::default();
         other.set("wubble", "vault-default", &[9; 32]).unwrap();
@@ -563,6 +622,28 @@ mod tests {
         other.save(login("https://c.test", "u", "p"), 2).unwrap();
         other.lock();
         assert_eq!(other.unlock(), UnlockOutcome::Unreadable { rows: 2 });
+    }
+
+    #[test]
+    fn starting_over_deletes_the_logins_whose_key_is_lost_then_makes_one() {
+        let kr = FakeKeyRing::default();
+        let mut v = vault(&kr);
+        v.unlock();
+        v.save(login("https://a.test", "u", "p"), 1).unwrap();
+        let mut lost = Vault::new(
+            FakeKeyRing::default(),
+            std::mem::take(&mut v.store),
+            "default",
+        );
+        // only from KeyLost: an unlocked vault's logins are not deleted this way
+        assert!(v.start_over().is_err());
+        assert_eq!(lost.unlock(), UnlockOutcome::KeyLost { rows: 1 });
+        assert_eq!(
+            lost.start_over().unwrap(),
+            UnlockOutcome::NewKey { unreadable: 0 }
+        );
+        assert!(lost.store.all().unwrap().is_empty());
+        lost.save(login("https://b.test", "u", "p"), 2).unwrap();
     }
 
     #[test]

@@ -863,6 +863,11 @@ fn report_unlock(outcome: &UnlockOutcome) {
         UnlockOutcome::Unavailable(why) => {
             eprintln!("wubble: saved passwords are off: {why}");
         }
+        UnlockOutcome::KeyLost { rows } => {
+            eprintln!(
+                "wubble: {rows} saved password(s) wait for their key: the keyring has none; no new key was made"
+            );
+        }
     }
 }
 

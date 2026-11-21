@@ -44,6 +44,9 @@ pub enum VaultCommand {
     },
     /// A browser's password export, read from this path on the store thread.
     ImportCsv(PathBuf),
+    /// The owner deletes the logins whose key the keyring lost, and a new key is made
+    /// ([`Vault::start_over`]).
+    StartOver,
 }
 
 impl fmt::Debug for VaultCommand {
@@ -64,6 +67,7 @@ impl fmt::Debug for VaultCommand {
                 .field("site", site)
                 .finish_non_exhaustive(),
             Self::ImportCsv(path) => f.debug_tuple("ImportCsv").field(path).finish(),
+            Self::StartOver => f.write_str("StartOver"),
         }
     }
 }
@@ -100,6 +104,7 @@ pub fn status_of(outcome: UnlockOutcome) -> VaultStatus {
             VaultStatus::Unreadable { rows }
         }
         UnlockOutcome::Unavailable(why) => VaultStatus::Unavailable(why),
+        UnlockOutcome::KeyLost { rows } => VaultStatus::KeyLost { rows },
     }
 }
 
@@ -107,6 +112,7 @@ pub fn status_of(outcome: UnlockOutcome) -> VaultStatus {
 fn locked_status(state: &VaultState) -> VaultStatus {
     match state {
         VaultState::Unavailable { reason } => VaultStatus::Unavailable(reason.clone()),
+        VaultState::KeyLost { rows } => VaultStatus::KeyLost { rows: *rows },
         _ => VaultStatus::Locked,
     }
 }
@@ -158,9 +164,9 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
     /// written: a row that does not open with this key is refused (its username would be the
     /// page's placeholder), and so is an edit onto another login's site and username.
     ///
-    /// A move to another site is a save and then a delete (the id and origin seal the blobs, so
-    /// the row cannot be rewritten in place). The `logins` API has no transaction, so a failed
-    /// delete takes the new row back out: either way one row remains.
+    /// A move to another site is a new row in place of the old one, in one store transaction
+    /// (`LoginStore::replace`: the id and origin seal the blobs, so the row cannot be rewritten
+    /// in place): one row remains whatever fails.
     fn edit(
         &mut self,
         id: &RecordId,
@@ -190,7 +196,8 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         if row.origin == origin {
             return self.update(id, &username, &password);
         }
-        let moved = self.save(
+        self.save_in_place_of(
+            id,
             NewLogin {
                 origin,
                 form_action_origin: None,
@@ -198,12 +205,7 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 password,
             },
             now_ms,
-        )?;
-        if let Err(e) = self.delete(id) {
-            let _ = self.delete(&moved);
-            return Err(e);
-        }
-        Ok(())
+        )
     }
 
     /// Runs one command. Nothing is listed or revealed unless the vault is unlocked.
@@ -229,8 +231,14 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 Err(VaultError::Unavailable(why)) => {
                     VaultAnswer::Status(VaultStatus::Unavailable(why))
                 }
+                Err(VaultError::KeyLost { rows }) => {
+                    VaultAnswer::Status(VaultStatus::KeyLost { rows })
+                }
                 Err(e) => failed(e),
             },
+            VaultCommand::StartOver => self
+                .start_over()
+                .map_or_else(failed, |o| VaultAnswer::Status(status_of(o))),
             VaultCommand::Reveal(id) => self.reveal(&id).map_or_else(failed, VaultAnswer::Revealed),
             VaultCommand::Delete(id) => self.delete(&id).map_or_else(failed, |_| VaultAnswer::Done),
             VaultCommand::Add {
@@ -541,6 +549,13 @@ mod tests {
         assert_eq!(snapshot(&mut v), before);
     }
 
+    /// A keyring holding a key of its own (not the one the rows were sealed with).
+    fn other_key() -> FakeKeyRing {
+        let kr = FakeKeyRing::default();
+        kr.set("wubble", "vault-default", &[42; 32]).unwrap();
+        kr
+    }
+
     #[test]
     fn an_unreadable_login_cannot_be_edited_only_deleted() {
         let mut v = vault(&FakeKeyRing::default());
@@ -548,7 +563,7 @@ mod tests {
         add(&mut v, "a.test", "me", "pw");
         // Another key over the same rows: the row lists but does not open.
         let rows = v.store().all().unwrap();
-        let mut other = vault(&FakeKeyRing::default());
+        let mut other = vault(&other_key());
         for r in rows.iter().cloned() {
             other.store_mut().insert(r).unwrap();
         }
@@ -590,7 +605,7 @@ mod tests {
         add(&mut v, "a.test", "me", "pw");
         // Another key over the same rows: they list, but nothing opens.
         let rows = v.store().all().unwrap();
-        let mut other = Vault::new(FakeKeyRing::default(), MemoryStore::default(), "default");
+        let mut other = Vault::new(other_key(), MemoryStore::default(), "default");
         for r in rows {
             other.store_mut().insert(r).unwrap();
         }

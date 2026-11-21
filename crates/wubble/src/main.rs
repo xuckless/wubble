@@ -592,7 +592,10 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// `--smoke passwords`: its three processes on one temporary profile (`passwords_smoke.rs`).
+/// `--smoke passwords`: the file its phases keep the vault key in, on the temporary profile.
+const SMOKE_KEYRING: &str = "smoke-keyring";
+
+/// `--smoke passwords`: its four processes on one temporary profile (`passwords_smoke.rs`).
 fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
     use passwords_smoke::VaultPhase;
     let exe = std::env::current_exe()?;
@@ -600,13 +603,26 @@ fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
     let result = (|| {
         mark_smoke_profile(&profile)?;
         let no_sandbox = app::no_sandbox_requested(std::env::args_os());
-        for phase in [VaultPhase::Write, VaultPhase::Read, VaultPhase::Broken] {
+        let key_file = profile.join(SMOKE_KEYRING);
+        for phase in [
+            VaultPhase::Write,
+            VaultPhase::Read,
+            VaultPhase::Broken,
+            VaultPhase::Lost,
+        ] {
+            // the key gone from the keyring, the logins still in the database
+            if phase == VaultPhase::Lost {
+                std::fs::remove_file(&key_file)?;
+            }
             let status = std::process::Command::new(&exe)
                 .args(session_phase_args(phase.arg(), &profile, no_sandbox))
                 .status()?;
             if !status.success() {
                 return Err(format!("{} exited with {status}", phase.arg()).into());
             }
+        }
+        if key_file.exists() {
+            return Err("a new key was made over logins sealed with the lost one".into());
         }
         Ok(())
     })();
@@ -1372,6 +1388,7 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     });
     window
         .on_passwords_import_requested(move || with_host_in(win, Host::passwords_import_requested));
+    window.on_passwords_start_over(move || with_host_in(win, Host::passwords_start_over));
     // The video controls, the toast's button and the Boost editor.
     window.on_video_command(move |name, value| {
         with_host_in(win, |host| host.video_command(&name, value))
@@ -1469,7 +1486,7 @@ fn run(
                 Box::new(wubble_vault::OsKeyRing)
             } else {
                 Box::new(wubble_vault::FileKeyRing::new(
-                    profile.join("smoke-keyring"),
+                    profile.join(SMOKE_KEYRING),
                     broken,
                 ))
             }

@@ -220,6 +220,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("passwords-phase", "1")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Write)),
         Some(("passwords-phase", "2")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Read)),
         Some(("passwords-phase", "3")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Broken)),
+        Some(("passwords-phase", "4")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Lost)),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)

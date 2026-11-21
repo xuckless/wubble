@@ -8,6 +8,9 @@
 //!    its new password.
 //! 3. Broken: the keyring cannot be reached; the page says so (unavailable, the reason shown),
 //!    lists nothing, and an add is refused with a notice instead of pretending to save.
+//! 4. Lost: the key is gone from the keyring (the parent removed the key file), the two logins
+//!    are not: the page says they wait for their key, an add is refused, and no new key is
+//!    made over them (the parent checks the key file is still absent).
 //!
 //! Every step is the page's own callback, as a click sends it. Each wait is "until the host
 //! sees X", bounded by a count of CEF work runs, never by time.
@@ -20,6 +23,7 @@ pub enum VaultPhase {
     Write,
     Read,
     Broken,
+    Lost,
 }
 
 impl VaultPhase {
@@ -29,6 +33,7 @@ impl VaultPhase {
             VaultPhase::Write => "passwords-phase=1",
             VaultPhase::Read => "passwords-phase=2",
             VaultPhase::Broken => "passwords-phase=3",
+            VaultPhase::Lost => "passwords-phase=4",
         }
     }
 }
@@ -54,6 +59,7 @@ pub enum Shown {
     Unlocked,
     Unavailable,
     Unreadable,
+    KeyLost,
 }
 
 /// One login row as the page draws it.
@@ -307,6 +313,45 @@ pub fn next(s: PasswordsSmoke, seen: &Seen) -> (PasswordsSmoke, Vec<Action>) {
                 ))
             }
         }
+        // the key gone, the logins kept
+        (VaultPhase::Lost, Unlocking) if seen.on_page && seen.shown == Shown::KeyLost => {
+            if !seen.rows.is_empty()
+                || !seen
+                    .body
+                    .starts_with("2 saved logins were saved with a key")
+            {
+                Some((
+                    Done,
+                    vec![Action::Fail(format!("the key-lost page: {seen:?}"))],
+                ))
+            } else {
+                Some((
+                    Refusing,
+                    vec![Action::Add {
+                        site: C_SITE,
+                        user: C_USER,
+                        password: C_PASSWORD,
+                    }],
+                ))
+            }
+        }
+        (VaultPhase::Lost, Unlocking) if unlocked => Some((
+            Done,
+            vec![Action::Fail(
+                "a lost key was replaced: the vault unlocked over logins sealed with another"
+                    .into(),
+            )],
+        )),
+        (VaultPhase::Lost, Refusing) if seen.on_page && !seen.notice.is_empty() => {
+            if seen.rows.is_empty() && seen.shown == Shown::KeyLost {
+                Some((Done, vec![Action::Pass]))
+            } else {
+                Some((
+                    Done,
+                    vec![Action::Fail(format!("after a refused add: {seen:?}"))],
+                ))
+            }
+        }
         (VaultPhase::Broken, Unlocking) if unlocked => Some((
             Done,
             vec![Action::Fail("a broken keyring unlocked the vault".into())],
@@ -474,6 +519,37 @@ mod tests {
         assert_eq!(actions.last(), Some(&Action::Pass));
         let (_, actions) = drive(
             VaultPhase::Broken,
+            &[
+                page(Shown::Locked, vec![]),
+                page(Shown::Locked, vec![]),
+                page(Shown::Unlocked, vec![]),
+            ],
+        );
+        assert!(matches!(actions.last(), Some(Action::Fail(_))));
+    }
+
+    #[test]
+    fn a_lost_key_must_be_said_keep_the_logins_and_refuse_the_add() {
+        let lost = |notice: &str| Seen {
+            body: "2 saved logins were saved with a key that the keyring does not have now".into(),
+            notice: notice.into(),
+            ..page(Shown::KeyLost, vec![])
+        };
+        let (s, actions) = drive(
+            VaultPhase::Lost,
+            &[
+                page(Shown::Locked, vec![]),
+                page(Shown::Locked, vec![]),
+                lost(""),
+                lost(""),
+                lost("2 saved logins wait for the key they were saved with"),
+            ],
+        );
+        assert_eq!(s.stage, Stage::Done);
+        assert_eq!(actions.last(), Some(&Action::Pass));
+        // a new key made over them (the vault unlocked) fails
+        let (_, actions) = drive(
+            VaultPhase::Lost,
             &[
                 page(Shown::Locked, vec![]),
                 page(Shown::Locked, vec![]),

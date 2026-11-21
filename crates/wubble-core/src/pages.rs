@@ -427,6 +427,11 @@ pub enum VaultStatus {
     Unreadable {
         rows: usize,
     },
+    /// The keyring has no key, and `rows` saved logins were sealed with one: they are kept and
+    /// no new key is made until the owner starts over.
+    KeyLost {
+        rows: usize,
+    },
 }
 
 /// The OS keyring the vault's key lives in, as the passwords page names it.
@@ -460,6 +465,20 @@ pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
                 "{rows} saved login{} no longer open with the key in your system keyring. \
                  They stay on disk, and new logins can still be saved.",
                 if *rows == 1 { "" } else { "s" }
+            ),
+        ),
+        VaultStatus::KeyLost { rows } => (
+            "Saved passwords are waiting for their key",
+            format!(
+                "{rows} saved login{s} {were} saved with a key that {KEYRING} does not have now \
+                 (it was reset, or another keyring answers). {They} {are} kept, and nothing new \
+                 is saved: restore or unlock that keyring and press Try again, or delete \
+                 {them} and start over.",
+                s = if *rows == 1 { "" } else { "s" },
+                were = if *rows == 1 { "was" } else { "were" },
+                They = if *rows == 1 { "It" } else { "They" },
+                are = if *rows == 1 { "is" } else { "are" },
+                them = if *rows == 1 { "it" } else { "them" },
             ),
         ),
     }
@@ -1189,6 +1208,11 @@ mod tests {
     #[test]
     fn status_text_names_each_state() {
         let t = |s| status_text(&s);
+        let (title, body) = t(VaultStatus::KeyLost { rows: 2 });
+        assert_eq!(title, "Saved passwords are waiting for their key");
+        assert!(
+            body.starts_with("2 saved logins were saved with a key") && body.contains("start over")
+        );
         assert_eq!(t(VaultStatus::Locked).0, "Passwords are locked");
         assert_eq!(t(VaultStatus::Unlocked).0, "Saved passwords");
         let (title, body) = t(VaultStatus::Unavailable("no daemon".into()));

@@ -757,6 +757,8 @@ export enum VaultState {
     unlocked,
     unavailable,
     unreadable,
+    // the keyring has no key for saved logins (`VaultStatus::KeyLost`)
+    key-lost,
 }
 
 export struct PasswordsView {
