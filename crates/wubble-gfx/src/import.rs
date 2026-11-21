@@ -329,6 +329,26 @@ impl Ring {
     }
 }
 
+/// The damage a frame may be written with in place, into the target on screen: `None` when it
+/// must be presented whole. In place needs all of: the frame says what changed (`damage`), and
+/// not everything; it is the generation after the one presented last (a frame replaced before
+/// it was taken changed things this damage does not cover); the ring's targets are the frame's
+/// size (a resized pane's first frame of the new size, or a frame of the old size after it,
+/// gets a new ring and is presented whole); and the image on screen is the ring's latest target.
+fn in_place(
+    damage: Option<Damage>,
+    last: Option<u64>,
+    generation: u64,
+    ring: Option<FrameSize>,
+    size: FrameSize,
+    shows_latest: bool,
+) -> Option<Damage> {
+    let damage = damage?;
+    let next = last.map(|g| g + 1) == Some(generation);
+    (next && ring == Some(size) && shows_latest && !damage.is_whole(size.width, size.height))
+        .then_some(damage)
+}
+
 /// Turns CEF frames into `slint::Image`s on the shared device.
 pub struct FramePresenter {
     ctx: HostWgpuContext,
@@ -376,20 +396,17 @@ impl FramePresenter {
         frame: NativeFrame,
         shown: &slint::Image,
     ) -> Result<(slint::Image, Option<Damage>), GfxError> {
-        let size = frame.size();
-        // a frame replaced before it was taken changed things this damage does not cover
-        let next = self.generation.map(|g| g + 1) == Some(frame.generation());
-        let in_place = match (frame.damage(), self.ring.as_ref()) {
-            (Some(damage), Some(ring))
-                if next
-                    && ring.size == size
-                    && !damage.is_whole(size.width, size.height)
-                    && shown.to_wgpu_30_texture().as_ref() == Some(&ring.latest().texture) =>
-            {
-                Some(damage)
-            }
-            _ => None,
-        };
+        let shows_latest = self.ring.as_ref().is_some_and(|ring| {
+            shown.to_wgpu_30_texture().as_ref() == Some(&ring.latest().texture)
+        });
+        let in_place = in_place(
+            frame.damage(),
+            self.generation,
+            frame.generation(),
+            self.ring.as_ref().map(|ring| ring.size),
+            frame.size(),
+            shows_latest,
+        );
         let Some(damage) = in_place else {
             return self.present(frame).map(|image| (image, None));
         };
@@ -699,6 +716,59 @@ mod tests {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         assert!(module.entry_points.iter().any(|p| p.name == "fs_main"));
+    }
+
+    /// A pane resize: the in-place path stays closed from the first frame of the new size (the
+    /// ring is the old size) until a frame of the new size has been presented whole, and a late
+    /// frame of the old size never writes into targets of the new one.
+    #[test]
+    fn a_pane_resize_presents_whole_until_a_frame_of_the_new_size_is_on_screen() {
+        let small = FrameSize::new(1080, 780);
+        let large = FrameSize::new(1280, 780);
+        let damage = Some(Damage {
+            x: 10,
+            y: 10,
+            width: 20,
+            height: 20,
+        });
+        // steady at the old size: the next generation goes in place
+        assert_eq!(
+            in_place(damage, Some(4), 5, Some(small), small, true),
+            damage
+        );
+        // the pane grew: the first frame of the new size meets the old ring, whole
+        assert_eq!(in_place(damage, Some(5), 6, Some(small), large, true), None);
+        // presented whole, the ring is the new size: in place again
+        assert_eq!(
+            in_place(damage, Some(6), 7, Some(large), large, true),
+            damage
+        );
+        // a frame of the old size arriving late: whole (the ring is remade at its size)
+        assert_eq!(in_place(damage, Some(7), 8, Some(large), small, true), None);
+    }
+
+    #[test]
+    fn a_frame_is_written_in_place_only_after_the_one_on_screen() {
+        let size = FrameSize::new(800, 600);
+        let some = Some(Damage {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        });
+        let whole = Some(Damage {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+        });
+        // no damage, a whole damage, a skipped generation, nothing presented yet, or another
+        // image on screen: whole
+        assert_eq!(in_place(None, Some(1), 2, Some(size), size, true), None);
+        assert_eq!(in_place(whole, Some(1), 2, Some(size), size, true), None);
+        assert_eq!(in_place(some, Some(1), 3, Some(size), size, true), None);
+        assert_eq!(in_place(some, None, 1, None, size, false), None);
+        assert_eq!(in_place(some, Some(1), 2, Some(size), size, false), None);
     }
 
     #[test]
