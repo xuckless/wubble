@@ -347,8 +347,9 @@ pub const DEFAULTS: &[Binding] = rows![
     // Chromium's Edit menu. Blink runs Ctrl+C/V/X/A/Z itself on Linux and Windows, so there the
     // page takes the key; it leaves their Cmd forms on macOS to the browser's menu (Blink
     // `editing_behavior.cc`), so there the page declines it and the action runs it on the
-    // focused frame.
-    "Mod+Z", ALL, Action::Undo, PageFirst;
+    // focused frame. Mod+Z is undo close tab, which is that undo whenever a field has the keys
+    // or nothing was closed (`closed`, Safari's Undo Close Tab), so Undo itself has no chord.
+    "Mod+Z", ALL, Action::UndoCloseTab, PageFirst;
     "Mod+Shift+Z", ALL, Action::Redo, PageFirst;
     "Ctrl+Y", LW, Action::Redo, PageFirst;
     "Mod+X", ALL, Action::Cut, PageFirst;
@@ -893,6 +894,25 @@ mod tests {
         }
     }
 
+    /// Mod+Z is undo close tab, page first (the page and its fields see it before any close
+    /// comes back); on macOS Ctrl+Z stays the sidebar toggle.
+    #[test]
+    fn mod_z_undoes_a_close_page_first() {
+        for (p, chord) in [(Platform::Linux, "Ctrl+Z"), (Platform::Mac, "Cmd+Z")] {
+            let km = Keymap::defaults(p);
+            assert_eq!(
+                km.action_for(ch(chord)),
+                Some((Action::UndoCloseTab, Route::PageFirst)),
+                "{p:?}"
+            );
+            assert_eq!(km.shortcut_for(Action::UndoCloseTab), Some(ch(chord)));
+        }
+        assert_eq!(
+            Keymap::defaults(Platform::Mac).action_for(ch("Ctrl+Z")),
+            Some((Action::ToggleSidebar, Route::Shell))
+        );
+    }
+
     #[test]
     fn bad_chords_are_rejected() {
         for bad in [
@@ -968,6 +988,8 @@ mod tests {
             Action::ScreenshotFullPage,
             Action::NewBoost,
             Action::ClearBrowsingData,
+            // its key, Mod+Z, is undo close tab's, which runs it whenever a field has the keys
+            Action::Undo,
         ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);

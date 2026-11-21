@@ -45,6 +45,9 @@ pub enum Plan {
     CycleRegion(bool),
     /// Take the newest entry off the store's recently-closed list and open it.
     ReopenClosed,
+    /// The last tab closed this run back, if there is one (`wubble_core::closed`); run from
+    /// the command bar, where no field is the key's.
+    UndoClose,
     ToggleSidebar,
     /// An event for the visible tab's find bar.
     Find(FindEvent),
@@ -96,6 +99,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::CloseTab => on_visible(Command::CloseTab),
         Action::DuplicateTab => on_visible(Command::DuplicateTab),
         Action::ReopenClosedTab => Plan::ReopenClosed,
+        // its key, unhandled by the page, goes to `Host::perform_unhandled` instead
+        Action::UndoCloseTab => Plan::UndoClose,
         Action::FocusAddress => Plan::FocusAddress,
         Action::NextRegion => Plan::CycleRegion(false),
         Action::PrevRegion => Plan::CycleRegion(true),
@@ -384,6 +389,7 @@ mod tests {
             })
         );
         assert_eq!(plan(Action::ReopenClosedTab, &m), Plan::ReopenClosed);
+        assert_eq!(plan(Action::UndoCloseTab, &m), Plan::UndoClose);
         assert_eq!(plan(Action::FocusAddress, &m), Plan::FocusAddress);
         assert_eq!(plan(Action::NextRegion, &m), Plan::CycleRegion(false));
         assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
