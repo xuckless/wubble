@@ -443,8 +443,9 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "type",
-        description: "Type text into an element by ref (replacing what it holds). With submit, \
-            press Enter and wait as navigate does when a page load follows.",
+        description: "Type text into a text field by ref (replacing what it holds). Only for text \
+            fields (use select for dropdowns, upload_file for file inputs). With submit, press \
+            Enter and wait as navigate does when a page load follows.",
         args: &[
             SESSION,
             TAB,
@@ -461,6 +462,38 @@ pub static TOOLS: &[Tool] = &[
                 target: a.target()?,
                 text: a.req("text")?,
                 submit: a.bool("submit"),
+            })
+        },
+    },
+    Tool {
+        name: "select",
+        description: "Select an option in a native <select> dropdown by visible label or value \
+            (exact match first, then case-insensitive). Lists available options if none matches. \
+            For custom JS/ARIA dropdowns, use click (or type for a searchable combobox).",
+        args: &[
+            SESSION,
+            TAB,
+            arg(
+                "ref",
+                Ty::Str,
+                true,
+                "Element ref of a <select> dropdown from read_page.",
+            ),
+            arg(
+                "option",
+                Ty::Str,
+                true,
+                "Option label or value to select (exact match first, then case-insensitive).",
+            ),
+        ],
+        annotations: ACT,
+        one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Select {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                option: a.req("option")?,
             })
         },
     },
@@ -828,6 +861,7 @@ mod tests {
             "read_page",
             "click",
             "type",
+            "select",
             "press_key",
             "screenshot",
             "list_tabs",
@@ -845,7 +879,7 @@ mod tests {
         ] {
             assert!(find(n).is_some(), "{n}");
         }
-        assert_eq!(TOOLS.len(), 20);
+        assert_eq!(TOOLS.len(), 21);
     }
 
     #[test]
@@ -886,5 +920,31 @@ mod tests {
                 .validate(neg.as_object().unwrap())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn select_schema_and_validation() {
+        let sel = find("select").unwrap();
+        let schema = sel.input_schema();
+        let req: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(req, ["session", "tab", "ref", "option"]);
+        let ok = json!({"session": "s", "tab": "t", "ref": "e1.5", "option": "Canada"});
+        assert!(sel.validate(ok.as_object().unwrap()).is_ok());
+        for bad in [
+            json!({"session": "s", "tab": "t", "ref": "e1.5"}),
+            json!({"session": "s", "tab": "t", "option": "Canada"}),
+            json!({"session": "s", "tab": "t", "ref": "e1.5", "option": 42}),
+            json!({"session": "s", "tab": "t", "ref": "e1.5", "option": "CA", "extra": true}),
+        ] {
+            assert!(sel.validate(bad.as_object().unwrap()).is_err(), "{bad}");
+        }
+        let ty = find("type").unwrap();
+        assert!(ty.description.contains("select"));
+        assert!(ty.description.contains("upload_file"));
     }
 }

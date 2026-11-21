@@ -137,6 +137,12 @@ pub enum AgentCall {
         text: String,
         submit: bool,
     },
+    Select {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        option: String,
+    },
     PressKey {
         session: SessionId,
         tab: TabId,
@@ -201,6 +207,7 @@ impl AgentCall {
             AgentCall::ReadPage { .. } => "read_page",
             AgentCall::Click { .. } => "click",
             AgentCall::Type { .. } => "type",
+            AgentCall::Select { .. } => "select",
             AgentCall::PressKey { .. } => "press_key",
             AgentCall::Screenshot { .. } => "screenshot",
             AgentCall::ListTabs { .. } => "list_tabs",
@@ -227,6 +234,7 @@ impl AgentCall {
             | AgentCall::ReadPage { session, .. }
             | AgentCall::Click { session, .. }
             | AgentCall::Type { session, .. }
+            | AgentCall::Select { session, .. }
             | AgentCall::PressKey { session, .. }
             | AgentCall::Screenshot { session, .. }
             | AgentCall::ListTabs { session }
@@ -250,6 +258,7 @@ impl AgentCall {
             | AgentCall::ReadPage { tab, .. }
             | AgentCall::Click { tab, .. }
             | AgentCall::Type { tab, .. }
+            | AgentCall::Select { tab, .. }
             | AgentCall::PressKey { tab, .. }
             | AgentCall::Screenshot { tab, .. }
             | AgentCall::CloseTab { tab, .. }

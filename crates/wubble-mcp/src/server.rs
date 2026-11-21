@@ -607,6 +607,18 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            parsed(
+                "select",
+                json!({"session": "s", "tab": "t", "ref": "e1.7", "option": "Toronto, ON"})
+            ),
+            AgentCall::Select {
+                session: SessionId("s".into()),
+                tab: TabId("t".into()),
+                target: crate::call::ElementRef("e1.7".into()),
+                option: "Toronto, ON".into(),
+            }
+        );
         let c = parsed("start_session", json!({"purpose": "p", "secrets": ["GH"]}));
         assert!(matches!(
             c,
