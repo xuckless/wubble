@@ -235,59 +235,126 @@ fn serve(
     deliver(Event::Gone(conn));
 }
 
-/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`).
-pub fn manifest_dir() -> std::path::PathBuf {
-    manifest::DIR
-        .iter()
-        .fold(crate::instance::runtime_dir(), |d, p| d.join(p))
+/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`): private
+/// to the user. `$XDG_RUNTIME_DIR` (per login, cleared at logout); without one the user's own
+/// state directory (`$XDG_STATE_HOME`, `~/.local/state`), on macOS `~/Library/Caches`, on Windows
+/// `%LOCALAPPDATA%`: never the shared temp root, where another user could plant one. `None` when
+/// none of them is known (nothing is written or read then).
+pub fn manifest_dir() -> Option<std::path::PathBuf> {
+    let abs = |key: &str| {
+        std::env::var_os(key)
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let root = if cfg!(windows) {
+        abs("LOCALAPPDATA")
+    } else if let Some(runtime) = abs("XDG_RUNTIME_DIR") {
+        Some(runtime)
+    } else if cfg!(target_os = "macos") {
+        abs("HOME").map(|h| h.join("Library/Caches"))
+    } else {
+        abs("XDG_STATE_HOME").or_else(|| abs("HOME").map(|h| h.join(".local/state")))
+    };
+    root.map(|r| manifest::DIR.iter().fold(r, |d, p| d.join(p)))
 }
 
 /// The manifest of the browser on `profile`.
-pub fn manifest_path(profile: &Path) -> std::path::PathBuf {
+pub fn manifest_path(profile: &Path) -> Option<std::path::PathBuf> {
     let hash = crate::instance::fnv1a(profile.as_os_str().as_encoded_bytes());
-    manifest_dir().join(format!("{hash:016x}.json"))
+    Some(manifest_dir()?.join(format!("{hash:016x}.json")))
 }
 
-/// Writes `m` at `path`, the directory private to the user.
+/// What a path must be for the relay to trust it.
+#[derive(Clone, Copy)]
+enum Kind {
+    Dir,
+    File,
+    Socket,
+}
+
+/// Whether `path` is a `kind` (not a link) owned by this user with no group or other access.
+#[cfg(unix)]
+fn private_to_me(path: &Path, kind: Kind) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    let ft = meta.file_type();
+    let right_kind = match kind {
+        Kind::Dir => ft.is_dir(),
+        Kind::File => ft.is_file(),
+        Kind::Socket => ft.is_socket(),
+    };
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    right_kind && meta.uid() == me && meta.mode() & 0o077 == 0
+}
+
+/// Windows: the manifests sit in the user's own `%LOCALAPPDATA%`; a named pipe is no file.
+#[cfg(not(unix))]
+fn private_to_me(path: &Path, kind: Kind) -> bool {
+    match kind {
+        Kind::Dir => path.is_dir(),
+        Kind::File => path.is_file(),
+        Kind::Socket => true,
+    }
+}
+
+/// Writes `m` at `path`: the directories 0700, the file 0600 from its creation.
 pub fn write_manifest(path: &Path, m: &Manifest) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for d in [dir, dir.parent().unwrap_or(dir)] {
-                std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
-            }
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("a manifest with no directory"))?;
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for d in [dir, dir.parent().unwrap_or(dir)] {
+            std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
         }
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, m.to_json())?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    file.write_all(m.to_json().as_bytes())?;
+    file.sync_all()?;
     std::fs::rename(tmp, path)
 }
 
-/// The browsers hosting now: every manifest whose socket answers; a stale one (its browser
-/// gone) is removed on the way.
+/// The browsers hosting now: every trusted manifest (`private_to_me`: directory, file and
+/// socket this user's own and private) whose socket answers. One whose socket is gone for good
+/// (`instance::probe`: refused or not found) is removed; one that could not be checked is only
+/// skipped.
 pub fn hosting_browsers() -> Vec<Manifest> {
-    let Ok(entries) = std::fs::read_dir(manifest_dir()) else {
+    let Some(dir) = manifest_dir().filter(|d| private_to_me(d, Kind::Dir)) else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
     entries
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .filter(|p| private_to_me(p, Kind::File))
         .filter_map(|p| {
-            let m = Manifest::from_json(&std::fs::read_to_string(&p).ok()?);
-            let live = m.as_ref().is_some_and(|m| {
-                Path::new(&m.socket)
-                    .to_fs_name::<GenericFilePath>()
-                    .ok()
-                    .and_then(|n| Stream::connect(n).ok())
-                    .is_some()
-            });
-            if !live {
-                let _ = std::fs::remove_file(&p);
+            let m = Manifest::from_json(&std::fs::read_to_string(&p).ok()?)?;
+            let socket = Path::new(&m.socket);
+            match crate::instance::probe(socket) {
+                crate::instance::Probe::Live if private_to_me(socket, Kind::Socket) => Some(m),
+                crate::instance::Probe::Dead => {
+                    let _ = std::fs::remove_file(&p);
+                    None
+                }
+                _ => None,
             }
-            m.filter(|_| live)
         })
         .collect()
 }
@@ -460,5 +527,40 @@ mod tests {
         };
         assert_ne!(new_id, old_id);
         second.stop();
+    }
+
+    /// Only a manifest this user owns, private, and no link, is trusted; the manifest wubble
+    /// writes is one.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_private_manifest_of_this_user_is_trusted() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wubble/mcp/m.json");
+        let m = Manifest {
+            pid: 1,
+            profile: "/p".into(),
+            default_profile: true,
+            socket: "/p/mcp.sock".into(),
+            command: vec!["/w".into(), "mcp".into()],
+            version: "0".into(),
+        };
+        write_manifest(&path, &m).unwrap();
+        let mcp_dir = path.parent().unwrap();
+        assert!(private_to_me(mcp_dir, Kind::Dir));
+        assert!(private_to_me(&path, Kind::File));
+        assert!(!private_to_me(&path, Kind::Socket));
+        let link = mcp_dir.join("l.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(!private_to_me(&link, Kind::File), "a link is not trusted");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!private_to_me(&path, Kind::File), "readable by others");
+        std::fs::set_permissions(mcp_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!private_to_me(mcp_dir, Kind::Dir));
+        // nothing listens: dead, the one rule `sweep` and the relay share
+        assert_eq!(
+            crate::instance::probe(&dir.path().join("none.sock")),
+            crate::instance::Probe::Dead
+        );
     }
 }

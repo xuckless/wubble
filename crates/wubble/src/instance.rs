@@ -206,37 +206,58 @@ pub(crate) fn remove_stale(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Whether something listens on the socket at `path`: the one rule for "stale" (`sweep`,
+/// `mcp::hosting_browsers`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Live,
+    /// Refused or not there: nobody will answer again; the file may go.
+    Dead,
+    /// Any other error (permissions, too many files): left alone.
+    Unknown,
+}
+
+pub fn probe(path: &Path) -> Probe {
+    let Ok(name) = path.to_fs_name::<GenericFilePath>() else {
+        return Probe::Unknown;
+    };
+    match Stream::connect(name) {
+        Ok(_) => Probe::Live,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            Probe::Dead
+        }
+        Err(_) => Probe::Unknown,
+    }
+}
+
 /// Removes the sockets in `runtime` that dead browsers left behind (a hashed name: a profile
-/// path too long for the socket address), instance and MCP alike, and the manifests of
-/// browsers that no longer host: a socket nobody listens on refuses a connection. A live one
-/// is only connected to and let go (it reads no message from an empty connection).
+/// path too long for the socket address), instance and MCP alike: only sockets this user owns
+/// whose probe says dead. Then the manifests of browsers that no longer host.
 #[cfg(unix)]
 pub fn sweep(runtime: &Path) {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let Ok(entries) = std::fs::read_dir(runtime) else {
         return;
     };
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
     for path in entries.filter_map(Result::ok).map(|e| e.path()) {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !(name.starts_with("wubble-") && name.ends_with(".sock")) {
             continue;
         }
-        let refused = path
-            .as_path()
-            .to_fs_name::<GenericFilePath>()
-            .map(|n| Stream::connect(n))
-            .is_ok_and(|r| {
-                r.is_err_and(|e| {
-                    matches!(
-                        e.kind(),
-                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-                    )
-                })
-            });
-        if refused {
+        let mine = std::fs::symlink_metadata(&path)
+            .is_ok_and(|m| m.file_type().is_socket() && m.uid() == me);
+        if mine && probe(&path) == Probe::Dead {
             let _ = std::fs::remove_file(&path);
         }
     }
-    // the manifests: `mcp::hosting_browsers` removes the stale ones as it reads them
+    // the manifests: `mcp::hosting_browsers` removes the dead ones as it reads them
     let _ = crate::mcp::hosting_browsers();
 }
 

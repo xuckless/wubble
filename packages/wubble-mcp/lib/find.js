@@ -12,11 +12,35 @@
 
 const path = require("node:path");
 
-/// Where hosting browsers write their manifests: `$XDG_RUNTIME_DIR/wubble/mcp`, else the temp
-/// directory's (wubble's `instance::runtime_dir`).
-function manifestDir(env, tmpdir) {
-  const runtime = env.XDG_RUNTIME_DIR || tmpdir;
-  return path.join(runtime, "wubble", "mcp");
+/// Where hosting browsers write their manifests (wubble's `mcp::manifest_dir`): private to the
+/// user. `$XDG_RUNTIME_DIR`, else `$XDG_STATE_HOME` or `~/.local/state`; on macOS
+/// `~/Library/Caches`; on Windows `%LOCALAPPDATA%`. Never the shared temp directory. null when
+/// none is known.
+function manifestDir(env, platform, home) {
+  const abs = (p) => (typeof p === "string" && path.isAbsolute(p) ? p : null);
+  let root;
+  if (platform === "win32") {
+    root = abs(env.LOCALAPPDATA);
+  } else if (abs(env.XDG_RUNTIME_DIR)) {
+    root = env.XDG_RUNTIME_DIR;
+  } else if (platform === "darwin") {
+    root = abs(home) && path.join(home, "Library/Caches");
+  } else {
+    root = abs(env.XDG_STATE_HOME) || (abs(home) && path.join(home, ".local/state"));
+  }
+  return root ? path.join(root, "wubble", "mcp") : null;
+}
+
+/// Whether an `lstat` result is a `kind` ("dir", "file", "socket"), not a link, owned by `uid`
+/// with no group or other access. Without a uid (Windows) the location alone is trusted.
+function privateToMe(stat, kind, uid) {
+  if (!stat) return false;
+  if (uid === undefined) return true;
+  const rightKind =
+    (kind === "dir" && stat.isDirectory()) ||
+    (kind === "file" && stat.isFile()) ||
+    (kind === "socket" && stat.isSocket());
+  return rightKind && stat.uid === uid && (stat.mode & 0o077) === 0;
 }
 
 /// One manifest's text, or null when it is not one.
@@ -105,6 +129,7 @@ function findBinary({ live, env, platform, home, isFile }) {
 
 module.exports = {
   manifestDir,
+  privateToMe,
   parseManifest,
   liveManifests,
   binaryOfManifests,

@@ -35,8 +35,20 @@ function alive(pid) {
   }
 }
 
+function lstat(p) {
+  try {
+    return fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/// The manifests of live browsers, trusted only when the directory, the file and its socket
+/// are this user's own and private.
 function readManifests() {
-  const dir = find.manifestDir(process.env, os.tmpdir());
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const dir = find.manifestDir(process.env, process.platform, os.homedir());
+  if (!dir || !find.privateToMe(lstat(dir), "dir", uid)) return [];
   let names = [];
   try {
     names = fs.readdirSync(dir).filter((n) => n.endsWith(".json"));
@@ -44,13 +56,17 @@ function readManifests() {
     return [];
   }
   const texts = names.flatMap((n) => {
+    const p = path.join(dir, n);
+    if (!find.privateToMe(lstat(p), "file", uid)) return [];
     try {
-      return [fs.readFileSync(path.join(dir, n), "utf8")];
+      return [fs.readFileSync(p, "utf8")];
     } catch {
       return [];
     }
   });
-  return find.liveManifests(texts, alive);
+  return find
+    .liveManifests(texts, alive)
+    .filter((m) => process.platform === "win32" || find.privateToMe(lstat(m.socket), "socket", uid));
 }
 
 /// Answers every request with `message` until stdin ends; the line also goes to stderr.

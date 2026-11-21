@@ -147,7 +147,7 @@ era"), the newest first in the manifest's `protocolVersions`.
 
 **Security, as Settings states it.** Being findable is not access: every session still needs the owner's press on
 the approval sheet; the socket is private to the user (0600), never a TCP port; nothing is hosted while the switch
-is off. The manifest (`<runtime dir>/wubble/mcp/<hash>.json`) holds no secret.
+is off. The manifest (`<runtime dir>/wubble/mcp/<hash>.json`, never the shared temp root) holds no secret, and a relay trusts it only when it and its socket are the user's own and private.
 
 ## 1. Summary and recommendation
 

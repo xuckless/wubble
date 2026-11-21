@@ -18,9 +18,29 @@ const manifest = (profile, defaultProfile, pid = 7) =>
     protocolVersions: ["2026-07-28", "2025-11-25"],
   });
 
-test("the manifests are where wubble writes them", () => {
-  assert.equal(find.manifestDir({ XDG_RUNTIME_DIR: "/run/user/1" }, "/tmp"), "/run/user/1/wubble/mcp");
-  assert.equal(find.manifestDir({}, "/tmp"), "/tmp/wubble/mcp");
+test("the manifests are where wubble writes them, never the shared temp directory", () => {
+  const dir = (env, platform) => find.manifestDir(env, platform, "/home/u");
+  assert.equal(dir({ XDG_RUNTIME_DIR: "/run/user/1" }, "linux"), "/run/user/1/wubble/mcp");
+  assert.equal(dir({}, "linux"), "/home/u/.local/state/wubble/mcp");
+  assert.equal(dir({ XDG_STATE_HOME: "/s" }, "linux"), "/s/wubble/mcp");
+  assert.equal(dir({}, "darwin"), "/home/u/Library/Caches/wubble/mcp");
+  assert.equal(dir({ XDG_RUNTIME_DIR: "relative" }, "linux"), "/home/u/.local/state/wubble/mcp");
+  assert.equal(find.manifestDir({}, "linux", ""), null);
+});
+
+test("only this user's private manifests are trusted", () => {
+  const stat = (kind, uid, mode) => ({
+    isDirectory: () => kind === "dir",
+    isFile: () => kind === "file",
+    isSocket: () => kind === "socket",
+    uid,
+    mode,
+  });
+  assert.ok(find.privateToMe(stat("dir", 7, 0o40700), "dir", 7));
+  assert.ok(!find.privateToMe(stat("dir", 7, 0o40755), "dir", 7));
+  assert.ok(!find.privateToMe(stat("file", 8, 0o100600), "file", 7));
+  assert.ok(!find.privateToMe(stat("file", 7, 0o100600), "socket", 7));
+  assert.ok(!find.privateToMe(null, "file", 7));
 });
 
 test("a manifest reads back; anything else is not one", () => {

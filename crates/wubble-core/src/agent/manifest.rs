@@ -1,6 +1,7 @@
 //! The file a hosting browser writes so a relay (`wubble mcp`, the npm package) or any tool can
 //! find it without running anything: one per hosting profile in the per-user runtime directory
-//! (`$XDG_RUNTIME_DIR/wubble/mcp/`, the temp directory where there is none), removed when
+//! (`$XDG_RUNTIME_DIR/wubble/mcp/`; without one the user's own state directory, never the
+//! shared temp root: `mcp::manifest_dir`), removed when
 //! hosting stops and on exit, stale when its process is gone. No secret is in it: the socket is
 //! private to the user (0600) and every session needs the owner's approval anyway.
 //!
