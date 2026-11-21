@@ -621,6 +621,13 @@ const STEPS: &[Step] = &[
         |h, _| h.data_log_call("read_page"),
         |h, _| h.data_agent_rows(2)
     ),
+    // ---- the net log: a page with a sign-in form and a textarea (`net_audit`, from the parent)
+    step!(
+        "visit /form, a sign-in form and a textarea",
+        |h, c| h.data_nav(c, "/form"),
+        |h, c| h.data_title(c, "Form")
+    ),
+    step!("let its services run", nothing, |_, c| when(c.runs > 300)),
     // ---- the end: what the pages show is written for the parent to compare with the store
     step!(
         "History at the end",

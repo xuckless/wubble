@@ -6,9 +6,8 @@
 //!    host's text path).
 //! 2. The word is right-clicked until Chromium's menu for it carries `misspelled_word` and
 //!    suggestions: what wubble's native context menu shows first (`menu.rs`).
-//! 3. After the quit, Chromium's net log (`log-net-log`, through `WUBBLE_PROBE_SWITCHES`) is read:
-//!    every URL a request named is on loopback, and none is the dictionary download
-//!    (`redirector.gvt1.com`) the refused hosts would have caught.
+//! 3. After the quit, Chromium's net log is audited (`net_audit.rs`): nothing looked up or
+//!    connected off loopback, no dictionary download.
 //!
 //! Bounded by a count of pump turns, not by time.
 
@@ -34,28 +33,6 @@ const WORD_AT: Point = Point { x: 40.0, y: 36.0 };
 /// Turns between tries at the right-click, while the check catches up.
 const RETRY_EVERY: u32 = 100;
 
-/// Every URL a net log names (`"url":"..."`), read as text so a log cut short still reads.
-pub fn logged_urls(log: &str) -> Vec<&str> {
-    log.split("\"url\":\"")
-        .skip(1)
-        .filter_map(|rest| rest.split('"').next())
-        .collect()
-}
-
-/// Whether `url` stays on this machine (loopback, or a page that is not a network one).
-pub fn is_local(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return true;
-    };
-    if !matches!(scheme, "http" | "https" | "ws" | "wss") {
-        return true;
-    }
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = host.rsplit('@').next().unwrap_or("");
-    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
-    host == "127.0.0.1" || host == "localhost" || host == "[::1]"
-}
-
 /// Passes with a line naming the suggestions and the requests the log held.
 pub fn run(
     config: Result<EngineConfig, EngineError>,
@@ -68,7 +45,7 @@ pub fn run(
     unsafe {
         std::env::set_var(
             "WUBBLE_PROBE_SWITCHES",
-            format!("log-net-log={}", net_log.display()),
+            crate::net_audit::probe_switch(&net_log),
         );
     }
     let port = crate::autofill_smoke::serve()?;
@@ -154,57 +131,12 @@ pub fn run(
 
     // 3. Quit, then what the net log says.
     crate::drain(&mut engine);
-    let log = std::fs::read_to_string(&net_log)?;
-    let urls = logged_urls(&log);
-    if urls.is_empty() {
-        return Err("the net log names no URL: nothing was audited".into());
-    }
-    if !urls
-        .iter()
-        .any(|u| u.contains(&format!("127.0.0.1:{port}/spell")))
-    {
-        return Err("the net log does not hold the loopback page's own request".into());
-    }
-    // Chromium makes a few requests of its own that wubble refuses at name resolution (the
-    // component updater's and autofill's); they are counted and
-    // named here, not failed on: what this proves is that the dictionary is not among them and
-    // that no request left for anything else of the page's.
-    let away: Vec<&str> = urls.iter().copied().filter(|u| !is_local(u)).collect();
-    let hosts: std::collections::BTreeSet<&str> = away
-        .iter()
-        .filter_map(|u| u.split_once("://")?.1.split(['/', '?']).next())
-        .collect();
-    if let Some(download) = urls
-        .iter()
-        .find(|u| u.contains("gvt1.com") || u.contains(".bdic"))
-    {
-        return Err(format!("a dictionary download was asked for: {download}").into());
+    let report = crate::net_audit::audit(&std::fs::read_to_string(&net_log)?)?;
+    if report.urls == 0 {
+        return Err("the net log names no request: nothing was audited".into());
     }
     Ok(format!(
-        "{WORD:?} marked, suggestions {suggestions:?}; net log: {} URLs, the page's own on \
-         loopback, no dictionary download, other hosts asked for: {hosts:?}",
-        urls.len()
+        "{WORD:?} marked, suggestions {suggestions:?}; {}",
+        report.line()
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_urls_are_loopback_or_not_network() {
-        assert!(is_local("http://127.0.0.1:5173/spell"));
-        assert!(is_local("http://localhost/x"));
-        assert!(is_local("data:text/html,hi"));
-        assert!(is_local("about:blank"));
-        assert!(!is_local("https://redirector.gvt1.com/edgedl/x.bdic"));
-        assert!(!is_local("https://127.0.0.1.evil.com/"));
-        assert!(!is_local("http://127.0.0.1@evil.com/"));
-    }
-
-    #[test]
-    fn urls_are_read_out_of_a_log() {
-        let log = r#"{"params":{"url":"http://a/"}},{"params":{"url":"https://b/x?y=1"},"#;
-        assert_eq!(logged_urls(log), ["http://a/", "https://b/x?y=1"]);
-    }
 }

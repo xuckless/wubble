@@ -545,6 +545,11 @@ const QUIET_FEATURES: &[(&str, &str)] = &[
         "TranslateRankerEnforcement",
         "the same model, loaded when this one is on",
     ),
+    (
+        "AutofillServerCommunication",
+        "content-autofill.googleapis.com: Chromium's own autofill query for the fields of any page \
+         with a form (net log: resolved, TCP connected); wubble's autofill is its own",
+    ),
 ];
 
 /// The extension system's switches for the installed, enabled extensions `paths`.
@@ -1515,6 +1520,7 @@ mod tests {
             "AimEnabled",
             "TranslateRankerQuery",
             "TranslateRankerEnforcement",
+            "AutofillServerCommunication",
         ] {
             assert!(features.split(',').any(|f| f == feature), "{features}");
         }

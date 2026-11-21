@@ -6,6 +6,9 @@
   textarea { position: absolute; left: 20px; top: 20px; width: 400px; height: 120px; padding: 4px; font: 24px monospace; }
 </style>
 <textarea spellcheck="true" lang="en-US"></textarea>
+<form action="/login" method="post" style="position:absolute;top:200px">
+  <input name="user" autocomplete="username"><input name="pass" type="password" autocomplete="current-password">
+</form>
 <script>
   // The smoke reads these lines from the console.
   const box = document.querySelector('textarea');

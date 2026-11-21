@@ -30,6 +30,7 @@ mod media_smoke;
 mod memory;
 mod menu;
 mod nav_smoke;
+mod net_audit;
 mod orbs;
 mod os_motion;
 mod os_scope;
@@ -756,6 +757,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                 .env("PATH", std::env::join_paths(dirs)?)
                 // no session bus: Show in folder would otherwise reach the person's file manager
                 .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+                // the quit run's net log is audited below (a killed run leaves none to read)
+                .env(
+                    "WUBBLE_PROBE_SWITCHES",
+                    net_audit::probe_switch(&profile.join(data_smoke::NET_LOG)),
+                )
                 .status()?;
             match ending {
                 data_smoke::Ending::Quit if !status.success() => {
@@ -765,6 +771,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(format!("the {word} run was not killed: {status}").into());
                 }
                 _ => {}
+            }
+            if ending == data_smoke::Ending::Quit {
+                let log = std::fs::read_to_string(profile.join(data_smoke::NET_LOG))?;
+                let report = net_audit::audit(&log)?;
+                println!("smoke: data: {}", report.line());
             }
             let shown = std::fs::read_to_string(profile.join(data_smoke::SUMMARY))?;
             let db = Profile {

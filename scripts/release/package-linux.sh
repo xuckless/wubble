@@ -110,6 +110,7 @@ cp assets/icons/linux/wubble.desktop "$stage/share/applications/wubble.desktop"
 cp -R assets/icons/linux/hicolor "$stage/share/icons/hicolor"
 cp LICENSE "$stage/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.md"
+cp crates/wubble-engine/assets/dictionaries/README_en_US.txt "$stage/DICTIONARY_NOTICE_en_US.txt"
 if [ -f "$cef_dir/CREDITS.html" ]; then
     cp "$cef_dir/CREDITS.html" "$stage/CREDITS.html"
 elif [ "$prebuilt" = 1 ]; then

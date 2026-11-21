@@ -9,7 +9,7 @@
 //!
 //! The file is Chromium's `third_party/hunspell_dictionaries/en-US-10-2.bdic` (built from SCOWL
 //! en_US; permissive licences, see `assets/dictionaries/README_en_US.txt` and
-//! `THIRD_PARTY_NOTICES.md`). Its version is the one `spellcheck_common.cc` expects for en-US in
+//! `THIRD_PARTY_NOTICES.md`; the release packages ship that README as `DICTIONARY_NOTICE_en_US.txt`). Its version is the one `spellcheck_common.cc` expects for en-US in
 //! CEF 156: a bump of the pin means a new file here under its new name.
 
 use std::path::Path;
