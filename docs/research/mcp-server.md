@@ -149,6 +149,64 @@ era"), the newest first in the manifest's `protocolVersions`.
 the approval sheet; the socket is private to the user (0600), never a TCP port; nothing is hosted while the switch
 is off. The manifest (`<runtime dir>/wubble/mcp/<hash>.json`, never the shared temp root) holds no secret, and a relay trusts it only when it and its socket are the user's own and private.
 
+## 0.3 Signing a session in (owner, 2026-11-21)
+
+Owner: "There's no way to transfer over passwords / cookies from normal sessions to agentic sessions, should be able
+to so we don't need to login multiple times." A session keeps its own Space and container (its own cookie jar): what
+the owner shares is copied into it, on the sheet, visibly, and dies with it. The rules, written before the code:
+
+**(a) Cookies: "Use my sign-ins for these sites".**
+1. A choice on the approval sheet (and on the `request_more` sheet), **off by default**, offered **only when the
+   session's site list is not empty**: never "all my cookies to any site". With it, the Space to take them from: the
+   owner's own Spaces (never an agent's), defaulting to the Space the owner is in.
+2. On Allow, the cookies of exactly the granted sites are **copied** from that Space's container into the session's,
+   **before the session's first navigation**: `start_session` gets its handle only once the copy answered. One
+   matcher decides, `agent::shares_cookie`, over the grant's own site patterns (`boost::Pattern`, the navigation
+   guard's): a cookie is copied when a page of a granted site would be sent it: its host and path match a granted
+   site (a `Secure` cookie only through https), or it is a domain cookie (`.google.com`) and a granted site's host
+   lies inside that domain (`accounts.google.com` is sent `.google.com`'s cookies).
+3. They are **copies**: the owner's container is only read, so the owner stays signed in. Every attribute is set as
+   read: name, value, domain (host-only or domain), path, `Secure`, `HttpOnly`, `SameSite`, priority, creation and
+   expiry; session cookies (no expiry) are copied as session cookies. Through CEF's cookie manager of the two
+   request contexts (visit, then set; `wubble-engine`, the edge).
+4. Stopping the session (Stop, the agent's `stop_session`, a closed connection, the dustbin) deletes the copies with
+   the session's container, as every teardown deletes it. A hand-off (`stop_session` `keep_tabs`) keeps the Space,
+   its container and so the copies, which are then the owner's like any Space's: the sheet says so; the kept
+   Space's dustbin deletes them.
+5. `request_more` for a new site offers the same choice for the **new sites only**; its answer waits for the copy.
+6. The activity page records "cookies for X copied from Space Y" (the sites and a count, never a name or value).
+
+**Not carried, and why.** [V] CEF 156's cookie struct (`cef_cookie_t`) has no partition key: a partitioned (CHIPS)
+cookie cannot be told from a first-party one through the cookie manager, so it arrives unpartitioned (still only
+for its own, granted, domain). localStorage, sessionStorage and IndexedDB are not copied: many sites keep refresh or
+access tokens there (Microsoft's MSAL caches tokens in localStorage or sessionStorage; Firebase-based sign-ins keep
+theirs in IndexedDB; many single-page apps keep a JWT in localStorage), so such a site asks the session to sign in
+again, and the autofill and `fill_secret` below cover that page. [I] DevTools' `DOMStorage.getDOMStorageItems` and
+`setDOMStorageItem` read and write one origin's localStorage, but only through a page of each container (a live view
+in the owner's Space and one in the session's) and only for an origin named exactly, while a grant names site
+patterns, not origins; DevTools gives a page no list of the origins a container holds data for, so a faithful copy
+cannot know what to copy, and it is not built (TODO.md). Service workers, client certificates, HTTP auth
+credentials, passkeys: not carried.
+
+**(b) Passwords: names bound to logins on the sheet.**
+1. The agent asks for secrets by **name** (`start_session` `secrets`, `request_more`); it never sees a value.
+2. On the sheet the owner picks, per name, **which saved login it stands for** (the picker lists the logins of the
+   granted sites first, then the rest), or leaves it unbound (then it is not granted). The vault must be unlocked by
+   the owner, on the sheet's own Unlock. Which part a name types is read from the name: one ending in `USER`,
+   `USERNAME`, `LOGIN` or `EMAIL` types the login's username, any other its password; the sheet shows which.
+3. `fill_secret` types that part into the field the agent names, only on the login's own origin
+   (`autofill::may_fill`: the exact origin, https never on http), after the page confirms the click focused it.
+4. The value never appears in a tool result, a log line, the activity page or a screenshot's text: the reads of the
+   tab (`read_page`, `read_text`, `evaluate`) have the values filled into it redacted; the activity page records
+   each `fill_secret` as its name and origin. A screenshot is pixels: a password field shows bullets, but a username,
+   or a password the page shows in plain text (a "show password" toggle, an echo), is visible in it.
+5. With "Use my sign-ins" on and a saved login for a granted site, the session's tabs get the **normal autofill**
+   for that site (the key chip, for the owner watching a windowed session): the agent never receives the secret.
+   Otherwise a session's tabs get no autofill, and they never offer to save a password.
+
+**(c) Visible and revocable.** The sheet states which sites' sign-ins and which logins are shared; the activity page
+records each copy and each fill; Stop and the dustbin remove the copies (the container goes).
+
 ## 1. Summary and recommendation
 
 Build it, after the first release, as **sessions**. The user asks their harness for something; the agent calls
