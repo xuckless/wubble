@@ -9,7 +9,7 @@
 
 <a href="https://github.com/xuckless/wubble/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/xuckless/wubble/ci.yml?branch=main&style=flat-square&label=CI"/></a> <a href="#license"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-8fb4ff?style=flat-square"/></a>
 
-[Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Build](#build) · [Roadmap](TODO.md)
+[wubble.cc](https://wubble.cc) · [Install](#install) · [Features](#features) · [How it works](#how-it-works) · [Build](#build) · [Roadmap](TODO.md)
 
 <br/>
 

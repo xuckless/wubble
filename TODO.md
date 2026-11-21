@@ -7,20 +7,25 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 
 ## Status (2026-11-21)
 `main` builds, lints and passes 2293 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.5` for Linux and macOS (the macOS quarantine fix for updates, released on the owner's word without a run on a Mac) and `0.1.0-preview.4` (drag and drop, pinch, spellcheck, partial rendering, the autofill-server request off; its new macOS code compiled and shipped but was not run by hand before the release; preview.3 fixed MCP hosting on macOS; preview.2, with codecs,
-added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
-registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
-(made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
-built but not released: they need the patched engine, which the release engine is not. The npm launcher
-(`packages/wubble-mcp`) is built, not published. Windows is not green in CI.
+(`scripts/headless.sh`), and an idle window draws nothing. CI is green on Linux and macOS; Windows does not pass yet.
+Released: `0.1.0-preview.5` for Linux and macOS (signed; the Mac build notarised, made by the owner on the Mac with
+`sh /Users/Shared/wubble-preview<N>-mac.sh`, then signed and uploaded from here). preview.4 brought drag and drop,
+pinch zoom, spellcheck, the media save control with a bundled ffmpeg, partial rendering of the shell, the hardening
+pass and PRs #1 and #2, and switched off Chromium's autofill-server request; preview.5 fixes updates on macOS
+(quarantine), released on the owner's word without a run on a Mac. The site is live at https://wubble.cc (`site/`).
+Not released: extensions (they need the patched engine, which the release engine is not) and the npm launcher
+(`packages/wubble-mcp`, built, unpublished). Never run on a Mac by hand: the macOS drags, Cmd+Q, the socket
+check, the quarantine fix; `cargo test --workspace` there passes in CI only.
 
-## Hardening pass (2026-11-21), merged, not yet released
-Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
-`~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
-and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
-Owner decisions waiting: whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
-this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
-`WUBBLE_SMOKE_KEYRING=os` there before the release).
+## Website (wubble.cc)
+`site/` is plain HTML, CSS and JS, served by a Cloudflare Worker (`site/README.md`); it went live as first built, with
+README wording as placeholder copy.
+- [ ] The copy and what the page says first: with the owner (the sentences not from README are listed in `site/README.md`'s history; nothing invented, no numbers without a measurement)
+- [ ] Reshoot the app shots on a clean profile (the Space is named "Agent: draft the issue", one shot shows a test page), and put a real site in the window under the hero in place of a second start page
+- [ ] The feature section reads as a list (bullets left, image right, four times; empty left columns on wide screens): recompose it from the design's pages
+- [ ] The SVG diagrams' text is unreadable at 360 px; the install command is cut off in its capsule
+- [ ] Owner: "Always Use HTTPS" for the zone (plain http serves the page without a redirect)
+- [ ] Each release: bump `VERSION` in `site/assets/js/site.js` and `npx wrangler deploy` in `site/` (in docs/release.md)
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
@@ -253,6 +258,12 @@ Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchma
 - [ ] Only if plain video still costs far more than Chromium after the above: the page on a native OS surface with faked glass (overturns four frame-path decisions; owner decides)
 
 ## Open decisions (owner)
+- Mac heat (measure first with `scripts/bench/mac-energy.sh`): an opaque window on macOS, a lower rate for the start page's liquid, the CEF pump's 33 ms ceiling on a still page
+- Fork `i-slint-core` to skip the second item walk, or wait for slint#15028
+- PR #1's defaults as merged: `install.sh` installs on the sha256 alone without `minisign` (a warning), page Escape, sentence-case labels, agent-tab refusals, the shortcut reset
+- PR #2's choices as merged: compact mode is the sidebar toggle; the autofill key chip at the page's top left
+- Attach FFmpeg's source tarball to each release, or keep the link in the notes
+- The inset-shadow edge under partial rendering: snap the shadow to the pixel grid (moves its edges up to 3 levels) or leave it
 - Hardware video decode: keep the opt-in row (unsandboxed GPU process) or remove it
 - Start page liquid: stirring per second or per frame
 - Ship codecs by default or opt-in (AVC/AAC patent exposure)

@@ -67,6 +67,8 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    archive is signed here, added to `latest.json` (`make-manifest` again with both archives in
    `dist/`), and the manifest, its signature and the Mac files are uploaded; `preview.json` is
    replaced again. `.github/workflows/release-sign.yml` (signing in CI) is not used.
+9. The site: set `VERSION` in `site/assets/js/site.js` to `<V>`, commit, and `npx wrangler deploy` in
+   `site/` (the owner's Cloudflare login; `site/README.md`), once every platform's files are up.
 
 ## What ships in each bundle
 
