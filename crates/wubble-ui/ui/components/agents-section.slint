@@ -61,7 +61,7 @@ export component AgentsCard inherits Card {
                     root.remove(app.id);
                 }
             }
-            if app.writable && !app.added: Button {
+            if app.writable && !app.added && !app.foreign: Button {
                 kind: ButtonKind.ghost;
                 text: "Add";
                 clicked => {

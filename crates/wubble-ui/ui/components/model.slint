@@ -899,13 +899,16 @@ export struct AgentsView {
 }
 
 // One agent app found on this computer. `added`: wubble's entry is in its file; `writable`:
-// wubble writes that file (else the entry is offered to copy); `opted-out`: the owner took
+// wubble writes that file (else the entry is offered to copy); `foreign`: an entry wubble did
+// not write is there (left alone); `opted-out`: the owner took
 // wubble out of it, and turning hosting on leaves it alone.
 export struct AgentAppItem {
     id: string,
     name: string,
     note: string,
     added: bool,
+    // an entry named wubble that wubble did not write: not touched, no button
+    foreign: bool,
     writable: bool,
     opted-out: bool,
 }

@@ -109,8 +109,8 @@ for the Copilot CLI's file) and `claude mcp add-from-claude-desktop` (macOS and 
 
 **So hosting writes the entry.** Turning hosting on adds `wubble` (stdio, `<abs path> mcp`, `--profile` only for a
 profile that is not the default) to each app found here whose format is verified, unless the owner took wubble out
-of it in Settings (remembered: `agent.mcp_opted_out`); turning it off removes exactly the entries wubble added
-(`agent.mcp_added`); a quit leaves them, and the relay then says the browser is not running. A backup is written
+of it in Settings (remembered: `agent.mcp_opted_out`); turning it off removes the entries wubble wrote, while they are still as it wrote them
+(`agent.mcp_added`; an entry named wubble that wubble did not write is never touched); a quit leaves them, and the relay then says the browser is not running. A backup is written
 beside each file before wubble's first write; the rest of the file is kept byte for byte (JSONC comments, trailing
 commas and unknown keys; TOML through `toml_edit`); a file that does not parse is left alone and its row says why.
 Apps are found by a file or directory of their own, read when Settings opens or hosting turns on: nothing runs in

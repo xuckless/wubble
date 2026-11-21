@@ -547,12 +547,12 @@ pub const AGENT_MCP_OPTED_OUT: SettingDef = SettingDef {
     restart: false,
 };
 
-/// The agent apps wubble added its server entry to (`agent::harness` ids): turning hosting off
-/// removes exactly these.
+/// The entries wubble owns: a JSON object of `agent::harness` id to the exact entry it wrote
+/// (`agent::harness::plan`): turning hosting off removes an entry only while it still is this.
 pub const AGENT_MCP_ADDED: SettingDef = SettingDef {
     key: "agent.mcp_added",
-    kind: SettingKind::List,
-    default: "[]",
+    kind: SettingKind::Text,
+    default: "{}",
     label: "Agent apps wubble added itself to",
     section: Section::Hidden,
     restart: false,

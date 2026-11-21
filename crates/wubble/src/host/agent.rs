@@ -3407,6 +3407,10 @@ impl Host {
         std::fs::create_dir_all(home.join(".config/Code/User")).map_err(io)?;
         let opencode = home.join(".config/opencode/opencode.jsonc");
         std::fs::write(&opencode, SMOKE_OPENCODE).map_err(io)?;
+        // an entry named wubble the owner wrote: wubble never touches it
+        std::fs::create_dir_all(home.join(".cursor")).map_err(io)?;
+        let cursor = home.join(".cursor/mcp.json");
+        std::fs::write(&cursor, SMOKE_CURSOR).map_err(io)?;
         self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "1");
         if !self.mcp_serving() {
             return Err(format!("not hosting: {:?}", self.hosting.state));
@@ -3427,6 +3431,9 @@ impl Host {
         if home.join(".config/Code/User/mcp.json").exists() {
             return Err("VS Code's file was written".into());
         }
+        if std::fs::read_to_string(&cursor).ok().as_deref() != Some(SMOKE_CURSOR) {
+            return Err("the owner's own wubble entry in Cursor's file was touched".into());
+        }
         self.agent_app_removed("codex");
         if has("codex", &codex)? {
             return Err("Remove left Codex's entry".into());
@@ -3437,7 +3444,8 @@ impl Host {
         }
         println!(
             "smoke: mcp apps ok on: added to Codex (a new config.toml) and opencode (comments \
-             kept, backup beside it), VS Code only offered; Remove and Add on Codex"
+             kept, backup beside it), VS Code only offered, the owner's own wubble entry in \
+             Cursor left alone; Remove and Add on Codex"
         );
         Ok(())
     }
@@ -3486,6 +3494,10 @@ impl Host {
                     "the apps' files kept wubble: {opencode:?} {codex:?}"
                 ));
             }
+            let cursor = std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap_or_default();
+            if cursor != SMOKE_CURSOR {
+                return Err("turning off removed the owner's own wubble entry".into());
+            }
         }
         use interprocess::local_socket::prelude::*;
         let name = socket
@@ -3522,3 +3534,7 @@ impl Host {
 /// `--smoke mcp`: opencode's file as a person keeps it (a comment, an empty server table).
 const SMOKE_OPENCODE: &str =
     "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  // mine\n  \"mcp\": {}\n}\n";
+
+/// `--smoke mcp`: Cursor's file with a wubble entry the owner wrote by hand.
+const SMOKE_CURSOR: &str =
+    "{\"mcpServers\": {\"wubble\": {\"command\": \"/home/me/bin/wubble\", \"args\": [\"mcp\"]}}}\n";

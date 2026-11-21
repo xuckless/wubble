@@ -4,7 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use wubble_core::agent::harness::{self, HARNESSES, Harness, Os};
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+use wubble_core::agent::harness::{self, HARNESSES, Harness, Moment, Os, Plan};
 use wubble_core::agent::hosting::Hosting;
 use wubble_core::apply::value_of;
 use wubble_core::settings as defs;
@@ -89,8 +92,35 @@ impl Host {
         })
     }
 
-    /// Adds wubble to one app; a note when it could not.
-    fn harness_add(&mut self, h: &Harness) -> Result<(), String> {
+    /// The entries wubble owns, by app: what it wrote (`agent.mcp_added`).
+    fn records(&self) -> BTreeMap<String, Value> {
+        serde_json::from_str(value_of(&defs::AGENT_MCP_ADDED, &self.settings.stored))
+            .unwrap_or_default()
+    }
+
+    fn store_records(&mut self, records: &BTreeMap<String, Value>) {
+        let text = serde_json::to_string(records).unwrap_or_else(|_| "{}".into());
+        if text != value_of(&defs::AGENT_MCP_ADDED, &self.settings.stored) {
+            self.write_setting(defs::AGENT_MCP_ADDED.key, &text);
+        }
+    }
+
+    /// One app's entry at `moment`, by the ownership rule (`harness::plan`): written, refreshed
+    /// or removed only when wubble owns it; what it owns afterwards is recorded.
+    fn harness_apply(&mut self, h: &'static Harness, moment: Moment) {
+        let result = self.harness_plan_run(h, moment);
+        match result {
+            Ok(_) => {
+                self.hosting.notes.remove(h.id);
+            }
+            Err(e) => {
+                eprintln!("wubble: {} left as it is: {e}", h.name);
+                self.hosting.notes.insert(h.id, e);
+            }
+        }
+    }
+
+    fn harness_plan_run(&mut self, h: &'static Harness, moment: Moment) -> Result<Plan, String> {
         let home = self.harness_home().ok_or("no home directory")?;
         let file = h.file(Os::current(), &home, &exists).ok_or("no file")?;
         let before = match read(&file).map_err(|e| e.to_string())? {
@@ -98,70 +128,52 @@ impl Host {
             Found::Text(t) => Some(t),
         };
         let text = before.as_deref().unwrap_or("");
-        let after = h
-            .add(text, &self.mcp_command())
-            .map_err(|e| e.to_string())?;
-        if after != text {
-            write_file(&file, before.as_deref(), &after).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    }
-
-    /// Takes wubble's entry out of one app's file.
-    fn harness_remove(&mut self, h: &Harness) -> Result<(), String> {
-        let home = self.harness_home().ok_or("no home directory")?;
-        let file = h.file(Os::current(), &home, &exists).ok_or("no file")?;
-        let Found::Text(text) = read(&file).map_err(|e| e.to_string())? else {
-            return Ok(());
+        let existing = h.existing(text).map_err(|e| e.to_string())?;
+        let mut records = self.records();
+        let wanted = h.entry(&self.mcp_command());
+        let plan = harness::plan(moment, existing.as_ref(), records.get(h.id), &wanted);
+        let after = match plan {
+            Plan::Write => Some(h.add(text, &self.mcp_command())),
+            Plan::Refresh => Some(h.put(text, &self.mcp_command())),
+            Plan::Remove => Some(h.remove(text)),
+            Plan::Adopt | Plan::NotManaged | Plan::Absent => None,
         };
-        let after = h.remove(&text).map_err(|e| e.to_string())?;
-        if after != text {
-            write_file(&file, Some(&text), &after).map_err(|e| e.to_string())?;
+        if let Some(after) = after {
+            let after = after.map_err(|e| e.to_string())?;
+            if after != text {
+                write_file(&file, before.as_deref(), &after).map_err(|e| e.to_string())?;
+            }
         }
-        Ok(())
+        if plan.owned() {
+            records.insert(h.id.to_owned(), wanted);
+        } else {
+            records.remove(h.id);
+        }
+        self.store_records(&records);
+        Ok(plan)
     }
 
     /// `Effect::Register`: wubble into every app found here that it writes and the owner has
-    /// not taken it out of; the ones it added are remembered for turning off.
+    /// not taken it out of (an entry it did not write is left alone).
     pub(super) fn mcp_register(&mut self) {
         let opted_out = self.stored_list(&defs::AGENT_MCP_OPTED_OUT);
-        let mut added = self.stored_list(&defs::AGENT_MCP_ADDED);
         let found = self.harnesses_found();
         for h in harness::targets(&found, &opted_out) {
-            match self.harness_add(h) {
-                Ok(()) => {
-                    if !added.iter().any(|a| a == h.id) {
-                        added.push(h.id.to_owned());
-                    }
-                    self.hosting.notes.remove(h.id);
-                }
-                Err(e) => {
-                    eprintln!("wubble: not added to {}: {e}", h.name);
-                    self.hosting.notes.insert(h.id, e);
-                }
-            }
+            self.harness_apply(h, Moment::TurnOn);
         }
-        self.store_list(&defs::AGENT_MCP_ADDED, &added);
     }
 
-    /// `Effect::Unregister`: exactly the entries wubble added come out.
+    /// `Effect::Unregister`: exactly the entries wubble owns, still as it wrote them, come out.
     pub(super) fn mcp_unregister(&mut self) {
-        let added = self.stored_list(&defs::AGENT_MCP_ADDED);
-        let mut kept = vec![];
-        for id in added {
-            let Some(h) = harness::find(&id) else {
-                continue;
-            };
-            if let Err(e) = self.harness_remove(h) {
-                eprintln!("wubble: not removed from {}: {e}", h.name);
-                self.hosting.notes.insert(h.id, e);
-                kept.push(id);
+        for id in self.records().into_keys() {
+            if let Some(h) = harness::find(&id) {
+                self.harness_apply(h, Moment::TurnOff);
             }
         }
-        self.store_list(&defs::AGENT_MCP_ADDED, &kept);
     }
 
-    /// Settings: "Remove" on one app: out of its file now, and left out from now on.
+    /// Settings: "Remove" on one app: wubble's own entry out of its file now, and the app left
+    /// out from now on.
     pub(crate) fn agent_app_removed(&mut self, id: &str) {
         let Some(h) = harness::find(id) else {
             return;
@@ -171,20 +183,7 @@ impl Host {
             opted_out.push(id.to_owned());
         }
         self.store_list(&defs::AGENT_MCP_OPTED_OUT, &opted_out);
-        match self.harness_remove(h) {
-            Ok(()) => {
-                let added: Vec<String> = self
-                    .stored_list(&defs::AGENT_MCP_ADDED)
-                    .into_iter()
-                    .filter(|a| a != id)
-                    .collect();
-                self.store_list(&defs::AGENT_MCP_ADDED, &added);
-                self.hosting.notes.remove(h.id);
-            }
-            Err(e) => {
-                self.hosting.notes.insert(h.id, e);
-            }
-        }
+        self.harness_apply(h, Moment::TurnOff);
         self.render_settings();
     }
 
@@ -201,19 +200,7 @@ impl Host {
             .collect();
         self.store_list(&defs::AGENT_MCP_OPTED_OUT, &opted_out);
         if self.hosting.state.serving() {
-            match self.harness_add(h) {
-                Ok(()) => {
-                    let mut added = self.stored_list(&defs::AGENT_MCP_ADDED);
-                    if !added.iter().any(|a| a == id) {
-                        added.push(id.to_owned());
-                    }
-                    self.store_list(&defs::AGENT_MCP_ADDED, &added);
-                    self.hosting.notes.remove(h.id);
-                }
-                Err(e) => {
-                    self.hosting.notes.insert(h.id, e);
-                }
-            }
+            self.harness_apply(h, Moment::TurnOn);
         }
         self.render_settings();
     }
@@ -254,21 +241,30 @@ impl Host {
         let home = self.harness_home();
         let found = self.harnesses_found();
         let command = self.mcp_command();
+        let records = self.records();
         let apps: Vec<AgentAppItem> = found
             .iter()
             .map(|h| {
                 let file = home
                     .as_ref()
                     .and_then(|home| h.file(Os::current(), home, &exists));
-                let added = h.writable()
-                    && file
-                        .as_ref()
+                // owned: its entry is still what wubble recorded writing; foreign: one it did not
+                let existing = if h.writable() {
+                    file.as_ref()
                         .and_then(|f| std::fs::read_to_string(f).ok())
-                        .is_some_and(|t| h.has(&t).unwrap_or(false));
+                        .and_then(|t| h.existing(&t).ok().flatten())
+                } else {
+                    None
+                };
+                let added = existing.is_some() && existing.as_ref() == records.get(h.id);
+                let foreign = existing.is_some() && !added;
                 let out = opted_out.iter().any(|o| o == h.id);
                 let where_ = file.map(|f| f.display().to_string()).unwrap_or_default();
                 let note = match (self.hosting.notes.get(h.id), h.writable(), added, out) {
                     (Some(e), ..) => format!("{where_}: {e}"),
+                    (None, true, false, _) if foreign => format!(
+                        "{where_}: has its own wubble entry (not managed by wubble, left as it is)"
+                    ),
                     (None, false, ..) => format!(
                         "{where_}: wubble does not write this app's file (its format is not \
                          verified); copy the entry into it"
@@ -285,6 +281,7 @@ impl Host {
                     name: h.name.into(),
                     note: note.into(),
                     added,
+                    foreign,
                     writable: h.writable(),
                     opted_out: out,
                 }

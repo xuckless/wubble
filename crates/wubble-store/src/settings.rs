@@ -254,7 +254,7 @@ settings! {
     AgentMcpOptedOut: Vec<String> = defs::AGENT_MCP_OPTED_OUT;
     /// Agent apps wubble added itself to.
     #[expect(dead_code, reason = "read through the text table by the host")]
-    AgentMcpAdded: Vec<String> = defs::AGENT_MCP_ADDED;
+    AgentMcpAdded: String = defs::AGENT_MCP_ADDED;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
     MediaEnabled: bool = defs::MEDIA_ENABLED;

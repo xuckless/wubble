@@ -279,11 +279,15 @@ impl Harness {
         self.format.is_some()
     }
 
-    /// Its entry for `command` (`[wubble, mcp, ..]`), as it would be written; for an app wubble
-    /// does not write, the generic `mcpServers` entry to copy.
+    /// Its entry for `command` (`[wubble, mcp, ..]`), as it would be written (Codex's TOML table
+    /// as the same JSON); for an app wubble does not write, the generic `mcpServers` entry to
+    /// copy.
     pub fn entry(&self, command: &[String]) -> Value {
         let (exe, args) = command.split_first().map_or(("", &[][..]), |(e, a)| (e, a));
         match self.format {
+            Some(Format::CodexToml) => {
+                json!({"command": exe, "args": args, "tool_timeout_sec": APPROVAL_MS / 1000})
+            }
             Some(Format::Json {
                 entry: Entry::Stdio,
                 ..
@@ -303,11 +307,28 @@ impl Harness {
     /// The text with wubble's entry added (unchanged when one is there); refused when the file
     /// does not parse or the app is not written.
     pub fn add(&self, text: &str, command: &[String]) -> Result<String, EditError> {
+        let entry = self.entry(command);
         match self.format.ok_or(EditError::NotVerified)? {
             Format::Json { path, .. } => {
-                jsonc::add(text, path, NAME, &self.entry(command)).map_err(EditError::Parse)
+                jsonc::add(text, path, NAME, &entry).map_err(EditError::Parse)
             }
-            Format::CodexToml => toml_add(text, command),
+            Format::CodexToml => toml_add(text, &entry),
+        }
+    }
+
+    /// The text with wubble's entry set to `command`'s, whatever was there before.
+    pub fn put(&self, text: &str, command: &[String]) -> Result<String, EditError> {
+        self.add(&self.remove(text)?, command)
+    }
+
+    /// The entry named wubble in the file, as JSON, if it has one.
+    pub fn existing(&self, text: &str) -> Result<Option<Value>, EditError> {
+        match self.format.ok_or(EditError::NotVerified)? {
+            Format::Json { path, .. } => jsonc::get(text, path, NAME).map_err(EditError::Parse),
+            Format::CodexToml => Ok(toml_doc(text)?
+                .get("mcp_servers")
+                .and_then(|t| t.get(NAME))
+                .map(toml_json)),
         }
     }
 
@@ -328,6 +349,61 @@ impl Harness {
                 .and_then(|t| t.get(NAME))
                 .is_some()),
         }
+    }
+}
+
+/// When wubble looks at an app's entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moment {
+    /// The owner turned hosting on, or pressed Add on the app: wubble may add itself.
+    TurnOn,
+    /// A start with hosting already on: wubble only keeps its own entries current.
+    Resume,
+    /// Hosting turned off, or Remove pressed: wubble's own entry goes.
+    TurnOff,
+}
+
+/// What to do with one app's entry, and whether wubble owns it afterwards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan {
+    /// No entry: write wubble's.
+    Write,
+    /// An entry equal to wubble's: take it as wubble's, unchanged.
+    Adopt,
+    /// wubble's own entry, out of date (the binary or profile moved): write the current one.
+    Refresh,
+    /// An entry wubble did not write (or the owner changed): never touched.
+    NotManaged,
+    /// No entry and wubble may not add one now (the owner deleted it): left so.
+    Absent,
+    /// wubble's own entry: taken out.
+    Remove,
+}
+
+impl Plan {
+    /// Whether wubble owns the entry after the plan ran (records it as written).
+    pub fn owned(self) -> bool {
+        matches!(self, Plan::Write | Plan::Adopt | Plan::Refresh)
+    }
+}
+
+/// The ownership rule: wubble owns an entry only if it wrote it (`recorded`, what it wrote last)
+/// or found exactly what it would write; it rewrites only its own, removes only one that is still
+/// what it wrote, and never adds one back on a start after the owner deleted it.
+pub fn plan(
+    moment: Moment,
+    existing: Option<&Value>,
+    recorded: Option<&Value>,
+    wanted: &Value,
+) -> Plan {
+    match (moment, existing) {
+        (Moment::TurnOff, Some(e)) if recorded == Some(e) => Plan::Remove,
+        (Moment::TurnOff, Some(_)) => Plan::NotManaged,
+        (Moment::TurnOff | Moment::Resume, None) => Plan::Absent,
+        (Moment::TurnOn, None) => Plan::Write,
+        (_, Some(e)) if e == wanted => Plan::Adopt,
+        (_, Some(e)) if recorded == Some(e) => Plan::Refresh,
+        (_, Some(_)) => Plan::NotManaged,
     }
 }
 
@@ -358,7 +434,68 @@ fn toml_doc(text: &str) -> Result<toml_edit::DocumentMut, EditError> {
         .map_err(|e| EditError::Toml(e.message().to_owned()))
 }
 
-fn toml_add(text: &str, command: &[String]) -> Result<String, EditError> {
+/// A TOML item as JSON (dates as their text), to compare entries and whole files.
+fn toml_json(item: &toml_edit::Item) -> Value {
+    use toml_edit::Value as V;
+    fn value(v: &V) -> Value {
+        match v {
+            V::String(s) => json!(s.value()),
+            V::Integer(i) => json!(i.value()),
+            V::Float(f) => json!(f.value()),
+            V::Boolean(b) => json!(b.value()),
+            V::Datetime(d) => json!(d.value().to_string()),
+            V::Array(a) => Value::Array(a.iter().map(value).collect()),
+            V::InlineTable(t) => {
+                Value::Object(t.iter().map(|(k, v)| (k.to_owned(), value(v))).collect())
+            }
+        }
+    }
+    match item {
+        toml_edit::Item::None => Value::Null,
+        toml_edit::Item::Value(v) => value(v),
+        toml_edit::Item::Table(t) => Value::Object(
+            t.iter()
+                .map(|(k, v)| (k.to_owned(), toml_json(v)))
+                .collect(),
+        ),
+        toml_edit::Item::ArrayOfTables(a) => Value::Array(
+            a.iter()
+                .map(|t| toml_json(&toml_edit::Item::Table(t.clone())))
+                .collect(),
+        ),
+    }
+}
+
+/// The TOML edit from `before` to `after` touched `[mcp_servers.wubble]` only, and it came out
+/// as `entry` (or gone).
+fn toml_verify(before: &str, after: &str, entry: Option<&Value>) -> Result<(), EditError> {
+    let rest = |text: &str| -> Result<(Value, Option<Value>), EditError> {
+        let mut v = toml_json(toml_doc(text)?.as_item());
+        let mut ours = None;
+        if let Some(top) = v.as_object_mut() {
+            if let Some(servers) = top.get_mut("mcp_servers").and_then(Value::as_object_mut) {
+                ours = servers.remove(NAME);
+            }
+            if top
+                .get("mcp_servers")
+                .and_then(Value::as_object)
+                .is_some_and(|s| s.is_empty())
+            {
+                top.remove("mcp_servers");
+            }
+        }
+        Ok((v, ours))
+    };
+    let ((a, _), (b, ours)) = (rest(before)?, rest(after)?);
+    if a != b || ours.as_ref() != entry {
+        return Err(EditError::Toml(
+            "an edit that would change the rest of the file".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn toml_add(text: &str, wanted: &Value) -> Result<String, EditError> {
     let mut doc = toml_doc(text)?;
     if doc.get("mcp_servers").and_then(|t| t.get(NAME)).is_some() {
         return Ok(text.to_owned());
@@ -372,14 +509,22 @@ fn toml_add(text: &str, command: &[String]) -> Result<String, EditError> {
         })
         .as_table_mut()
         .ok_or_else(|| EditError::Toml("mcp_servers is not a table".into()))?;
-    let (exe, args) = command.split_first().map_or(("", &[][..]), |(e, a)| (e, a));
     let mut entry = toml_edit::Table::new();
-    entry["command"] = toml_edit::value(exe);
-    entry["args"] = toml_edit::value(args.iter().collect::<toml_edit::Array>());
+    entry["command"] = toml_edit::value(wanted["command"].as_str().unwrap_or(""));
+    entry["args"] = toml_edit::value(
+        wanted["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<toml_edit::Array>(),
+    );
     // Codex cuts a call at 300 s by default; an approval can take longer
-    entry["tool_timeout_sec"] = toml_edit::value(i64::try_from(APPROVAL_MS / 1000).unwrap_or(0));
+    entry["tool_timeout_sec"] = toml_edit::value(wanted["tool_timeout_sec"].as_i64().unwrap_or(0));
     servers.insert(NAME, toml_edit::Item::Table(entry));
-    Ok(doc.to_string())
+    let out = doc.to_string();
+    toml_verify(text, &out, Some(wanted))?;
+    Ok(out)
 }
 
 fn toml_remove(text: &str) -> Result<String, EditError> {
@@ -393,7 +538,9 @@ fn toml_remove(text: &str) -> Result<String, EditError> {
     if servers.is_empty() && servers.is_implicit() {
         doc.remove("mcp_servers");
     }
-    Ok(doc.to_string())
+    let out = doc.to_string();
+    toml_verify(text, &out, None)?;
+    Ok(out)
 }
 
 /// Where a backup of `file` goes before wubble's first write to it.
@@ -429,7 +576,7 @@ pub fn shell_line(command: &[String]) -> String {
 }
 
 /// Which apps hosting adds wubble to: found here, written by wubble, not opted out.
-pub fn targets<'a>(found: &'a [&'static Harness], opted_out: &[String]) -> Vec<&'a Harness> {
+pub fn targets(found: &[&'static Harness], opted_out: &[String]) -> Vec<&'static Harness> {
     found
         .iter()
         .copied()
@@ -597,5 +744,80 @@ mod tests {
             "'/opt/my apps/wubble' mcp"
         );
         assert!(generic_entry(&cmd()).contains("\"command\": \"/opt/wubble/wubble\""));
+    }
+
+    #[test]
+    fn wubble_owns_only_what_it_wrote() {
+        use Moment::*;
+        let ours = json!({"command": "/opt/wubble", "args": ["mcp"]});
+        let old = json!({"command": "/old/wubble", "args": ["mcp"]});
+        let hand = json!({"command": "/home/u/bin/wubble", "args": ["mcp"]});
+        // turned on: written, adopted when equal, refreshed only when it is still what wubble wrote
+        assert_eq!(plan(TurnOn, None, None, &ours), Plan::Write);
+        assert_eq!(plan(TurnOn, Some(&ours), None, &ours), Plan::Adopt);
+        assert_eq!(plan(TurnOn, Some(&old), Some(&old), &ours), Plan::Refresh);
+        assert_eq!(plan(TurnOn, Some(&hand), None, &ours), Plan::NotManaged);
+        assert_eq!(
+            plan(TurnOn, Some(&hand), Some(&old), &ours),
+            Plan::NotManaged
+        );
+        // a start: never added back after the owner deleted it
+        assert_eq!(plan(Resume, None, Some(&ours), &ours), Plan::Absent);
+        assert_eq!(plan(Resume, Some(&old), Some(&old), &ours), Plan::Refresh);
+        assert_eq!(plan(Resume, Some(&hand), None, &ours), Plan::NotManaged);
+        // turned off: only what wubble wrote, unchanged since, goes
+        assert_eq!(plan(TurnOff, Some(&ours), Some(&ours), &ours), Plan::Remove);
+        assert_eq!(
+            plan(TurnOff, Some(&hand), Some(&ours), &ours),
+            Plan::NotManaged
+        );
+        assert_eq!(plan(TurnOff, Some(&ours), None, &ours), Plan::NotManaged);
+        assert_eq!(plan(TurnOff, None, Some(&ours), &ours), Plan::Absent);
+        assert!(Plan::Write.owned() && Plan::Refresh.owned() && !Plan::NotManaged.owned());
+    }
+
+    /// Two profiles host at once: the default one's entry is in the file; the other finds an
+    /// entry it did not write and leaves it, and the first's turning off removes only its own.
+    #[test]
+    fn a_second_profile_leaves_the_first_one_s_entry() {
+        let h = find("cursor").unwrap();
+        let a = vec!["/opt/wubble".to_owned(), "mcp".to_owned()];
+        let b = manifest_cmd("/tmp/b");
+        let file = h.add("{}", &a).unwrap();
+        let a_recorded = h.entry(&a);
+        let existing = h.existing(&file).unwrap();
+        assert_eq!(
+            plan(Moment::TurnOn, existing.as_ref(), None, &h.entry(&b)),
+            Plan::NotManaged
+        );
+        assert_eq!(
+            plan(Moment::TurnOff, existing.as_ref(), None, &h.entry(&b)),
+            Plan::NotManaged
+        );
+        assert_eq!(
+            plan(
+                Moment::TurnOff,
+                existing.as_ref(),
+                Some(&a_recorded),
+                &h.entry(&a)
+            ),
+            Plan::Remove
+        );
+    }
+
+    fn manifest_cmd(profile: &str) -> Vec<String> {
+        super::super::manifest::command("/opt/wubble", profile, false)
+    }
+
+    #[test]
+    fn every_app_reads_back_and_rewrites_its_entry() {
+        for h in HARNESSES.iter().filter(|h| h.writable()) {
+            let old = vec!["/old/wubble".to_owned(), "mcp".to_owned()];
+            let added = h.add(fixture(h.id), &old).unwrap();
+            assert_eq!(h.existing(&added).unwrap(), Some(h.entry(&old)), "{}", h.id);
+            let put = h.put(&added, &cmd()).unwrap();
+            assert_eq!(h.existing(&put).unwrap(), Some(h.entry(&cmd())), "{}", h.id);
+            assert_eq!(h.existing(fixture(h.id)).unwrap(), None, "{}", h.id);
+        }
     }
 }
