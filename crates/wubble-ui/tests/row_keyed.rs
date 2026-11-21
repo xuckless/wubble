@@ -181,13 +181,15 @@ fn row_buttons_follow_their_item() {
     // popover's pitch). The popover draws its rows with the overlay kit's ADownloadRow
     // (kit/overlay/a), on the pitch its OverlapLayer gives them.
     app.set_page(InternalPageKind::Downloads);
-    app.set_downloads(ModelRc::from(Rc::new(VecModel::from(vec![DownloadItem {
+    let dl = ModelRc::from(Rc::new(VecModel::from(vec![DownloadItem {
         id: 1,
         name: "f".into(),
         detail: "1 MB".into(),
         progress: 0.5,
         status: DownloadStatus::Running,
-    }]))));
+    }])));
+    app.set_downloads(dl.clone());
+    app.set_downloads_page_items(dl);
     app.set_downloads_open(true);
     run(&app, &wired, &mut now, 500);
     let heights: Vec<f32> = ElementHandle::find_by_element_id(&app, "DownloadRow::row-touch")

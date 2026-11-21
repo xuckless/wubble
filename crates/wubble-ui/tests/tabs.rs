@@ -307,6 +307,98 @@ fn tab_scroll_reaches_scroller(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_scroll_y(), 120.0);
 }
 
+/// The host syncs its rows in place (`wubble_ui::sync`) and says so (`shell-model-changed`).
+fn host_render(app: &AppWindow, model: &VecModel<TabItem>, items: Vec<TabItem>) {
+    wubble_ui::sync(model, items);
+    app.invoke_shell_model_changed();
+    pump();
+}
+
+fn item(id: i32, title: &str) -> TabItem {
+    TabItem {
+        id,
+        title: title.into(),
+        ..Default::default()
+    }
+}
+
+fn leaving_titles(app: &AppWindow) -> Vec<(i32, String)> {
+    app.get_leaving_rows()
+        .iter()
+        .map(|l| (l.tab.id, l.tab.title.to_string()))
+        .collect()
+}
+
+/// A tab retitled after it opened, then closed: its leaving row shows the title it last had,
+/// not the one it opened with.
+fn a_closed_row_leaves_with_its_last_title(app: &AppWindow, driver: &Shared) {
+    let model = Rc::new(VecModel::from(vec![item(10, "a"), item(11, "b")]));
+    app.set_tabs(ModelRc::from(model.clone()));
+    app.set_active_tab_id(10);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    host_render(app, &model, vec![item(10, "a"), item(11, "b, loaded")]);
+    driver.borrow_mut().advance(app, DT);
+    host_render(app, &model, vec![item(10, "a")]);
+    driver.borrow_mut().advance(app, DT);
+    assert_eq!(leaving_titles(app), [(11, "b, loaded".to_owned())]);
+    settle(app, driver);
+    assert!(leaving_titles(app).is_empty());
+}
+
+/// A row closed, brought back and closed again, all before a frame: it leaves with its look
+/// from the second close, not the first.
+fn a_row_back_before_a_frame_leaves_with_its_new_look(app: &AppWindow, driver: &Shared) {
+    let model = Rc::new(VecModel::from(vec![item(10, "a"), item(11, "b")]));
+    app.set_tabs(ModelRc::from(model.clone()));
+    app.set_active_tab_id(10);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    host_render(app, &model, vec![item(10, "a")]);
+    host_render(app, &model, vec![item(10, "a"), item(11, "b again")]);
+    host_render(app, &model, vec![item(10, "a")]);
+    driver.borrow_mut().advance(app, DT);
+    assert_eq!(leaving_titles(app), [(11, "b again".to_owned())]);
+    settle(app, driver);
+}
+
+/// A drag of row 0 one slot down with the active row outside the drag (row 3), and a host that
+/// does not act on the move: no id and no active row change, yet the rows go back to the
+/// model's order. Row 0 springs back from where it was dropped (it does not swap springs with
+/// row 1 and jump), and every row comes to rest at its slot.
+fn a_dropped_row_returns_when_the_host_keeps_the_order(
+    app: &AppWindow,
+    driver: &Shared,
+    log: &Log,
+) {
+    app.set_tabs(tabs([10, 11, 12, 13]));
+    app.set_active_tab_id(13);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    let y = row_centre(0);
+    press(app, ROW_X, y, PointerEventButton::Left);
+    for k in 1..=9 {
+        moved(app, ROW_X, y + k as f32 * 5.0);
+        for _ in 0..4 {
+            driver.borrow_mut().advance(app, DT);
+        }
+    }
+    release(app, ROW_X, y + 45.0, PointerEventButton::Left);
+    assert_eq!(log.borrow().moved.last(), Some(&(10, 1)));
+    driver.borrow_mut().advance(app, DT);
+    let dropped = rows(app);
+    assert!(
+        dropped[0] > 20.0 && dropped[1] < 20.0,
+        "row 0 springs back from its drop, row 1 from the slot it gave up: {dropped:?}"
+    );
+    settle(app, driver);
+    assert_eq!(rows(app), [0.0, 40.0, 80.0, 120.0]);
+    assert_eq!(app.get_selected_row(), 3);
+}
+
 #[derive(Default)]
 struct Calls {
     activated: Vec<i32>,
@@ -395,4 +487,7 @@ fn tab_list_scenarios() {
     tab_scroll_reaches_scroller(&app, &driver);
     folder_header_is_a_row(&app, &driver, &log);
     touch_sizing_resizes_rows(&app, &driver);
+    a_closed_row_leaves_with_its_last_title(&app, &driver);
+    a_dropped_row_returns_when_the_host_keeps_the_order(&app, &driver, &log);
+    a_row_back_before_a_frame_leaves_with_its_new_look(&app, &driver);
 }

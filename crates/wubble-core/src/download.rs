@@ -318,6 +318,30 @@ pub fn finished_ids(entries: &[DownloadEntry]) -> Vec<i64> {
         .collect()
 }
 
+/// What the downloads page's "Clear finished" removes while its search shows `query`: the
+/// finished entries, or none while a search hides some rows (the button is off then, so it
+/// never clears rows the user cannot see).
+pub fn clearable_ids(entries: &[DownloadEntry], query: &str) -> Vec<i64> {
+    if query.trim().is_empty() {
+        finished_ids(entries)
+    } else {
+        vec![]
+    }
+}
+
+/// Entries whose file name or URL matches `query` (case-insensitive; blank returns all).
+pub fn filter_entries(entries: &[DownloadEntry], query: &str) -> Vec<DownloadEntry> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return entries.to_vec();
+    }
+    entries
+        .iter()
+        .filter(|e| e.name.to_lowercase().contains(&q) || e.url.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 impl DownloadEntry {
     /// The file can be opened: the download completed.
     pub fn can_open(&self) -> bool {
@@ -588,6 +612,11 @@ mod tests {
             with(6, Interrupted("x".into())),
         ];
         assert_eq!(finished_ids(&list), [2, 4, 5]);
+        assert_eq!(clearable_ids(&list, " "), [2, 4, 5]);
+        assert!(
+            clearable_ids(&list, "report").is_empty(),
+            "a search hides rows: nothing is cleared"
+        );
         assert!(entry(Complete).can_open());
         assert!(!entry(Cancelled).can_open());
         assert!(!entry(Running).can_open());
@@ -647,5 +676,32 @@ mod tests {
         for (n, want) in cases {
             assert_eq!(format_bytes(n), want, "{n}");
         }
+    }
+
+    #[test]
+    fn filter_entries_matches_name_and_url_case_insensitively() {
+        let a = DownloadEntry {
+            id: 1,
+            name: "Report-2026.PDF".into(),
+            url: "https://docs.example.com/files/report.pdf".into(),
+            ..entry(DownloadState::Complete)
+        };
+        let b = DownloadEntry {
+            id: 2,
+            name: "archive.tar.gz".into(),
+            url: "https://cdn.wubble.test/builds/nightly.tar.gz".into(),
+            ..entry(DownloadState::Running)
+        };
+        let list = [a.clone(), b.clone()];
+        assert_eq!(filter_entries(&list, ""), list);
+        assert_eq!(filter_entries(&list, "   "), list);
+        assert_eq!(filter_entries(&list, "report"), std::slice::from_ref(&a));
+        assert_eq!(filter_entries(&list, "PDF"), std::slice::from_ref(&a));
+        assert_eq!(
+            filter_entries(&list, "WUBBLE.TEST"),
+            std::slice::from_ref(&b)
+        );
+        assert_eq!(filter_entries(&list, "nightly"), [b]);
+        assert!(filter_entries(&list, "missing").is_empty());
     }
 }

@@ -1,7 +1,7 @@
 //! The settings page's models from the core view-models (`wubble_core::pages`, `keys`): one
 //! generic mapping per row kind, so a new setting needs no code here either.
 
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
 use wubble_core::omnibox::ENGINES;
 use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
@@ -159,10 +159,59 @@ pub fn page_link_items<'a>(links: impl IntoIterator<Item = &'a PageLink>) -> Vec
         .collect()
 }
 
+/// Whether two `ModelRc`s have the same length and element-wise equal contents (`ModelRc::eq`
+/// uses `Rc::ptr_eq`, so freshly built models always compare unequal).
+fn same_model<T: Clone + 'static>(
+    a: &ModelRc<T>,
+    b: &ModelRc<T>,
+    eq: impl Fn(&T, &T) -> bool,
+) -> bool {
+    a.row_count() == b.row_count() && a.iter().zip(b.iter()).all(|(x, y)| eq(&x, &y))
+}
+
+/// Content equality for [`EntryItem`], comparing `cells` by value rather than `Rc::ptr_eq`.
+pub fn same_entry_item(a: &EntryItem, b: &EntryItem) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    let (a_cells, b_cells) = (std::mem::take(&mut a.cells), std::mem::take(&mut b.cells));
+    same_model(&a_cells, &b_cells, PartialEq::eq) && a == b
+}
+
+/// Content equality for [`SettingItem`], comparing all inner `ModelRc` fields by value so
+/// `render_settings` does not tear down and rebuild unchanged rows.
+pub fn same_setting_item(a: &SettingItem, b: &SettingItem) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    let (a_words, b_words) = (std::mem::take(&mut a.words), std::mem::take(&mut b.words));
+    let (a_labels, b_labels) = (std::mem::take(&mut a.labels), std::mem::take(&mut b.labels));
+    let (a_entries, b_entries) = (
+        std::mem::take(&mut a.entries),
+        std::mem::take(&mut b.entries),
+    );
+    let (a_columns, b_columns) = (
+        std::mem::take(&mut a.columns),
+        std::mem::take(&mut b.columns),
+    );
+    let (a_options, b_options) = (
+        std::mem::take(&mut a.options),
+        std::mem::take(&mut b.options),
+    );
+    a == b
+        && same_model(&a_words, &b_words, PartialEq::eq)
+        && same_model(&a_labels, &b_labels, PartialEq::eq)
+        && same_model(&a_entries, &b_entries, same_entry_item)
+        && same_model(&a_columns, &b_columns, PartialEq::eq)
+        && same_model(&a_options, &b_options, PartialEq::eq)
+}
+
+/// Content equality for [`BindingItem`], comparing `keys` by value rather than `Rc::ptr_eq`.
+pub fn same_binding_item(a: &BindingItem, b: &BindingItem) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    let (a_keys, b_keys) = (std::mem::take(&mut a.keys), std::mem::take(&mut b.keys));
+    same_model(&a_keys, &b_keys, PartialEq::eq) && a == b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slint::Model;
     use std::collections::HashMap;
 
     #[test]
@@ -237,5 +286,78 @@ mod tests {
         let keys: Vec<String> = with_chord.keys.iter().map(|k| k.to_string()).collect();
         assert_eq!(keys.join("+"), with_chord.chord.as_str());
         assert!(keys.len() >= 2);
+    }
+
+    /// A choice made after the page was drawn reaches the shown row through the in-place sync
+    /// the host uses (`same_setting_item`): the engine's Select goes from "Ask on first search"
+    /// (none chosen) to the engine, and back.
+    #[test]
+    fn a_changed_engine_reaches_the_synced_row() {
+        let engine_row = |stored: &HashMap<String, String>| {
+            let items = setting_items(&wubble_core::pages::settings_page(stored));
+            let i = items.iter().position(|r| r.key == "search.engine").unwrap();
+            (items, i)
+        };
+        let (items, i) = engine_row(&HashMap::new());
+        assert_eq!(items[i].selected, -1);
+        assert_eq!(items[i].placeholder, "Ask on first search");
+        let model = VecModel::from(items);
+        let chosen = HashMap::from([("search.engine".to_owned(), "duckduckgo".to_owned())]);
+        let (next, _) = engine_row(&chosen);
+        assert!(crate::sync_by(&model, next, same_setting_item));
+        let row = model.row_data(i).unwrap();
+        assert_eq!(row.value, "duckduckgo");
+        assert_eq!(
+            row.options.row_data(row.selected as usize).unwrap().label,
+            "DuckDuckGo"
+        );
+        // the same view again changes nothing
+        let (again, _) = engine_row(&chosen);
+        assert!(!crate::sync_by(&model, again, same_setting_item));
+        let (none, _) = engine_row(&HashMap::new());
+        assert!(crate::sync_by(&model, none, same_setting_item));
+        assert_eq!(model.row_data(i).unwrap().selected, -1);
+    }
+
+    #[test]
+    fn same_item_compares_inner_models_by_content() {
+        let page = wubble_core::pages::settings_page(&HashMap::new());
+        let first = setting_items(&page);
+        let second = setting_items(&page);
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(&second) {
+            assert!(same_setting_item(a, b), "unchanged row {}", a.key);
+        }
+        let mut modified = second[0].clone();
+        modified.changed = !modified.changed;
+        assert!(!same_setting_item(&first[0], &modified));
+
+        let rows = wubble_core::keys::binding_rows(wubble_core::keys::Platform::Linux, &[]);
+        let b1 = binding_items(&rows);
+        let b2 = binding_items(&rows);
+        for (a, b) in b1.iter().zip(&b2) {
+            assert!(same_binding_item(a, b), "unchanged binding {}", a.action);
+        }
+        let mut bm = b2[0].clone();
+        bm.keys = strings(["Alt", "X"]);
+        assert!(!same_binding_item(&b1[0], &bm));
+
+        let e1 = entry_items(&[Entry {
+            label: "a".into(),
+            key: "a".into(),
+            cells: vec!["x".into(), "y".into()],
+        }]);
+        let e2 = entry_items(&[Entry {
+            label: "a".into(),
+            key: "a".into(),
+            cells: vec!["x".into(), "y".into()],
+        }]);
+        let e3 = entry_items(&[Entry {
+            label: "a".into(),
+            key: "a".into(),
+            cells: vec!["x".into(), "z".into()],
+        }]);
+        assert!(same_entry_item(&e1[0], &e2[0]));
+        assert!(!same_entry_item(&e1[0], &e3[0]));
     }
 }

@@ -132,10 +132,7 @@ impl Host {
             .collect();
         let t = tasks::rows(&self.model, &pids, &processes, &samples);
         let own = std::process::id();
-        wubble_ui::sync(
-            &self.tasks.rows,
-            t.rows.iter().map(|r| item(r, own)).collect(),
-        );
+        wubble_ui::sync(&self.tasks.rows, t.rows.iter().map(|r| item(r, own)));
         if let Some(window) = self.w.window.upgrade() {
             window.set_tasks_total(
                 format!(

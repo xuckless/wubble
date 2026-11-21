@@ -485,9 +485,12 @@ fn render_page(window: &AppWindow, host: &Host) {
         row.answer = *serial;
         row.note = (*note).into();
     }
-    crate::bind::sync(window.get_settings_rows(), rows, |m| {
-        window.set_settings_rows(m)
-    });
+    crate::bind::sync_by(
+        window.get_settings_rows(),
+        rows,
+        wubble_ui::settings::same_setting_item,
+        |m| window.set_settings_rows(m),
+    );
 
     let needle = page.query.trim().to_lowercase();
     window.set_settings_searching(!needle.is_empty());
@@ -513,9 +516,10 @@ fn render_page(window: &AppWindow, host: &Host) {
             )
         })
         .collect();
-    crate::bind::sync(
+    crate::bind::sync_by(
         window.get_settings_bindings(),
         wubble_ui::settings::binding_items(&bindings),
+        wubble_ui::settings::same_binding_item,
         |m| window.set_settings_bindings(m),
     );
     window.set_settings_capture(match page.capture {
@@ -563,12 +567,16 @@ fn render_page(window: &AppWindow, host: &Host) {
 
     let sites = pages::sites_view(&host.site_zoom, &host.site_permissions);
     let entries = wubble_ui::settings::entry_items;
-    crate::bind::sync(window.get_settings_site_zoom(), entries(&sites.zoom), |m| {
-        window.set_settings_site_zoom(m)
-    });
-    crate::bind::sync(
+    crate::bind::sync_by(
+        window.get_settings_site_zoom(),
+        entries(&sites.zoom),
+        wubble_ui::settings::same_entry_item,
+        |m| window.set_settings_site_zoom(m),
+    );
+    crate::bind::sync_by(
         window.get_settings_site_permissions(),
         entries(&sites.permissions),
+        wubble_ui::settings::same_entry_item,
         |m| window.set_settings_site_permissions(m),
     );
     let now = std::time::SystemTime::now()
@@ -580,6 +588,14 @@ fn render_page(window: &AppWindow, host: &Host) {
         |m| window.set_settings_filter_lists(m),
     );
     window.set_settings_filter_busy(host.blocking.is_busy());
+    // the Filter lists field's refusal: its setting has no row of its own (Section::Hidden)
+    window.set_settings_filter_note(
+        if answered == wubble_core::settings::BLOCKER_CUSTOM_LISTS.key {
+            (*note).into()
+        } else {
+            "".into()
+        },
+    );
     if window.get_settings_about().version.is_empty() {
         window.set_settings_about(about());
     }

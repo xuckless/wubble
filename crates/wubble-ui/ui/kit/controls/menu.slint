@@ -274,6 +274,9 @@ export component Menu inherits Rectangle {
     // One event to the machine (`Controls.menu-event`'s kinds; -1 only the rows), its intents
     // to the owner.
     function send(kind: int, arg: int) {
+        if !Controls.wired && Controls.views.length == 0 {
+            return;
+        }
         if root.slot < 0 {
             root.slot = Controls.acquire(3, 0);
         }
@@ -387,6 +390,8 @@ export component Menu inherits Rectangle {
             over-layer: root.glass-layer;
             // the entrance fades the look, not this panel: the scene's glass shows only while it does
             present: root.mounted && tween.t > 0;
+            scene-alpha: tween.t;
+            scene-scale: body.zoom;
             tier: GlassTier.thick;
             radius: TouchCss.tp-menu--border-radius;
             over-content: true;

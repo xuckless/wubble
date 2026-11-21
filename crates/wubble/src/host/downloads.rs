@@ -52,6 +52,8 @@ pub(super) struct Downloads {
     /// Save ... As downloads started from a menu and not yet offered: (tab, URL). Each asks
     /// where to save it.
     save_as: Vec<(TabId, String)>,
+    /// The downloads page's search filter (the popover stays unfiltered).
+    query: String,
 }
 
 impl Downloads {
@@ -364,10 +366,18 @@ impl Host {
         self.apply_download(id, event);
     }
 
-    /// "Clear finished": every entry that is done goes, through the one remove path.
+    /// "Clear finished": every entry that is done goes, through the one remove path (none while
+    /// the page's search hides rows: `download::clearable_ids`).
     pub(crate) fn downloads_cleared(&mut self) {
-        for id in download::finished_ids(&self.downloads.list) {
+        for id in download::clearable_ids(&self.downloads.list, &self.downloads.query) {
             self.apply_download(id, DownloadEvent::Remove);
+        }
+    }
+
+    pub(crate) fn downloads_query(&mut self, query: &str) {
+        query.clone_into(&mut self.downloads.query);
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_downloads(&window);
         }
     }
 
@@ -591,7 +601,22 @@ impl Host {
 
     pub(super) fn render_downloads(&self, window: &AppWindow) {
         let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
-        window.set_downloads(super::surfaces::model(items));
+        crate::bind::sync(window.get_downloads(), items, |m| window.set_downloads(m));
+        if self.downloads.list.is_empty() {
+            window.set_downloads_open(false);
+        }
+        let filtered: Vec<DownloadItem> =
+            download::filter_entries(&self.downloads.list, &self.downloads.query)
+                .iter()
+                .map(item)
+                .collect();
+        crate::bind::sync(window.get_downloads_page_items(), filtered, |m| {
+            window.set_downloads_page_items(m)
+        });
+        window.set_downloads_searching(!self.downloads.query.trim().is_empty());
+        window.set_downloads_has_finished(
+            !download::clearable_ids(&self.downloads.list, &self.downloads.query).is_empty(),
+        );
     }
 }
 

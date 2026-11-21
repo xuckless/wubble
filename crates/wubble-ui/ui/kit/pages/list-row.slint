@@ -23,6 +23,7 @@ import { IconButton } from "../controls/icon-button.slint";
 import { PressableButton } from "../controls/button.slint";
 import { OverlapLayer } from "../motion/overlap.slint";
 import { Tween } from "../motion/tween.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { ListProgress } from "list-progress.slint";
 
 // `.st-lead`: the tile a row leads with, the favicon (16) in it or the icon.
@@ -170,7 +171,7 @@ export component ListRow inherits Rectangle {
     callback opened-new-tab();
     out property <bool> hovered: ta.has-hover;
     // the row's actions show (RowAction `reveal`)
-    out property <bool> reveal: ta.has-hover;
+    out property <bool> reveal: ta.has-hover || keys.has-focus;
     // wubble: a drag over the row would drop into it (a bookmarks folder): the kit drop mark
     // over the row (`chrome/drop-mark.slint`)
     in property <bool> drop-target;
@@ -189,7 +190,7 @@ export component ListRow inherits Rectangle {
     }
 
     hover := Tween {
-        on: root.tappable && ta.has-hover;
+        on: root.tappable && (ta.has-hover || keys.has-focus);
         in-ms: SettingsCss.st-row--transition-background-color-duration;
         out-ms: SettingsCss.st-row--transition-background-color-duration;
         in-easing: ease;
@@ -206,6 +207,12 @@ export component ListRow inherits Rectangle {
         }
         DropMark {
             kind: root.drop-target ? DropMarkKind.box : DropMarkKind.none;
+        }
+        keys := FocusKeys {
+            enabled: root.tappable;
+            activate => {
+                root.opened();
+            }
         }
         // the row's controls sit inside its touch area, so its hover holds over them
         ta := TouchArea {
@@ -272,6 +279,10 @@ export component ListRow inherits Rectangle {
                 width: text-col.width;
                 progress: root.progress;
             }
+        }
+        FocusRing {
+            shown: root.tappable && keys.has-focus;
+            radius: SettingsCss.st-row--border-radius;
         }
     }
 }

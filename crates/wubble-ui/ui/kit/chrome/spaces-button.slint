@@ -13,6 +13,7 @@ import { Icon } from "../controls/icon.slint";
 import { Wobble } from "../motion/wobble.slint";
 import { Tween } from "../motion/tween.slint";
 import { Calm } from "../motion/calm.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { SpaceTint } from "space-switcher.slint";
 
 export component SpacesButton inherits Rectangle {
@@ -39,6 +40,12 @@ export component SpacesButton inherits Rectangle {
         in-easing: TouchCss.tp-chev--transition-transform-easing;
         out-easing: TouchCss.tp-chev--transition-transform-easing;
     }
+    keys := FocusKeys {
+        activate => {
+            root.hit = !root.hit;
+            root.clicked();
+        }
+    }
     ta := TouchArea {
         clicked => {
             root.hit = !root.hit;
@@ -61,5 +68,9 @@ export component SpacesButton inherits Rectangle {
                 easing: ease;
             }
         }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: BrowserCss.wb-spaces-ind--border-radius;
     }
 }

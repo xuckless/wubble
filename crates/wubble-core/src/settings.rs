@@ -230,7 +230,7 @@ pub const BLOCKER_CUSTOM_LISTS: SettingDef = SettingDef {
     kind: SettingKind::List,
     default: "[]",
     label: "Your own filter lists (HTTPS URLs)",
-    section: Section::Privacy,
+    section: Section::Hidden,
     restart: false,
 };
 /// Per-list switches by catalog id (`wubble_blocker::catalog`): 0 off, 1 on; a list without an
@@ -240,7 +240,7 @@ pub const BLOCKER_LISTS: SettingDef = SettingDef {
     kind: SettingKind::Map,
     default: "{}",
     label: "Filter lists switched from their default",
-    section: Section::Privacy,
+    section: Section::Hidden,
     restart: false,
 };
 /// Visits older than this many days are expired; 0 keeps everything.
@@ -1059,6 +1059,8 @@ mod tests {
             &VIDEO_COLLAPSED,
             &SPONSOR_ASKED,
             &SPONSOR_ACTIONS,
+            &BLOCKER_CUSTOM_LISTS,
+            &BLOCKER_LISTS,
         ] {
             assert_eq!(d.section, Section::Hidden, "{}", d.key);
         }

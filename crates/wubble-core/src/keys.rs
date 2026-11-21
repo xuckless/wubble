@@ -320,9 +320,9 @@ pub const DEFAULTS: &[Binding] = rows![
     "Ctrl+0", MAC, Action::SelectSpace(10), Shell;
     "Mod+Alt+Right", ALL, Action::NextSpace, Shell;
     "Mod+Alt+Left", ALL, Action::PrevSpace, Shell;
-    "Mod+Alt+S", ALL, Action::ToggleCompactMode, PageFirst;
     "Ctrl+Alt+Z", LW, Action::ToggleSidebar, Shell;
     "Ctrl+Z", MAC, Action::ToggleSidebar, Shell;
+    "Mod+Alt+S", ALL, Action::ToggleSidebar, PageFirst;
     "Mod+F", ALL, Action::Find, PageFirst;
     "Mod+G", ALL, Action::FindNext, PageFirst;
     "F3", LW, Action::FindNext, PageFirst;
@@ -849,6 +849,27 @@ mod tests {
         assert_eq!(overrides_from_json(&overrides_to_json(&ov)).unwrap(), ov);
     }
 
+    /// Compact mode folded into the sidebar toggle: an override saved for it before
+    /// (`toggle-compact-mode`) loads as the sidebar toggle on its chord.
+    #[test]
+    fn a_saved_compact_mode_override_binds_the_sidebar_toggle() {
+        let (ov, bad) =
+            overrides_from_entries(&[r#"[["Ctrl+Shift+K", "toggle-compact-mode"]]"#.to_owned()]);
+        assert_eq!(bad, 0);
+        assert_eq!(
+            ov,
+            [Override {
+                chord: ch("Ctrl+Shift+K"),
+                action: Some(Action::ToggleSidebar),
+            }]
+        );
+        let km = Keymap::defaults(Platform::Linux).with_overrides(&ov);
+        assert_eq!(
+            km.action_for(ch("Ctrl+Shift+K")).map(|r| r.0),
+            Some(Action::ToggleSidebar)
+        );
+    }
+
     #[test]
     fn compact_mode_does_not_shadow_save_page() {
         for p in PLATFORMS {
@@ -861,8 +882,14 @@ mod tests {
             assert_eq!(km.action_for(ch(save)), None, "{p:?}");
             assert_eq!(
                 km.action_for(ch(&expand("Mod+Alt+S", p))).map(|r| r.0),
-                Some(Action::ToggleCompactMode)
+                Some(Action::ToggleSidebar)
             );
+            let primary = if p == Platform::Mac {
+                "Ctrl+Z"
+            } else {
+                "Ctrl+Alt+Z"
+            };
+            assert_eq!(km.shortcut_for(Action::ToggleSidebar), Some(ch(primary)));
         }
     }
 

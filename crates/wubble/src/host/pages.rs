@@ -1035,6 +1035,7 @@ impl Host {
             wubble_ui::pages::login_items(&shown, revealed),
             |m| window.set_logins(m),
         );
+        window.set_passwords_searching(!p.query.trim().is_empty());
     }
 
     pub(crate) fn passwords_query(&mut self, query: &str) {

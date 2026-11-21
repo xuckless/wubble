@@ -8,8 +8,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use i_slint_backend_testing::{
-    ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
+    AccessibleRole, ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
+use slint::platform::{Key, PointerEventButton};
 use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
 use wubble_ui::{AppWindow, BoostView, PrintSheetView};
 
@@ -119,6 +120,61 @@ fn boost_tint(app: &AppWindow) {
     settle();
 }
 
+fn key(app: &AppWindow, text: SharedString) {
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+    app.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+    mock_elapsed_time(Duration::from_millis(16));
+}
+
+/// Escape in a Boost field leaves the field (keys typed after it edit nothing) and asks for no
+/// action: closing would discard the unsaved draft.
+fn boost_escape_keeps_the_draft(app: &AppWindow) {
+    let acts = Rc::new(RefCell::new(Vec::<String>::new()));
+    let a = acts.clone();
+    app.on_boost_act(move |name| a.borrow_mut().push(name.into()));
+    let edits = Rc::new(RefCell::new(Vec::<String>::new()));
+    let e = edits.clone();
+    app.on_boost_text(move |field, _| e.borrow_mut().push(field.into()));
+    app.set_boost(BoostView {
+        open: true,
+        serial: 2,
+        is_new: true,
+        ..Default::default()
+    });
+    settle();
+    for (label, field) in [("Name", "name"), ("Sites", "site"), ("Font", "font")] {
+        let input = shown(app, label)
+            .into_iter()
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TextInput))
+            .unwrap_or_else(|| panic!("the {label} field"));
+        input.mock_single_click(PointerEventButton::Left);
+        mock_elapsed_time(Duration::from_millis(16));
+        key(app, "x".into());
+        assert_eq!(
+            edits.borrow().last().map(String::as_str),
+            Some(field),
+            "{label}: typed into"
+        );
+        let typed = edits.borrow().len();
+        key(app, Key::Escape.into());
+        assert!(
+            acts.borrow().is_empty(),
+            "{label}: Escape asked for {:?}",
+            acts.borrow()
+        );
+        key(app, "y".into());
+        assert_eq!(
+            edits.borrow().len(),
+            typed,
+            "{label}: Escape left the field"
+        );
+    }
+    app.set_boost(BoostView::default());
+    settle();
+}
+
 fn print_sheet_exit(app: &AppWindow) {
     let names: Vec<SharedString> = vec!["Save as PDF".into(), "Office".into()];
     app.set_print_sheet_view(PrintSheetView {
@@ -159,5 +215,6 @@ fn overlays_b_keep_their_states() {
     app.window().set_size(LogicalSize::new(1280.0, 1800.0));
     settle();
     boost_tint(&app);
+    boost_escape_keeps_the_draft(&app);
     print_sheet_exit(&app);
 }

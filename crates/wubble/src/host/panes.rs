@@ -79,22 +79,6 @@ fn edge(table: &EdgeTable) -> Edge<'_> {
     }
 }
 
-/// Writes `rows` into the shell's model in place when it is one this host made (rows kept, only
-/// changed ones set), else hands `set` a new one.
-pub(super) fn sync_rows<T: Clone + PartialEq + 'static>(
-    model: slint::ModelRc<T>,
-    rows: Vec<T>,
-    same: impl Fn(&T, &T) -> bool,
-    set: impl FnOnce(slint::ModelRc<T>),
-) {
-    match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
-        Some(model) => {
-            wubble_ui::sync_by(model, rows, same);
-        }
-        None => set(super::surfaces::model(rows)),
-    }
-}
-
 /// Whether two rows show the same: their `images` (wgpu textures) compared by texture, as Slint
 /// 1.19 never finds two such images equal ([`wubble_ui::same_image`]), the rest by `==`;
 /// rewriting an unchanged row every frame asked for the next frame, so the shell rendered at the
@@ -365,9 +349,9 @@ impl Host {
     /// After a model change: the strings adopt it at once (no time passes) and animate from
     /// the next rendered frame.
     pub(super) fn settle_panes(&mut self, window: &AppWindow) {
-        self.step_strings(window, 0.0);
+        let strings_moving = self.step_strings(window, 0.0);
         self.layout_panes(window);
-        if self.model.window_split(self.w.id).is_some() {
+        if strings_moving {
             window.window().request_redraw();
         }
     }
@@ -624,12 +608,10 @@ impl Host {
         } else {
             self.w.panes.ring(focused, height)
         };
-        sync_rows(window.get_panes(), panes, same_pane, |m| {
+        crate::bind::sync_by(window.get_panes(), panes, same_pane, |m| {
             window.set_panes(m)
         });
-        sync_rows(window.get_seams(), seams, PartialEq::eq, |m| {
-            window.set_seams(m)
-        });
+        crate::bind::sync(window.get_seams(), seams, |m| window.set_seams(m));
         window.set_focus_ring(ring.into());
         self.sync_scene_pages(window);
     }

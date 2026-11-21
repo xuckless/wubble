@@ -119,7 +119,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::PrevSpace => switch(model.space_step(-1)),
         // Zen's compact mode (Mod+Alt+S) hides the sidebar and peeks it at the window edge: the
         // design's hidden mode, which the sidebar toggle reaches (`SidebarMode::toggled`)
-        Action::ToggleSidebar | Action::ToggleCompactMode => Plan::ToggleSidebar,
+        Action::ToggleSidebar => Plan::ToggleSidebar,
         Action::TogglePinTab => match visible {
             Some(t) if model.is_pinned(t) => Plan::Model(Command::UnpinTab(t)),
             Some(t) => Plan::Model(Command::PinTab(t)),
@@ -389,7 +389,6 @@ mod tests {
         assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
         assert_eq!(plan(Action::Quit, &m), Plan::Quit);
         assert_eq!(plan(Action::ToggleSidebar, &m), Plan::ToggleSidebar);
-        assert_eq!(plan(Action::ToggleCompactMode, &m), Plan::ToggleSidebar);
     }
 
     #[test]

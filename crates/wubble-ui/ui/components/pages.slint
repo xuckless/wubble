@@ -178,7 +178,7 @@ export component BookmarksPage inherits PageFrame {
         }
     }
     if root.lines.length == 0: ListEmpty {
-        text: root.searching ? "No bookmarks match" : "No bookmarks yet. Press Ctrl+D on a page to add one.";
+        text: root.searching ? "No bookmarks match" : "No bookmarks yet. Bookmark a page from the address bar to add one.";
     }
     if root.lines.length > 0: ListCard {
         for line[i] in root.lines: bookmark-row := ListRow {
@@ -244,25 +244,29 @@ export component BookmarksPage inherits PageFrame {
 // ─────────────────────────────────────────────────────────────────────────── downloads
 
 export component DownloadsPage inherits PageFrame {
-    // The host's one downloads model, the popover's too.
+    // Filtered by the page's search query (the popover stays unfiltered).
     in property <[DownloadItem]> items;
+    in property <bool> searching;
+    in property <bool> has-finished;
     callback action(int, DownloadAction);
     callback clear-finished();
 
     title: "Downloads";
-    searchable: false;
+    searchable: true;
+    placeholder: "Search downloads";
 
     ListToolbar {
         Button {
             kind: ButtonKind.ghost;
             text: "Clear finished";
+            enabled: root.has-finished;
             clicked => {
                 root.clear-finished();
             }
         }
     }
     if root.items.length == 0: ListEmpty {
-        text: "No downloads";
+        text: root.searching ? "No downloads match" : "No downloads";
     }
     if root.items.length > 0: ListCard {
         for item[i] in root.items: DownloadRow {
@@ -284,6 +288,7 @@ export component PasswordsPage inherits Rectangle {
     in property <PasswordsView> view;
     // Nothing while locked: the host sends no rows.
     in property <[LoginItem]> logins;
+    in property <bool> searching;
     callback query-changed(string);
     callback unlock();
     callback reveal(string);
@@ -411,7 +416,7 @@ export component PasswordsPage inherits Rectangle {
             }
         }
         if root.view.state == VaultState.unlocked && root.logins.length == 0: ListEmpty {
-            text: "No saved passwords";
+            text: root.searching ? "No passwords match" : "No saved passwords";
         }
         if root.logins.length > 0: ListToolbar { }
         if root.logins.length > 0: ListCard {

@@ -85,6 +85,7 @@ component StartTile inherits PressableButton {
                 radius: self.width * StartCss.wb-start-site-icon--border-radius;
                 hover: root.hovered;
                 pressed: root.pressed;
+                focused: root.keyboard-focused;
                 Image {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;

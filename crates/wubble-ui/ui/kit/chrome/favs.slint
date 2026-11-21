@@ -17,6 +17,7 @@ import { Icon, Glyph } from "../controls/icon.slint";
 import { Wobble } from "../motion/wobble.slint";
 import { Press } from "../motion/press.slint";
 import { Calm } from "../motion/calm.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { GlassTier, GlassKeys, TabItem } from "../../components/model.slint";
 
 export component Favs inherits Rectangle {
@@ -84,11 +85,19 @@ export component Favs inherits Rectangle {
             radius: BrowserCss.wb-fav--border-radius;
             hover: ta.has-hover;
             pressed: ta.pressed;
+            focused: keys.has-focus;
             background: tile.active ? Shell.selected-fill : root.over-wgpu ? transparent : Glass.thin.fill;
             press := Press {
                 pressed: ta.pressed;
             }
             scale: press.scale;
+
+            keys := FocusKeys {
+                activate => {
+                    tile.hit = !tile.hit;
+                    root.activated(tab.id);
+                }
+            }
 
             ta := TouchArea {
                 clicked => {
@@ -122,6 +131,10 @@ export component Favs inherits Rectangle {
                         tint: tile.active ? Palette.ink : Palette.mist;
                     }
                 }
+            }
+            FocusRing {
+                shown: keys.has-focus;
+                radius: BrowserCss.wb-fav--border-radius;
             }
         }
     }

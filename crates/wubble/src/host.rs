@@ -3614,10 +3614,19 @@ impl Host {
         self.media_pointer(pane, Some(point));
     }
 
-    /// Where the pointer is in the window, or None once it left: kept here and given to the
-    /// window, whose video strip takes its hover from it.
+    /// Where the pointer is in the window, or None once it left: kept here and forwarded to the
+    /// window only while the active tab has an open or collapsed video overlay.
     pub(crate) fn set_pointer(&mut self, window: &AppWindow, at: Option<slint::LogicalPosition>) {
         self.input.pointer = at;
+        if self.video_overlay_active() {
+            self.sync_pointer(window);
+        }
+    }
+
+    /// Writes the stored pointer position into Slint (used while a video overlay is active and
+    /// once when an overlay opens).
+    pub(super) fn sync_pointer(&self, window: &AppWindow) {
+        let at = self.input.pointer;
         window.set_pointer_in(at.is_some());
         if let Some(p) = at {
             window.set_pointer_x(p.x);

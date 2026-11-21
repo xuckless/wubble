@@ -100,6 +100,9 @@ export component SpacesMenu inherits Rectangle {
 
     // One event to the machine (`Controls.menu-event`'s kinds), its intents to the owner.
     function send(kind: int, arg: int) {
+        if !Controls.wired && Controls.views.length == 0 {
+            return;
+        }
         if root.slot < 0 {
             root.slot = Controls.acquire(3, 0);
         }

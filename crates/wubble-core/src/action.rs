@@ -35,7 +35,6 @@ pub enum Action {
     NextSpace,
     PrevSpace,
     ToggleSidebar,
-    ToggleCompactMode,
     Find,
     FindNext,
     FindPrev,
@@ -113,7 +112,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 68] = [
+const FIXED: [(&str, Action); 67] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("duplicate-tab", Action::DuplicateTab),
@@ -136,7 +135,6 @@ const FIXED: [(&str, Action); 68] = [
     ("next-space", Action::NextSpace),
     ("prev-space", Action::PrevSpace),
     ("toggle-sidebar", Action::ToggleSidebar),
-    ("toggle-compact-mode", Action::ToggleCompactMode),
     ("find", Action::Find),
     ("find-next", Action::FindNext),
     ("find-prev", Action::FindPrev),
@@ -210,6 +208,10 @@ impl Action {
         if let Some(n) = numbered("select-space-", 10) {
             return Some(Action::SelectSpace(n));
         }
+        // Saved user overrides written before compact mode merged into ToggleSidebar.
+        if id == "toggle-compact-mode" {
+            return Some(Action::ToggleSidebar);
+        }
         FIXED.iter().find(|(name, _)| *name == id).map(|&(_, a)| a)
     }
 
@@ -272,7 +274,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 31] = [
+pub const PALETTE: [ActionInfo; 30] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -301,7 +303,7 @@ pub const PALETTE: [ActionInfo; 31] = [
     ActionInfo {
         action: Action::ToggleSidebar,
         title: "Toggle sidebar",
-        keywords: "hide show tabs",
+        keywords: "hide show tabs compact",
     },
     ActionInfo {
         action: Action::ToggleMute,
@@ -318,11 +320,6 @@ pub const PALETTE: [ActionInfo; 31] = [
         action: Action::Unsplit,
         title: "Take this page out of the split",
         keywords: "unsplit side by side pane",
-    },
-    ActionInfo {
-        action: Action::ToggleCompactMode,
-        title: "Toggle compact mode",
-        keywords: "hide show",
     },
     ActionInfo {
         action: Action::OpenSettings,
@@ -438,10 +435,14 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 86);
+        assert_eq!(all.len(), 85);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
+        assert_eq!(
+            Action::from_id("toggle-compact-mode"),
+            Some(Action::ToggleSidebar)
+        );
     }
 
     #[test]
@@ -465,7 +466,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 86);
+        assert_eq!(ids.len(), 85);
     }
 
     #[test]

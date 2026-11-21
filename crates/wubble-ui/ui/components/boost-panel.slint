@@ -93,6 +93,10 @@ export component BoostPanel inherits Rectangle {
                 edited(t) => {
                     root.text-edited("name", t);
                 }
+                // Escape leaves the field and keeps the unsaved draft (closing discards it)
+                escaped => {
+                    self.blur();
+                }
             }
         }
         BGroup {
@@ -103,6 +107,10 @@ export component BoostPanel inherits Rectangle {
                 label: "Sites";
                 edited(t) => {
                     root.text-edited("site", t);
+                }
+                // Escape leaves the field and keeps the unsaved draft (closing discards it)
+                escaped => {
+                    self.blur();
                 }
             }
             BNote {
@@ -191,6 +199,10 @@ export component BoostPanel inherits Rectangle {
                 label: "Font";
                 edited(t) => {
                     root.text-edited("font", t);
+                }
+                // Escape leaves the field and keeps the unsaved draft (closing discards it)
+                escaped => {
+                    self.blur();
                 }
             }
         }
