@@ -943,15 +943,22 @@ impl Host {
         ) {
             self.hover_dismiss();
         }
+        let is_tick = matches!(command, Command::Tick { .. });
+        let mut any_effects = false;
         let mut queue = VecDeque::from([command]);
         while let Some(command) = queue.pop_front() {
             // `apply` takes the model by value; a fresh one holds its place meanwhile.
             let placeholder = Model::new(Instant::now());
             let current = std::mem::replace(&mut self.model, placeholder);
             let (model, effects) = model::apply(current, command);
+            any_effects |= !effects.is_empty();
             self.model = model;
             self.pending.extend(effects);
             queue.extend(self.flush());
+        }
+        // An idle lifecycle tick with no effects changed nothing visible in the shell.
+        if is_tick && !any_effects {
+            return;
         }
         // Surfaces outlive a sleeping tab's view, not the tab.
         let tabs = &self.model.tabs;
@@ -3543,10 +3550,19 @@ impl Host {
         self.media_pointer(pane, Some(point));
     }
 
-    /// Where the pointer is in the window, or None once it left: kept here and given to the
-    /// window, whose video strip takes its hover from it.
+    /// Where the pointer is in the window, or None once it left: kept here and forwarded to the
+    /// window only while the active tab has an open or collapsed video overlay.
     pub(crate) fn set_pointer(&mut self, window: &AppWindow, at: Option<slint::LogicalPosition>) {
         self.input.pointer = at;
+        if self.video_overlay_active() {
+            self.sync_pointer(window);
+        }
+    }
+
+    /// Writes the stored pointer position into Slint (used while a video overlay is active and
+    /// once when an overlay opens).
+    pub(super) fn sync_pointer(&self, window: &AppWindow) {
+        let at = self.input.pointer;
         window.set_pointer_in(at.is_some());
         if let Some(p) = at {
             window.set_pointer_x(p.x);

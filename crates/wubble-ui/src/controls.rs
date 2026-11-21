@@ -252,6 +252,8 @@ pub struct Controls {
     alive: Vec<bool>,
     since_sweep: usize,
     sweep: Sweep,
+    /// `Controls.generation`'s one owner, incremented on each sweep without reading back from Slint.
+    generation: i32,
     views: Rc<VecModel<ControlView>>,
     /// The time base of the toggle's fling velocity.
     epoch: Instant,
@@ -266,6 +268,7 @@ impl Controls {
             alive: vec![],
             since_sweep: 0,
             sweep: Sweep::Idle,
+            generation: 0,
             views: Rc::new(VecModel::default()),
             epoch: Instant::now(),
             last: None,
@@ -442,9 +445,9 @@ impl Controls {
         }
     }
 
-    /// One frame: frees the slots a sweep found dead, steps every live control and writes the
-    /// views. Returns (another frame needed, bump the generation).
-    pub fn frame(&mut self, now: Instant) -> (bool, bool) {
+    /// Frees the slots the current sweep found dead, once live controls have answered `alive`
+    /// (called right after `ChangeTracker::run_change_handlers` in the same frame).
+    pub fn end_sweep(&mut self) {
         if self.sweep == Sweep::Asking {
             for (slot, alive) in self.slots.iter_mut().zip(&self.alive) {
                 if !alive {
@@ -453,12 +456,21 @@ impl Controls {
             }
             self.sweep = Sweep::Idle;
         }
-        let bump = self.since_sweep >= SWEEP_AFTER;
-        if bump {
+    }
+
+    /// One frame: frees any unended sweep, steps every live control and writes the views.
+    /// Returns `(another frame needed, Some(generation) when a sweep starts)`.
+    pub fn frame(&mut self, now: Instant) -> (bool, Option<i32>) {
+        self.end_sweep();
+        let bump = if self.since_sweep >= SWEEP_AFTER {
             self.since_sweep = 0;
             self.alive.iter_mut().for_each(|a| *a = false);
             self.sweep = Sweep::Asking;
-        }
+            self.generation = self.generation.wrapping_add(1);
+            Some(self.generation)
+        } else {
+            None
+        };
         let dt = self
             .last
             .replace(now)
@@ -478,7 +490,7 @@ impl Controls {
         if !moving {
             self.last = None;
         }
-        (moving || bump, bump)
+        (moving, bump)
     }
 
     #[cfg(test)]
@@ -577,10 +589,9 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     reg
 }
 
-/// Bumps `Controls.generation` (live controls answer `alive`).
-pub fn bump(window: &AppWindow) {
-    let g = window.global::<Global>();
-    g.set_generation(g.get_generation().wrapping_add(1));
+/// Writes `Controls.generation` without reading it back (live controls answer `alive`).
+pub fn bump(window: &AppWindow, generation: i32) {
+    window.global::<Global>().set_generation(generation);
 }
 
 #[cfg(test)]
@@ -597,18 +608,28 @@ mod tests {
             .collect();
         assert_eq!(ids[3], 3);
         let t0 = Instant::now();
-        let (_, bump) = c.frame(t0);
-        assert!(bump, "enough new slots: sweep");
-        // only slot 3 answers
+        let (moving, bump) = c.frame(t0);
+        assert!(!moving, "a sweep alone does not request an extra frame");
+        assert_eq!(bump, Some(1), "enough new slots: first sweep generation");
+        // only slot 3 answers before end_sweep in the same frame
         c.alive[3] = true;
-        c.frame(t0 + Duration::from_millis(16));
+        c.end_sweep();
         assert_eq!(c.live(), 1);
         assert_eq!(
             c.acquire(Slot::Toggle(Toggle::new(true, ToggleSize::Lg))),
             0,
-            "a freed slot is reused"
+            "a freed slot is reused immediately in the same frame"
         );
         assert_eq!(c.views.row_count(), SWEEP_AFTER);
+        // another SWEEP_AFTER acquires bumps generation to 2
+        for _ in 1..SWEEP_AFTER {
+            c.acquire(Slot::Toggle(Toggle::new(false, ToggleSize::Lg)));
+        }
+        let (moving, bump) = c.frame(t0 + Duration::from_millis(16));
+        assert!(!moving);
+        assert_eq!(bump, Some(2), "second sweep increments generation");
+        c.end_sweep();
+        assert_eq!(c.live(), 0, "no control answered alive: all freed");
     }
 
     #[test]

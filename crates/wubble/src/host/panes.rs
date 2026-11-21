@@ -363,9 +363,9 @@ impl Host {
     /// After a model change: the strings adopt it at once (no time passes) and animate from
     /// the next rendered frame.
     pub(super) fn settle_panes(&mut self, window: &AppWindow) {
-        self.step_strings(window, 0.0);
+        let strings_moving = self.step_strings(window, 0.0);
         self.layout_panes(window);
-        if self.model.window_split(self.w.id).is_some() {
+        if strings_moving {
             window.window().request_redraw();
         }
     }

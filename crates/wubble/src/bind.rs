@@ -28,8 +28,19 @@ pub(crate) fn sync<T: Clone + PartialEq + 'static>(
     rows: Vec<T>,
     set: impl FnOnce(ModelRc<T>),
 ) {
+    sync_by(current, rows, PartialEq::eq, set);
+}
+
+/// [`sync`] with `same` deciding whether a row changed (for structs containing inner `ModelRc`s
+/// or wgpu images whose default `PartialEq` is pointer identity).
+pub(crate) fn sync_by<T: Clone + 'static>(
+    current: ModelRc<T>,
+    rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
+    set: impl FnOnce(ModelRc<T>),
+) {
     match current.as_any().downcast_ref::<VecModel<T>>() {
-        Some(model) => wubble_ui::sync(model, rows),
+        Some(model) => wubble_ui::sync_by(model, rows, same),
         None => set(ModelRc::from(Rc::new(VecModel::from(rows)))),
     }
 }
@@ -90,10 +101,13 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
         tab_items(&v.pinned, favicons),
         |m| window.set_pinned_tabs(m),
     );
-    sync(window.get_tabs(), tab_items(&v.tabs, favicons), |m| {
-        window.set_tabs(m)
-    });
-    let spaces = v
+    let tabs_model = window.get_tabs();
+    let next_tabs = tab_items(&v.tabs, favicons);
+    let tabs_changed = tabs_model.row_count() != next_tabs.len()
+        || tabs_model.iter().zip(&next_tabs).any(|(a, b)| a.id != b.id);
+    sync(tabs_model, next_tabs, |m| window.set_tabs(m));
+    let spaces_model = window.get_spaces();
+    let spaces: Vec<SpaceItem> = v
         .spaces
         .iter()
         .map(|s| SpaceItem {
@@ -104,15 +118,21 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             agent: s.agent,
         })
         .collect();
-    sync(window.get_spaces(), spaces, |m| window.set_spaces(m));
+    let spaces_changed = spaces_model.row_count() != spaces.len()
+        || spaces_model.iter().zip(&spaces).any(|(a, b)| a.id != b.id);
+    sync(spaces_model, spaces, |m| window.set_spaces(m));
+    let active_changed = window.get_active_tab_id() != v.active_tab
+        || window.get_active_space_id() != v.active_space;
     window.set_active_tab_id(v.active_tab);
     window.set_active_space_id(v.active_space);
     window.set_address_host(v.host.as_str().into());
     window.set_address_path(v.path.as_str().into());
     window.set_address_secure(v.secure);
     // Rows synced in place change no property, so no `changed` handler tells
-    // the driver: tell it here.
-    window.invoke_shell_model_changed();
+    // the driver: tell it here, only when tab/space ids or active selection changed.
+    if tabs_changed || spaces_changed || active_changed {
+        window.invoke_shell_model_changed();
+    }
 }
 
 /// The Spaces popup's lines (`wubble_core::spacemenu`) and the keys' rows: the lines, a
