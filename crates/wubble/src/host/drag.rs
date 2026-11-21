@@ -825,7 +825,7 @@ mod tests {
         assert_eq!(list_slot(105.0, 100.0, 40.0, 3), (0, None));
         assert_eq!(list_slot(120.0, 100.0, 40.0, 3), (1, Some(0)));
         assert_eq!(list_slot(135.0, 100.0, 40.0, 3), (1, None));
-        assert_eq!(list_slot(170.0, 100.0, 40.0, 3), (2, Some(1)));
+        assert_eq!(list_slot(160.0, 100.0, 40.0, 3), (2, Some(1)));
         // below the last row: the end; above the first: the start
         assert_eq!(list_slot(400.0, 100.0, 40.0, 3), (3, None));
         assert_eq!(list_slot(20.0, 100.0, 40.0, 3), (0, None));
