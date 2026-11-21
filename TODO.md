@@ -113,6 +113,15 @@ Open, to build or check:
 - [ ] Spell check in other languages: the English dictionary is bundled; add an opt-in (off by default) download of others, from `redirector.gvt1.com` or a mirror, into `<profile>/Dictionaries`
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
+- [ ] The autofill key chip sits over the page's top left and is not pane-aware in split view: it needs the focused field's rect from the engine
+- [ ] Rebinding the sidebar shortcut also unbinds its second chord, Mod+Alt+S (once compact mode's), and the shortcut editor shows only the first chord
+- [ ] Narrow Settings (content width 759 px or less): the slider and select rows do not wrap to full width as the design's narrow block does (`settings.css`:120-130); repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
+- [ ] The built-in pages' list rows take Tab and Enter but not Up/Down, and a focused row is not scrolled into view
+- [ ] `FocusKeys` with `native-button: false` fires again on key repeat (a held Enter or Space)
+- [ ] The settings search no longer finds "Your own filter lists" (the setting moved to `Section::Hidden`; the Filter lists section is not searchable)
+- [ ] A Space button opened by keyboard does not give the Spaces menu the keyboard focus
+- [ ] The popovers' scroll thumbs' touch area covers the rows' right edge
+- [ ] A popover's entrance marks the whole window dirty (the glass's scene scale and alpha change each frame), so partial rendering does not help during it
 
 ## M0: Frame path
 - [ ] Spring spike: a per-frame spring (k 300 / c 15) with no missed frames while a page scrolls
