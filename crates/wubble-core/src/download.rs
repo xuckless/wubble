@@ -695,9 +695,12 @@ mod tests {
         let list = [a.clone(), b.clone()];
         assert_eq!(filter_entries(&list, ""), list);
         assert_eq!(filter_entries(&list, "   "), list);
-        assert_eq!(filter_entries(&list, "report"), [a.clone()]);
-        assert_eq!(filter_entries(&list, "PDF"), [a.clone()]);
-        assert_eq!(filter_entries(&list, "WUBBLE.TEST"), [b.clone()]);
+        assert_eq!(filter_entries(&list, "report"), std::slice::from_ref(&a));
+        assert_eq!(filter_entries(&list, "PDF"), std::slice::from_ref(&a));
+        assert_eq!(
+            filter_entries(&list, "WUBBLE.TEST"),
+            std::slice::from_ref(&b)
+        );
         assert_eq!(filter_entries(&list, "nightly"), [b]);
         assert!(filter_entries(&list, "missing").is_empty());
     }
