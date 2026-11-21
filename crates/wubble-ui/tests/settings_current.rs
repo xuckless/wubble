@@ -113,7 +113,11 @@ fn the_section_list_names_the_section_in_view() {
             .unwrap();
         row.mock_single_click(PointerEventButton::Left);
         frames(&app, &wired, 90);
-        assert_eq!(current(&app), [title.clone()], "clicked {title}");
+        assert_eq!(
+            current(&app),
+            std::slice::from_ref(&title),
+            "clicked {title}"
+        );
         let position = LogicalPosition::new(900.0, 400.0);
         app.window()
             .dispatch_event(WindowEvent::PointerMoved { position });
@@ -126,7 +130,7 @@ fn the_section_list_names_the_section_in_view() {
         let now = current(&app);
         // the last sections are short: at the end of the page the list names the last one
         assert!(
-            now == [title.clone()] || now == ["About"],
+            now == std::slice::from_ref(&title) || now == ["About"],
             "scrolled from {title}: {now:?}"
         );
     }
