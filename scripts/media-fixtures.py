@@ -98,6 +98,9 @@ PAGES = {
     "cookie-hls": '<video src="/gslow/hls-media/index.m3u8" autoplay muted loop controls width=480></video>',
     "cookie-hls-pair": '<video src="/gslow/hls-ts/master.m3u8" autoplay muted loop controls width=480></video>',
     "reset": '<video src="/reset/clip.mp4" autoplay muted loop controls width=480></video>',
+    "iframe-x": '<iframe src="http://localhost:18080/plain-kit.html" width=520 height=300 style="border:0"></iframe>',
+    "iframe-s": '<iframe src="/plain-kit.html" width=520 height=300 style="border:0"></iframe>',
+    "plain-kit": '<video src="/f/clip.mp4" autoplay muted loop controls width=480></video><script>note("kit "+(typeof window[Symbol.for("wubble.kit")]))</script>',
     "iframe": '<iframe src="/plain.html" width=520 height=300 style="border:0"></iframe>',
     "audio": '<audio src="/f/song.mp3" autoplay muted loop controls></audio><p>an audio page',
     "mse": """<video id=v autoplay muted loop controls width=480></video><script>
@@ -121,6 +124,14 @@ for _n in ("dash-timeline", "dash-list", "dash-file"):
         f"<script>fetch('/f/{_n}/manifest.mpd');</script>"
     )
 # DASH through MSE: init and segments appended to a blob: video, as dash.js does
+# a service worker answers /sw/clip.mp4 itself, from the clip: the page's video request is served
+# by the worker, not the network (does detection still see it?)
+PAGES["sw"] = """<video id=v autoplay muted loop controls width=480></video><script>
+navigator.serviceWorker.register('/sw.js').then(()=>navigator.serviceWorker.ready).then(()=>
+  fetch('/sw/clip.mp4').then(()=>{v.src='/sw/clip.mp4'})).catch(e=>note('sw '+e))</script>"""
+PAGES["shadow"] = """<div id=h></div><script>
+h.attachShadow({mode:'open'}).innerHTML='<video src="/f/clip.mp4" autoplay muted loop controls width=480></video>'</script>"""
+PAGES["cached"] = '<video src="/cache/clip.mp4" autoplay muted loop controls width=480></video>'
 PAGES["dash-mse"] = """<video id=v autoplay muted loop controls width=480></video><script>
 (async()=>{const base='/f/dash-timeline/';const mpd=await (await fetch(base+'manifest.mpd')).text();
 const ms=new MediaSource();v.src=URL.createObjectURL(ms);await new Promise(r=>ms.addEventListener('sourceopen',r));
@@ -187,13 +198,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ".m3u8": "application/vnd.apple.mpegurl", ".mpd": "application/dash+xml", ".ts": "video/mp2t",
             ".key": "application/octet-stream", ".bin": "application/octet-stream", ".html": "text/html"}
 
-    def file(self, rel, ranges=True, length=True, mime=None, slow=False, reset_at=None):
+    def file(self, rel, ranges=True, length=True, mime=None, slow=False, reset_at=None, cache=None):
         path = os.path.normpath(os.path.join(self.root, rel))
         if not path.startswith(os.path.abspath(self.root)) or not os.path.isfile(path):
             return self.send(404, {"Content-Type": "text/plain"}, b"not found")
         data = open(path, "rb").read()
         ctype = mime or self.mime.get(os.path.splitext(path)[1], "application/octet-stream")
         head = {"Content-Type": ctype}
+        if cache:
+            head["Cache-Control"] = cache
         rng = self.headers.get("Range")
         if ranges:
             head["Accept-Ranges"] = "bytes"
@@ -239,6 +252,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if m.group(1).startswith("cookie"):
                 head["Set-Cookie"] = "sess=1; Path=/"
             return self.send(200, head, page(m.group(1), PAGES[m.group(1)]).encode())
+        if p == "/sw.js":
+            js = ("self.addEventListener('install',e=>self.skipWaiting());"
+                  "self.addEventListener('activate',e=>e.waitUntil(clients.claim()));"
+                  "self.addEventListener('fetch',e=>{if(new URL(e.request.url).pathname==='/sw/clip.mp4')"
+                  "e.respondWith(fetch('/f/clip.mp4'))});")
+            return self.send(200, {"Content-Type": "text/javascript"}, js.encode())
+        if p.startswith("/cache/"):
+            # a response the HTTP cache may serve again: a reload needs no network
+            return self.file(p[7:], cache="max-age=3600")
         if p.startswith("/f/"):
             return self.file(p[3:])
         if p.startswith("/nolen/"):

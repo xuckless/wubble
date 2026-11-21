@@ -29,9 +29,31 @@
     return r.width > 1 && r.height > 1 && r.bottom > 0 && r.right > 0 &&
       r.top < innerHeight && r.left < innerWidth ? r.width * r.height : 0;
   }
+  // The page's videos: the document's own, and when it has none on screen, those inside open
+  // shadow roots (web-component players: a `querySelectorAll` does not reach into them).
+  function shadowVideos(root, out) {
+    for (const el of root.querySelectorAll("*")) {
+      const sr = el.shadowRoot;
+      if (!sr) continue;
+      out.push(...sr.querySelectorAll("video"));
+      shadowVideos(sr, out);
+    }
+    return out;
+  }
+  // The walk costs a pass over the DOM: at most once a second, the list kept between.
+  let shadowList = [], shadowAt = -1e9;
   function primary() {
+    let best = pick(document.querySelectorAll("video"));
+    if (!best) {
+      const now = performance.now();
+      if (now - shadowAt > 1000) { shadowList = shadowVideos(document, []); shadowAt = now; }
+      best = pick(shadowList);
+    }
+    return best;
+  }
+  function pick(list) {
     let best = null, bestScore = 0;
-    for (const v of document.querySelectorAll("video")) {
+    for (const v of list) {
       const area = visible(v);
       if (!area) continue;
       const score = area * (v.paused ? 1 : 4);
