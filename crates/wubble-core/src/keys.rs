@@ -623,9 +623,9 @@ pub fn clear_binding(overrides: &[Override], platform: Platform, action: Action)
     next
 }
 
-/// The overrides without the user's changes to `action`: it runs on its default chords again
-/// (reclaiming any default stolen by another action, and without resurrecting another rebound
-/// action's old default).
+/// The overrides without the user's changes to `action`: it runs on its default chords again,
+/// unless another action was bound to one of them since (that one keeps it); a chord `action`
+/// had taken from another rebound action stays unbound, not that action's old default again.
 pub fn reset_binding(overrides: &[Override], platform: Platform, action: Action) -> Vec<Override> {
     let defaults: Vec<Chord> = default_rows(platform)
         .filter(|(_, a, _)| *a == action)
@@ -633,7 +633,9 @@ pub fn reset_binding(overrides: &[Override], platform: Platform, action: Action)
         .collect();
     let mut next: Vec<Override> = overrides
         .iter()
-        .filter(|o| o.action != Some(action) && !defaults.contains(&o.chord))
+        .filter(|o| {
+            o.action != Some(action) && !(o.action.is_none() && defaults.contains(&o.chord))
+        })
         .copied()
         .collect();
     let base = Keymap::defaults(platform).with_overrides(&next);
@@ -1207,15 +1209,22 @@ mod tests {
     }
 
     #[test]
-    fn reset_binding_reclaims_stolen_default_and_does_not_resurrect_rebound_default() {
+    fn reset_binding_keeps_a_default_taken_since_and_does_not_resurrect_rebound_default() {
         let p = Platform::Linux;
-        // Scenario 1: B steals A's default; resetting A must reclaim A's default.
+        // Scenario 1: B was bound to A's default since; resetting A leaves it with B, and A
+        // runs on its other defaults.
         let (ov, prev) = set_binding(&[], p, Action::Find, ch("Ctrl+W"));
         assert_eq!(prev, Some(Action::CloseTab));
         let ov = reset_binding(&ov, p, Action::CloseTab);
         let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::Find);
+        assert_eq!(km.action_for(ch("Ctrl+F4")).unwrap().0, Action::CloseTab);
+        // A default only unbound (A moved off it) comes back.
+        let (ov, _) = set_binding(&[], p, Action::CloseTab, ch("Ctrl+Alt+K"));
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        assert!(ov.is_empty());
+        let km = Keymap::defaults(p).with_overrides(&ov);
         assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
-        assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+W")));
 
         // Scenario 2: B is rebound to Ctrl+B, then A takes B's old default Ctrl+F.
         // Resetting A must NOT resurrect Ctrl+F on B.
