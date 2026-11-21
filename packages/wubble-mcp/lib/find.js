@@ -12,11 +12,12 @@
 
 const path = require("node:path");
 
-/// Where hosting browsers write their manifests (wubble's `mcp::manifest_dir`): private to the
-/// user. `$XDG_RUNTIME_DIR`, else `$XDG_STATE_HOME` or `~/.local/state`; on macOS
-/// `~/Library/Caches`; on Windows `%LOCALAPPDATA%`. Never the shared temp directory. null when
-/// none is known.
-function manifestDir(env, platform, home) {
+/// Where hosting browsers write their manifests (wubble's `mcp::manifest_dir`, in
+/// `instance::private_root`): private to the user. `$XDG_RUNTIME_DIR`; else on macOS the
+/// per-user temp directory (`$TMPDIR`, 0700); else `$XDG_STATE_HOME` or `~/.local/state`; on
+/// Windows `%LOCALAPPDATA%`. With none of them known, the temp directory (the reader trusts only
+/// a directory of this user's own there: `privateToMe`); null when even that is not absolute.
+function manifestDir(env, platform, home, tmp) {
   const abs = (p) => (typeof p === "string" && path.isAbsolute(p) ? p : null);
   let root;
   if (platform === "win32") {
@@ -24,10 +25,11 @@ function manifestDir(env, platform, home) {
   } else if (abs(env.XDG_RUNTIME_DIR)) {
     root = env.XDG_RUNTIME_DIR;
   } else if (platform === "darwin") {
-    root = abs(home) && path.join(home, "Library/Caches");
+    root = null;
   } else {
     root = abs(env.XDG_STATE_HOME) || (abs(home) && path.join(home, ".local/state"));
   }
+  root = root || abs(tmp);
   return root ? path.join(root, "wubble", "mcp") : null;
 }
 

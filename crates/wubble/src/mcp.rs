@@ -286,33 +286,20 @@ fn serve(
     deliver(Event::Gone(conn));
 }
 
-/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`): private
-/// to the user. `$XDG_RUNTIME_DIR` (per login, cleared at logout); without one the user's own
-/// state directory (`$XDG_STATE_HOME`, `~/.local/state`), on macOS `~/Library/Caches`, on Windows
-/// `%LOCALAPPDATA%`: never the shared temp root, where another user could plant one. `None` when
-/// none of them is known (nothing is written or read then).
-pub fn manifest_dir() -> Option<std::path::PathBuf> {
-    let abs = |key: &str| {
-        std::env::var_os(key)
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_absolute())
-    };
-    let root = if cfg!(windows) {
-        abs("LOCALAPPDATA")
-    } else if let Some(runtime) = abs("XDG_RUNTIME_DIR") {
-        Some(runtime)
-    } else if cfg!(target_os = "macos") {
-        abs("HOME").map(|h| h.join("Library/Caches"))
-    } else {
-        abs("XDG_STATE_HOME").or_else(|| abs("HOME").map(|h| h.join(".local/state")))
-    };
-    root.map(|r| manifest::DIR.iter().fold(r, |d, p| d.join(p)))
+/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`), in the
+/// user's private root (`instance::private_root`). The shared temp root is its last resort only
+/// (no `HOME`): there the readers' check that it is the user's own and private
+/// (`private_to_me`) keeps another user's planted one out.
+pub fn manifest_dir() -> std::path::PathBuf {
+    manifest::DIR
+        .iter()
+        .fold(crate::instance::private_root(), |d, p| d.join(p))
 }
 
 /// The manifest of the browser on `profile`.
-pub fn manifest_path(profile: &Path) -> Option<std::path::PathBuf> {
+pub fn manifest_path(profile: &Path) -> std::path::PathBuf {
     let hash = crate::instance::fnv1a(profile.as_os_str().as_encoded_bytes());
-    Some(manifest_dir()?.join(format!("{hash:016x}.json")))
+    manifest_dir().join(format!("{hash:016x}.json"))
 }
 
 /// What a path must be for the relay to trust it.
@@ -384,9 +371,10 @@ pub fn write_manifest(path: &Path, m: &Manifest) -> io::Result<()> {
 /// (`instance::probe`: refused or not found) is removed; one that could not be checked is only
 /// skipped.
 pub fn hosting_browsers() -> Vec<Manifest> {
-    let Some(dir) = manifest_dir().filter(|d| private_to_me(d, Kind::Dir)) else {
+    let dir = manifest_dir();
+    if !private_to_me(&dir, Kind::Dir) {
         return vec![];
-    };
+    }
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };

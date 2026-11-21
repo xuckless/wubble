@@ -88,7 +88,7 @@ pub fn socket_path(profile: &Path, runtime: &Path) -> PathBuf {
 }
 
 /// Where `socket` of `profile` lives: in it when the path is short enough, else a name hashed
-/// from it in `runtime` (`$XDG_RUNTIME_DIR`, else the temp directory). On Windows a named pipe
+/// from it in `runtime` ([`runtime_dir`]). On Windows a named pipe
 /// ([`pipe_of`]): interprocess takes only `\\.\pipe\` paths there.
 #[cfg(windows)]
 pub fn path_of(socket: Socket, profile: &Path, _runtime: &Path) -> PathBuf {
@@ -130,28 +130,47 @@ pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// The directory for a hashed socket name: private to the user (`$XDG_RUNTIME_DIR`, else
-/// `$XDG_STATE_HOME` or `$HOME/.local/state`, on macOS `~/Library/Caches`, on Windows
-/// `%LOCALAPPDATA%`), never the shared temp directory.
+/// The user's private directory for hashed socket names and the MCP manifests
+/// ([`private_root`]), made (0700) when it is missing.
 pub fn runtime_dir() -> PathBuf {
-    runtime_dir_from(|key| std::env::var_os(key).map(PathBuf::from))
+    let dir = private_root();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        if let Err(e) = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+        {
+            eprintln!("wubble: {}: {e}", dir.display());
+        }
+    }
+    dir
 }
 
-fn runtime_dir_from(env: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
+/// The user's private root: `$XDG_RUNTIME_DIR` (per login, cleared at logout); else on macOS
+/// the per-user temp directory (`$TMPDIR`, 0700: where earlier versions bound, so an older
+/// running browser and a newer start still meet); else `$XDG_STATE_HOME` or `~/.local/state`;
+/// on Windows `%LOCALAPPDATA%`. Never a relative path: with none of them known, the temp
+/// directory, as before.
+pub fn private_root() -> PathBuf {
+    private_root_from(
+        std::env::consts::OS,
+        |key| std::env::var_os(key).map(PathBuf::from),
+        std::env::temp_dir(),
+    )
+}
+
+fn private_root_from(os: &str, env: impl Fn(&str) -> Option<PathBuf>, temp: PathBuf) -> PathBuf {
     let abs = |key: &str| env(key).filter(|p| p.is_absolute());
-    if cfg!(windows) {
-        abs("LOCALAPPDATA").unwrap_or_else(|| PathBuf::from("."))
-    } else if let Some(runtime) = abs("XDG_RUNTIME_DIR") {
-        runtime
-    } else if cfg!(target_os = "macos") {
-        abs("HOME")
-            .map(|h| h.join("Library/Caches"))
-            .unwrap_or_else(|| PathBuf::from("."))
-    } else {
-        abs("XDG_STATE_HOME")
-            .or_else(|| abs("HOME").map(|h| h.join(".local/state")))
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
+    let root = match os {
+        "windows" => abs("LOCALAPPDATA"),
+        _ if abs("XDG_RUNTIME_DIR").is_some() => abs("XDG_RUNTIME_DIR"),
+        "macos" => None,
+        _ => abs("XDG_STATE_HOME").or_else(|| abs("HOME").map(|h| h.join(".local/state"))),
+    };
+    root.or_else(|| Some(temp).filter(|t| t.is_absolute()))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
 /// How the start went.
@@ -439,47 +458,48 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dir_never_falls_back_to_tmp() {
-        let tmp = std::env::temp_dir();
-        let none = runtime_dir_from(|_| None);
-        assert_ne!(none, tmp);
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            assert_eq!(
-                runtime_dir_from(|k| match k {
-                    "XDG_RUNTIME_DIR" => Some(PathBuf::from("/run/user/1000")),
-                    "XDG_STATE_HOME" => Some(PathBuf::from("/home/u/.state")),
-                    "HOME" => Some(PathBuf::from("/home/u")),
-                    _ => None,
-                }),
-                PathBuf::from("/run/user/1000")
-            );
-            assert_eq!(
-                runtime_dir_from(|k| match k {
-                    "XDG_STATE_HOME" => Some(PathBuf::from("/home/u/.state")),
-                    "HOME" => Some(PathBuf::from("/home/u")),
-                    _ => None,
-                }),
-                PathBuf::from("/home/u/.state")
-            );
-            assert_eq!(
-                runtime_dir_from(|k| match k {
-                    "HOME" => Some(PathBuf::from("/home/u")),
-                    _ => None,
-                }),
-                PathBuf::from("/home/u/.local/state")
-            );
-        }
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(
-                runtime_dir_from(|k| match k {
-                    "HOME" => Some(PathBuf::from("/Users/u")),
-                    _ => None,
-                }),
-                PathBuf::from("/Users/u/Library/Caches")
-            );
-        }
+    fn the_private_root_by_platform() {
+        let tmp = || PathBuf::from("/tmp/me");
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == k)
+                    .map(|(_, v)| PathBuf::from(v))
+            }
+        };
+        let all: &[(&str, &str)] = &[
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("XDG_STATE_HOME", "/home/u/.state"),
+            ("HOME", "/home/u"),
+            ("LOCALAPPDATA", "C:\\u\\AppData\\Local"),
+        ];
+        let root = |os, pairs| private_root_from(os, env(pairs), tmp());
+        assert_eq!(root("linux", all), PathBuf::from("/run/user/1000"));
+        assert_eq!(root("macos", all), PathBuf::from("/run/user/1000"));
+        assert_eq!(
+            root(
+                "linux",
+                &[("XDG_STATE_HOME", "/home/u/.state"), ("HOME", "/home/u")]
+            ),
+            PathBuf::from("/home/u/.state")
+        );
+        assert_eq!(
+            root("linux", &[("HOME", "/home/u")]),
+            PathBuf::from("/home/u/.local/state")
+        );
+        // macOS keeps the per-user $TMPDIR earlier versions bound in
+        assert_eq!(root("macos", &[("HOME", "/Users/u")]), tmp());
+        // nothing known, or only relative paths: the temp directory, never a relative path
+        assert_eq!(root("linux", &[]), tmp());
+        assert_eq!(
+            root("linux", &[("XDG_RUNTIME_DIR", "run"), ("HOME", "home")]),
+            tmp()
+        );
+        assert_eq!(
+            private_root_from("linux", |_| None, PathBuf::from("rel")),
+            PathBuf::from("/tmp")
+        );
     }
 
     #[cfg(unix)]
