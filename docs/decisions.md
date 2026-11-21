@@ -214,6 +214,10 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Media joining | One track renamed into place; video plus audio joined by the system `ffmpeg` if found, else two files. | 2026-11-18 |
 | Media DRM | Protected streams are never fetched or decrypted ("Protected, cannot be saved"); plain HLS AES-128 is decrypted. | 2026-11-18 |
 | YouTube formats | Innertube's player API as yt-dlp's `android_vr` client, a request of wubble's own behind `media.youtube` (off). | 2026-11-18 |
+| Media session | A media download fetches in its tab's container, never another's: with the tab closed or asleep it uses a live page of the same container, else it stops with "the page it came from is closed" and resumes once one is open. | 2026-11-21 |
+| Media choices | A manifest without resolutions is judged by bit rate (a rough H.264 ladder); the container (TS or MP4) comes from a variant playlist, not a guess; rows that read alike get codec, bit rate or name; without `ffmpeg` a separate video and audio is said to be two files and a stream with its sound inside is preferred by default. | 2026-11-21 |
+| YouTube offers | A watch page always says why it offers nothing: lookup off (no request; a row opens Settings), or the lookup's own refusal (YouTube's bot check is shown, never worked around). | 2026-11-21 |
+| Media probe | `--smoke media=probe` and `scripts/media-fixtures.py` are hand tools (they use the clock and the network): nothing in `cargo test` or CI runs them. | 2026-11-21 |
 | Video controls | One overlay per page over the main video, fed by the page kit's snapshot; speed remembered per site. | 2026-11-19 |
 | Picture-in-picture | wubble's own Pip model window showing the tab's element-fullscreen video (no crop); closing it pauses the video. | 2026-11-19 |
 | Media keys | MPRIS, Now Playing and SMTC through `souvlaki`, acting on the audible tab, else Pip, else the visible one. | 2026-11-18 |
