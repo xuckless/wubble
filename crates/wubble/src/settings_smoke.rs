@@ -678,6 +678,8 @@ mod tests {
             let mut page = Page {
                 seen: Seen {
                     still: true,
+                    sidebar_row: "extended".into(),
+                    sidebar_shell: "extended".into(),
                     ..Seen::default()
                 },
                 row: 0,
@@ -755,7 +757,23 @@ mod tests {
                     pick(id, s);
                 }
                 Do::ScrollTop => s.select_found = true,
-                Do::Shoot(_) | Do::Goto(_) | Do::ToggleSidebar | Do::SidebarTab(_) => {}
+                Do::Shoot(_) | Do::Goto(_) => {}
+                // the Sidebar row follows the shell
+                Do::ToggleSidebar => {
+                    let mode = if s.sidebar_shell == "hidden" {
+                        "extended"
+                    } else {
+                        "hidden"
+                    };
+                    s.sidebar_shell = mode.into();
+                    s.sidebar_row = mode.into();
+                }
+                Do::SidebarTab(label) => {
+                    let mode = label.to_lowercase();
+                    s.sidebar_stored.clone_from(&mode);
+                    s.sidebar_shell.clone_from(&mode);
+                    s.sidebar_row = mode;
+                }
                 Do::PressOutside => s.select_open = false,
                 Do::Press(Keys::Escape) if self.capture != keys::Capture::Idle => {
                     self.record(keys::CaptureEvent::Cancel)
