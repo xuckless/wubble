@@ -723,9 +723,16 @@ mod tests {
         fn record(&mut self, event: keys::CaptureEvent) {
             let (state, bind) = keys::capture(self.capture, event, &self.keymap());
             self.capture = state;
-            if let Some((action, chord)) = bind {
-                self.overrides =
-                    keys::set_binding(&self.overrides, keys::Platform::Linux, action, chord).0;
+            match bind {
+                Some((action, Some(chord))) => {
+                    self.overrides =
+                        keys::set_binding(&self.overrides, keys::Platform::Linux, action, chord).0;
+                }
+                Some((action, None)) => {
+                    self.overrides =
+                        keys::clear_binding(&self.overrides, keys::Platform::Linux, action);
+                }
+                None => {}
             }
         }
 

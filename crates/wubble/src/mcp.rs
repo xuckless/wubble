@@ -88,31 +88,44 @@ pub fn bind(path: &Path) -> io::Result<Listener> {
 }
 
 /// Binds where a socket's mode cannot be set before `bind` (macOS: `fchmod` on a socket fails,
-/// which interprocess reports as `Unsupported`): the socket is bound inside a new directory
-/// only this user may enter, given its mode there, then renamed into place (a bound socket
-/// keeps listening under its new name). It is never reachable by another user, and the
-/// process's umask is left alone (other threads make files meanwhile).
+/// which interprocess reports as `Unsupported`): the socket is bound inside a unique `0o700`
+/// temporary directory only this user may enter, given its `0o600` mode there, then linked or
+/// renamed into place (a bound socket keeps listening under its new name). It is never reachable
+/// by another user, and the process's umask is left alone (other threads make files meanwhile).
 #[cfg(unix)]
 fn private_by_dir(path: &Path) -> io::Result<Listener> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    private_by_dir_impl(path, false)
+}
+
+#[cfg(unix)]
+pub(crate) fn private_by_dir_impl(path: &Path, exclusive: bool) -> io::Result<Listener> {
+    use std::os::unix::fs::PermissionsExt;
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
-    // short names: a socket path has a small limit, and `path` already fits it
-    let dir = parent.join(".m");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    let inside = dir.join("s");
-    let made = (|| {
-        let listener = ListenerOptions::new()
-            .name(inside.as_path().to_fs_name::<GenericFilePath>()?)
-            // the file is renamed away: nothing of this name is left to reclaim
-            .reclaim_name(false)
-            .create_sync()?;
-        std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o600))?;
+    // short unique name: a socket path has a small limit, and `path` already fits it;
+    // `tempfile::Builder::tempdir_in` creates the directory with mode 0o700 on Unix.
+    let dir = tempfile::Builder::new()
+        .prefix(".m-")
+        .rand_bytes(4)
+        .tempdir_in(parent)?;
+    let inside = dir.path().join("s");
+    let listener = ListenerOptions::new()
+        .name(inside.as_path().to_fs_name::<GenericFilePath>()?)
+        // the file is moved/linked away: nothing of this name is left to reclaim
+        .reclaim_name(false)
+        .create_sync()?;
+    std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o600))?;
+    if exclusive {
+        std::fs::hard_link(&inside, path).map_err(|e| {
+            if e.kind() == io::ErrorKind::AlreadyExists {
+                io::Error::from(io::ErrorKind::AddrInUse)
+            } else {
+                e
+            }
+        })?;
+    } else {
         std::fs::rename(&inside, path)?;
-        Ok(listener)
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    made
+    }
+    Ok(listener)
 }
 
 /// Connection ids, process-wide: a connection left from an earlier hosting run never shares
@@ -273,33 +286,20 @@ fn serve(
     deliver(Event::Gone(conn));
 }
 
-/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`): private
-/// to the user. `$XDG_RUNTIME_DIR` (per login, cleared at logout); without one the user's own
-/// state directory (`$XDG_STATE_HOME`, `~/.local/state`), on macOS `~/Library/Caches`, on Windows
-/// `%LOCALAPPDATA%`: never the shared temp root, where another user could plant one. `None` when
-/// none of them is known (nothing is written or read then).
-pub fn manifest_dir() -> Option<std::path::PathBuf> {
-    let abs = |key: &str| {
-        std::env::var_os(key)
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_absolute())
-    };
-    let root = if cfg!(windows) {
-        abs("LOCALAPPDATA")
-    } else if let Some(runtime) = abs("XDG_RUNTIME_DIR") {
-        Some(runtime)
-    } else if cfg!(target_os = "macos") {
-        abs("HOME").map(|h| h.join("Library/Caches"))
-    } else {
-        abs("XDG_STATE_HOME").or_else(|| abs("HOME").map(|h| h.join(".local/state")))
-    };
-    root.map(|r| manifest::DIR.iter().fold(r, |d, p| d.join(p)))
+/// The directory of the hosting browsers' manifests (`wubble_core::agent::manifest`), in the
+/// user's private root (`instance::private_root`). The shared temp root is its last resort only
+/// (no `HOME`): there the readers' check that it is the user's own and private
+/// (`private_to_me`) keeps another user's planted one out.
+pub fn manifest_dir() -> std::path::PathBuf {
+    manifest::DIR
+        .iter()
+        .fold(crate::instance::private_root(), |d, p| d.join(p))
 }
 
 /// The manifest of the browser on `profile`.
-pub fn manifest_path(profile: &Path) -> Option<std::path::PathBuf> {
+pub fn manifest_path(profile: &Path) -> std::path::PathBuf {
     let hash = crate::instance::fnv1a(profile.as_os_str().as_encoded_bytes());
-    Some(manifest_dir()?.join(format!("{hash:016x}.json")))
+    manifest_dir().join(format!("{hash:016x}.json"))
 }
 
 /// What a path must be for the relay to trust it.
@@ -371,9 +371,10 @@ pub fn write_manifest(path: &Path, m: &Manifest) -> io::Result<()> {
 /// (`instance::probe`: refused or not found) is removed; one that could not be checked is only
 /// skipped.
 pub fn hosting_browsers() -> Vec<Manifest> {
-    let Some(dir) = manifest_dir().filter(|d| private_to_me(d, Kind::Dir)) else {
+    let dir = manifest_dir();
+    if !private_to_me(&dir, Kind::Dir) {
         return vec![];
-    };
+    }
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return vec![];
     };
@@ -385,13 +386,22 @@ pub fn hosting_browsers() -> Vec<Manifest> {
         .filter_map(|p| {
             let m = Manifest::from_json(&std::fs::read_to_string(&p).ok()?)?;
             let socket = Path::new(&m.socket);
+            if !private_to_me(socket, Kind::Socket) {
+                #[cfg(unix)]
+                if std::fs::symlink_metadata(socket)
+                    .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+                {
+                    let _ = std::fs::remove_file(&p);
+                }
+                return None;
+            }
             match crate::instance::probe(socket) {
-                crate::instance::Probe::Live if private_to_me(socket, Kind::Socket) => Some(m),
+                crate::instance::Probe::Live => Some(m),
                 crate::instance::Probe::Dead => {
                     let _ = std::fs::remove_file(&p);
                     None
                 }
-                _ => None,
+                crate::instance::Probe::Unknown => None,
             }
         })
         .collect()
@@ -415,6 +425,10 @@ const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 /// `wubble mcp`: stdio to the socket at `path` and back, until either side ends. With no
 /// browser there, every request on stdin gets the [`NOT_RUNNING`] error.
 pub fn relay(path: &Path) -> io::Result<()> {
+    if !private_to_me(path, Kind::Socket) {
+        eprintln!("wubble mcp: {NOT_RUNNING}");
+        return answer_offline(io::stdin().lock(), io::stdout().lock());
+    }
     let stream = match Stream::connect(path.to_fs_name::<GenericFilePath>()?) {
         Ok(stream) => stream,
         Err(_) => {
@@ -486,8 +500,14 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(
-            !dir.path().join(".m").exists(),
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            [std::ffi::OsStr::new("m.sock")],
             "the directory it was made in is gone"
         );
         Stream::connect(path.as_path().to_fs_name::<GenericFilePath>().unwrap()).unwrap();

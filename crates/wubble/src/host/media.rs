@@ -1175,7 +1175,7 @@ impl Host {
                 variant,
             })
             .collect();
-        let id = self.add_download_entry(url, &output, size);
+        let id = self.add_download_entry(url, &output, size, session);
         let run = Run {
             job: Job::Resolving { paused: false },
             tab,

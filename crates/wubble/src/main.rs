@@ -1420,6 +1420,7 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
     });
     window.on_binding_record(move |id| with_host_in(win, |host| host.binding_record(&id)));
     window.on_binding_reset(move |id| with_host_in(win, |host| host.binding_reset(&id)));
+    window.on_binding_clear(move |id| with_host_in(win, |host| host.binding_clear(&id)));
     window.on_capture_confirm(move || {
         with_host_in(win, |host| host.capture_event(CaptureEvent::Confirm))
     });
@@ -1795,7 +1796,9 @@ fn run(
             autofill_port.map(dnd_smoke::home),
             Checks {
                 parity: autofill_port.map(|port| {
-                    host::ParityRun::suite("dnd", dnd_smoke::home(port), dnd_smoke::ITEMS.to_vec())
+                    let filter = std::env::var("WUBBLE_PARITY").ok();
+                    let items = parity::pick(dnd_smoke::ITEMS, filter.as_deref());
+                    host::ParityRun::suite("dnd", dnd_smoke::home(port), items)
                 }),
                 ..none
             },
@@ -2198,6 +2201,7 @@ fn run(
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
     measure::mark(measure::Stage::SessionRestored);
+    wubble_engine::app::set_quit_handler(Some(quit));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {
@@ -2263,6 +2267,7 @@ fn run(
     };
     let code = Verdict::of(mode, &outcome).print();
     drain(&mut host.engine);
+    wubble_engine::app::set_quit_handler(None);
     Ok(code)
 }
 

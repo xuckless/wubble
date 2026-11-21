@@ -415,7 +415,7 @@ impl Store {
             .conn
             .query(sql, (needle.as_str(), key.as_str()))
             .await?;
-        let mut hits: Vec<(u8, i64, i64, Bookmark)> = Vec::new();
+        let mut hits: Vec<(u8, std::cmp::Reverse<i64>, i64, Bookmark)> = Vec::new();
         while let Some(r) = rows.next().await? {
             let title: String = r.get(0)?;
             let url: String = r.get(1)?;
@@ -435,7 +435,12 @@ impl Store {
             } else {
                 2
             };
-            hits.push((tier, -r.get::<i64>(2)?, r.get(3)?, Bookmark { url, title }));
+            hits.push((
+                tier,
+                std::cmp::Reverse(r.get::<i64>(2)?),
+                r.get(3)?,
+                Bookmark { url, title },
+            ));
         }
         hits.sort_by_key(|(tier, newest, id, _)| (*tier, *newest, *id));
         let mut seen = HashSet::new();

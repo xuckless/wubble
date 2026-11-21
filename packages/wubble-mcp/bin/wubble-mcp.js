@@ -47,7 +47,7 @@ function lstat(p) {
 /// are this user's own and private.
 function readManifests() {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const dir = find.manifestDir(process.env, process.platform, os.homedir());
+  const dir = find.manifestDir(process.env, process.platform, os.homedir(), os.tmpdir());
   if (!dir || !find.privateToMe(lstat(dir), "dir", uid)) return [];
   let names = [];
   try {

@@ -17,6 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::space::ContainerId;
+
 /// A name used when the page suggests nothing usable.
 pub const FALLBACK_NAME: &str = "download";
 
@@ -254,6 +256,8 @@ pub struct DownloadEntry {
     pub state: DownloadState,
     /// Unix ms.
     pub started_ms: i64,
+    /// The container whose cookies started this download.
+    pub container: ContainerId,
 }
 
 impl DownloadEntry {
@@ -567,6 +571,7 @@ mod tests {
             total: None,
             state,
             started_ms: 0,
+            container: ContainerId::DEFAULT,
         }
     }
 

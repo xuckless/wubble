@@ -75,6 +75,7 @@ fn task(pid: i32, memory: &str) -> TaskItem {
         cpu: Default::default(),
         busy: Default::default(),
         never_sleep: false,
+        can_sleep: false,
         can_discard: false,
         can_end: true,
     }

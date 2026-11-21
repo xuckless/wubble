@@ -1147,6 +1147,7 @@ mod tests {
             total,
             state,
             started_ms: 0,
+            container: crate::space::ContainerId::DEFAULT,
         }
     }
 

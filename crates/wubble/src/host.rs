@@ -932,13 +932,31 @@ impl Host {
         if persist::changes_session(&command) {
             self.save = self.save.changed();
         }
-        if let Command::CloseTab(tab) = command {
-            self.remember_closed(tab);
-        }
+        let pre_close = matches!(
+            command,
+            Command::CloseTab(_)
+                | Command::CloseTabs(_)
+                | Command::CloseOthers(_)
+                | Command::DeleteSpace(_)
+                | Command::CloseWindow(_)
+                | Command::CloseGlance(_)
+        )
+        .then(|| {
+            self.model
+                .tabs
+                .keys()
+                .copied()
+                .map(|tab| (tab, self.closed_tab_entry(tab, &command)))
+                .collect::<Vec<_>>()
+        });
         if matches!(
             command,
             Command::ActivateTab(_)
                 | Command::CloseTab(_)
+                | Command::CloseTabs(_)
+                | Command::CloseOthers(_)
+                | Command::DeleteSpace(_)
+                | Command::CloseGlance(_)
                 | Command::SwitchSpace(_)
                 | Command::MoveTab { .. }
         ) {
@@ -954,9 +972,17 @@ impl Host {
             self.pending.extend(effects);
             queue.extend(self.flush());
         }
+        if let Some(before) = pre_close {
+            for (tab, closed) in before {
+                if !self.model.tabs.contains_key(&tab) {
+                    self.finish_closed(tab, closed);
+                }
+            }
+        }
         // Surfaces outlive a sleeping tab's view, not the tab.
         let tabs = &self.model.tabs;
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
+        self.committed.retain(|tab, _| tabs.contains_key(tab));
         self.held_popups.retain(|tab, _| tabs.contains_key(tab));
         self.preview.forget_except(|tab| tabs.contains_key(tab));
         // a tab moved into or out of a session's Space: its navigation rule follows the model
@@ -1239,7 +1265,9 @@ impl Host {
         {
             return;
         }
-        if let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone()) {
+        if !self.agent_drives(tab)
+            && let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone())
+        {
             self.store.put_favicon(&url, &icon, now_ms());
         }
         self.favicons.insert(
@@ -1300,16 +1328,6 @@ impl Host {
             return self.popup_view();
         }
         self.tab_view(self.key_page()?)
-    }
-
-    /// The visible tab's view, else any live tab's: for work that needs a view but none in
-    /// particular (a retried download started from an internal page).
-    fn any_view(&mut self) -> Option<&mut View> {
-        let tab = self
-            .shown()
-            .filter(|t| self.views.contains_key(t))
-            .or_else(|| self.views.keys().next().copied())?;
-        self.tab_view(tab)
     }
 
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
@@ -1647,7 +1665,8 @@ impl Host {
             }
             WebEvent::TitleChanged(title) => {
                 self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
-                if let Some(url) = self.committed.get(&tab)
+                if !self.agent_drives(tab)
+                    && let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {
                     self.store.update_title(url, &title);
@@ -2233,34 +2252,35 @@ impl Host {
 
     // ----- persistence
 
-    /// Called before a tab closes: it goes on the recently-closed list.
-    fn remember_closed(&mut self, tab: TabId) {
-        self.media_tab_closed(tab);
-        self.committed.remove(&tab);
-        self.typed_nav.ended(tab);
-        if self.archiving.contains_key(&tab) {
-            return; // filed in the Archive instead
+    /// Snapshot of a tab for the recently-closed list, taken before the model drops it.
+    /// `command` is about to run. None for a tab filed in the Archive, one an agent session
+    /// drives, and what `Model::closes_into_recent` leaves out (a peek's, an agent Space's being
+    /// deleted, an empty one).
+    fn closed_tab_entry(&self, tab: TabId, command: &Command) -> Option<ClosedTab> {
+        if self.archiving.contains_key(&tab)
+            || self.agent_drives(tab)
+            || !self.model.closes_into_recent(tab, command)
+        {
+            return None;
         }
-        // an agent session's tab is none of the user's, nor is one of an agent Space the owner
-        // clears with its dustbin, kept or not (as the session's own teardown)
-        let cleared = self.model.location(tab).map(|(sp, _)| sp) == self.agents.clearing
-            && self.agents.clearing.is_some();
-        if self.agent_drives(tab) || cleared {
-            return;
-        }
-        let Some(t) = self.model.tabs.get(&tab) else {
-            return;
-        };
-        if t.url.is_empty() {
-            return;
-        }
-        self.store.push_closed(ClosedTab {
+        let t = self.model.tabs.get(&tab)?;
+        Some(ClosedTab {
             url: t.url.clone(),
             title: t.title.clone(),
             container: t.container,
             space: self.model.location(tab).map(|(space, _)| space),
             closed_at_ms: now_ms(),
-        });
+        })
+    }
+
+    /// Cleans up per-tab host state for a tab the model removed and records it if eligible.
+    fn finish_closed(&mut self, tab: TabId, closed: Option<ClosedTab>) {
+        self.media_tab_closed(tab);
+        self.committed.remove(&tab);
+        self.typed_nav.ended(tab);
+        if let Some(entry) = closed {
+            self.store.push_closed(entry);
+        }
     }
 
     /// The engine committed `url` in `tab`: a history visit unless it only
@@ -3423,7 +3443,8 @@ impl Host {
             return EventResult::Propagate;
         }
         // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
-        // a menu): wubble_core::overlay.
+        // a menu), but the page's Esc never answers a notice or a permission prompt:
+        // wubble_core::overlay.
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
             && key.modifiers.keys.is_empty()

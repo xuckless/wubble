@@ -1,10 +1,10 @@
 //! Links to schemes the browser cannot load (`mailto:`, `tel:`, `magnet:`, an app's own scheme):
 //! whether one is opened in the app the OS has for it, asked about first, or refused.
 //!
-//! Chromium's behaviour (`ExternalProtocolHandler::LaunchUrl` and its dialog, BSD-3-Clause; no
-//! code copied): a link opens another app only after a user gesture, the user is asked "Open
-//! <app>?" unless they ticked "Always allow <site> to open links of this type", and that choice
-//! is kept per site and scheme (`protocol_handler.allowed_origin_protocol_pairs`). wubble keeps
+//! Chromium's behaviour (`ExternalProtocolHandler::LaunchUrl` and its dialog, BSD-3-Clause; only
+//! its denied-scheme list is copied, [`DENIED_SCHEMES`]): a link opens another app only after a
+//! user gesture, the user is asked "Open <app>?" unless they ticked "Always allow <site> to open
+//! links of this type", and that choice is kept per site and scheme (`protocol_handler.allowed_origin_protocol_pairs`). wubble keeps
 //! it in the site permission table as [`Permission::ExternalLinks`] under the origin [`key`]
 //! makes, so there is one owner of per-site decisions.
 
@@ -49,11 +49,58 @@ pub fn key_for(url: &str, page: &str) -> Option<String> {
     Some(key(&scheme(url)?, &site::origin_of(page)?))
 }
 
+/// Schemes never handed to the OS even with a user gesture or a remembered decision: Chromium's
+/// `kDeniedSchemes`, copied from `chrome/browser/external_protocol/external_protocol_handler.cc`
+/// (Chromium 156.0.8078.96, BSD-3-Clause; THIRD_PARTY_NOTICES.md).
+const DENIED_SCHEMES: &[&str] = &[
+    "afp",
+    "applescript",
+    "data",
+    "disk",
+    "disks",
+    "file",
+    "hcp",
+    "ie.http",
+    "javascript",
+    "mk",
+    "ms-help",
+    "nntp",
+    "res",
+    "shell",
+    "vbscript",
+    "view-source",
+    "vnd.ms.radio",
+];
+
+/// wubble's own, on Windows only: schemes whose handler there runs or fetches files from another
+/// machine (the Follina `ms-msdt:` and `search-ms:` attacks, WebDAV and SMB shares that the shell
+/// opens and may run from). On Linux and macOS `smb:` and `dav:` open a network share in the
+/// file manager, as asked.
+const DENIED_ON_WINDOWS: &[&str] = &["search-ms", "ms-msdt", "smb", "dav"];
+
+/// Chromium's prefix for schemes an app declares only local programs may open
+/// (`kLocalOnlySchemePrefix`, same file).
+const LOCAL_ONLY_PREFIX: &str = "local+";
+
+/// Whether `scheme` (lowercase) is never opened from a page, as Chromium's
+/// `ExternalProtocolHandler::GetBlockState` rules it: a one-letter scheme (`C:/...`, a Windows
+/// path the shell would run), a denied scheme, a local-only one; `windows` adds
+/// [`DENIED_ON_WINDOWS`].
+fn denied(scheme: &str, windows: bool) -> bool {
+    scheme.len() == 1
+        || DENIED_SCHEMES.contains(&scheme)
+        || scheme.starts_with(LOCAL_ONLY_PREFIX)
+        || (windows && DENIED_ON_WINDOWS.contains(&scheme))
+}
+
 /// What a link to `url` from the page `page` gets. A link the page opened without a user
 /// gesture never opens another app (Chromium blocks it too); otherwise a remembered choice for
 /// the site and scheme applies, and the rest is asked.
 pub fn decide(url: &str, page: &str, gesture: bool, table: &SitePermissions) -> Verdict {
-    if !gesture || scheme(url).is_none() {
+    let Some(scheme) = scheme(url) else {
+        return Verdict::Block;
+    };
+    if !gesture || denied(&scheme, cfg!(windows)) {
         return Verdict::Block;
     }
     let remembered = key_for(url, page).and_then(|k| table.get(&k, Permission::ExternalLinks));
@@ -138,5 +185,46 @@ mod tests {
             "opaque pages ask"
         );
         assert_eq!(decide("nonsense", PAGE, true, &t), Verdict::Block);
+    }
+
+    #[test]
+    fn dangerous_schemes_are_always_blocked() {
+        let mut t = SitePermissions::default();
+        for url in [
+            "shell:desktop",
+            "vbscript:msgbox(1)",
+            "VBScript:msgbox(1)",
+            "applescript://com.apple.scripteditor?action=new",
+            "afp://host/share",
+            "disk:x",
+            "ms-help:x",
+            "c:/windows/system32/notepad.exe",
+            "local+myapp:x",
+        ] {
+            if let Some(k) = key_for(url, PAGE) {
+                t.set(&k, Permission::ExternalLinks, Decision::Allow);
+            }
+            assert_eq!(
+                decide(url, PAGE, true, &t),
+                Verdict::Block,
+                "{url} must be blocked even with gesture and remembered Allow"
+            );
+        }
+    }
+
+    #[test]
+    fn network_shares_are_refused_on_windows_only() {
+        for scheme in ["smb", "dav", "search-ms", "ms-msdt"] {
+            assert!(denied(scheme, true), "{scheme} on Windows");
+        }
+        for scheme in ["smb", "dav"] {
+            assert!(
+                !denied(scheme, false),
+                "{scheme} opens a share on Linux and macOS"
+            );
+        }
+        for scheme in ["mailto", "tel", "magnet", "zoommtg", "web+app"] {
+            assert!(!denied(scheme, true) && !denied(scheme, false), "{scheme}");
+        }
     }
 }

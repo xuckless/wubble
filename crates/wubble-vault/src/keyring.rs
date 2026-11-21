@@ -150,7 +150,25 @@ impl KeyRing for FileKeyRing {
                 format!("{s} {a} {hex}\n")
             })
             .collect();
-        std::fs::write(&self.path, text).map_err(|e| KeyRingError(e.to_string()))
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&self.path)
+            .map_err(|e| KeyRingError(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| KeyRingError(e.to_string()))?;
+        }
+        file.write_all(text.as_bytes())
+            .map_err(|e| KeyRingError(e.to_string()))
     }
 }
 
@@ -218,5 +236,17 @@ mod tests {
         assert!(broken.get("wubble", "vault-p").is_err());
         assert!(broken.set("wubble", "vault-p", &[1]).is_err());
         assert_eq!(&**b.get("wubble", "vault-p").unwrap().unwrap(), &[3]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_keyring_writes_with_0600_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keyring");
+        let ring = FileKeyRing::new(&path, false);
+        ring.set("wubble", "vault-p", &[1, 2, 3]).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

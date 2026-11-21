@@ -6,10 +6,12 @@
 use std::path::PathBuf;
 
 use wubble_core::download::{DownloadEntry, DownloadState};
+use wubble_core::space::ContainerId;
 
 use crate::*;
 
-const COLUMNS: &str = "id, url, name, path, total, received, state, error, started_at";
+const COLUMNS: &str =
+    "id, url, name, path, total, received, state, error, started_at, container_id";
 
 fn read(r: &turso::Row) -> Result<DownloadEntry> {
     let state: String = r.get(6)?;
@@ -26,6 +28,7 @@ fn read(r: &turso::Row) -> Result<DownloadEntry> {
         state: DownloadState::parse(&state, error)
             .ok_or_else(|| Error::Corrupt(format!("download state {state:?}")))?,
         started_ms: r.get(8)?,
+        container: ContainerId(narrow(r.get(9)?, "download container")?),
     })
 }
 
@@ -41,7 +44,9 @@ impl Store {
         tx.execute("DELETE FROM downloads WHERE id = ?1", (entry.id,))
             .await?;
         tx.execute(
-            format!("INSERT INTO downloads({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"),
+            format!(
+                "INSERT INTO downloads({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            ),
             (
                 entry.id,
                 entry.url.as_str(),
@@ -52,6 +57,7 @@ impl Store {
                 entry.state.as_str(),
                 entry.state.error(),
                 entry.started_ms,
+                i64::from(entry.container.0),
             ),
         )
         .await?;
@@ -123,6 +129,7 @@ mod tests {
             total: (id % 2 == 0).then_some(100),
             state,
             started_ms: 1_000 + id,
+            container: ContainerId::DEFAULT,
         }
     }
 
@@ -149,6 +156,29 @@ mod tests {
             // Adding under an existing id replaces the row.
             s.add_download(&a).await.unwrap();
             assert_eq!(s.downloads(10).await.unwrap(), vec![a]);
+        });
+    }
+
+    /// A download from another container keeps it across a reopen (a retry then runs there).
+    #[test]
+    fn a_download_keeps_its_container_across_reopen() {
+        pollster::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("wubble.db");
+            let mine = DownloadEntry {
+                container: ContainerId(7),
+                ..entry(1, DownloadState::Complete)
+            };
+            let plain = entry(2, DownloadState::Complete);
+            {
+                let mut s = Store::open(&path).await.unwrap();
+                s.add_download(&mine).await.unwrap();
+                s.add_download(&plain).await.unwrap();
+            }
+            let s = Store::open(&path).await.unwrap();
+            let got = s.downloads(10).await.unwrap();
+            assert_eq!(got, vec![plain, mine]);
+            assert_eq!(got[1].container, ContainerId(7));
         });
     }
 

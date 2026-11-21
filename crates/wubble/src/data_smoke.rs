@@ -308,6 +308,7 @@ mod tests {
                 total: Some(2),
                 state: wubble_core::download::DownloadState::Running,
                 started_ms: 0,
+                container: wubble_core::space::ContainerId::DEFAULT,
             }))
             .unwrap();
         }

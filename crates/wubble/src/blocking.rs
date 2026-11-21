@@ -191,16 +191,27 @@ impl Blocking {
         let compiled = self.load_cached(settings, &sources, &paths(profile).1);
         let update = settings.lists_auto_update;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if !compiled {
+            // Counted before spawning so `is_busy()` is true at once. Requests
+            // are never held for the lists (CEF's IO thread must not wait):
+            // until they compile, requests pass (TODO.md, start-up race).
+            self.begin_rebuild();
+        }
         let this = self.clone();
         let work = move || {
             if compiled {
                 this.count_rules(&sources, generation);
             } else {
-                this.run_rebuild(generation);
+                this.rebuild(generation);
+                this.end_rebuild();
             }
             if update {
                 loop {
-                    this.update_once(fetch, Due::At(unix_now()));
+                    if !this.updating.swap(true, Ordering::SeqCst) {
+                        this.update_once(fetch, Due::At(unix_now()));
+                        this.updating.store(false, Ordering::SeqCst);
+                        this.notify();
+                    }
                     std::thread::sleep(UPDATE_CHECK);
                 }
             }
@@ -216,6 +227,9 @@ impl Blocking {
             }
             Ok(thread) => Some(thread),
             Err(e) => {
+                if !compiled {
+                    self.end_rebuild();
+                }
                 eprintln!("wubble: blocker lists not loaded: {e}");
                 None
             }
@@ -1429,5 +1443,27 @@ example.com#@#.cookie-notice
         assert!(!b.is_busy());
         let blocked = |host: &str| check(&b, &format!("https://{host}/x.js"), SITE, Script);
         assert_eq!((blocked("a.test"), blocked("b.test")), (Allow, Block));
+    }
+
+    /// A cold start is busy before its thread runs, and a request meanwhile
+    /// is answered at once (passes) instead of waiting for the lists.
+    #[test]
+    fn cold_start_is_busy_at_once_and_never_holds_a_request() {
+        let p = Profile::new("cold-start");
+        let (dir, _) = paths(&p.0);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mine.txt"), "||ads.example^\n").unwrap();
+        let b = Blocking::new();
+        let busy = b.compiling.lock().unwrap();
+        let compile = b
+            .start_with(&p.0, &only_own_lists(), no_network)
+            .expect("compiles");
+        assert!(b.is_busy());
+        // The compile is held by `busy`: this answers without it.
+        assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Allow);
+        drop(busy);
+        compile.join().unwrap();
+        assert!(!b.is_busy());
+        assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Block);
     }
 }

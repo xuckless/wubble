@@ -18,14 +18,17 @@ const manifest = (profile, defaultProfile, pid = 7) =>
     protocolVersions: ["2026-07-28", "2025-11-25"],
   });
 
-test("the manifests are where wubble writes them, never the shared temp directory", () => {
-  const dir = (env, platform) => find.manifestDir(env, platform, "/home/u");
+test("the manifests are where wubble writes them", () => {
+  const dir = (env, platform) => find.manifestDir(env, platform, "/home/u", "/tmp/me");
   assert.equal(dir({ XDG_RUNTIME_DIR: "/run/user/1" }, "linux"), "/run/user/1/wubble/mcp");
   assert.equal(dir({}, "linux"), "/home/u/.local/state/wubble/mcp");
   assert.equal(dir({ XDG_STATE_HOME: "/s" }, "linux"), "/s/wubble/mcp");
-  assert.equal(dir({}, "darwin"), "/home/u/Library/Caches/wubble/mcp");
+  // macOS: the per-user $TMPDIR, where wubble's sockets have always been
+  assert.equal(dir({}, "darwin"), "/tmp/me/wubble/mcp");
   assert.equal(dir({ XDG_RUNTIME_DIR: "relative" }, "linux"), "/home/u/.local/state/wubble/mcp");
-  assert.equal(find.manifestDir({}, "linux", ""), null);
+  // no home: the temp directory, as wubble; never a relative path
+  assert.equal(find.manifestDir({}, "linux", "", "/tmp/me"), "/tmp/me/wubble/mcp");
+  assert.equal(find.manifestDir({}, "linux", "", "rel"), null);
 });
 
 test("only this user's private manifests are trusted", () => {

@@ -201,9 +201,19 @@ pub fn lp_args(printer: &str, copies: u32, pdf: &std::path::Path) -> Vec<String>
 pub fn parse_lpstat_e(out: &str) -> Vec<String> {
     out.lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.contains(' '))
+        .filter(|l| is_valid_printer_name(l))
         .map(str::to_owned)
         .collect()
+}
+
+/// A CUPS destination name safe to pass to `lp -d`: non-empty, not option-like, and without
+/// spaces, control characters, `/` or `#`.
+fn is_valid_printer_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '/' || c == '#')
 }
 
 /// The default destination in `lpstat -d`'s answer
@@ -537,6 +547,22 @@ mod tests {
             Some("Office_Laser".into())
         );
         assert_eq!(parse_lpstat_d("no system default destination\n"), None);
+    }
+
+    #[test]
+    fn lpstat_e_rejects_unsafe_printer_names() {
+        let out = "\
+            Office_Laser\n\
+            -o\n\
+            --help\n\
+            bad/name\n\
+            bad#name\n\
+            has\tcontrol\n\
+            has\x00nul\n\
+            has\x1besc\n\
+            has space\n\
+            HP-LaserJet.local\n";
+        assert_eq!(parse_lpstat_e(out), ["Office_Laser", "HP-LaserJet.local"]);
     }
 
     fn open(printers: &[&str], default: Option<&str>) -> Sheet {
