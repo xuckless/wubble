@@ -373,8 +373,8 @@ impl SoftBody {
         let sa = self.cy.v.atan2(self.cx.v);
         let s_amt = (R * K::speed_max).min(sv * K::speed_stretch);
         let mut mean = 0.0;
-        for i in 0..RING_N {
-            mean += self.ring[i] as f64;
+        for r in self.ring {
+            mean += r as f64;
         }
         mean /= RING_N as f64;
         for i in 0..RING_N {
