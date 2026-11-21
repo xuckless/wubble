@@ -1061,24 +1061,34 @@ impl Host {
         );
     }
 
-    /// Where saved media goes: the setting's folder, else the downloads folder; created.
-    fn media_dir(&self) -> Option<PathBuf> {
+    /// Where saved media goes: the setting's folder, else the downloads folder; created, and
+    /// checked for a file to be written there (a read-only or missing folder says so now, not
+    /// after the whole video is fetched).
+    fn media_dir(&self) -> Result<PathBuf, String> {
         let dir = match self.media.settings.save_dir.as_str() {
-            "" => self.downloads.dir()?.to_path_buf(),
+            "" => self
+                .downloads
+                .dir()
+                .ok_or("there is no downloads folder")?
+                .to_path_buf(),
             dir => PathBuf::from(dir),
         };
         std::fs::create_dir_all(&dir)
-            .map_err(|e| eprintln!("wubble: {}: {e}", dir.display()))
-            .ok()?;
-        Some(dir)
+            .map_err(|e| format!("{} cannot be created ({e})", dir.display()))?;
+        let probe = dir.join(format!(".wubble-write-{}", std::process::id()));
+        std::fs::write(&probe, b"")
+            .map_err(|e| format!("{} cannot be written to ({e})", dir.display()))?;
+        let _ = std::fs::remove_file(probe);
+        Ok(dir)
     }
 
     /// A free path in the media folder for `file_name`.
-    fn media_path(&self, file_name: &str) -> Option<PathBuf> {
+    fn media_path(&self, file_name: &str) -> Result<PathBuf, String> {
         let dir = self.media_dir()?;
         download::unique_name(&dir, file_name, |p| {
             p.exists() || self.media.reserved(p) || self.downloads.reserved(p)
         })
+        .ok_or_else(|| format!("no free name for {file_name} in {}", dir.display()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1094,11 +1104,15 @@ impl Host {
         size: Option<u64>,
         url: &str,
     ) {
-        let Some(output) = self.media_path(&name::media_file_name(&title, &note, container)) else {
-            if let Some(window) = self.w.window.upgrade() {
-                self.toast(&window, "Cannot save: no folder for videos");
+        let output = match self.media_path(&name::media_file_name(&title, &note, container)) {
+            Ok(output) => output,
+            Err(why) => {
+                eprintln!("wubble: media: {why}");
+                if let Some(window) = self.w.window.upgrade() {
+                    self.toast(&window, &format!("Cannot save the video: {why}"));
+                }
+                return;
             }
-            return;
         };
         let tracks = variants
             .into_iter()
@@ -1334,7 +1348,7 @@ impl Host {
                     [("video", containers[0]), ("audio", containers[1])]
                         .iter()
                         .filter_map(|(what, c)| {
-                            self.media_path(&name::media_file_name(&title, what, *c))
+                            self.media_path(&name::media_file_name(&title, what, *c)).ok()
                         })
                         .collect()
                 } else {

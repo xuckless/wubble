@@ -797,6 +797,10 @@ impl Host {
     // ----- shell helpers
 
     pub(super) fn toast(&mut self, window: &AppWindow, text: &str) {
+        // `--smoke media=probe` (the probe's step holds its own state while it saves)
+        if std::env::var_os("WUBBLE_PROBE_SAVE").is_some() {
+            println!("probe: toast {text:?}");
+        }
         self.toast_replaced();
         self.show_toast(window, text, "", false);
     }
