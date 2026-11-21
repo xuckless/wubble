@@ -37,8 +37,7 @@ use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
 use wubble_engine::page::{EditCommand, PageEvent};
 use wubble_mcp::{
-    AgentCall, ButtonKind, Direction, DragTo, NavTarget, Offset, RequestId, ToolResult,
-    WaitCondition,
+    AgentCall, ButtonKind, CallId, Direction, DragTo, NavTarget, Offset, ToolResult, WaitCondition,
 };
 use wubble_ui::{AgentLogItem, AgentSheetView, AppWindow};
 use wubble_vault::RecordId;
@@ -60,6 +59,8 @@ const SUBMIT_GRACE: Duration = Duration::from_secs(1);
 /// Ticks a `scroll` turns the wheel in, and the time between them.
 const WHEEL_TICKS: u32 = 5;
 const WHEEL_TICK: Duration = Duration::from_millis(20);
+/// How often a call waiting on the owner reports progress.
+const BEAT: Duration = Duration::from_secs(5);
 /// How long an action that may start a navigation (a click, a key, a script) waits before it
 /// answers, so a navigation its page started and the session's sites refused is its error.
 const SETTLE: Duration = Duration::from_millis(300);
@@ -107,7 +108,7 @@ struct Session {
     /// What the client asked for, as the owner leaves it on the sheet; Allow grants its sites.
     lists: agent::Lists,
     /// The `start_session` call, answered once the token exists (or the session ended).
-    start: Option<RequestId>,
+    start: Option<CallId>,
     /// The Space and container the approval opened.
     space: Option<(SpaceId, ContainerId)>,
     /// Why the session was refused, when not the owner's word.
@@ -122,7 +123,7 @@ struct Session {
 #[derive(Clone)]
 struct Reply {
     conn: ConnId,
-    id: RequestId,
+    id: CallId,
     session: Option<SessionId>,
     tool: &'static str,
     target: Option<String>,
@@ -330,6 +331,10 @@ pub(super) struct Agents {
     pending: Vec<Pending>,
     next: u64,
     timer: slint::Timer,
+    /// Progress for the calls that wait on the owner (`start_session`, `request_more`), while
+    /// any does; and how many beats it has sent.
+    beat: slint::Timer,
+    beats: u64,
     /// The window the sheet shows in and the session it shows, while it does.
     sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
@@ -774,6 +779,7 @@ impl Host {
     /// Shows the first waiting session's sheet when the overlays let it (one modal at a time:
     /// a page's dialog or the user's sheet makes it wait; the pump asks again).
     pub(super) fn agent_sheet_pump(&mut self) {
+        self.agent_beat_arm();
         if self.agents.sheet.is_some() {
             return;
         }
@@ -1216,7 +1222,7 @@ impl Host {
 
     // ----- calls
 
-    fn agent_call(&mut self, conn: ConnId, id: RequestId, call: AgentCall) {
+    fn agent_call(&mut self, conn: ConnId, id: CallId, call: AgentCall) {
         let mut reply = Reply {
             conn,
             id,
@@ -2460,6 +2466,50 @@ impl Host {
     /// An action's answer once a navigation it started had [`SETTLE`] to be refused.
     fn agent_settle(&mut self, reply: Reply, tab: TabId, answer: String) {
         self.agent_wait(reply, Wait::Settle { tab, answer }, SETTLE);
+    }
+
+    /// The progress beat runs while a call waits on the owner's sheet, so a client that passed a
+    /// progress token sees the call is alive (Claude Code's idle timer counts them).
+    fn agent_beat_arm(&mut self) {
+        let waiting = self
+            .agents
+            .sessions
+            .values()
+            .any(|s| s.start.is_some() || s.more.is_some());
+        if !waiting {
+            self.agents.beat.stop();
+            return;
+        }
+        if !self.agents.beat.running() {
+            self.agents
+                .beat
+                .start(slint::TimerMode::Repeated, BEAT, || {
+                    with_host(Host::agent_beat)
+                });
+        }
+    }
+
+    fn agent_beat(&mut self) {
+        self.agents.beats += 1;
+        let step = self.agents.beats;
+        let mut sent = false;
+        for s in self.agents.sessions.values() {
+            let (id, what) = match (&s.start, &s.more) {
+                (Some(id), _) => (id, "waiting for the owner to approve the session"),
+                (_, Some(more)) => (&more.id, "waiting for the owner to answer"),
+                _ => continue,
+            };
+            sent = true;
+            if let (Some(note), Some(conn)) = (
+                wubble_mcp::progress(id, step, what),
+                self.agents.conns.get(&s.conn),
+            ) {
+                conn.out.send(note);
+            }
+        }
+        if !sent {
+            self.agents.beat.stop();
+        }
     }
 
     /// The grant of the session that drives `tab`.

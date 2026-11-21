@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, Listener, ListenerOptions, Stream};
 use serde_json::Value;
-use wubble_mcp::{AgentCall, Incoming, LineFramer, RequestId, RpcError, encode_line, handle_line};
+use wubble_mcp::{AgentCall, CallId, Incoming, LineFramer, Peer, RpcError, encode_line};
 
 /// One connection to the MCP socket, numbered from 1 in the order they came.
 pub type ConnId = u64;
@@ -53,7 +53,7 @@ pub enum Event {
     /// A validated `tools/call`: the host answers with `tool_response(&id, ..)` on `out`.
     Call {
         conn: ConnId,
-        id: RequestId,
+        id: CallId,
         call: AgentCall,
     },
     /// The peer closed the connection (or it broke).
@@ -127,6 +127,7 @@ fn serve(conn: ConnId, stream: Stream, deliver: &(dyn Fn(Event) + Send + Sync)) 
         client,
     });
     let mut framer = LineFramer::default();
+    let mut peer = Peer::default();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = match (&*stream).read(&mut buf) {
@@ -136,7 +137,7 @@ fn serve(conn: ConnId, stream: Stream, deliver: &(dyn Fn(Event) + Send + Sync)) 
         for line in framer.push(&buf[..n]) {
             match line {
                 Err(_) => out.send(RpcError::Parse.response(None)),
-                Ok(line) => match handle_line(&line) {
+                Ok(line) => match peer.handle(&line) {
                     Incoming::Reply(reply) => out.send(reply),
                     Incoming::Call { id, call } => deliver(Event::Call { conn, id, call }),
                     Incoming::Ignore => {}

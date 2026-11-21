@@ -19,5 +19,6 @@ pub use call::{
 };
 pub use frame::{FrameError, LineFramer, encode_line};
 pub use server::{
-    Content, Incoming, RequestId, RpcError, ToolResult, handle_line, tool_response, unavailable,
+    CallId, Content, Era, INSTRUCTIONS, Incoming, LEGACY_VERSIONS, PROTOCOL_VERSION, Peer,
+    RequestId, RpcError, ToolResult, handle_line, progress, tool_response, unavailable,
 };

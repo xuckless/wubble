@@ -115,7 +115,11 @@ fn button(a: &Args) -> ButtonKind {
 pub static TOOLS: &[Tool] = &[
     Tool {
         name: "start_session",
-        description: "Ask the user to approve an agent session in its own Space. Blocks until answered.",
+        description: "Start here. Asks the browser's owner to approve an agent session in its own \
+            Space: a sheet on their screen, so this call blocks until they answer, often for \
+            minutes (allow a long tool timeout; progress notifications come every few seconds \
+            if you pass a progressToken). Returns the session handle and the first tab's handle, \
+            which every other tool takes.",
         args: &[
             arg(
                 "purpose",

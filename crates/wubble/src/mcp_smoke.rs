@@ -298,6 +298,54 @@ fn text(result: &Value) -> String {
         .to_owned()
 }
 
+/// A client of an earlier revision (the TypeScript SDK's, 2025-11-25): `initialize`, then
+/// `notifications/initialized`, the list, a call, on its own connection.
+fn legacy(socket: &Path, c: &mut Client) -> Result<(), String> {
+    let name = socket
+        .to_fs_name::<GenericFilePath>()
+        .map_err(|e| e.to_string())?;
+    let mut old = Client {
+        stream: Stream::connect(name).map_err(|e| format!("connect: {e}"))?,
+        framer: wubble_mcp::LineFramer::default(),
+        lines: VecDeque::new(),
+        next: 0,
+        steps: 0,
+    };
+    let init = old.request(
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "an earlier client", "version": "1"}}),
+    )?;
+    if init["protocolVersion"] != "2025-11-25"
+        || init["serverInfo"]["name"] != "wubble"
+        || !init["instructions"]
+            .as_str()
+            .is_some_and(|i| i.contains("start_session"))
+    {
+        return Err(format!("initialize: {init}"));
+    }
+    old.stream
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+        .map_err(|e| e.to_string())?;
+    let l = old.request("tools/list", json!({}))?;
+    let tools = l["tools"].as_array().map_or(0, Vec::len);
+    if tools != wubble_mcp::tools::TOOLS.len() || l.get("ttlMs").is_some() {
+        return Err(format!("tools/list after initialize: {l}"));
+    }
+    let r = old.request(
+        "tools/call",
+        json!({"name": "list_tabs", "arguments": {"session": "none"}}),
+    )?;
+    if r["isError"] != true || r.get("resultType").is_some() {
+        return Err(format!("a call after initialize: {r}"));
+    }
+    c.step(
+        "initialize",
+        format!("an earlier client (2025-11-25) served its revision: {tools} tools, calls answered in its shape"),
+    );
+    Ok(())
+}
+
 /// The ref on the `read_page` line that starts with `prefix`.
 fn ref_of(page: &str, prefix: &str) -> Option<String> {
     let line = page.lines().find(|l| l.starts_with(prefix))?;
@@ -373,6 +421,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
         return Err(format!("tools/list: {tools} tools"));
     }
     c.step("tools/list", format!("{tools} tools"));
+    legacy(socket, &mut c)?;
 
     // The sheet's Deny: the host's answer to the one that asks for a secret (the sheet shows it
     // by name; no value exists to ask for).
