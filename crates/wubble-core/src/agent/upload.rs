@@ -156,6 +156,45 @@ pub fn fits(target: &Target, files: usize) -> Result<(), &'static str> {
     }
 }
 
+/// What the page's accessibility tree shows on a file input once it holds files named `names`:
+/// Chromium names one file, or counts several ("2 files").
+pub fn markers(names: &[String]) -> Vec<String> {
+    let mut markers: Vec<String> = names.iter().filter(|n| !n.is_empty()).cloned().collect();
+    if names.len() > 1 {
+        markers.push(format!("{} files", names.len()));
+    }
+    markers
+}
+
+/// How an upload's wait for the page's tree ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeWait {
+    /// The input's accessible name or value shows the files.
+    Shows,
+    /// The input has no node in the tree (hidden: `display:none`, as behind a custom button):
+    /// nothing there can show them.
+    Unshown,
+    /// The deadline came and the tree did not show them.
+    Late,
+}
+
+/// Whether an upload's wait for the page's tree ends now: `input` is the file input's
+/// accessible name and value as the tree has them (`None`: it has no node), `markers` what
+/// shows the files ([`markers`]), `late` the call's deadline passed. Any other change to the
+/// tree (focus, a sibling's text) does not end it.
+pub fn tree_wait(input: Option<(&str, &str)>, markers: &[String], late: bool) -> Option<TreeWait> {
+    let shows = |(name, value): (&str, &str)| {
+        markers
+            .iter()
+            .any(|m| name.contains(m.as_str()) || value.contains(m.as_str()))
+    };
+    match input {
+        None => Some(TreeWait::Unshown),
+        Some(item) if shows(item) => Some(TreeWait::Shows),
+        Some(_) => late.then_some(TreeWait::Late),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +283,25 @@ mod tests {
         assert_eq!(
             parse_target(&json!({"result": {"value": {"file": false}}})).map(|t| t.file),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn the_wait_ends_only_when_the_input_shows_its_files_or_at_the_deadline() {
+        let one = markers(&["resume.pdf".into()]);
+        assert_eq!(one, vec!["resume.pdf"]);
+        let chosen = Some(("Resume: No file chosen", "No file chosen"));
+        // the input unchanged (a focus update came, say): on, until the deadline says so
+        assert_eq!(tree_wait(chosen, &one, false), None);
+        assert_eq!(tree_wait(chosen, &one, true), Some(TreeWait::Late));
+        let shown = Some(("Resume: resume.pdf", "resume.pdf"));
+        assert_eq!(tree_wait(shown, &one, false), Some(TreeWait::Shows));
+        assert_eq!(tree_wait(None, &one, false), Some(TreeWait::Unshown));
+        let two = markers(&["a.pdf".into(), "b.pdf".into()]);
+        assert_eq!(two, vec!["a.pdf", "b.pdf", "2 files"]);
+        assert_eq!(
+            tree_wait(Some(("Cover", "2 files")), &two, false),
+            Some(TreeWait::Shows)
         );
     }
 }

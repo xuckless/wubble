@@ -72,11 +72,9 @@ const SETTLE: Duration = Duration::from_millis(300);
 const UPLOAD_GROUP: &str = "wubble-agent-upload";
 /// How long after the click's input fence `upload_file` waits for the page to open a file chooser.
 const UPLOAD_CHOOSER_WAIT: Duration = Duration::from_millis(1500);
-/// How long after answering a file chooser `upload_file` waits for the accessibility tree to refresh.
+/// How long after the files are in the input `upload_file` waits for the page's tree to show them.
 const UPLOAD_AX_WAIT: Duration = Duration::from_millis(1000);
 /// Minimum settle after answering a file chooser when an `AxTree` update arrived (e.g. a focus
-/// change) that does not yet show the uploaded filename(s) in the flattened tree.
-const UPLOAD_AX_SETTLE: Duration = Duration::from_millis(250);
 /// Steps a drag's pointer moves in between its press and its release.
 const DRAG_STEPS: u32 = 8;
 /// How long after a script's own `timeout_ms` the call gives up waiting for the page's answer.
@@ -455,14 +453,12 @@ enum Wait {
         tab: TabId,
         paths: Vec<PathBuf>,
     },
-    /// `upload_file`: the file chooser was answered, waiting for the accessibility tree to refresh.
+    /// `upload_file`: the files are in the input `node` (a backend node id: its id in the page's
+    /// tree), waiting for the tree to show them ([`upload::tree_wait`]).
     Uploaded {
         tab: TabId,
-        rev: u64,
-        /// Substrings that confirm the attached file(s) reached the AX tree (filename or `"N files"`).
+        node: i64,
         markers: Vec<String>,
-        /// Earliest time an unrelated `AxTree` update (e.g. focus) may finish the wait.
-        settle_at: Instant,
         answer: String,
     },
 }
@@ -752,29 +748,6 @@ fn upload_log_target(paths: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Substrings expected in the accessibility tree once Chromium reflects `paths` on a file input
-/// (the filename for one file, or `"N files"` / any filename for multiple files).
-fn upload_ax_markers(paths: &[PathBuf]) -> Vec<String> {
-    let mut markers: Vec<String> = paths
-        .iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
-        .filter(|n| !n.is_empty())
-        .collect();
-    if paths.len() > 1 {
-        markers.push(format!("{} files", paths.len()));
-    }
-    markers
-}
-
-/// Whether `items` already contains any of `markers` in an item's name or value.
-fn ax_shows_upload(items: &[AxItem], markers: &[String]) -> bool {
-    items.iter().any(|item| {
-        markers
-            .iter()
-            .any(|m| item.name.contains(m.as_str()) || item.value.contains(m.as_str()))
-    })
 }
 
 /// A random 256-bit token, hex.
@@ -3833,7 +3806,7 @@ impl Host {
             }
             Uploading::Setting => {
                 self.agent_release_group(tab, &group);
-                self.agent_uploaded(p.reply, tab, &paths);
+                self.agent_uploaded(p.reply, tab, node, &paths);
             }
         }
     }
@@ -3861,19 +3834,17 @@ impl Host {
     }
 
     /// The files are in the input: the answer once the page's tree shows them.
-    fn agent_uploaded(&mut self, reply: Reply, tab: TabId, paths: &[PathBuf]) {
-        let names = paths
+    fn agent_uploaded(&mut self, reply: Reply, tab: TabId, node: i64, paths: &[PathBuf]) {
+        let names: Vec<String> = paths
             .iter()
             .filter_map(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let answer = format!("uploaded {names}");
+            .collect();
+        let answer = format!("uploaded {}", names.join(", "));
         let wait = Wait::Uploaded {
             tab,
-            rev: self.ax_rev(tab),
-            markers: upload_ax_markers(paths),
-            settle_at: Instant::now() + UPLOAD_AX_SETTLE,
+            node,
+            markers: upload::markers(&names),
             answer,
         };
         self.agent_wait(reply, wait, UPLOAD_AX_WAIT);
@@ -4038,21 +4009,7 @@ impl Host {
     /// as its calls want it.
     fn agent_arm(&mut self) {
         self.agent_intercept();
-        let Some(first) = self
-            .agents
-            .pending
-            .iter()
-            .map(|p| match &p.wait {
-                Wait::Uploaded {
-                    tab,
-                    rev,
-                    settle_at,
-                    ..
-                } if self.ax_rev(*tab) > *rev => p.deadline.min(*settle_at),
-                _ => p.deadline,
-            })
-            .min()
-        else {
+        let Some(first) = self.agents.pending.iter().map(|p| p.deadline).min() else {
             self.agents.timer.stop();
             return;
         };
@@ -4678,18 +4635,23 @@ impl Host {
                 late.then_some(Err("clicking the element did not open a file chooser"))
             }
             Wait::Uploaded {
-                rev,
+                node,
                 markers,
-                settle_at,
                 answer,
                 ..
             } => {
-                let updated = self.ax_rev(tab) > *rev;
-                let reflected = updated
-                    && page
-                        .map(|t| ax_shows_upload(&t.flatten(ALL_ITEMS), markers))
-                        .unwrap_or(false);
-                (reflected || (updated && now >= *settle_at) || late).then(|| Ok(answer.clone()))
+                let input = page.and_then(|t| {
+                    t.flatten(ALL_ITEMS)
+                        .into_iter()
+                        .find(|i| Some(i.tree.as_str()) == t.document() && i64::from(i.id) == *node)
+                });
+                let input = input.as_ref().map(|i| (i.name.as_str(), i.value.as_str()));
+                upload::tree_wait(input, markers, late).map(|end| match end {
+                    upload::TreeWait::Shows | upload::TreeWait::Unshown => Ok(answer.clone()),
+                    upload::TreeWait::Late => {
+                        Ok(format!("{answer} (the page's tree did not change)"))
+                    }
+                })
             }
             _ => None,
         };
@@ -5603,9 +5565,8 @@ mod tests {
             },
             Wait::Uploaded {
                 tab,
-                rev: 0,
+                node: 9,
                 markers: vec![],
-                settle_at: Instant::now(),
                 answer: String::new(),
             },
         ];
@@ -5683,39 +5644,6 @@ mod tests {
             upload_log_target(&["/a/b/one.txt".into(), "/c/d/two.pdf".into()]),
             "one.txt, two.pdf"
         );
-
-        assert_eq!(
-            upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]),
-            vec!["resume.pdf"]
-        );
-        assert_eq!(
-            upload_ax_markers(&[PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b.pdf")]),
-            vec!["a.pdf", "b.pdf", "2 files"]
-        );
-        let item = |name: &str, value: &str| AxItem {
-            tree: "t".into(),
-            id: 1,
-            kind: wubble_ax::Kind::Button,
-            role: "button".into(),
-            name: name.into(),
-            value: value.into(),
-            url: String::new(),
-            level: 0,
-            checked: None,
-            focused: false,
-            bounds: Bounds::default(),
-        };
-        let one = upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]);
-        assert!(!ax_shows_upload(
-            &[item("Resume: No file chosen", "No file chosen")],
-            &one
-        ));
-        assert!(ax_shows_upload(
-            &[item("Resume: resume.pdf", "resume.pdf")],
-            &one
-        ));
-        let two = upload_ax_markers(&[PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b.pdf")]);
-        assert!(ax_shows_upload(&[item("Cover: 2 files", "2 files")], &two));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
