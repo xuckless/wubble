@@ -56,7 +56,7 @@ fn a_press_on_a_chord_asks_to_record_it() {
     let l = log.clone();
     app.on_capture_cancel(move || l.borrow_mut().push("cancel".into()));
 
-    click(&app, &button(&app, "New Tab"));
+    click(&app, &button(&app, "New tab"));
     assert_eq!(*log.borrow(), ["record new-tab"], "a press on the chord");
 
     // asked a chord another action runs: Replace and Cancel answer
@@ -65,7 +65,7 @@ fn a_press_on_a_chord_asks_to_record_it() {
         action: "new-tab".into(),
         conflict: true,
         chord: "Ctrl+W".into(),
-        other: "Close Tab".into(),
+        other: "Close tab".into(),
         ..Default::default()
     });
     pump();
