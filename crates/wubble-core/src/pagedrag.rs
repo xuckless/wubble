@@ -57,7 +57,7 @@ pub trait Payload: Clone {
 }
 
 /// What a drop on the shell opens or fills: the link, else the text.
-fn dropped_text<P: Payload>(data: &P) -> Option<String> {
+pub fn dropped_text<P: Payload>(data: &P) -> Option<String> {
     data.link()
         .or(data.text())
         .map(str::trim)
@@ -70,7 +70,10 @@ fn dropped_text<P: Payload>(data: &P) -> Option<String> {
 pub enum Shell {
     /// The tab list: a drop inserts at `index`; `row` is the tab whose row's middle the pointer
     /// is on (a rest there shows it).
-    List { index: usize, row: Option<TabId> },
+    List {
+        index: usize,
+        row: Option<TabId>,
+    },
     NewTab,
     /// The address (command) bar.
     Bar,
@@ -106,13 +109,18 @@ pub struct Dragging<P> {
     pub popup: bool,
     /// An agent session's tab: only its own page hears the drag.
     pub confined: bool,
+    /// Released over a page: the drop waits for the page's answer to the drag there (CEF
+    /// `UpdateDragCursor`), or a [`DWELL`] when it says none or nothing.
+    pub dropping: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageDrag<P> {
     Dragging(Dragging<P>),
     /// The drag left the window and is the OS's: it ends when the OS says.
-    Outside { source: TabId },
+    Outside {
+        source: TabId,
+    },
 }
 
 impl<P> PageDrag<P> {
@@ -157,21 +165,37 @@ pub enum Input<P> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect<P> {
     /// `DragTargetDragEnter` on `tab` with the source page's own data (custom types included).
-    Enter { tab: TabId, allowed: DragOps },
+    Enter {
+        tab: TabId,
+        allowed: DragOps,
+    },
     /// `DragTargetDragOver` at the pointer.
-    Over { tab: TabId, allowed: DragOps },
-    Leave { tab: TabId },
-    Drop { tab: TabId },
+    Over {
+        tab: TabId,
+        allowed: DragOps,
+    },
+    Leave {
+        tab: TabId,
+    },
+    Drop {
+        tab: TabId,
+    },
     /// `DragSourceEndedAt` on the source with the operation done, then
     /// `DragSourceSystemDragEnded`.
     End(DragOps),
     /// A new tab with this link or text (the host searches text as the bar does), at `index` in
     /// the list (`None`: at the end), shown.
-    OpenTab { text: String, index: Option<usize> },
+    OpenTab {
+        text: String,
+        index: Option<usize>,
+    },
     /// The bar opens holding this text, all of it selected.
     FillBar(String),
     /// A new tab in this Space with the link or text; that Space shows.
-    OpenInSpace { text: String, space: SpaceId },
+    OpenInSpace {
+        text: String,
+        space: SpaceId,
+    },
     /// Show this tab (the drag rested on its row).
     Activate(TabId),
     OpenSpaces,
@@ -182,6 +206,21 @@ pub enum Effect<P> {
     Mark(Option<Shell>),
     /// Hand the drag to the OS with what it carries.
     StartOs(P, DragOps),
+}
+
+/// What a drop of `text` (a link or text) on `at` does; the switcher takes none. A drag from
+/// another app dropped on the shell does the same.
+pub fn shell_drop<P>(at: Shell, text: String) -> Option<Effect<P>> {
+    match at {
+        Shell::List { index, .. } => Some(Effect::OpenTab {
+            text,
+            index: Some(index),
+        }),
+        Shell::NewTab => Some(Effect::OpenTab { text, index: None }),
+        Shell::Bar => Some(Effect::FillBar(text)),
+        Shell::Space(space) => Some(Effect::OpenInSpace { text, space }),
+        Shell::SpacesTrigger => None,
+    }
 }
 
 /// The operation a drop does before the page has said: Chromium's preference among those the
@@ -273,11 +312,12 @@ fn dwell<P>(mut d: Dragging<P>, now: Instant) -> (Dragging<P>, Vec<Effect<P>>) {
 impl<P> Dragging<P> {
     /// Whether a rest would still do something: the host keeps a timer for [`Input::Tick`].
     pub fn awaits_dwell(&self) -> bool {
-        !self.dwelt
-            && matches!(
-                self.over,
-                Over::Shell(Shell::List { row: Some(_), .. } | Shell::SpacesTrigger)
-            )
+        self.dropping
+            || !self.dwelt
+                && matches!(
+                    self.over,
+                    Over::Shell(Shell::List { row: Some(_), .. } | Shell::SpacesTrigger)
+                )
     }
 }
 
@@ -313,6 +353,7 @@ pub fn start<P: Payload>(input: Input<P>) -> Option<(PageDrag<P>, Vec<Effect<P>>
         dwelt: false,
         popup: false,
         confined,
+        dropping: false,
     };
     Some((PageDrag::Dragging(d), fx))
 }
@@ -345,6 +386,9 @@ pub fn transition<P: Payload>(
             };
         }
     };
+    if d.dropping {
+        return dropping(d, input);
+    }
     match input {
         Input::Moved { over, now } => {
             let over = confine(&d, over);
@@ -403,31 +447,22 @@ pub fn transition<P: Payload>(
                 fx.push(E::Mark(None));
             }
             let (op, open) = match at {
+                // the page's answer to the drag at the release point first (it may come late)
                 Over::Page(tab) => {
-                    let op = d.chosen.unwrap_or_else(|| drop_operation(d.allowed));
-                    fx.extend([
-                        E::Over {
-                            tab,
-                            allowed: d.allowed,
-                        },
-                        E::Drop { tab },
-                    ]);
-                    (op, None)
+                    fx.push(E::Over {
+                        tab,
+                        allowed: d.allowed,
+                    });
+                    d.over = at;
+                    d.chosen = None;
+                    d.dropping = true;
+                    return (Some(PageDrag::Dragging(d)), fx);
                 }
                 Over::Shell(s) => {
                     let op = shell_operation(&d.data, d.allowed, s);
                     let open = dropped_text(&d.data)
                         .filter(|_| op != DragOps::NONE)
-                        .and_then(|text| match s {
-                            Shell::List { index, .. } => Some(E::OpenTab {
-                                text,
-                                index: Some(index),
-                            }),
-                            Shell::NewTab => Some(E::OpenTab { text, index: None }),
-                            Shell::Bar => Some(E::FillBar(text)),
-                            Shell::Space(space) => Some(E::OpenInSpace { text, space }),
-                            Shell::SpacesTrigger => None,
-                        });
+                        .and_then(|text| shell_drop(s, text));
                     (op, open)
                 }
                 Over::Elsewhere => (DragOps::NONE, None),
@@ -484,6 +519,35 @@ pub fn transition<P: Payload>(
         }
         // A second start is the engine's to refuse; a page's report off its page is stale; the
         // OS's end of a drag it never had is not this one's.
+        _ => (Some(PageDrag::Dragging(d)), vec![]),
+    }
+}
+
+/// A release over a page, waiting for its answer: an operation drops at once; none, or none
+/// in time, drops once a [`DWELL`] has run (the page decides, as Blink does on any drop).
+fn dropping<P>(d: Dragging<P>, input: Input<P>) -> (Option<PageDrag<P>>, Vec<Effect<P>>) {
+    use Effect as E;
+    let Over::Page(tab) = d.over else {
+        return (None, ended(&d, vec![], DragOps::NONE));
+    };
+    let drop = |d: &Dragging<P>, op| ended(d, vec![E::Drop { tab }], op);
+    match input {
+        Input::Cursor { tab: t, op } if t == tab && op != DragOps::NONE => (None, drop(&d, op)),
+        Input::Cursor { tab: t, op } if t == tab => {
+            let d = Dragging {
+                chosen: Some(op),
+                ..d
+            };
+            (Some(PageDrag::Dragging(d)), vec![])
+        }
+        Input::Tick { .. } => {
+            let op = d.chosen.unwrap_or_else(|| drop_operation(d.allowed));
+            (None, drop(&d, op))
+        }
+        Input::Cancelled => (None, ended(&d, vec![E::Leave { tab }], DragOps::NONE)),
+        Input::Gone(t) if t == tab => (None, ended(&d, vec![], DragOps::NONE)),
+        Input::Gone(t) if t == d.source => (None, ended(&d, vec![E::Leave { tab }], DragOps::NONE)),
+        // the button is up: the pointer is no drag's
         _ => (Some(PageDrag::Dragging(d)), vec![]),
     }
 }
@@ -600,19 +664,54 @@ mod tests {
                 allowed: ALL
             }]
         );
-        let (s, fx) = transition(s, Input::Released(Over::Page(A)));
-        assert!(s.is_none());
+        let (s, fx) = step(s, Input::Released(Over::Page(A)));
         assert_eq!(
             fx,
-            [
-                E::Over {
-                    tab: A,
-                    allowed: ALL
-                },
-                E::Drop { tab: A },
-                E::End(DragOps::COPY)
-            ]
+            [E::Over {
+                tab: A,
+                allowed: ALL
+            }]
         );
+        // the pointer after the release is nothing; the page's answer drops
+        let (s, fx) = mv(s, Over::Elsewhere, 6);
+        assert!(fx.is_empty());
+        let (s, fx) = transition(
+            s,
+            Input::Cursor {
+                tab: A,
+                op: DragOps::COPY,
+            },
+        );
+        assert!(s.is_none());
+        assert_eq!(fx, [E::Drop { tab: A }, E::End(DragOps::COPY)]);
+    }
+
+    #[test]
+    fn a_slow_or_refusing_page_gets_the_drop_after_a_while() {
+        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let PageDrag::Dragging(d) = &s else { panic!() };
+        assert!(d.awaits_dwell());
+        // none said (maybe an answer to an earlier move): wait on
+        let (s, fx) = step(
+            s,
+            Input::Cursor {
+                tab: A,
+                op: DragOps::NONE,
+            },
+        );
+        assert!(fx.is_empty());
+        let (s, fx) = transition(s, Input::Tick { now: ms(600) });
+        assert!(s.is_none());
+        assert_eq!(fx, [E::Drop { tab: A }, E::End(DragOps::NONE)]);
+        // no answer at all: Chromium's default
+        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let (_, fx) = transition(s, Input::Tick { now: ms(600) });
+        assert_eq!(fx, [E::Drop { tab: A }, E::End(DragOps::COPY)]);
+        // Escape while waiting
+        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let (s, fx) = transition(s, Input::Cancelled);
+        assert!(s.is_none());
+        assert_eq!(fx, [E::Leave { tab: A }, E::End(DragOps::NONE)]);
     }
 
     #[test]
@@ -649,18 +748,22 @@ mod tests {
             },
         );
         assert_eq!(fx, [E::Feedback(DragOps::MOVE)]);
-        let (_, fx) = transition(s, Input::Released(Over::Page(B)));
+        let (s, fx) = step(s, Input::Released(Over::Page(B)));
         assert_eq!(
             fx,
-            [
-                E::Over {
-                    tab: B,
-                    allowed: ALL
-                },
-                E::Drop { tab: B },
-                E::End(DragOps::MOVE)
-            ]
+            [E::Over {
+                tab: B,
+                allowed: ALL
+            }]
         );
+        let (_, fx) = transition(
+            s,
+            Input::Cursor {
+                tab: B,
+                op: DragOps::MOVE,
+            },
+        );
+        assert_eq!(fx, [E::Drop { tab: B }, E::End(DragOps::MOVE)]);
     }
 
     #[test]
@@ -770,9 +873,7 @@ mod tests {
                 E::Over {
                     tab: B,
                     allowed: ALL
-                },
-                E::Drop { tab: B },
-                E::End(DragOps::COPY)
+                }
             ]
         );
     }
@@ -791,9 +892,7 @@ mod tests {
         let row = list(1, Some(B));
         let (s, fx) = mv(started(link()), row, 100);
         assert!(!fx.contains(&E::Activate(B)));
-        let PageDrag::Dragging(d) = &s else {
-            panic!()
-        };
+        let PageDrag::Dragging(d) = &s else { panic!() };
         assert!(d.awaits_dwell());
         let (s, fx) = mv(s, row, 300);
         assert!(!fx.contains(&E::Activate(B)));
@@ -855,12 +954,9 @@ mod tests {
             },
         );
         assert_eq!(fx, [E::Feedback(DragOps::MOVE)]);
-        let (_, fx) = transition(s.clone(), Input::Released(Over::Page(A)));
-        assert_eq!(fx.last(), Some(&E::End(DragOps::MOVE)));
         let (s, _) = mv(s, Over::Elsewhere, 5);
-        let (s, _) = mv(s, Over::Page(A), 6);
-        let (_, fx) = transition(s, Input::Released(Over::Page(A)));
-        assert_eq!(fx.last(), Some(&E::End(DragOps::COPY)));
+        let PageDrag::Dragging(d) = &s else { panic!() };
+        assert_eq!(d.chosen, None, "off the page, nothing the page said holds");
     }
 
     #[test]
@@ -895,7 +991,10 @@ mod tests {
         let (_, fx) = transition(s.clone(), Input::Released(Over::Shell(Shell::Bar)));
         assert_eq!(fx, [E::End(DragOps::NONE)]);
         let (_, fx) = transition(s, Input::Released(Over::Page(A)));
-        assert_eq!(fx.last(), Some(&E::End(DragOps::COPY)));
+        assert!(fx.contains(&E::Over {
+            tab: A,
+            allowed: ALL
+        }));
     }
 
     #[test]
