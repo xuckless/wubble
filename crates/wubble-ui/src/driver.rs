@@ -229,18 +229,19 @@ impl Driver {
         let tab_changed = active_tab != self.page_tab;
         if ids_changed || row_changed {
             self.tabs.set_ids(&row_ids(&ids), row);
-            // keep what a dropped row showed while it leaves
-            let items: Vec<TabItem> = window.get_tabs().iter().collect();
-            let old = std::mem::replace(&mut self.items, items);
-            for l in &self.tabs.leaving {
-                if !self.gone.iter().any(|g| same(g, l.id))
-                    && let Some(item) = old.iter().find(|t| same(t, l.id))
-                {
-                    self.gone.push(item.clone());
-                }
-            }
             self.ids = ids;
             window.set_selected_row(slint_index(row));
+        }
+        // Keep what a dropped row showed while it leaves: the rows as last read, refreshed on
+        // every change (a title or icon too), so a closed row leaves as it last looked.
+        let items: Vec<TabItem> = window.get_tabs().iter().collect();
+        let old = std::mem::replace(&mut self.items, items);
+        for l in &self.tabs.leaving {
+            if !self.gone.iter().any(|g| same(g, l.id))
+                && let Some(item) = old.iter().find(|t| same(t, l.id))
+            {
+                self.gone.push(item.clone());
+            }
         }
         if let Some(i) = space {
             if i != self.space {

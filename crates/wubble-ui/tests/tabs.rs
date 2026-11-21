@@ -307,6 +307,46 @@ fn tab_scroll_reaches_scroller(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_scroll_y(), 120.0);
 }
 
+/// The host syncs its rows in place (`wubble_ui::sync`) and says so (`shell-model-changed`).
+fn host_render(app: &AppWindow, model: &VecModel<TabItem>, items: Vec<TabItem>) {
+    wubble_ui::sync(model, items);
+    app.invoke_shell_model_changed();
+    pump();
+}
+
+fn item(id: i32, title: &str) -> TabItem {
+    TabItem {
+        id,
+        title: title.into(),
+        ..Default::default()
+    }
+}
+
+fn leaving_titles(app: &AppWindow) -> Vec<(i32, String)> {
+    app.get_leaving_rows()
+        .iter()
+        .map(|l| (l.tab.id, l.tab.title.to_string()))
+        .collect()
+}
+
+/// A tab retitled after it opened, then closed: its leaving row shows the title it last had,
+/// not the one it opened with.
+fn a_closed_row_leaves_with_its_last_title(app: &AppWindow, driver: &Shared) {
+    let model = Rc::new(VecModel::from(vec![item(10, "a"), item(11, "b")]));
+    app.set_tabs(ModelRc::from(model.clone()));
+    app.set_active_tab_id(10);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    host_render(app, &model, vec![item(10, "a"), item(11, "b, loaded")]);
+    driver.borrow_mut().advance(app, DT);
+    host_render(app, &model, vec![item(10, "a")]);
+    driver.borrow_mut().advance(app, DT);
+    assert_eq!(leaving_titles(app), [(11, "b, loaded".to_owned())]);
+    settle(app, driver);
+    assert!(leaving_titles(app).is_empty());
+}
+
 #[derive(Default)]
 struct Calls {
     activated: Vec<i32>,
@@ -395,4 +435,5 @@ fn tab_list_scenarios() {
     tab_scroll_reaches_scroller(&app, &driver);
     folder_header_is_a_row(&app, &driver, &log);
     touch_sizing_resizes_rows(&app, &driver);
+    a_closed_row_leaves_with_its_last_title(&app, &driver);
 }
