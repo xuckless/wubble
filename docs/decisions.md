@@ -162,6 +162,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Still backdrop in the browser window | The browser window's backdrop is `Backdrop::Still` (a fixed dye table); the living liquid is kept for the start page; supersedes "Liquid comes to a freeze". | 2026-11-19 |
 | Window physics stay native | Window move, throw, stretch, rubber-band resize and minimise-to-bubble stay with the OS compositor; documented exceptions. | 2026-11-19 |
 | No voice yet | No voice feature in this phase: the voice glow shader goes into the kit, no microphone. | 2026-11-19 |
+| Compact mode is the sidebar toggle | Compact mode folded into the sidebar toggle (owner's PR #2): one action, `toggle-sidebar`, keeps Mod+Alt+S as its second chord; saved overrides of `toggle-compact-mode` load as the sidebar toggle. | 2026-11-21 |
 | Split seam truth | Split and sidebar seams follow the web's `browser/seam.ts` / `.wb-split-line`, not the Room page's seam. | 2026-11-19 |
 
 ## Design fidelity
