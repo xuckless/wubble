@@ -409,3 +409,23 @@ redraws the whole window at 8 Hz while a page changes (TODO.md).
 | working (516 dots) | 59.9 | 0 | 8.0 % | 8.8 % | 9.2 % |
 
 A moving orb redraws the whole window every frame (Skia's renderer has no partial redraw here); the orb's own pass is small next to that. An orb at rest or paused costs no frames (`agent-orbs-paused`: 180 shown, 0 moving).
+
+## Browser benchmarks after the optimization pass (2026-11-21)
+
+2026-11-21, the machine and method of "Browser benchmarks against Chromium and Firefox" above (`scripts/bench/runner.py`,
+visible windows on the 300 Hz display, fresh profiles, one browser at a time, load average 1.3 to 2.7 before each run).
+"wubble" is the release build of main at 302c571 (partial rendering, page damage in place); "before" is the release
+build of main before pf/perf was merged. Speedometer 3.1: 3 runs each, interleaved; MotionMark 1.3: 1 run each
+(144 fps target in all).
+
+| | wubble | before | Chromium 157 | Firefox 160 |
+|---|---|---|---|---|
+| Speedometer 3.1 score | 27.5 to 27.6 | 27.5 | 33.1 to 33.4 | 32.3 to 32.4 |
+| Speedometer CPU s per run | 40.5 to 40.9 | 41.4 to 41.6 | 31.4 to 31.5 | 33.7 to 35.2 |
+| Speedometer peak PSS (MB) | 1324 to 1367 | 1294 to 1320 | 1223 to 1642 | 2910 to 3310 |
+| MotionMark 1.3 score | 1933.03 ±0.86 % | 1899.85 ±0.85 % | 1976.57 ±0.77 % | 1060.85 ±0.78 % |
+| MotionMark CPU s per run | 543.1 | 594.8 | 480.4 | 453.1 |
+| MotionMark peak PSS (MB) | 1722 | 1654 | 1415 | 1517 |
+
+The pass does not move Speedometer (score and CPU within 2 %): its 17 % gap to Chromium is not the shell's redraw.
+MotionMark: 9 % less CPU than before for the same score within noise; 2 % behind Chromium for 13 % more CPU (was 17 %).
