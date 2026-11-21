@@ -236,7 +236,10 @@ impl Driver {
         // every change (a title or icon too), so a closed row leaves as it last looked.
         let items: Vec<TabItem> = window.get_tabs().iter().collect();
         let old = std::mem::replace(&mut self.items, items);
-        for l in &self.tabs.leaving {
+        // a row that came back before a frame pruned it must not leave later with this look
+        let leaving = &self.tabs.leaving;
+        self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
+        for l in leaving {
             if !self.gone.iter().any(|g| same(g, l.id))
                 && let Some(item) = old.iter().find(|t| same(t, l.id))
             {

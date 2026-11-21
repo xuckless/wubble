@@ -347,6 +347,23 @@ fn a_closed_row_leaves_with_its_last_title(app: &AppWindow, driver: &Shared) {
     assert!(leaving_titles(app).is_empty());
 }
 
+/// A row closed, brought back and closed again, all before a frame: it leaves with its look
+/// from the second close, not the first.
+fn a_row_back_before_a_frame_leaves_with_its_new_look(app: &AppWindow, driver: &Shared) {
+    let model = Rc::new(VecModel::from(vec![item(10, "a"), item(11, "b")]));
+    app.set_tabs(ModelRc::from(model.clone()));
+    app.set_active_tab_id(10);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    host_render(app, &model, vec![item(10, "a")]);
+    host_render(app, &model, vec![item(10, "a"), item(11, "b again")]);
+    host_render(app, &model, vec![item(10, "a")]);
+    driver.borrow_mut().advance(app, DT);
+    assert_eq!(leaving_titles(app), [(11, "b again".to_owned())]);
+    settle(app, driver);
+}
+
 /// A drag of row 0 one slot down with the active row outside the drag (row 3), and a host that
 /// does not act on the move: no id and no active row change, yet the rows go back to the
 /// model's order. Row 0 springs back from where it was dropped (it does not swap springs with
@@ -472,4 +489,5 @@ fn tab_list_scenarios() {
     touch_sizing_resizes_rows(&app, &driver);
     a_closed_row_leaves_with_its_last_title(&app, &driver);
     a_dropped_row_returns_when_the_host_keeps_the_order(&app, &driver, &log);
+    a_row_back_before_a_frame_leaves_with_its_new_look(&app, &driver);
 }
