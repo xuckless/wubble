@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in</title>
+<!-- Two saved logins for one site: the menu offers both; the second is picked. -->
+<form action="/f/welcome" method="post">
+<input name="user" id="user" autocomplete="username">
+<input type="password" name="pass" id="pass" autocomplete="current-password">
+<button type="submit" class="go">Sign in</button></form>
+<script>fx.expect([["#user", "sam"], ["#pass", "s4m-pw"]], "filled ok");</script>

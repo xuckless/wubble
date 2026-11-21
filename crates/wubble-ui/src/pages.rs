@@ -110,6 +110,7 @@ pub fn passwords_view(status: &VaultStatus, notice: &str) -> PasswordsView {
             VaultStatus::Unlocked => VaultState::Unlocked,
             VaultStatus::Unavailable(_) => VaultState::Unavailable,
             VaultStatus::Unreadable { .. } => VaultState::Unreadable,
+            VaultStatus::KeyLost { .. } => VaultState::KeyLost,
         },
         title: title.into(),
         body: body.as_str().into(),
@@ -125,7 +126,9 @@ pub fn login_items(rows: &[LoginView], revealed: Option<(&str, &str)>) -> Vec<Lo
             LoginItem {
                 id: r.id.as_str().into(),
                 site: r.site().into(),
+                origin: r.origin.as_str().into(),
                 username: r.username.as_deref().unwrap_or("(cannot be read)").into(),
+                readable: r.username.is_some(),
                 revealed: shown.unwrap_or_default().into(),
                 has_revealed: shown.is_some(),
             }
@@ -214,6 +217,21 @@ mod tests {
         assert_eq!(items[0].site, "a.test");
         let none = login_items(&rows, None);
         assert!(none.iter().all(|i| !i.has_revealed));
+    }
+
+    #[test]
+    fn an_unreadable_login_is_marked_so_it_offers_no_edit() {
+        let row = |username: Option<&str>| LoginView {
+            id: "1".into(),
+            origin: "https://a.test".into(),
+            username: username.map(Into::into),
+            created_ms: 0,
+            last_used_ms: None,
+            times_used: 0,
+        };
+        let items = login_items(&[row(Some("me")), row(None)], None);
+        assert!(items[0].readable && items[0].username == "me");
+        assert!(!items[1].readable && items[1].username == "(cannot be read)");
     }
 
     #[test]

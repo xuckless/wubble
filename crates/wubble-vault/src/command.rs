@@ -34,8 +34,19 @@ pub enum VaultCommand {
         username: String,
         password: Zeroizing<String>,
     },
+    /// A saved login changed by hand: its site, username and password (an empty password keeps
+    /// the saved one). Another site moves it there (saved anew, the old row deleted).
+    Edit {
+        id: RecordId,
+        site: String,
+        username: String,
+        password: Zeroizing<String>,
+    },
     /// A browser's password export, read from this path on the store thread.
     ImportCsv(PathBuf),
+    /// The owner deletes the logins whose key the keyring lost, and a new key is made
+    /// ([`Vault::start_over`]).
+    StartOver,
 }
 
 impl fmt::Debug for VaultCommand {
@@ -50,7 +61,13 @@ impl fmt::Debug for VaultCommand {
                 .debug_struct("Add")
                 .field("site", site)
                 .finish_non_exhaustive(),
+            Self::Edit { id, site, .. } => f
+                .debug_struct("Edit")
+                .field("id", id)
+                .field("site", site)
+                .finish_non_exhaustive(),
             Self::ImportCsv(path) => f.debug_tuple("ImportCsv").field(path).finish(),
+            Self::StartOver => f.write_str("StartOver"),
         }
     }
 }
@@ -87,6 +104,7 @@ pub fn status_of(outcome: UnlockOutcome) -> VaultStatus {
             VaultStatus::Unreadable { rows }
         }
         UnlockOutcome::Unavailable(why) => VaultStatus::Unavailable(why),
+        UnlockOutcome::KeyLost { rows } => VaultStatus::KeyLost { rows },
     }
 }
 
@@ -94,6 +112,7 @@ pub fn status_of(outcome: UnlockOutcome) -> VaultStatus {
 fn locked_status(state: &VaultState) -> VaultStatus {
     match state {
         VaultState::Unavailable { reason } => VaultStatus::Unavailable(reason.clone()),
+        VaultState::KeyLost { rows } => VaultStatus::KeyLost { rows: *rows },
         _ => VaultStatus::Locked,
     }
 }
@@ -129,7 +148,66 @@ fn read_export(path: &PathBuf) -> Result<Zeroizing<String>, String> {
         .map_err(|_| "the file is not text".to_owned())
 }
 
+/// A site as typed on the page (`example.com` means `https://example.com`), as an origin.
+fn typed_site(site: &str) -> Result<Origin, String> {
+    let site = site.trim();
+    let site = if site.contains("://") {
+        site.to_owned()
+    } else {
+        format!("https://{site}")
+    };
+    Origin::parse(&site).map_err(|e| format!("not a site: {e}"))
+}
+
 impl<K: KeyRing, S: LoginStore> Vault<K, S> {
+    /// A login changed by hand ([`VaultCommand::Edit`]). Every check runs before anything is
+    /// written: a row that does not open with this key is refused (its username would be the
+    /// page's placeholder), and so is an edit onto another login's site and username.
+    ///
+    /// A move to another site is a new row in place of the old one, in one store transaction
+    /// (`LoginStore::replace`: the id and origin seal the blobs, so the row cannot be rewritten
+    /// in place): one row remains whatever fails.
+    fn edit(
+        &mut self,
+        id: &RecordId,
+        origin: Origin,
+        username: String,
+        password: Zeroizing<String>,
+        now_ms: i64,
+    ) -> Result<(), VaultError> {
+        let unreadable = |e| match e {
+            VaultError::Crypto(_) => VaultError::UnreadableLogin,
+            e => e,
+        };
+        let row = self.store().get(id)?.ok_or(crate::StoreError::NotFound)?;
+        self.username(id).map_err(unreadable)?;
+        let password = if password.is_empty() {
+            self.reveal(id).map_err(unreadable)?
+        } else {
+            password
+        };
+        if self
+            .find_for_origin(&origin)?
+            .iter()
+            .any(|c| c.id != *id && c.username == username)
+        {
+            return Err(VaultError::Taken);
+        }
+        if row.origin == origin {
+            return self.update(id, &username, &password);
+        }
+        self.save_in_place_of(
+            id,
+            NewLogin {
+                origin,
+                form_action_origin: None,
+                username,
+                password,
+            },
+            now_ms,
+        )
+    }
+
     /// Runs one command. Nothing is listed or revealed unless the vault is unlocked.
     pub fn run(&mut self, command: VaultCommand, now_ms: i64) -> VaultAnswer {
         let failed = |e: VaultError| VaultAnswer::Failed(e.to_string());
@@ -153,36 +231,45 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 Err(VaultError::Unavailable(why)) => {
                     VaultAnswer::Status(VaultStatus::Unavailable(why))
                 }
+                Err(VaultError::KeyLost { rows }) => {
+                    VaultAnswer::Status(VaultStatus::KeyLost { rows })
+                }
                 Err(e) => failed(e),
             },
+            VaultCommand::StartOver => self
+                .start_over()
+                .map_or_else(failed, |o| VaultAnswer::Status(status_of(o))),
             VaultCommand::Reveal(id) => self.reveal(&id).map_or_else(failed, VaultAnswer::Revealed),
             VaultCommand::Delete(id) => self.delete(&id).map_or_else(failed, |_| VaultAnswer::Done),
             VaultCommand::Add {
                 site,
                 username,
                 password,
-            } => {
-                let site = site.trim();
-                let site = if site.contains("://") {
-                    site.to_owned()
-                } else {
-                    format!("https://{site}")
-                };
-                match Origin::parse(&site) {
-                    Err(e) => VaultAnswer::Failed(format!("not a site: {e}")),
-                    Ok(origin) => self
-                        .save(
-                            NewLogin {
-                                origin,
-                                form_action_origin: None,
-                                username,
-                                password,
-                            },
-                            now_ms,
-                        )
-                        .map_or_else(failed, |_| VaultAnswer::Done),
-                }
-            }
+            } => match typed_site(&site) {
+                Err(why) => VaultAnswer::Failed(why),
+                Ok(origin) => self
+                    .save(
+                        NewLogin {
+                            origin,
+                            form_action_origin: None,
+                            username,
+                            password,
+                        },
+                        now_ms,
+                    )
+                    .map_or_else(failed, |_| VaultAnswer::Done),
+            },
+            VaultCommand::Edit {
+                id,
+                site,
+                username,
+                password,
+            } => match typed_site(&site) {
+                Err(why) => VaultAnswer::Failed(why),
+                Ok(origin) => self
+                    .edit(&id, origin, username, password, now_ms)
+                    .map_or_else(failed, |()| VaultAnswer::Done),
+            },
             VaultCommand::ImportCsv(path) => {
                 let text = match read_export(&path) {
                     Ok(text) => text,
@@ -319,6 +406,187 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_changes_the_login_keeps_an_empty_password_and_moves_a_site() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "old-pw");
+        let id = entries(&mut v)[0].id.clone();
+        let edit = |v: &mut V, id: &str, site: &str, user: &str, pw: &str| {
+            v.run(
+                VaultCommand::Edit {
+                    id: RecordId(id.into()),
+                    site: site.into(),
+                    username: user.into(),
+                    password: Zeroizing::new(pw.into()),
+                },
+                7,
+            )
+        };
+        let reveal = |v: &mut V, id: &str| match v.run(VaultCommand::Reveal(RecordId(id.into())), 8)
+        {
+            VaultAnswer::Revealed(pw) => pw.to_string(),
+            other => panic!("{other:?}"),
+        };
+        // same site: the row stays, re-encrypted
+        assert!(matches!(
+            edit(&mut v, &id, "a.test", "me2", "new-pw"),
+            VaultAnswer::Done
+        ));
+        let rows = entries(&mut v);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].id.as_str(), rows[0].username.as_deref()),
+            (id.as_str(), Some("me2"))
+        );
+        assert_eq!(reveal(&mut v, &id), "new-pw");
+        // an empty password keeps the saved one
+        assert!(matches!(
+            edit(&mut v, &id, "https://a.test", "me3", ""),
+            VaultAnswer::Done
+        ));
+        assert_eq!(reveal(&mut v, &id), "new-pw");
+        // another site: one row, on the new origin, the password carried
+        assert!(matches!(
+            edit(&mut v, &id, "b.test:8443", "me3", ""),
+            VaultAnswer::Done
+        ));
+        let rows = entries(&mut v);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].origin, "https://b.test:8443");
+        assert_eq!(reveal(&mut v, &rows[0].id), "new-pw");
+        // a bad site or a gone row: refused, nothing changes
+        assert!(matches!(
+            edit(&mut v, &rows[0].id, "not a site", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
+        assert!(matches!(
+            edit(&mut v, "gone", "a.test", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
+        assert_eq!(entries(&mut v).len(), 1);
+        // locked: refused
+        v.run(VaultCommand::Lock, 9);
+        assert!(matches!(
+            edit(&mut v, &rows[0].id, "a.test", "x", "y"),
+            VaultAnswer::Failed(_)
+        ));
+    }
+
+    fn edit(v: &mut V, id: &str, site: &str, user: &str, pw: &str) -> VaultAnswer {
+        v.run(
+            VaultCommand::Edit {
+                id: RecordId(id.into()),
+                site: site.into(),
+                username: user.into(),
+                password: Zeroizing::new(pw.into()),
+            },
+            7,
+        )
+    }
+
+    /// The rows as (origin, username, password), sorted, to show nothing changed.
+    fn snapshot(v: &mut V) -> Vec<(String, Option<String>, String)> {
+        let mut rows: Vec<_> = entries(v)
+            .into_iter()
+            .map(|r| {
+                let pw = match v.run(VaultCommand::Reveal(RecordId(r.id.clone())), 8) {
+                    VaultAnswer::Revealed(pw) => pw.to_string(),
+                    _ => String::new(),
+                };
+                (r.origin, r.username, pw)
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    fn id_of(v: &mut V, origin: &str, user: &str) -> String {
+        entries(v)
+            .into_iter()
+            .find(|r| r.origin == origin && r.username.as_deref() == Some(user))
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn an_edit_onto_another_logins_site_and_username_is_refused() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw-me");
+        add(&mut v, "a.test", "you", "pw-you");
+        let you = id_of(&mut v, "https://a.test", "you");
+        let before = snapshot(&mut v);
+        let VaultAnswer::Failed(why) = edit(&mut v, &you, "a.test", "me", "new") else {
+            panic!("accepted")
+        };
+        assert_eq!(
+            why,
+            "Another saved login already has this site and username"
+        );
+        assert_eq!(snapshot(&mut v), before);
+        // Its own site and username is no collision.
+        assert!(matches!(
+            edit(&mut v, &you, "a.test", "you", "new"),
+            VaultAnswer::Done
+        ));
+    }
+
+    #[test]
+    fn a_move_onto_a_site_that_has_the_username_is_refused() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw-a");
+        add(&mut v, "b.test", "me", "pw-b");
+        let a = id_of(&mut v, "https://a.test", "me");
+        let before = snapshot(&mut v);
+        let VaultAnswer::Failed(why) = edit(&mut v, &a, "b.test", "me", "") else {
+            panic!("accepted")
+        };
+        assert_eq!(
+            why,
+            "Another saved login already has this site and username"
+        );
+        assert_eq!(snapshot(&mut v), before);
+    }
+
+    /// A keyring holding a key of its own (not the one the rows were sealed with).
+    fn other_key() -> FakeKeyRing {
+        let kr = FakeKeyRing::default();
+        kr.set("wubble", "vault-default", &[42; 32]).unwrap();
+        kr
+    }
+
+    #[test]
+    fn an_unreadable_login_cannot_be_edited_only_deleted() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw");
+        // Another key over the same rows: the row lists but does not open.
+        let rows = v.store().all().unwrap();
+        let mut other = vault(&other_key());
+        for r in rows.iter().cloned() {
+            other.store_mut().insert(r).unwrap();
+        }
+        other.run(VaultCommand::Unlock, 0);
+        let id = rows[0].id.0.clone();
+        for (site, pw) in [("a.test", "new"), ("a.test", ""), ("b.test", "new")] {
+            let VaultAnswer::Failed(why) = edit(&mut other, &id, site, "(cannot be read)", pw)
+            else {
+                panic!("accepted")
+            };
+            assert_eq!(
+                why,
+                "This login cannot be read with this key; it can only be deleted"
+            );
+        }
+        assert_eq!(other.store().all().unwrap(), rows);
+        assert!(matches!(
+            other.run(VaultCommand::Delete(RecordId(id)), 9),
+            VaultAnswer::Done
+        ));
+    }
+
+    #[test]
     fn a_bad_site_is_refused_with_a_reason() {
         let mut v = vault(&FakeKeyRing::default());
         v.run(VaultCommand::Unlock, 0);
@@ -337,7 +605,7 @@ mod tests {
         add(&mut v, "a.test", "me", "pw");
         // Another key over the same rows: they list, but nothing opens.
         let rows = v.store().all().unwrap();
-        let mut other = Vault::new(FakeKeyRing::default(), MemoryStore::default(), "default");
+        let mut other = Vault::new(other_key(), MemoryStore::default(), "default");
         for r in rows {
             other.store_mut().insert(r).unwrap();
         }

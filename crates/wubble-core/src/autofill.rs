@@ -12,13 +12,28 @@
 //! (`ParseAutocomplete`, `IsNotPasswordField`, `IsProbablyNotUsername`,
 //! `ParseUsingAutocomplete`, `GetRelevantPasswords`,
 //! `SignificantFields::LocateSpecificPasswords`,
-//! `FindUsernameFieldBaseHeuristics`, `ParseUsingBaseHeuristics`),
-//! BSD-3-Clause, simplified: no server predictions, no single-username
-//! forms. See `THIRD_PARTY_NOTICES.md`.
+//! `FindUsernameFieldBaseHeuristics`, `ParseUsingBaseHeuristics`, the
+//! single-username rule at the end of `Parse`), with its field-name patterns
+//! (`components/password_manager/core/common/password_manager_constants.h`
+//! `kOneTimePwdRe`, `kSocialSecurityRe`; `components/autofill/core/common/
+//! autofill_regex_constants.h` `kCardCvcRe`) and its username-first flow
+//! (`password_manager_util.cc` `IsLikelyOtp`,
+//! `CanFieldBeConsideredAsSingleUsername`, `CanValueBeConsideredAsSingleUsername`;
+//! `possible_username_data.cc` with `kSingleUsernameTimeToLive`), BSD-3-Clause,
+//! simplified: no server predictions. See `THIRD_PARTY_NOTICES.md`.
+//!
+//! A form the script reports holds a password field (or had one: a field
+//! shown as text by a show-password toggle still counts, Firefox's
+//! `hasBeenTypePassword`), or passed the script's username-only test (Firefox
+//! `LoginManagerChild.getUsernameFieldFromUsernameOnlyForm`). A reported form
+//! without any password field is therefore a username-only form here.
 //!
 //! Secrets: values travel as [`Secret`] (zeroized on drop, never printed).
 //! Nothing here is part of the saved session.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde_json::Value;
 
 use crate::secret::Secret;
@@ -175,6 +190,11 @@ pub enum FormClass {
         new_password: FieldId,
         confirm: Option<FieldId>,
     },
+    /// The first step of a two-step sign-in: a username and no password yet
+    /// (Chromium's `is_single_username`, "username-first" forms).
+    SingleUsername {
+        username: FieldId,
+    },
 }
 
 /// The autocomplete token that decides (Chromium `ParseAutocomplete`): the
@@ -189,12 +209,17 @@ enum Hint {
     CreditCard,
 }
 
+/// `webauthn` alone is Firefox's field name "webauthn", which its
+/// `isUsernameFieldType` and `isInferredUsernameField` take for a username
+/// (Amazon's first sign-in step has only that).
 fn hint(autocomplete: &str) -> Hint {
-    let last = autocomplete
+    let tokens: Vec<String> = autocomplete
         .split_ascii_whitespace()
         .map(str::to_ascii_lowercase)
-        .rfind(|t| t != "webauthn");
-    match last.as_deref() {
+        .collect();
+    let last = tokens.iter().rfind(|t| *t != "webauthn");
+    match last.map(String::as_str) {
+        None if !tokens.is_empty() => Hint::Username,
         Some("username") => Hint::Username,
         Some("current-password") => Hint::CurrentPassword,
         Some("new-password") => Hint::NewPassword,
@@ -204,33 +229,51 @@ fn hint(autocomplete: &str) -> Hint {
     }
 }
 
-/// Names that mark a password-typed field as something else: one-time
-/// codes, card security codes, social security numbers (Chromium
-/// `IsNotPasswordField` plus its OTP and CVC name rules).
-const NOT_PASSWORD_NAMES: [&str; 9] = [
-    "otp",
-    "onetime",
-    "one-time",
-    "one_time",
-    "cvc",
-    "cvv",
-    "csc",
-    "ssn",
-    "verification",
-];
+/// Chromium's patterns, matched case-insensitively like its `MatchesRegex`:
+/// `password_manager_constants.h` `kOneTimePwdRe` and `kSocialSecurityRe`,
+/// `autofill_regex_constants.h` `kCardCvcRe`.
+static ONE_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)one.?time|",
+        r"(?:\b|_)(?:otp|otc|totp|sms|2fa|mfa)(?:\b|_)|",
+        r"(?:otp|otc|totp|sms|2fa|mfa).?(?:code|token|input|val|pin|login|verif|pass|pwd|psw|auth|field)|",
+        r"(?:verif(?:y|ication)?|email|phone|text|login|input|txt|user).?(?:otp|otc|totp|sms|2fa|mfa)|",
+        r"sms.?otp|mfa.?otp|",
+        r"verif(?:y|ication)?.?code|(?:\b|_)vcode|",
+        r"(?:second|two|2).?factor|",
+        r"wfls-token|email_code",
+    ))
+    .expect("kOneTimePwdRe compiles")
+});
+static SSN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)ssn|social.?security.?(num(ber)?|#)*").expect("kSocialSecurityRe compiles")
+});
+static CVC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)verification|card.?identification|security.?code|card.?code",
+        r"|security.?value|security.?number|card.?pin|c-v-v",
+        r"|código de segurança|código de seguridad|karten.?prüfn",
+        r"|(?:cvn|cvv|cvc|csc|cvd|ccv)|\bcid\b|cccid",
+    ))
+    .expect("kCardCvcRe compiles")
+});
 
-fn is_not_password(f: &FieldSnapshot) -> bool {
-    if matches!(
-        hint(&f.autocomplete),
-        Hint::OneTimeCode | Hint::CreditCard | Hint::Username
-    ) {
-        return true;
-    }
-    let name = f.name.to_ascii_lowercase();
-    let id = f.id_attr.to_ascii_lowercase();
-    NOT_PASSWORD_NAMES
-        .iter()
-        .any(|n| name.contains(n) || id.contains(n))
+fn name_or_id_matches(f: &FieldSnapshot, re: &Regex) -> bool {
+    re.is_match(&f.name) || re.is_match(&f.id_attr)
+}
+
+/// Chromium `IsNotPasswordField` (with `IsCreditCardField`): a card code, a
+/// one-time code or a social security number, by autocomplete or name.
+fn is_not_password_field(f: &FieldSnapshot) -> bool {
+    matches!(hint(&f.autocomplete), Hint::OneTimeCode | Hint::CreditCard)
+        || name_or_id_matches(f, &CVC_RE)
+        || name_or_id_matches(f, &SSN_RE)
+        || name_or_id_matches(f, &ONE_TIME_RE)
+}
+
+/// Chromium `password_manager::util::IsLikelyOtp`.
+fn is_likely_otp(f: &FieldSnapshot) -> bool {
+    f.autocomplete.contains("one-time-code") || name_or_id_matches(f, &ONE_TIME_RE)
 }
 
 /// Chromium `IsProbablyNotUsername`.
@@ -238,11 +281,27 @@ fn probably_not_username(value: &str) -> bool {
     value.is_empty() || (value.chars().count() < 3 && value.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// A password field the parser may use in `mode`.
+/// Chromium `CanFieldBeConsideredAsSingleUsername`: a meaningful name or id
+/// (two letters at least, `IsMeaningfulNameOrId`) that does not say "search".
+/// The label is not reported, so only the name and the id are checked.
+fn may_be_single_username(f: &FieldSnapshot) -> bool {
+    let meaningful = |s: &str| s.chars().filter(|c| c.is_alphabetic()).nth(1).is_some();
+    let search = |s: &str| s.to_lowercase().contains("search");
+    (meaningful(&f.name) || meaningful(&f.id_attr)) && !search(&f.name) && !search(&f.id_attr)
+}
+
+/// Chromium `CanValueBeConsideredAsSingleUsername`: 2 to 100 characters.
+fn single_username_value(value: &str) -> bool {
+    (2..=100).contains(&value.encode_utf16().count())
+}
+
+/// A password field the parser may use in `mode`. A password-typed field
+/// marked `autocomplete=username` is a username (wubble's rule, not Chromium's).
 fn usable_password(f: &FieldSnapshot, mode: Mode) -> bool {
     f.kind == FieldKind::Password
         && !f.readonly
-        && !is_not_password(f)
+        && hint(&f.autocomplete) != Hint::Username
+        && !is_not_password_field(f)
         && (mode == Mode::Filling || !f.value.is_empty())
 }
 
@@ -310,7 +369,7 @@ fn username_before(form: &FormSnapshot, first_password: FieldId, mode: Mode) -> 
     let before = &form.fields[..end];
     let candidate = |f: &&FieldSnapshot| {
         f.kind.text_like()
-            && !matches!(hint(&f.autocomplete), Hint::OneTimeCode | Hint::CreditCard)
+            && !is_not_password_field(f)
             && (mode == Mode::Filling || !probably_not_username(f.value.expose()))
     };
     let editable = before
@@ -394,21 +453,58 @@ pub fn classify(form: &FormSnapshot, mode: Mode) -> FormClass {
         .map(|f| f.id)
         .min_by_key(|id| form.fields.iter().position(|f| f.id == *id))
     else {
-        return FormClass::NotAForm;
+        // No password to use. Chromium: a username found by its autocomplete
+        // attribute makes a single-username form. wubble: a form the script
+        // reported without any password field passed its username-only test.
+        return username
+            .or_else(|| username_only(form, mode))
+            .map_or(FormClass::NotAForm, |username| FormClass::SingleUsername {
+                username,
+            });
     };
     let username = username.or_else(|| username_before(form, first, mode));
     class_of(username, located)
 }
 
+/// The username of a form the script reported with no password field (its
+/// username-only test, Firefox `getUsernameFieldFromUsernameOnlyForm`, passed):
+/// the one text field that may be a single username (Chromium
+/// `CanFieldBeConsideredAsSingleUsername`, not `IsLikelyOtp`), editable and
+/// shown when filling, with a value that may be a username when saving
+/// (`CanValueBeConsideredAsSingleUsername`).
+fn username_only(form: &FormSnapshot, mode: Mode) -> Option<FieldId> {
+    if form.fields.iter().any(|f| f.kind == FieldKind::Password) {
+        return None;
+    }
+    let mut candidates = form.fields.iter().filter(|f| {
+        f.kind.text_like()
+            && may_be_single_username(f)
+            && !is_likely_otp(f)
+            && match mode {
+                Mode::Filling => f.visible && !f.readonly,
+                Mode::Saving => single_username_value(f.value.expose()),
+            }
+    });
+    let one = candidates.next()?;
+    candidates.next().is_none().then_some(one.id)
+}
+
 /// The fields a picked login fills: (username, password).
-pub fn fill_target(class: FormClass) -> Option<(Option<FieldId>, FieldId)> {
+pub fn fill_target(class: FormClass) -> Option<(Option<FieldId>, Option<FieldId>)> {
     match class {
-        FormClass::Login { username, password } => Some((username, password)),
+        FormClass::Login { username, password } => Some((username, Some(password))),
         FormClass::Change {
             username, current, ..
-        } => Some((username, current)),
+        } => Some((username, Some(current))),
+        FormClass::SingleUsername { username } => Some((Some(username), None)),
         FormClass::SignUp { .. } | FormClass::NotAForm => None,
     }
+}
+
+/// A form a password is typed into to sign in (not a sign-up form, not a
+/// username step).
+fn signs_in(class: FormClass) -> bool {
+    matches!(class, FormClass::Login { .. } | FormClass::Change { .. })
 }
 
 /// The fields a generated password fills: the new one and its confirmation.
@@ -424,7 +520,7 @@ pub fn generate_target(class: FormClass) -> Vec<FieldId> {
             confirm,
             ..
         } => std::iter::once(new_password).chain(confirm).collect(),
-        FormClass::Login { .. } | FormClass::NotAForm => vec![],
+        FormClass::Login { .. } | FormClass::SingleUsername { .. } | FormClass::NotAForm => vec![],
     }
 }
 
@@ -448,7 +544,7 @@ pub fn submitted(form: &FormSnapshot) -> Option<(Creds, bool)> {
     let value = |id: FieldId| form.fields.iter().find(|f| f.id == id).map(|f| &f.value);
     let class = classify(form, Mode::Saving);
     let (username, password) = match class {
-        FormClass::NotAForm => return None,
+        FormClass::NotAForm | FormClass::SingleUsername { .. } => return None,
         FormClass::Login { username, password } => (username, password),
         FormClass::SignUp {
             username,
@@ -471,29 +567,36 @@ pub fn submitted(form: &FormSnapshot) -> Option<(Creds, bool)> {
     Some((creds, matches!(class, FormClass::Login { .. })))
 }
 
-/// The form to offer on: the first a saved login can fill, else the first
-/// sign-up form.
+/// The username a username-first step submitted (`form` is a single-username
+/// form with a value that may be a username).
+pub fn submitted_username(form: &FormSnapshot) -> Option<String> {
+    let FormClass::SingleUsername { username } = classify(form, Mode::Saving) else {
+        return None;
+    };
+    let field = form.fields.iter().find(|f| f.id == username)?;
+    Some(field.value.expose().to_owned())
+}
+
+/// The form to offer on: the first sign-in form, else the first username
+/// step, else the first sign-up form.
 fn offered_form(forms: &[FormSnapshot]) -> Option<(u32, FormClass)> {
-    let classes: Vec<(u32, FormClass)> = forms
+    let rank = |c: FormClass| match c {
+        FormClass::Login { .. } | FormClass::Change { .. } => Some(0),
+        FormClass::SingleUsername { .. } => Some(1),
+        FormClass::SignUp { .. } => Some(2),
+        FormClass::NotAForm => None,
+    };
+    forms
         .iter()
         .map(|f| (f.id, classify(f, Mode::Filling)))
-        .collect();
-    classes
-        .iter()
-        .find(|(_, c)| fill_target(*c).is_some())
-        .or_else(|| {
-            classes
-                .iter()
-                .find(|(_, c)| !generate_target(*c).is_empty())
-        })
-        .copied()
+        .filter_map(|(id, c)| Some((rank(c)?, id, c)))
+        .min_by_key(|(rank, ..)| *rank)
+        .map(|(_, id, c)| (id, c))
 }
 
 /// A sign-in form is still on the page (a failed login shows it again).
 fn has_login_form(forms: &[FormSnapshot]) -> bool {
-    forms
-        .iter()
-        .any(|f| fill_target(classify(f, Mode::Filling)).is_some())
+    forms.iter().any(|f| signs_in(classify(f, Mode::Filling)))
 }
 
 // ------------------------------------------------------------ origin rules
@@ -506,21 +609,26 @@ pub fn web_origin(url: &str) -> Option<String> {
 }
 
 /// Whether a frame's report may be acted on, and the origin it speaks for:
-/// the frame's origin must be the top-level page's (no cross-origin iframe,
-/// no opaque origin, http or https only).
+/// the frame's own (a cross-origin iframe speaks for its origin, never for
+/// the page's), on a web page (http or https, no opaque origin).
 pub fn may_report(top_url: &str, frame_url: &str) -> Option<String> {
-    let top = web_origin(top_url)?;
-    (web_origin(frame_url)? == top).then_some(top)
+    web_origin(top_url)?;
+    web_origin(frame_url)
 }
 
 /// Whether a login saved for `login_origin` may be filled into a frame:
-/// the report rule, and the exact origin of the login (so an https login
-/// never fills on http, and a subdomain never matches).
+/// the report rule, and the frame's origin is the login's exact origin (so
+/// an https login never fills on http, a subdomain never matches, and a
+/// cross-origin iframe gets only its own origin's logins).
 pub fn may_fill(top_url: &str, frame_url: &str, login_origin: &str) -> bool {
     may_report(top_url, frame_url).is_some_and(|o| Some(o) == web_origin(login_origin))
 }
 
 // ------------------------------------------------------------ per-tab state
+
+/// How long a username submitted on a username-first step is kept for the
+/// password step (Chromium `kSingleUsernameTimeToLive`, 5 minutes), in ms.
+pub const SINGLE_USERNAME_TTL_MS: i64 = 5 * 60 * 1000;
 
 /// A saved login offered for a form (no password).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -534,7 +642,10 @@ pub struct Candidate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Offer {
     pub frame: String,
+    /// The frame's origin: the only origin whose logins are offered here.
     pub origin: String,
+    /// The offer is the main frame's (it wins over an iframe's).
+    pub main: bool,
     pub form: u32,
     pub class: FormClass,
     /// The vault's logins for the origin; empty until it answered.
@@ -561,6 +672,11 @@ impl Offer {
             rows.push(MenuRow::Generate);
         }
         rows
+    }
+
+    /// A picked login fills a password here (not only a username).
+    pub fn fills_password(&self) -> bool {
+        fill_target(self.class).is_some_and(|(_, password)| password.is_some())
     }
 }
 
@@ -592,9 +708,9 @@ pub enum SaveKind {
     Update(String),
 }
 
-/// One tab's autofill lifecycle.
+/// Where one tab's autofill is, from a form on the page to a save prompt.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum AutofillState {
+pub enum Phase {
     #[default]
     Idle,
     /// A form the key chip offers to fill or generate for.
@@ -607,6 +723,31 @@ pub enum AutofillState {
     Checking(Pending),
     /// The save (or update) prompt shows.
     Prompt { kind: SaveKind, pending: Pending },
+}
+
+/// The username a username-first step submitted (Chromium's
+/// `PossibleUsernameData`): a password-only form submitted on the same
+/// origin within [`SINGLE_USERNAME_TTL_MS`] is saved with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstStep {
+    pub origin: String,
+    pub username: String,
+    /// When it was submitted (ms, the host's clock).
+    pub at: i64,
+}
+
+impl FirstStep {
+    fn fresh(&self, now: i64) -> bool {
+        now.saturating_sub(self.at) <= SINGLE_USERNAME_TTL_MS
+    }
+}
+
+/// One tab's autofill state: the phase, and the username a first step left
+/// for the next (it outlives the navigation to the password page).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AutofillState {
+    pub phase: Phase,
+    pub first_step: Option<FirstStep>,
 }
 
 /// The prompt's buttons.
@@ -625,7 +766,7 @@ pub struct Policy {
     pub autofill: bool,
     /// `passwords.offer_to_save`.
     pub offer_to_save: bool,
-    /// The user chose "Never" for the page's origin.
+    /// The user chose "Never" for the event's origin (the page's when the event has none).
     pub never_save: bool,
 }
 
@@ -636,6 +777,7 @@ pub enum Event {
     Forms {
         frame: String,
         origin: String,
+        is_main: bool,
         forms: Vec<FormSnapshot>,
     },
     /// The vault's logins for `origin`.
@@ -649,15 +791,18 @@ pub enum Event {
     Close,
     /// A menu row was clicked (the user gesture every fill needs).
     Choose(usize),
+    /// A form was submitted at `at` (ms, the host's clock).
     Submit {
         frame: String,
         origin: String,
         form: FormSnapshot,
+        at: i64,
     },
     Gone {
         frame: String,
         origin: String,
         form: FormSnapshot,
+        at: i64,
     },
     Settled {
         frame: String,
@@ -679,20 +824,34 @@ pub enum Event {
     Closed,
 }
 
+impl Event {
+    /// The origin a frame's event speaks for (whose "never save" applies).
+    pub fn origin(&self) -> Option<&str> {
+        match self {
+            Self::Forms { origin, .. }
+            | Self::Submit { origin, .. }
+            | Self::Gone { origin, .. }
+            | Self::Settled { origin, .. } => Some(origin),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// Ask the vault for `origin`'s logins (answered with `Event::Logins`).
     QueryLogins {
         origin: String,
     },
-    /// Reveal `record`'s password and fill it, with `username`, into `frame`.
+    /// Fill `username` into `frame`, and `record`'s password when the form
+    /// has a password field (a username step has none).
     Fill {
         frame: String,
         origin: String,
         record: String,
         username: String,
         username_field: Option<FieldId>,
-        password_field: FieldId,
+        password_field: Option<FieldId>,
     },
     /// Generate a password and fill it into `fields` of `frame`.
     FillGenerated {
@@ -720,29 +879,58 @@ pub enum Effect {
 }
 
 type Step = (AutofillState, Vec<Effect>);
+type PhaseStep = (Phase, Vec<Effect>);
 
 /// The one transition of a tab's autofill state.
 pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
-    use AutofillState as S;
-    match (state, event) {
-        (_, Event::Closed) => (S::Idle, vec![]),
+    if matches!(event, Event::Closed) {
+        return (AutofillState::default(), vec![]);
+    }
+    let AutofillState { phase, first_step } = state;
+    // A username step's submit is remembered for the password step; an old one goes.
+    let first_step = match &event {
+        Event::Submit {
+            origin, form, at, ..
+        }
+        | Event::Gone {
+            origin, form, at, ..
+        } => match submitted_username(form) {
+            Some(username) => Some(FirstStep {
+                origin: origin.clone(),
+                username,
+                at: *at,
+            }),
+            None => first_step.filter(|f| f.fresh(*at)),
+        },
+        _ => first_step,
+    };
+    let (phase, effects) = phase_transition(phase, event, policy, first_step.as_ref());
+    (AutofillState { phase, first_step }, effects)
+}
+
+fn phase_transition(
+    phase: Phase,
+    event: Event,
+    policy: Policy,
+    first_step: Option<&FirstStep>,
+) -> PhaseStep {
+    use Phase as S;
+    match (phase, event) {
         (
-            state @ (S::Idle | S::Offer(_) | S::Menu(_)),
+            phase @ (S::Idle | S::Offer(_) | S::Menu(_)),
             Event::Forms {
                 frame,
                 origin,
+                is_main,
                 forms,
-            },
-        )
-        | (
-            state @ (S::Idle | S::Offer(_) | S::Menu(_)),
-            Event::Settled {
+            }
+            | Event::Settled {
                 frame,
                 origin,
+                is_main,
                 forms,
-                ..
             },
-        ) => offer(state, frame, origin, &forms, policy),
+        ) => offer(phase, frame, origin, is_main, &forms, policy),
         (S::Offer(mut o), Event::Logins { origin, candidates }) if o.origin == origin => {
             o.candidates = candidates;
             (S::Offer(o), vec![])
@@ -755,36 +943,38 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
         (S::Menu(o), Event::Close) => (S::Offer(o), vec![]),
         (S::Menu(o), Event::Choose(i)) => choose(o, i),
         (
-            state,
+            phase,
             Event::Submit {
                 frame,
                 origin,
                 form,
+                at,
             },
-        ) => match pending(frame, origin, &form, policy) {
+        ) => match pending(frame, origin, &form, policy, first_step, at) {
             Some(p) => (S::Submitted(p), vec![]),
-            None => (state, vec![]),
+            None => (phase, vec![]),
         },
         (
-            state,
+            phase,
             Event::Gone {
                 frame,
                 origin,
                 form,
+                at,
             },
-        ) => match pending(frame, origin, &form, policy) {
+        ) => match pending(frame, origin, &form, policy, first_step, at) {
             Some(p) => check(p),
-            None => (state, vec![]),
+            None => (phase, vec![]),
         },
         (
-            state @ (S::Submitted(_) | S::Checking(_) | S::Prompt { .. }),
+            phase @ (S::Submitted(_) | S::Checking(_) | S::Prompt { .. }),
             Event::Settled {
                 frame,
                 origin,
                 is_main,
                 forms,
             },
-        ) => settled_after_submit(state, frame, origin, is_main, &forms, policy),
+        ) => settled_after_submit(phase, frame, origin, is_main, &forms, policy),
         (S::Offer(_) | S::Menu(_), Event::Navigated) => (S::Idle, vec![]),
         (
             S::Checking(p),
@@ -827,7 +1017,7 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
             };
             (S::Idle, effects)
         }
-        (state, _) => (state, vec![]),
+        (phase, _) => (phase, vec![]),
     }
 }
 
@@ -835,16 +1025,18 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
 /// without a form ends only its own offer: an offer in a same-origin iframe
 /// outlives the main document settling (its `load` waits for the iframe's).
 /// A new main document (CEF may give it a new frame id) ends any offer
-/// through `Event::Navigated`.
+/// through `Event::Navigated`. Another frame's offer with rows stands,
+/// unless this report is the main frame's and that one is an iframe's.
 fn offer(
-    state: AutofillState,
+    phase: Phase,
     frame: String,
     origin: String,
+    is_main: bool,
     forms: &[FormSnapshot],
     policy: Policy,
-) -> Step {
-    use AutofillState as S;
-    let current = match &state {
+) -> PhaseStep {
+    use Phase as S;
+    let current = match &phase {
         S::Offer(o) | S::Menu(o) => Some(o),
         _ => None,
     };
@@ -852,20 +1044,21 @@ fn offer(
         // This frame has no form (any more): its offer goes.
         return match current {
             Some(o) if o.frame == frame || !policy.autofill => (S::Idle, vec![]),
-            _ => (state, vec![]),
+            _ => (phase, vec![]),
         };
     };
-    // The same form again (a DOM change): keep the logins and an open menu.
-    if let Some(o) = current
-        && o.frame == frame
-        && o.origin == origin
-        && o.form == form
-    {
-        let o = Offer { class, ..o.clone() };
-        return match state {
-            S::Menu(_) => (S::Menu(o), vec![]),
-            _ => (S::Offer(o), vec![]),
-        };
+    if let Some(o) = current {
+        // The same form again (a DOM change): keep the logins and an open menu.
+        if o.frame == frame && o.origin == origin && o.form == form {
+            let o = Offer { class, ..o.clone() };
+            return match phase {
+                S::Menu(_) => (S::Menu(o), vec![]),
+                _ => (S::Offer(o), vec![]),
+            };
+        }
+        if o.frame != frame && !o.rows().is_empty() && !(is_main && !o.main) {
+            return (phase, vec![]);
+        }
     }
     let query = fill_target(class).map(|_| Effect::QueryLogins {
         origin: origin.clone(),
@@ -873,6 +1066,7 @@ fn offer(
     let o = Offer {
         frame,
         origin,
+        main: is_main,
         form,
         class,
         candidates: vec![],
@@ -880,7 +1074,7 @@ fn offer(
     (S::Offer(o), query.into_iter().collect())
 }
 
-fn choose(o: Offer, index: usize) -> Step {
+fn choose(o: Offer, index: usize) -> PhaseStep {
     let row = o.rows().get(index).cloned();
     let effect = match row {
         Some(MenuRow::Login { .. }) => fill_target(o.class).and_then(|(user, pass)| {
@@ -901,15 +1095,29 @@ fn choose(o: Offer, index: usize) -> Step {
         }),
         None => None,
     };
-    (AutofillState::Offer(o), effect.into_iter().collect())
+    (Phase::Offer(o), effect.into_iter().collect())
 }
 
-/// Submitted credentials worth keeping, if saving is on for the site.
-fn pending(frame: String, origin: String, form: &FormSnapshot, policy: Policy) -> Option<Pending> {
+/// Submitted credentials worth keeping, if saving is on for the site. A form
+/// without a username takes the one a first step submitted on the origin,
+/// while it is fresh (Chromium's username-first flow).
+fn pending(
+    frame: String,
+    origin: String,
+    form: &FormSnapshot,
+    policy: Policy,
+    first_step: Option<&FirstStep>,
+    at: i64,
+) -> Option<Pending> {
     if !policy.offer_to_save || policy.never_save {
         return None;
     }
-    let (creds, sign_in) = submitted(form)?;
+    let (mut creds, sign_in) = submitted(form)?;
+    if creds.username.is_empty()
+        && let Some(f) = first_step.filter(|f| f.origin == origin && f.fresh(at))
+    {
+        creds.username = f.username.clone();
+    }
     Some(Pending {
         frame,
         origin,
@@ -925,35 +1133,35 @@ fn pending(frame: String, origin: String, form: &FormSnapshot, policy: Policy) -
 /// form offered again. Otherwise a submit counts as done; a check or a
 /// prompt already under way stays.
 fn settled_after_submit(
-    state: AutofillState,
+    phase: Phase,
     frame: String,
     origin: String,
     is_main: bool,
     forms: &[FormSnapshot],
     policy: Policy,
-) -> Step {
-    use AutofillState as S;
-    let (S::Submitted(p) | S::Checking(p) | S::Prompt { pending: p, .. }) = &state else {
-        return (state, vec![]);
+) -> PhaseStep {
+    use Phase as S;
+    let (S::Submitted(p) | S::Checking(p) | S::Prompt { pending: p, .. }) = &phase else {
+        return (phase, vec![]);
     };
     if !is_main && frame != p.frame {
-        return (state, vec![]);
+        return (phase, vec![]);
     }
     if p.sign_in && origin == p.origin && has_login_form(forms) {
-        return offer(S::Idle, frame, origin, forms, policy);
+        return offer(S::Idle, frame, origin, is_main, forms, policy);
     }
-    match state {
+    match phase {
         S::Submitted(p) => check(p),
-        state => (state, vec![]),
+        phase => (phase, vec![]),
     }
 }
 
-fn check(p: Pending) -> Step {
+fn check(p: Pending) -> PhaseStep {
     let effect = Effect::CheckSave {
         origin: p.origin.clone(),
         creds: p.creds.clone(),
     };
-    (AutofillState::Checking(p), vec![effect])
+    (Phase::Checking(p), vec![effect])
 }
 
 /// What the shell shows for a tab.
@@ -963,22 +1171,26 @@ pub struct View {
     pub chip: bool,
     /// The key menu's rows, while it is open.
     pub menu: Option<Vec<MenuRow>>,
+    /// The origin the menu's logins belong to, when it is a frame's, not the page's own: the
+    /// menu names it.
+    pub menu_origin: Option<String>,
     /// The save prompt: its kind, the username and the origin.
     pub prompt: Option<(SaveKind, String, String)>,
 }
 
 pub fn view(state: &AutofillState) -> View {
-    match state {
-        AutofillState::Offer(o) => View {
+    match &state.phase {
+        Phase::Offer(o) => View {
             chip: !o.rows().is_empty(),
             ..View::default()
         },
-        AutofillState::Menu(o) => View {
+        Phase::Menu(o) => View {
             chip: true,
             menu: Some(o.rows()),
+            menu_origin: (!o.main).then(|| o.origin.clone()),
             prompt: None,
         },
-        AutofillState::Prompt { kind, pending } => View {
+        Phase::Prompt { kind, pending } => View {
             prompt: Some((
                 kind.clone(),
                 pending.creds.username.clone(),
@@ -986,9 +1198,7 @@ pub fn view(state: &AutofillState) -> View {
             )),
             ..View::default()
         },
-        AutofillState::Idle | AutofillState::Submitted(_) | AutofillState::Checking(_) => {
-            View::default()
-        }
+        Phase::Idle | Phase::Submitted(_) | Phase::Checking(_) => View::default(),
     }
 }
 
@@ -1427,10 +1637,24 @@ mod tests {
                 false,
             ),
             (
-                "cross-origin iframe",
+                "cross-origin iframe, its own origin's login",
                 top,
                 "https://evil.test/",
                 "https://evil.test",
+                true,
+            ),
+            (
+                "cross-origin iframe, the page's login",
+                top,
+                "https://evil.test/",
+                "https://a.test",
+                false,
+            ),
+            (
+                "cross-origin iframe on http, its https login",
+                top,
+                "http://b.test/",
+                "https://b.test",
                 false,
             ),
             (
@@ -1473,7 +1697,13 @@ mod tests {
             may_report("http://127.0.0.1:8080/", "http://127.0.0.1:8080/x").as_deref(),
             Some("http://127.0.0.1:8080")
         );
-        assert_eq!(may_report("https://a.test/", "https://b.test/"), None);
+        // A frame speaks for its own origin, never for the page's.
+        assert_eq!(
+            may_report("https://a.test/", "https://b.test/").as_deref(),
+            Some("https://b.test")
+        );
+        assert_eq!(may_report("https://a.test/", "about:blank"), None);
+        assert_eq!(may_report("file:///x", "https://b.test/"), None);
         assert_eq!(may_report("about:blank", "about:blank"), None);
     }
 
@@ -1494,6 +1724,7 @@ mod tests {
         Event::Forms {
             frame: frame.into(),
             origin: ORIGIN.into(),
+            is_main: frame == "main",
             forms,
         }
     }
@@ -1516,6 +1747,7 @@ mod tests {
             frame: "main".into(),
             origin: ORIGIN.into(),
             form: filled_login(user, pass),
+            at: 0,
         }
     }
 
@@ -1529,7 +1761,7 @@ mod tests {
     fn run(events: Vec<Event>, policy: Policy) -> (AutofillState, Vec<Effect>) {
         events
             .into_iter()
-            .fold((AutofillState::Idle, vec![]), |(s, mut all), e| {
+            .fold((AutofillState::default(), vec![]), |(s, mut all), e| {
                 let (s, effects) = transition(s, e, policy);
                 all.extend(effects);
                 (s, all)
@@ -1556,6 +1788,7 @@ mod tests {
             frame: "main".into(),
             origin: ORIGIN.into(),
             form: filled_login(user, pass),
+            at: 0,
         }
     }
 
@@ -1575,7 +1808,7 @@ mod tests {
                 origin: ORIGIN.into()
             }]
         );
-        assert!(matches!(s, AutofillState::Offer(_)));
+        assert!(matches!(s.phase, Phase::Offer(_)));
         assert!(!view(&s).chip, "no chip before the vault answered");
         let (s, _) = transition(s, logins(), ON);
         assert!(view(&s).chip);
@@ -1598,17 +1831,17 @@ mod tests {
                 record: "r1".into(),
                 username: "alice".into(),
                 username_field: Some(1),
-                password_field: 2,
+                password_field: Some(2),
             }]
         );
-        assert!(matches!(s, AutofillState::Offer(_)), "the menu closes");
+        assert!(matches!(s.phase, Phase::Offer(_)), "the menu closes");
     }
 
     #[test]
     fn the_menu_closes_and_a_row_out_of_range_fills_nothing() {
         let (s, _) = run(vec![forms("main", login_page()), logins(), Event::Open], ON);
         let (s2, _) = transition(s.clone(), Event::Close, ON);
-        assert!(matches!(s2, AutofillState::Offer(_)));
+        assert!(matches!(s2.phase, Phase::Offer(_)));
         let (_, effects) = transition(s, Event::Choose(5), ON);
         assert!(effects.is_empty());
     }
@@ -1639,16 +1872,40 @@ mod tests {
         let (s, _) = run(vec![forms("main", login_page()), logins(), Event::Open], ON);
         let (s, effects) = transition(s, forms("main", login_page()), ON);
         assert!(effects.is_empty());
-        assert!(matches!(&s, AutofillState::Menu(o) if o.candidates == [alice()]));
+        assert!(matches!(&s.phase, Phase::Menu(o) if o.candidates == [alice()]));
     }
 
     #[test]
     fn the_form_leaving_its_frame_ends_the_offer_but_another_frame_does_not() {
         let (s, _) = run(vec![forms("main", login_page()), logins()], ON);
         let (s, _) = transition(s, forms("sub", vec![]), ON);
-        assert!(matches!(s, AutofillState::Offer(_)));
+        assert!(matches!(s.phase, Phase::Offer(_)));
         let (s, _) = transition(s, forms("main", vec![]), ON);
-        assert_eq!(s, AutofillState::Idle);
+        assert_eq!(s.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn a_frames_menu_names_the_origin_its_logins_belong_to() {
+        let offer = |main: bool| Offer {
+            frame: "f".into(),
+            origin: "https://login.idp.test".into(),
+            main,
+            form: 0,
+            class: FormClass::Login {
+                username: Some(1),
+                password: 2,
+            },
+            candidates: vec![],
+        };
+        let state = |o| AutofillState {
+            phase: Phase::Menu(o),
+            first_step: None,
+        };
+        assert_eq!(view(&state(offer(true))).menu_origin, None);
+        assert_eq!(
+            view(&state(offer(false))).menu_origin.as_deref(),
+            Some("https://login.idp.test")
+        );
     }
 
     #[test]
@@ -1662,7 +1919,7 @@ mod tests {
             ],
             ON,
         );
-        assert!(matches!(&s, AutofillState::Offer(o) if o.frame == "frame"));
+        assert!(matches!(&s.phase, Phase::Offer(o) if o.frame == "frame"));
         assert!(view(&s).chip);
         let (s, _) = transition(s, Event::Open, ON);
         let (_, effects) = transition(s, Event::Choose(0), ON);
@@ -1675,10 +1932,10 @@ mod tests {
             let (s, _) = run(vec![forms(offered, login_page()), logins()], ON);
             // The main document settling with no form ends only the main frame's own offer.
             let (s2, _) = transition(s.clone(), settled("main", true, vec![]), ON);
-            assert_eq!(matches!(s2, AutofillState::Idle), offered == "main");
+            assert_eq!(matches!(s2.phase, Phase::Idle), offered == "main");
             // A new main document (its script's `start`, perhaps under a new frame id).
             let (s, _) = transition(s, Event::Navigated, ON);
-            assert_eq!(s, AutofillState::Idle, "{offered}");
+            assert_eq!(s.phase, Phase::Idle, "{offered}");
         }
     }
 
@@ -1688,7 +1945,7 @@ mod tests {
             let mut events = vec![forms("main", login_page()), logins()];
             events.extend(extra);
             events.push(Event::Navigated);
-            assert_eq!(run(events, ON).0, AutofillState::Idle);
+            assert_eq!(run(events, ON).0.phase, Phase::Idle);
         }
     }
 
@@ -1718,7 +1975,7 @@ mod tests {
             ON,
         );
         let creds = creds("alice", "pw");
-        assert!(matches!(s, AutofillState::Checking(_)));
+        assert!(matches!(s.phase, Phase::Checking(_)));
         assert_eq!(
             effects.last(),
             Some(&Effect::CheckSave {
@@ -1732,7 +1989,7 @@ mod tests {
             Some((SaveKind::New, "alice".into(), ORIGIN.into()))
         );
         let (s, effects) = transition(s, Event::Answer(Answer::Save), ON);
-        assert_eq!(s, AutofillState::Idle);
+        assert_eq!(s.phase, Phase::Idle);
         assert_eq!(
             effects,
             [Effect::Save {
@@ -1762,7 +2019,7 @@ mod tests {
         assert!(matches!(&effects[..], [Effect::Update { record, .. }] if record == "r1"));
         for nothing in [SaveVerdict::Same, SaveVerdict::Unavailable] {
             let (s, _) = transition(checking.clone(), verdict("alice", "pw", nothing), ON);
-            assert_eq!(s, AutofillState::Idle);
+            assert_eq!(s.phase, Phase::Idle);
         }
     }
 
@@ -1778,7 +2035,7 @@ mod tests {
         )
         .0;
         let (s, effects) = transition(prompt.clone(), Event::Answer(Answer::Never), ON);
-        assert_eq!(s, AutofillState::Idle);
+        assert_eq!(s.phase, Phase::Idle);
         assert_eq!(
             effects,
             [Effect::Never {
@@ -1786,7 +2043,7 @@ mod tests {
             }]
         );
         let (s, effects) = transition(prompt, Event::Answer(Answer::NotNow), ON);
-        assert_eq!((s, effects), (AutofillState::Idle, vec![]));
+        assert_eq!((s.phase, effects), (Phase::Idle, vec![]));
     }
 
     #[test]
@@ -1798,7 +2055,7 @@ mod tests {
             ],
             ON,
         );
-        assert!(matches!(s, AutofillState::Offer(_)), "offered again");
+        assert!(matches!(s.phase, Phase::Offer(_)), "offered again");
         assert!(
             !effects
                 .iter()
@@ -1819,13 +2076,14 @@ mod tests {
                     frame: "main".into(),
                     origin: ORIGIN.into(),
                     form: signup,
+                    at: 0,
                 },
                 // "Account created, please sign in."
                 settled("main", true, login_page()),
             ],
             ON,
         );
-        assert!(matches!(s, AutofillState::Checking(_)));
+        assert!(matches!(s.phase, Phase::Checking(_)));
         assert_eq!(
             effects,
             [Effect::CheckSave {
@@ -1839,7 +2097,7 @@ mod tests {
     fn a_failed_sign_in_after_the_form_hid_drops_the_check_and_the_prompt() {
         // The page hid the form while it waited; the server then sent the form back.
         let checking = run(vec![submit("alice", "wrong"), gone("alice", "wrong")], ON).0;
-        assert!(matches!(checking, AutofillState::Checking(_)));
+        assert!(matches!(checking.phase, Phase::Checking(_)));
         let prompt = transition(
             checking.clone(),
             verdict("alice", "wrong", SaveVerdict::Differs("r1".into())),
@@ -1848,7 +2106,7 @@ mod tests {
         .0;
         for state in [checking, prompt] {
             let (s, effects) = transition(state, settled("main", true, login_page()), ON);
-            assert!(matches!(s, AutofillState::Offer(_)), "offered again");
+            assert!(matches!(s.phase, Phase::Offer(_)), "offered again");
             assert_eq!(view(&s).prompt, None);
             assert!(!effects.iter().any(|e| matches!(e, Effect::Update { .. })));
         }
@@ -1883,7 +2141,7 @@ mod tests {
             verdict("alice", "pw", SaveVerdict::Differs("alice-record".into())),
             ON,
         );
-        assert!(matches!(&s, AutofillState::Checking(p) if p.creds.username == "bob"));
+        assert!(matches!(&s.phase, Phase::Checking(p) if p.creds.username == "bob"));
         let (s, _) = transition(s, verdict("bob", "pw2", SaveVerdict::New), ON);
         assert_eq!(
             view(&s).prompt,
@@ -1896,8 +2154,8 @@ mod tests {
         };
         let checking = run(vec![submit("bob", "pw2"), gone("bob", "pw2")], ON).0;
         assert!(matches!(
-            transition(checking, other_origin, ON).0,
-            AutofillState::Checking(_)
+            transition(checking, other_origin, ON).0.phase,
+            Phase::Checking(_)
         ));
     }
 
@@ -1907,7 +2165,7 @@ mod tests {
             vec![submit("alice", "pw"), settled("ad-frame", false, vec![])],
             ON,
         );
-        assert!(matches!(s, AutofillState::Submitted(_)));
+        assert!(matches!(s.phase, Phase::Submitted(_)));
         assert!(effects.is_empty());
     }
 
@@ -1915,11 +2173,11 @@ mod tests {
     fn a_single_page_sign_in_is_seen_when_the_form_goes() {
         let gone = gone("alice", "pw");
         let (s, effects) = run(vec![submit("alice", "pw"), gone.clone()], ON);
-        assert!(matches!(s, AutofillState::Checking(_)));
+        assert!(matches!(s.phase, Phase::Checking(_)));
         assert!(matches!(&effects[..], [Effect::CheckSave { .. }]));
         // Without a submit seen first, too.
         let (s, _) = run(vec![gone], ON);
-        assert!(matches!(s, AutofillState::Checking(_)));
+        assert!(matches!(s.phase, Phase::Checking(_)));
     }
 
     #[test]
@@ -1938,7 +2196,7 @@ mod tests {
             ],
             off,
         );
-        assert_eq!((s, effects), (AutofillState::Idle, vec![]));
+        assert_eq!((s.phase, effects), (Phase::Idle, vec![]));
         let never = Policy {
             never_save: true,
             ..ON
@@ -1947,7 +2205,7 @@ mod tests {
             vec![submit("alice", "pw"), settled("m", true, vec![])],
             never,
         );
-        assert_eq!((s, effects), (AutofillState::Idle, vec![]));
+        assert_eq!((s.phase, effects), (Phase::Idle, vec![]));
     }
 
     #[test]
@@ -1963,7 +2221,7 @@ mod tests {
         .0;
         assert_eq!(
             transition(prompt, Event::Closed, ON),
-            (AutofillState::Idle, vec![])
+            (AutofillState::default(), vec![])
         );
     }
 
@@ -1978,7 +2236,7 @@ mod tests {
             ],
             ON,
         );
-        assert!(matches!(&s, AutofillState::Submitted(p) if p.creds.username == "bob"));
+        assert!(matches!(&s.phase, Phase::Submitted(p) if p.creds.username == "bob"));
     }
 
     #[test]
@@ -1992,5 +2250,371 @@ mod tests {
         );
         let shown = format!("{s:?} {effects:?} {:?}", submit("alice", "hunter2-secret"));
         assert!(!shown.contains("hunter2-secret"), "{shown}");
+    }
+
+    // ----- username-first, one-time codes, frames
+
+    fn id_attr(mut f: FieldSnapshot, id: &str) -> FieldSnapshot {
+        f.id_attr = id.into();
+        f
+    }
+
+    #[test]
+    fn single_username_forms() {
+        use Mode::{Filling, Saving};
+        let single = |username| FormClass::SingleUsername { username };
+        let cases: Vec<(&str, FormSnapshot, Mode, FormClass)> = vec![
+            (
+                "Chromium: autocomplete username, no password",
+                form(vec![ac(field(1, "email"), "username webauthn")]),
+                Filling,
+                single(1),
+            ),
+            (
+                "Chromium: autocomplete username next to a hidden password (Google, Microsoft)",
+                form(vec![
+                    ac(field(1, "email"), "username"),
+                    hidden(named(pw(2), "hiddenPassword")),
+                ]),
+                Filling,
+                single(1),
+            ),
+            (
+                "the script's username-only form: its one named text field",
+                form(vec![named(field(1, "email"), "email")]),
+                Filling,
+                single(1),
+            ),
+            (
+                "a username-only form with a hidden extra field",
+                form(vec![named(text(1), "login"), hidden(named(text(2), "x"))]),
+                Filling,
+                single(1),
+            ),
+            (
+                "two text fields: no single username",
+                form(vec![named(text(1), "first"), named(text(2), "last")]),
+                Filling,
+                FormClass::NotAForm,
+            ),
+            (
+                "a search field is no username (CanFieldBeConsideredAsSingleUsername)",
+                form(vec![named(text(1), "q_search")]),
+                Filling,
+                FormClass::NotAForm,
+            ),
+            (
+                "a meaningless name is no username",
+                form(vec![named(text(1), "q")]),
+                Filling,
+                FormClass::NotAForm,
+            ),
+            (
+                "a one-time code is no username (IsLikelyOtp)",
+                form(vec![ac(named(text(1), "code"), "one-time-code")]),
+                Filling,
+                FormClass::NotAForm,
+            ),
+            (
+                "an sms code by name is no username",
+                form(vec![id_attr(text(1), "sms_code")]),
+                Filling,
+                FormClass::NotAForm,
+            ),
+            (
+                "saving: a one-letter value is no username",
+                form(vec![with_value(named(text(1), "login"), "a")]),
+                Saving,
+                FormClass::NotAForm,
+            ),
+            (
+                "saving: the typed username",
+                form(vec![with_value(named(text(1), "login"), "alice")]),
+                Saving,
+                single(1),
+            ),
+            (
+                "Firefox: autocomplete webauthn alone is a username (Amazon)",
+                form(vec![
+                    ac(named(text(1), "email"), "webauthn"),
+                    hidden(named(pw(2), "password")),
+                ]),
+                Filling,
+                single(1),
+            ),
+            (
+                "a visible password wins: a sign-in form",
+                form(vec![ac(text(1), "username"), pw(2)]),
+                Filling,
+                login(Some(1), 2),
+            ),
+        ];
+        for (what, f, mode, want) in cases {
+            assert_eq!(classify(&f, mode), want, "{what}");
+        }
+    }
+
+    #[test]
+    fn chromium_one_time_code_names_are_not_passwords() {
+        for name in [
+            "otp",
+            "one-time-code",
+            "oneTimePassword",
+            "sms_code",
+            "totp",
+            "2fa_token",
+            "mfa-code",
+            "verification_code",
+            "vcode",
+            "second_factor",
+            "email_code",
+            "card_cvv",
+            "security-code",
+            "ssn",
+        ] {
+            let f = form(vec![text(1), named(pw(2), name)]);
+            assert_eq!(classify(&f, Mode::Filling), FormClass::NotAForm, "{name}");
+        }
+        for name in ["password", "pass", "pwd", "passwd", "Passwd", "user_pass"] {
+            let f = form(vec![text(1), named(pw(2), name)]);
+            assert_eq!(classify(&f, Mode::Filling), login(Some(1), 2), "{name}");
+        }
+        // A code field before the password is not the username either.
+        let f = form(vec![text(1), named(text(2), "otp"), pw(3)]);
+        assert_eq!(classify(&f, Mode::Filling), login(Some(1), 3));
+    }
+
+    #[test]
+    fn a_username_step_fills_only_the_username() {
+        let step = form(vec![ac(field(1, "email"), "username")]);
+        assert_eq!(
+            fill_target(classify(&step, Mode::Filling)),
+            Some((Some(1), None))
+        );
+        let (s, _) = run(vec![forms("main", vec![step]), logins(), Event::Open], ON);
+        let (_, effects) = transition(s, Event::Choose(0), ON);
+        assert!(matches!(
+            &effects[..],
+            [Effect::Fill {
+                username_field: Some(1),
+                password_field: None,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_sign_up_form_never_offers_a_saved_login() {
+        let signup = form(vec![
+            ac(text(1), "username"),
+            ac(pw(2), "new-password"),
+            ac(pw(3), "new-password"),
+        ]);
+        let (s, effects) = run(vec![forms("main", vec![signup]), logins()], ON);
+        assert!(effects.is_empty());
+        assert_eq!(
+            match &s.phase {
+                Phase::Offer(o) => o.rows(),
+                _ => vec![],
+            },
+            [MenuRow::Generate]
+        );
+        // A change form fills the current password only, never a new one.
+        let change = form(vec![
+            ac(text(1), "username"),
+            ac(pw(2), "current-password"),
+            ac(pw(3), "new-password"),
+            ac(pw(4), "new-password"),
+        ]);
+        assert_eq!(
+            fill_target(classify(&change, Mode::Filling)),
+            Some((Some(1), Some(2)))
+        );
+    }
+
+    fn step_submit(user: &str, at: i64) -> Event {
+        Event::Submit {
+            frame: "main".into(),
+            origin: ORIGIN.into(),
+            form: form(vec![with_value(ac(field(1, "email"), "username"), user)]),
+            at,
+        }
+    }
+
+    fn password_submit(pass: &str, origin: &str, at: i64) -> Event {
+        Event::Submit {
+            frame: "main".into(),
+            origin: origin.into(),
+            form: FormSnapshot {
+                id: 2,
+                fields: vec![with_value(ac(pw(5), "current-password"), pass)],
+            },
+            at,
+        }
+    }
+
+    fn pending_user(s: &AutofillState) -> Option<&str> {
+        match &s.phase {
+            Phase::Submitted(p) => Some(&p.creds.username),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_two_step_sign_in_saves_the_first_steps_username() {
+        let (s, effects) = run(vec![step_submit("alice@a.test", 1_000)], ON);
+        assert!(effects.is_empty());
+        assert_eq!(s.phase, Phase::Idle, "a username alone is not saved");
+        assert_eq!(
+            s.first_step.as_ref().map(|f| f.username.as_str()),
+            Some("alice@a.test")
+        );
+        // The password page loads (a navigation keeps it) and its form is submitted.
+        let (s, _) = transition(s, Event::Navigated, ON);
+        let (s, _) = transition(s, password_submit("pw", ORIGIN, 61_000), ON);
+        assert_eq!(pending_user(&s), Some("alice@a.test"));
+        let (_, effects) = transition(s, settled("next", true, vec![]), ON);
+        assert_eq!(
+            effects,
+            [Effect::CheckSave {
+                origin: ORIGIN.into(),
+                creds: creds("alice@a.test", "pw"),
+            }]
+        );
+        // A step in the same document, its password seen gone.
+        let (s, _) = run(
+            vec![
+                step_submit("bob", 0),
+                Event::Gone {
+                    frame: "main".into(),
+                    origin: ORIGIN.into(),
+                    form: form(vec![
+                        hidden(with_value(field(1, "email"), "")),
+                        with_value(pw(2), "pw2"),
+                    ]),
+                    at: 10,
+                },
+            ],
+            ON,
+        );
+        assert!(matches!(&s.phase, Phase::Checking(p) if p.creds.username == "bob"));
+    }
+
+    #[test]
+    fn the_first_steps_username_is_bounded_by_origin_and_time() {
+        let late = SINGLE_USERNAME_TTL_MS + 1;
+        let (s, _) = run(
+            vec![step_submit("alice", 0), password_submit("pw", ORIGIN, late)],
+            ON,
+        );
+        assert_eq!(pending_user(&s), Some(""), "stale after five minutes");
+        assert_eq!(s.first_step, None, "and dropped");
+        let (s, _) = run(
+            vec![
+                step_submit("alice", 0),
+                password_submit("pw", "https://b.test", 5),
+            ],
+            ON,
+        );
+        assert_eq!(pending_user(&s), Some(""), "another origin's step");
+        // A form with its own username keeps it.
+        let (s, _) = run(vec![step_submit("alice", 0), submit("carol", "pw")], ON);
+        assert_eq!(pending_user(&s), Some("carol"));
+        // Closing the tab forgets it.
+        let (s, _) = run(vec![step_submit("alice", 0), Event::Closed], ON);
+        assert_eq!(s, AutofillState::default());
+    }
+
+    fn frame_forms(frame: &str, origin: &str, is_main: bool) -> Event {
+        Event::Forms {
+            frame: frame.into(),
+            origin: origin.into(),
+            is_main,
+            forms: login_page(),
+        }
+    }
+
+    #[test]
+    fn a_cross_origin_frame_is_offered_only_its_own_origins_logins() {
+        let other = "https://login.b.test";
+        let (s, effects) = run(vec![frame_forms("f", other, false)], ON);
+        assert_eq!(
+            effects,
+            [Effect::QueryLogins {
+                origin: other.into()
+            }]
+        );
+        // The page's logins answered for the frame's offer are dropped.
+        let (s, _) = transition(s, logins(), ON);
+        assert!(!view(&s).chip);
+        let (s, _) = transition(
+            s,
+            Event::Logins {
+                origin: other.into(),
+                candidates: vec![alice()],
+            },
+            ON,
+        );
+        let (s, _) = transition(s, Event::Open, ON);
+        let (_, effects) = transition(s, Event::Choose(0), ON);
+        assert!(
+            matches!(&effects[..], [Effect::Fill { frame, origin, .. }] if frame == "f" && origin == other)
+        );
+    }
+
+    #[test]
+    fn the_main_frames_form_wins_over_an_iframes() {
+        // An iframe's offer with rows stands against another iframe, not against the main frame.
+        let (s, _) = run(vec![frame_forms("f", ORIGIN, false), logins()], ON);
+        let (s2, effects) = transition(s.clone(), frame_forms("g", ORIGIN, false), ON);
+        assert!(effects.is_empty());
+        assert!(matches!(&s2.phase, Phase::Offer(o) if o.frame == "f"));
+        let (s, effects) = transition(s, frame_forms("main", ORIGIN, true), ON);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(&s.phase, Phase::Offer(o) if o.frame == "main" && o.main));
+        // The main frame's offer stands against an iframe's report.
+        let (s, _) = transition(s, logins(), ON);
+        let (s, _) = transition(s, frame_forms("f", ORIGIN, false), ON);
+        assert!(matches!(&s.phase, Phase::Offer(o) if o.frame == "main"));
+    }
+
+    #[test]
+    fn a_frames_save_names_its_origin() {
+        let other = "https://login.b.test";
+        let (s, _) = run(
+            vec![
+                Event::Submit {
+                    frame: "f".into(),
+                    origin: other.into(),
+                    form: filled_login("alice", "pw"),
+                    at: 0,
+                },
+                Event::Settled {
+                    frame: "main".into(),
+                    origin: other.into(),
+                    is_main: true,
+                    forms: vec![],
+                },
+                Event::Verdict {
+                    origin: other.into(),
+                    creds: creds("alice", "pw"),
+                    verdict: SaveVerdict::New,
+                },
+            ],
+            ON,
+        );
+        assert_eq!(
+            view(&s).prompt,
+            Some((SaveKind::New, "alice".into(), other.into()))
+        );
+    }
+
+    #[test]
+    fn events_name_their_origin() {
+        assert_eq!(
+            frame_forms("f", "https://b.test", false).origin(),
+            Some("https://b.test")
+        );
+        assert_eq!(Event::Open.origin(), None);
     }
 }

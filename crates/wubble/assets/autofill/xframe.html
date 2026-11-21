@@ -1,0 +1,5 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in</title>
+<!-- The sign-in form in a cross-origin iframe (another loopback host): it is offered its own
+     origin's logins only, never this page's. -->
+<iframe class="full" src="http://{FRAME_HOST}:{PORT}/f/{FRAME_PATH}/inner"></iframe>

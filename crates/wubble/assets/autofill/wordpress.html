@@ -1,0 +1,26 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Log In ‹ Fixture — WordPress</title>
+<!-- Modelled on wp-login.php: show-password toggle (a type=button inside the form, which must
+     not count as a submit), remember-me checkbox, hidden redirect fields. -->
+<div id="login">
+<form name="loginform" id="loginform" action="/f/welcome" method="post">
+<p><label for="user_login">Username or Email Address</label>
+<input type="text" name="log" id="user_login" class="input" value="" size="20" autocapitalize="off" autocomplete="username" required="required"></p>
+<div class="user-pass-wrap"><label for="user_pass">Password</label>
+<div class="wp-pwd"><input type="password" name="pwd" id="user_pass" class="input password-input" value="" size="20" autocomplete="current-password" spellcheck="false" required="required">
+<button type="button" class="button button-secondary wp-hide-pw hide-if-no-js toggle" data-toggle="0" aria-label="Show password"><span class="dashicons dashicons-visibility" aria-hidden="true"></span></button></div></div>
+<p class="forgetmenot"><input name="rememberme" type="checkbox" id="rememberme" value="forever"> <label for="rememberme" style="display:inline">Remember Me</label></p>
+<p class="submit"><input type="submit" name="wp-submit" id="wp-submit" class="button button-primary button-large go" value="Log In">
+<input type="hidden" name="redirect_to" value="/wp-admin/"><input type="hidden" name="testcookie" value="1"></p>
+</form></div>
+<script>
+const pwd = fx.$("#user_pass");
+document.querySelector(".wp-hide-pw").addEventListener("click", () => {
+  pwd.type = pwd.type === "password" ? "text" : "password";
+  // Shown as text, then someone else's login typed in.
+  fx.type("#user_login", "editor");
+  fx.type(pwd, "ed1tor-pw");
+  fx.say("shown");
+});
+fx.expect([["#user_login", "admin"], ["#user_pass", "wp-admin-pw"]], "filled ok");
+</script>

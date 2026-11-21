@@ -326,6 +326,7 @@ impl Host {
                 self.gallery_agent_kept();
             }
             Overlay::AgentMore => self.gallery_agent_more(),
+            Overlay::AgentSignIns => self.gallery_agent_signins(),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -348,6 +349,7 @@ impl Host {
                         },
                         MenuRow::Generate,
                     ]),
+                    menu_origin: None,
                     prompt: None,
                 }
             }
@@ -355,6 +357,7 @@ impl Host {
                 autofill = View {
                     chip: true,
                     menu: None,
+                    menu_origin: None,
                     prompt: Some((SaveKind::New, "alice".into(), origin)),
                 }
             }

@@ -20,6 +20,8 @@ pub trait LoginStore {
     /// other fields are never changed through `update`.
     fn update(&mut self, record: StoredRecord) -> Result<(), StoreError>;
     fn delete(&mut self, id: &RecordId) -> Result<bool, StoreError>;
+    /// `new` in place of row `old`, together or not at all (`NotFound`: no row `old`).
+    fn replace(&mut self, old: &RecordId, new: StoredRecord) -> Result<(), StoreError>;
     fn get(&self, id: &RecordId) -> Result<Option<StoredRecord>, StoreError>;
     /// Rows whose origin equals `origin` exactly.
     fn by_origin(&self, origin: &Origin) -> Result<Vec<StoredRecord>, StoreError>;
@@ -67,6 +69,18 @@ impl LoginStore for MemoryStore {
 
     fn delete(&mut self, id: &RecordId) -> Result<bool, StoreError> {
         Ok(self.rows.remove(id).is_some())
+    }
+
+    fn replace(&mut self, old: &RecordId, new: StoredRecord) -> Result<(), StoreError> {
+        if !self.rows.contains_key(old) {
+            return Err(StoreError::NotFound);
+        }
+        if self.rows.contains_key(&new.id) {
+            return Err(StoreError::Duplicate);
+        }
+        self.rows.remove(old);
+        self.rows.insert(new.id.clone(), new);
+        Ok(())
     }
 
     fn get(&self, id: &RecordId) -> Result<Option<StoredRecord>, StoreError> {

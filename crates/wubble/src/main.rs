@@ -40,6 +40,7 @@ mod pages_smoke;
 mod pagescripts;
 mod panes;
 mod parity;
+mod passwords_smoke;
 mod perform;
 mod persist;
 mod pixels;
@@ -244,9 +245,34 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::SessionPhase { phase, profile }) => {
-            with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
-        }
+        Command::Smoke(Smoke::SessionPhase { phase, profile }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
+            }
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Passwords) => match smoke_passwords() {
+            Ok(()) => {
+                println!("smoke: passwords ok");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: passwords FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::PasswordsPhase { phase, profile }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                with_smoke_dir(|config, _| report_run(Mode::Passwords(phase), config, &profile))
+            }
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::Data) => match smoke_data() {
             Ok(()) => {
                 println!("smoke: data ok");
@@ -257,9 +283,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::DataPhase { ending, profile }) => {
-            with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile))
-        }
+        Command::Smoke(Smoke::DataPhase { ending, profile }) => match smoke_profile(&profile) {
+            Ok(()) => with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile)),
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
             println!("{}", blocking::measure());
             ExitCode::SUCCESS
@@ -339,7 +369,7 @@ fn main() -> ExitCode {
                     Mode::Start
                 }
                 Smoke::Pages => Mode::Pages,
-                Smoke::Autofill => Mode::Autofill,
+                Smoke::Autofill { probe } => Mode::Autofill { probe },
                 Smoke::Media => Mode::Media,
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
@@ -364,6 +394,8 @@ fn main() -> ExitCode {
                 | Smoke::Extensions { .. }
                 | Smoke::Session
                 | Smoke::SessionPhase { .. }
+                | Smoke::Passwords
+                | Smoke::PasswordsPhase { .. }
                 | Smoke::Data
                 | Smoke::DataPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
@@ -564,6 +596,7 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let profile = std::env::temp_dir().join(format!("wubble-session-{}", std::process::id()));
     let result = (|| {
+        mark_smoke_profile(&profile)?;
         let no_sandbox = app::no_sandbox_requested(std::env::args_os());
         for phase in ["session-phase=1", "session-phase=2"] {
             let status = std::process::Command::new(&exe)
@@ -577,6 +610,67 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     })();
     remove_cache(&profile);
     result
+}
+
+/// `--smoke passwords`: the file its phases keep the vault key in, on the temporary profile.
+const SMOKE_KEYRING: &str = "smoke-keyring";
+
+/// `--smoke passwords`: its four processes on one temporary profile (`passwords_smoke.rs`).
+fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
+    use passwords_smoke::VaultPhase;
+    let exe = std::env::current_exe()?;
+    let profile = std::env::temp_dir().join(format!("wubble-passwords-{}", std::process::id()));
+    let result = (|| {
+        mark_smoke_profile(&profile)?;
+        let no_sandbox = app::no_sandbox_requested(std::env::args_os());
+        let key_file = profile.join(SMOKE_KEYRING);
+        for phase in [
+            VaultPhase::Write,
+            VaultPhase::Read,
+            VaultPhase::Broken,
+            VaultPhase::Lost,
+        ] {
+            // the key gone from the keyring, the logins still in the database
+            if phase == VaultPhase::Lost {
+                std::fs::remove_file(&key_file)?;
+            }
+            let status = std::process::Command::new(&exe)
+                .args(session_phase_args(phase.arg(), &profile, no_sandbox))
+                .status()?;
+            if !status.success() {
+                return Err(format!("{} exited with {status}", phase.arg()).into());
+            }
+        }
+        if key_file.exists() {
+            return Err("a new key was made over logins sealed with the lost one".into());
+        }
+        Ok(())
+    })();
+    remove_cache(&profile);
+    result
+}
+
+/// The file a parent smoke writes into its temporary profile; a phase run refuses any
+/// profile without it, so a phase pointed at a real profile cannot overwrite its session
+/// or replace its vault's key.
+const SMOKE_PROFILE_MARKER: &str = ".wubble-smoke-profile";
+
+/// Creates `dir` and marks it as a smoke's throwaway profile.
+fn mark_smoke_profile(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(SMOKE_PROFILE_MARKER), b"")
+}
+
+/// Whether a phase run may use `dir`: only a profile its parent smoke marked.
+fn smoke_profile(dir: &Path) -> Result<(), String> {
+    if dir.join(SMOKE_PROFILE_MARKER).is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is not a smoke profile (no {SMOKE_PROFILE_MARKER}); phases run only under --smoke session or --smoke passwords",
+            dir.display()
+        ))
+    }
 }
 
 /// One `--smoke session` phase's command line; the parent's `--no-sandbox` goes with it,
@@ -609,6 +703,8 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
         let profile =
             std::env::temp_dir().join(format!("wubble-data-{word}-{}", std::process::id()));
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            // its run (`data-phase`) refuses a profile not marked as a smoke's
+            mark_smoke_profile(&profile)?;
             let bin = profile.join("bin");
             std::fs::create_dir_all(&bin)?;
             let stub = bin.join("xdg-open");
@@ -659,21 +755,23 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `--smoke autofill`: the login the key menu must offer on the smoke's page.
-fn seed_autofill_login(store: &StoreClient, port: u16) {
-    let origin = format!("http://127.0.0.1:{port}");
+/// The logins the smokes' key menus must offer: `--smoke autofill`'s fixtures' (origin,
+/// username, password), or the loopback page's one for the smokes that share its server.
+fn seed_autofill_logins(store: &StoreClient, logins: Vec<(String, String, String)>) {
     store.vault(move |vault| {
-        let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
-            return;
-        };
-        let login = wubble_vault::NewLogin {
-            origin,
-            form_action_origin: None,
-            username: autofill_smoke::SEEDED_USER.into(),
-            password: zeroize::Zeroizing::new(autofill_smoke::SEEDED_PASSWORD.into()),
-        };
-        if let Err(e) = vault.save(login, 0) {
-            eprintln!("smoke: autofill: the login was not seeded: {e}");
+        for (origin, username, password) in logins {
+            let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
+                continue;
+            };
+            let login = wubble_vault::NewLogin {
+                origin,
+                form_action_origin: None,
+                username,
+                password: zeroize::Zeroizing::new(password),
+            };
+            if let Err(e) = vault.save(login, 0) {
+                eprintln!("smoke: autofill: a login was not seeded: {e}");
+            }
         }
     });
 }
@@ -731,6 +829,8 @@ struct Outcome {
     /// `--smoke start` reached its end.
     start_passed: bool,
     pages_passed: bool,
+    /// `--smoke passwords` (this process's phase) reached its end.
+    passwords_passed: bool,
     /// `--smoke data`'s run reached its end.
     data_passed: bool,
     gallery_passed: bool,
@@ -786,8 +886,8 @@ enum Mode {
     Pages,
     /// `--smoke gallery` (on the pages smoke's seeded profile).
     Gallery,
-    /// `--smoke autofill`.
-    Autofill,
+    /// `--smoke autofill`, or with `probe` its hand-run look at a real page.
+    Autofill { probe: Option<String> },
     /// `--smoke media`.
     Media,
     /// `--smoke builtins`.
@@ -804,6 +904,8 @@ enum Mode {
     Overlay { dark: bool },
     /// One phase of `--smoke session`.
     Session(Phase),
+    /// One process of `--smoke passwords`.
+    Passwords(passwords_smoke::VaultPhase),
     /// One run of `--smoke data`, ending as given.
     Data(data_smoke::Ending),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -1340,6 +1442,18 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_agent_sheet_site_submitted(move |text| {
         with_host_in(win, |host| host.agent_sheet_site_submitted(&text))
     });
+    window.on_agent_sheet_share_toggled(move |on| {
+        with_host_in(win, |host| host.agent_sheet_share(on))
+    });
+    window.on_agent_sheet_share_from_picked(move |i| {
+        with_host_in(win, |host| host.agent_sheet_share_from(i))
+    });
+    window.on_agent_sheet_bound(move |name, i| {
+        with_host_in(win, |host| host.agent_sheet_bound(&name, i))
+    });
+    window.on_agent_sheet_unlock_vault(move || {
+        with_host_in(win, |host| host.agent_sheet_unlock_vault())
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });
@@ -1368,8 +1482,12 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_login_added(move |site, user, password| {
         with_host_in(win, |host| host.login_added(&site, &user, &password))
     });
+    window.on_login_edited(move |id, site, user, password| {
+        with_host_in(win, |host| host.login_edited(&id, &site, &user, &password))
+    });
     window
         .on_passwords_import_requested(move || with_host_in(win, Host::passwords_import_requested));
+    window.on_passwords_start_over(move || with_host_in(win, Host::passwords_start_over));
     // The video controls, the toast's button and the Boost editor.
     window.on_video_command(move |name, value| {
         with_host_in(win, |host| host.video_command(&name, value))
@@ -1426,10 +1544,16 @@ fn run(
     );
     let autofill_port = (matches!(
         mode,
-        Mode::Autofill | Mode::Block | Mode::Parity | Mode::Mcp
+        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Mcp
     ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
+    // `--smoke autofill`'s fixtures (or its probe), seeded below.
+    let mut autofill_plan = match &mode {
+        Mode::Autofill { probe: Some(url) } => Some(autofill_smoke::probe(url)),
+        Mode::Autofill { probe: None } => autofill_port.map(autofill_smoke::corpus),
+        _ => None,
+    };
     // `--smoke data`'s pages, cookies and held downloads, on a loopback port.
     let data_server = matches!(mode, Mode::Data(_))
         .then(data_smoke::serve)
@@ -1457,13 +1581,42 @@ fn run(
             pages_smoke::seed(&db, &keyring)?;
             Box::new(keyring)
         }
+        // a key that outlives the process, in a file of the throwaway profile; or, only on a
+        // private D-Bus session with a throwaway keyring (`WUBBLE_SMOKE_KEYRING=os`), the OS one
+        Mode::Passwords(phase) => {
+            let broken = *phase == passwords_smoke::VaultPhase::Broken;
+            if !broken && std::env::var("WUBBLE_SMOKE_KEYRING").as_deref() == Ok("os") {
+                Box::new(wubble_vault::OsKeyRing)
+            } else {
+                Box::new(wubble_vault::FileKeyRing::new(
+                    profile.join(SMOKE_KEYRING),
+                    broken,
+                ))
+            }
+        }
         _ => Box::new(wubble_vault::FakeKeyRing::default()),
     };
     // The database loads, and the GPU device is made (about 150 ms on the Linux box, as long
     // as CEF's start), while CEF starts.
     let (store, loaded) = StoreClient::spawn(db, keyring);
     if let Some(port) = autofill_port.filter(|_| !matches!(mode, Mode::Parity)) {
-        seed_autofill_login(&store, port);
+        let logins = match &autofill_plan {
+            Some(plan) => plan.iter().flat_map(|f| f.logins.clone()).collect(),
+            None => vec![
+                (
+                    format!("http://127.0.0.1:{port}"),
+                    autofill_smoke::SEEDED_USER.into(),
+                    autofill_smoke::SEEDED_PASSWORD.into(),
+                ),
+                // `--smoke mcp`'s login the sheet binds a session's names to
+                (
+                    format!("http://{}:{port}", mcp_smoke::SIGNIN_HOST),
+                    mcp_smoke::SIGNIN_USER.into(),
+                    mcp_smoke::SIGNIN_PASSWORD.into(),
+                ),
+            ],
+        };
+        seed_autofill_logins(&store, logins);
     }
     let gpu_init = std::thread::Builder::new()
         .name("wubble-gpu-init".into())
@@ -1485,6 +1638,7 @@ fn run(
         settings_smoke: None,
         start_smoke: None,
         pages_smoke: None,
+        passwords_smoke: None,
         data_smoke: None,
         gallery_smoke: None,
         autofill_smoke: None,
@@ -1608,13 +1762,17 @@ fn run(
                 ..none
             },
         ),
-        Mode::Autofill => (
-            autofill_port.map(|port| format!("http://127.0.0.1:{port}/")),
-            Checks {
-                autofill_smoke: Some(autofill_smoke::AutofillSmoke::default()),
-                ..none
-            },
-        ),
+        Mode::Autofill { .. } => {
+            let smoke =
+                autofill_smoke::AutofillSmoke::new(autofill_plan.take().unwrap_or_default());
+            (
+                smoke.start_url().map(str::to_owned),
+                Checks {
+                    autofill_smoke: Some(smoke),
+                    ..none
+                },
+            )
+        }
         Mode::Media => (
             media_port.map(|port| format!("http://127.0.0.1:{port}/")),
             Checks {
@@ -1646,8 +1804,11 @@ fn run(
                 ..none
             },
         ),
+        // the owner signed in to the sites a session shares (`mcp_smoke::sign_in`)
         Mode::Mcp => (
-            Some(bundled()),
+            autofill_port
+                .map(mcp_smoke::sign_in)
+                .or_else(|| Some(bundled())),
             Checks {
                 mcp_smoke: Some(Default::default()),
                 ..none
@@ -1693,6 +1854,13 @@ fn run(
             None,
             Checks {
                 session_smoke: Some(SessionSmoke::new(*phase)),
+                ..none
+            },
+        ),
+        Mode::Passwords(phase) => (
+            None,
+            Checks {
+                passwords_smoke: Some(passwords_smoke::PasswordsSmoke::new(*phase)),
                 ..none
             },
         ),
@@ -1988,6 +2156,7 @@ fn run(
         settings_passed: host.settings_passed,
         start_passed: host.start_passed,
         pages_passed: host.pages_passed,
+        passwords_passed: host.passwords_passed,
         data_passed: host.data_passed,
         gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
@@ -2020,5 +2189,19 @@ mod tests {
         let off = session_phase_args("session-phase=2", profile, true);
         assert!(app::no_sandbox_requested(&off));
         assert_eq!(off[3], "/tmp/p");
+    }
+
+    #[test]
+    fn smoke_profile_accepts_a_marked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        mark_smoke_profile(dir.path()).unwrap();
+        assert_eq!(smoke_profile(dir.path()), Ok(()));
+    }
+
+    #[test]
+    fn smoke_profile_refuses_an_unmarked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = smoke_profile(dir.path()).unwrap_err();
+        assert!(err.contains(&dir.path().display().to_string()), "{err}");
     }
 }

@@ -982,6 +982,21 @@ impl Host {
         self.vault_request(command, Then::Apply);
     }
 
+    /// The page's "Delete them and start over" (`VaultStatus::KeyLost`).
+    pub(crate) fn passwords_start_over(&mut self) {
+        self.vault_request(VaultCommand::StartOver, Then::Apply);
+    }
+
+    pub(crate) fn login_edited(&mut self, id: &str, site: &str, username: &str, password: &str) {
+        let command = VaultCommand::Edit {
+            id: RecordId(id.to_owned()),
+            site: site.to_owned(),
+            username: username.to_owned(),
+            password: Zeroizing::new(password.to_owned()),
+        };
+        self.vault_request(command, Then::Apply);
+    }
+
     /// "Import CSV": the OS file chooser, then the vault reads the file on the store thread.
     pub(crate) fn passwords_import_requested(&mut self) {
         use crate::chooser::{self, DialogSpec, Pick};

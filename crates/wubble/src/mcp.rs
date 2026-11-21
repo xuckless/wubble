@@ -67,9 +67,12 @@ pub enum Event {
 /// browser, so a file found here is a crash's and goes.
 pub fn bind(path: &Path) -> io::Result<Listener> {
     crate::instance::remove_stale(path)?;
+    // Only `Hosted::stop` removes the file, before it returns: a listener reclaiming its name on
+    // drop would do it later, from the accept thread winding down, and could take the socket a
+    // following `start` just bound at the same path.
     let options = || {
         path.to_fs_name::<GenericFilePath>()
-            .map(|name| ListenerOptions::new().name(name))
+            .map(|name| ListenerOptions::new().name(name).reclaim_name(false))
     };
     // Only this user may connect (set before `listen`, so no umask race).
     #[cfg(unix)]

@@ -671,6 +671,15 @@ export struct PrintSheetView {
     copies: int,
 }
 
+// One secret name on the agent sheet: the logins it may stand for (the first: none) and the one
+// picked; the title says which part of the login it types.
+export struct AgentBindingItem {
+    name: string,
+    title: string,
+    options: [MenuEntry],
+    index: int,
+}
+
 // An agent session's approval sheet (`wubble_core::agent::Request` and the session's sites): who asks and for what.
 export struct AgentSheetView {
     open: bool,
@@ -691,7 +700,21 @@ export struct AgentSheetView {
     // A running session asks for more (`request_more`): the lists hold only what is new, and
     // there is no window choice.
     more: bool,
+    // "Use my sign-ins for these sites": offered only with a list of sites (never any site)
+    may-share: bool,
+    share: bool,
+    // the owner's Spaces the sign-ins may come from, and the one chosen
+    share-from: [MenuEntry],
+    share-from-index: int,
+    // what sharing does, in words: the sites, the Space, and that the copies die with the session
+    share-note: string,
+    // each secret name asked for, and the saved login it stands for (`AgentBindingItem`)
+    bindings: [AgentBindingItem],
+    // the vault must be unlocked (by the owner, here) before a login can be picked
+    vault-locked: bool,
+    vault-note: string,
 }
+
 
 // One line of the agent activity log page (`wubble_core::agent::log::Row`).
 export struct AgentLogItem {
@@ -720,7 +743,11 @@ export struct BookmarkSheetView {
 export struct LoginItem {
     id: string,
     site: string,
+    // the origin in full (`http://` kept), what an edit starts from
+    origin: string,
     username: string,
+    // the username opened with this key; an unreadable row can only be deleted, not edited
+    readable: bool,
     revealed: string,
     has-revealed: bool,
 }
@@ -730,6 +757,8 @@ export enum VaultState {
     unlocked,
     unavailable,
     unreadable,
+    // the keyring has no key for saved logins (`VaultStatus::KeyLost`)
+    key-lost,
 }
 
 export struct PasswordsView {

@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in to GitHub · GitHub</title>
+<!-- Modelled on github.com/login: one form, autocomplete username and current-password, a
+     passkey button beside it. Enter in the password field submits. -->
+<div class="auth-form px-3" id="login">
+<form data-turbo="false" action="/f/welcome" accept-charset="UTF-8" method="post">
+<input type="hidden" name="authenticity_token" value="fixture" autocomplete="off">
+<div class="auth-form-body mt-3">
+<label for="login_field">Username or email address</label>
+<input type="text" name="login" id="login_field" class="form-control input-block js-login-field" autocapitalize="off" autocorrect="off" autocomplete="username" autofocus="autofocus" required="required">
+<div class="position-relative">
+<label for="password">Password</label>
+<input type="password" name="password" id="password" class="form-control form-control input-block js-password-field enter" autocomplete="current-password" required="required">
+<input type="hidden" name="webauthn-conditional" value="undefined">
+<input type="submit" name="commit" value="Sign in" class="btn btn-primary btn-block js-sign-in-button go" data-disable-with="Signing in…">
+</div></div></form>
+<div class="login-callout"><button type="button" class="btn-link js-webauthn-login">Sign in with a passkey</button></div>
+</div>
+<script>
+// Then a changed password, typed; the user clicks into the field and presses Enter.
+fx.expect([["#login_field", "octocat"], ["#password", "0ld-octo"]], "filled ok", () => fx.type("#password", "n3w-octo"));
+</script>

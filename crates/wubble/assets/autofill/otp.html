@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in</title>
+<!-- A password and a one-time code typed as a password (named, no autocomplete): the code is no
+     password, so no change-password form and nothing filled into it. -->
+<form action="/f/otp/code" method="post">
+<input type="text" name="username" id="user">
+<input type="password" name="password" id="pass">
+<input type="password" name="verification_code" id="otp" inputmode="numeric" placeholder="6-digit code">
+<input type="submit" class="go" value="Sign in">
+</form>
+<script>
+fx.expect([["#user", "quinn"], ["#pass", "qu1nn-pw"]], "filled ok", null, ["#otp"]);
+</script>

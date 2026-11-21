@@ -35,6 +35,9 @@ base64 = "0.22"
 # Codex's config.toml edited in place, comments and order kept (`agent::harness`); already in
 # Cargo.lock (MIT OR Apache-2.0).
 toml_edit = "0.25"
+# Password autofill (`autofill`): Chromium's one-time-code, SSN and card-code field-name patterns;
+# already in Cargo.lock (MIT OR Apache-2.0).
+regex = "1"
 
 [dev-dependencies]
 # Signs the updater's test manifests and archives with a key pair made in the test (MIT,

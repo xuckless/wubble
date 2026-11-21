@@ -96,6 +96,18 @@ impl LoginStore for StoreLogins {
         pollster::block_on(self.store.delete_login(&id.0)).map_err(backend)
     }
 
+    fn replace(&mut self, old: &RecordId, new: StoredRecord) -> Result<(), StoreError> {
+        let moved =
+            pollster::block_on(self.store.move_login(&old.0, to_row(new))).map_err(|e| {
+                if e.is_constraint() {
+                    StoreError::Duplicate
+                } else {
+                    backend(e)
+                }
+            })?;
+        moved.then_some(()).ok_or(StoreError::NotFound)
+    }
+
     fn get(&self, id: &RecordId) -> Result<Option<StoredRecord>, StoreError> {
         pollster::block_on(self.store.login(&id.0))
             .map_err(backend)?
@@ -228,9 +240,16 @@ mod tests {
             v.unlock();
             v.save(login("https://a.test", "alice", "pw1"), 5).unwrap()
         };
-        // Same database, a keyring that has never seen the first key.
-        let mut v = vault_at(&path, &FakeKeyRing::default());
-        assert_eq!(v.unlock(), UnlockOutcome::NewKey { unreadable: 1 });
+        // Same database, a keyring that has never seen the first key: no new key over the row.
+        assert_eq!(
+            vault_at(&path, &FakeKeyRing::default()).unlock(),
+            UnlockOutcome::KeyLost { rows: 1 }
+        );
+        // a keyring holding another key: the row lists, but does not open
+        let other = FakeKeyRing::default();
+        crate::keyring::KeyRing::set(&other, "wubble", "vault-default", &[42; 32]).unwrap();
+        let mut v = vault_at(&path, &other);
+        assert_eq!(v.unlock(), UnlockOutcome::Unreadable { rows: 1 });
         assert!(v.reveal(&id).is_err());
         assert!(
             v.find_for_origin(&page("https://a.test"))
