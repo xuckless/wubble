@@ -223,6 +223,55 @@ wubble is about 16 % behind Chromium on Speedometer and within one run's noise o
 
 Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
 
+## Pixel questions and the glass governor (pf/perf, 2026-11-21)
+
+One release build of pf/perf after the merge of main 8ac66cb, partial rendering on and off
+(`SLINT_SKIA_PARTIAL_RENDERING=off`), alternated, load under 3 (0.5 to 1.2) before each run.
+
+Whole-window frames (`--measure idle --seconds 10 --measure-page wubble://start`, the scene redraws the whole
+window every frame), 3 runs each:
+
+| | on | off |
+|---|---|---|
+| Slint render p50 / p95 | 0.72 to 0.73 / 1.19 to 1.24 ms | 0.63 to 0.65 / 1.09 to 1.14 ms |
+| present interval p99 | 17.3 to 19.8 ms | 17.5 to 17.7 ms |
+| missed vsyncs in 10 s | 2, 3, 2 | 2, 2, 2 |
+
+A whole-window frame costs 0.1 ms more on the CPU with partial rendering on (the dirty-region walk; the kept
+frame's copy to the swapchain is a GPU copy). It does not show in the frame intervals.
+
+The gallery (`--smoke gallery`), 6 runs each: the glass governor changed level in none of the 12 runs. The
+earlier steps to Flat (2 of 4 runs with partial on) were taken with the machine loaded; main's own build
+stepped down once under the same load.
+
+The gallery shots, with partial on against off (off's runs against each other give the noise):
+- The shell and page scenes are within off's own spread. The exceptions are the agent-orb, task-manager and
+  history scenes, which animate and differ in every run either way, and the first run of each set.
+- `66-settings-sites`: the Sites list's scrollbar thumb is still fading in some runs and gone in others, both
+  on and off (shot timing).
+- `58-settings`, `69-settings-search-pages` and `75-archive` (2 or 3 of 6 runs, partial on only): up to 6
+  levels on the edge columns of two inset-shadowed rounded rects, the Settings section pill and the address
+  field. The inset shadow image sits at a fractional device position (x 311.36 for the pill). Skia
+  anti-aliases its edge column differently when a partial frame's clip covers it, and the pixel then stays
+  until the item is redrawn. The evidence, from `--smoke settings` in verify mode:
+  - with inset shadows not drawn, the smoke has no mismatches;
+  - the shadow's device position is the same in the partial frame and in the whole redraw (logged);
+  - drawing the image through a shader instead leaves it;
+  - snapping the image to the pixel grid removes it, but moves the shadow's edges by up to 3 levels against
+    upstream (the owner's call, in TODO).
+- Verify's other mismatches in `--smoke settings`, single pixels of the section icons on frames drawn whole,
+  are not partial rendering's. They remain with every frame forced whole, and follow the draw order (drawing
+  the reference first moves them to it). They go away when the inset shadow images are rendered on a CPU
+  surface. A frame that renders a new shadow image starts a GPU offscreen surface mid-frame, and Skia then
+  rasterizes the icon paths after it slightly differently; verify's reference finds the image cached and
+  starts none. Upstream draws each frame once, so it shows the first draw, as the presented frame does.
+
+`42-toast-question` (1 run in 4 earlier) was not a stale frame. In that run Chromium's GPU process exited
+(133) while the page was alive, and from the next resize on the page laid out with smaller body text. Killing
+the GPU process at the same point (SIGTRAP to the helper with a `GpuWatchdog` thread, once scene 15 is shot)
+reproduces it on main's build, shot for shot. The in-place path presents whole on any size change (`import.rs` `in_place`, unit
+tested).
+
 ## pf/perf against main, quiet machine (2026-11-21, numbers of record)
 
 The release builds of main at f43b5cf ("base") and of pf/perf at cc5a49a ("final": partial rendering, page damage in
