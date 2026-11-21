@@ -79,7 +79,7 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Media downloader, no muxer: separate video and audio (YouTube's adaptive formats, HLS audio groups, DASH) become one file only with a system `ffmpeg` (a Mac has none), else two files and a menu that says so; a pure-Rust or bundled remuxer is the fix
 - [ ] Media downloader: an HLS download is MPEG-TS (`.ts`), which QuickTime and the browser itself do not play; remux to MP4 when `ffmpeg` is found, or with a remuxer
 - [ ] Media downloader: YouTube's player API answered "Sign in to confirm you're not a bot" to the `android_vr` client from the dev box (shown to the user now, not worked around); its format URLs' own fetch is untried; an owner call: allow one 1 MB ranged fetch from a free video, and say which sites the owner tried
-- [ ] Media downloader: a DASH manifest of several periods is refused ("Not supported"); a video in an iframe gets no strip button (the glyph still offers it); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)
+- [ ] Media downloader: a DASH manifest of several periods is refused ("Not supported"); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)
 - [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page); downloads that an agent session's tab starts land in the user's list and folder with no prompt (the airlock is not built)
 - [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
 - [ ] Two things are called "Clear browsing data" (the History page's button clears visits; the command clears cookies and cache), and the command is not found by "history"
@@ -100,6 +100,7 @@ Open, for the owner's eye:
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
 - [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
+- [ ] Media downloader: a video a service worker answers is not seen by the detection (the worker's own fetch has no tab; `--smoke media=probe` on fixtures `sw`): the save control says nothing was found; fullscreen shows the strip without its glass (the scene does not render there): look by hand; an embedded YouTube player (an iframe of youtube.com) has no lookup, since the lookup keys on the tab's own address
 - [ ] Video strip button reads "Save video"; a second click mid-download re-enters the downloader
 - [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
 

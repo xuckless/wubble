@@ -969,14 +969,16 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(list) = self.media.tabs.get(&tab) else {
-            return;
-        };
-        if !self.media.settings.ask_each_time {
+        // A video with MediaKeys is protected whatever the page's other streams are: the menu
+        // says so and offers nothing.
+        let protected = self.video_is_protected(tab);
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
+        if !self.media.settings.ask_each_time && !protected {
+            let can_join = wubble_engine::save::find_ffmpeg().is_some();
             let first = list.items.iter().find_map(|i| match &i.found {
                 Found::Ready(variants) => {
                     let choices = select::choices(variants);
-                    let can_join = wubble_engine::save::find_ffmpeg().is_some();
                     select::choose(&choices, self.media.settings.quality, can_join)
                         .map(|c| (i.id, c))
                 }
@@ -999,23 +1001,41 @@ impl Host {
             .iter()
             .map(|i| item_title(i, &page_title))
             .collect();
-        let rows: Vec<MediaRow> = list
-            .items
-            .iter()
-            .zip(&titles)
-            .filter(|(i, _)| i.is_shown())
-            .map(|(i, title)| MediaRow {
-                item: i.id,
-                title,
-                found: &i.found,
-            })
-            .collect();
+        let protected_found = Found::Refused(Refusal::Protected);
+        let rows: Vec<MediaRow> = if protected {
+            vec![MediaRow {
+                item: 0,
+                title: &page_title,
+                found: &protected_found,
+            }]
+        } else {
+            list.items
+                .iter()
+                .zip(&titles)
+                .filter(|(i, _)| i.is_shown())
+                .map(|(i, title)| MediaRow {
+                    item: i.id,
+                    title,
+                    found: &i.found,
+                })
+                .collect()
+        };
         let entries =
             crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+    }
+
+    /// The downloader is on and lists something for the tab's page (a stream, or why not).
+    pub(super) fn media_has_shown(&self, tab: TabId) -> bool {
+        self.media.has_media(tab)
+    }
+
+    /// Whether the downloader is on (`media.enabled`).
+    pub(super) fn media_enabled(&self) -> bool {
+        self.media.settings.enabled
     }
 
     /// The tab's streams, as the downloader lists them (none while it is off).

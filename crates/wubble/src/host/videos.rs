@@ -410,7 +410,11 @@ impl Host {
 
     fn media_snapshot(&mut self, tab: TabId, json: Value) {
         let now = now_ms() as u64;
-        let video = json.get("v").and_then(VideoState::from_json);
+        // A frame's area is a strip only over what the downloader saw of the page.
+        let video = json
+            .get("v")
+            .and_then(VideoState::from_json)
+            .filter(|v| !v.frame || self.media_has_shown(tab));
         self.videos
             .playing
             .insert(tab, video.as_ref().is_some_and(VideoState::plays_aloud));
@@ -598,6 +602,15 @@ impl Host {
         }
     }
 
+    /// The tab's main video carries MediaKeys (EME): protected, whatever the downloader saw.
+    pub(super) fn video_is_protected(&self, tab: TabId) -> bool {
+        self.videos
+            .overlays
+            .get(&tab)
+            .and_then(Overlay::video)
+            .is_some_and(|v| v.drm)
+    }
+
     /// `--smoke media=probe`: what the strip knows of the tab's video.
     pub(super) fn video_overlay_debug(&self, tab: TabId) -> String {
         match self.videos.overlays.get(&tab).and_then(Overlay::video) {
@@ -612,7 +625,7 @@ impl Host {
             return video::Save::Absent;
         };
         let latest = self.media_latest(tab).and_then(|id| self.downloads.get(id));
-        video::Save::of(v, self.media_items(tab), latest)
+        video::Save::of(v, self.media_items(tab), latest, self.media_enabled())
     }
 
     pub(crate) fn video_hovered(&mut self, over: bool) {
@@ -776,6 +789,7 @@ impl Host {
                             .map_or(-1, |i| i as i32),
                         speeds: o.speeds_open(),
                         can_pip: self.model.can_pip(tab),
+                        frame: v.frame,
                         save: match save {
                             video::Save::Absent => VideoSave::Absent,
                             video::Save::Offered => VideoSave::Offered,
@@ -1274,6 +1288,11 @@ impl Host {
             strip: overlay.is_some_and(Overlay::shown),
             collapsed: overlay.is_some_and(Overlay::collapsed),
             speeds: overlay.is_some_and(Overlay::speeds_open),
+            menu: tab.is_some_and(|t| {
+                self.surfaces
+                    .get(&t)
+                    .is_some_and(|s| s.menu != crate::menu::Menu::Closed)
+            }),
             toast,
             save: tab.map(|t| self.video_save_state(t)),
             ready: tab.is_some_and(|t| {

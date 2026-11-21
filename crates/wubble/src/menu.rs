@@ -1005,6 +1005,13 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
         danger: false,
     };
     let mut out = Vec::new();
+    if rows.is_empty() {
+        // The strip's control was pressed and the downloader has nothing for the page.
+        return vec![
+            info("Nothing to save was found on this page".into()),
+            info("A player that streams in small pieces may not be offered".into()),
+        ];
+    }
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
             out.push(Entry {
@@ -1754,6 +1761,13 @@ mod tests {
             label.chars().filter(|&c| c == 'x').count(),
             SEARCH_LABEL_CHARS
         );
+    }
+
+    #[test]
+    fn the_save_control_with_nothing_to_save_says_so() {
+        let entries = media_entries(&[], false);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.command == Command::Info && !e.enabled));
     }
 
     #[test]

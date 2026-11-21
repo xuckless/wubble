@@ -78,14 +78,14 @@ export component VideoControls inherits Rectangle {
             // The strip's controls inside its touch area: a pointer on a button is still on the
             // strip (a sibling under the buttons lost its hover to each of them, and the strip went
             // while the pointer was on it).
-            if root.built: play := IconButton {
+            if root.built && !root.video.frame: play := IconButton {
                 icon-path: root.video.paused ? Glyph.play : Glyph.pause;
                 label: root.video.paused ? "Play" : "Pause";
                 clicked => {
                     root.command("play", 0);
                 }
             }
-            if root.built: bar := BScrubber {
+            if root.built && !root.video.frame: bar := BScrubber {
                 progress: root.video.progress;
                 marks: root.video.marks;
                 horizontal-stretch: 1;
@@ -93,14 +93,14 @@ export component VideoControls inherits Rectangle {
                     root.command("seek", clamp(f, 0, 1));
                 }
             }
-            if root.built: rate-button := BDockText {
+            if root.built && !root.video.frame: rate-button := BDockText {
                 value: root.video.rate;
                 label: "Speed";
                 clicked => {
                     root.command("speeds", 0);
                 }
             }
-            if root.built: loop := IconButton {
+            if root.built && !root.video.frame: loop := IconButton {
                 icon-path: Glyph.loop;
                 label: "Loop";
                 on: root.video.looped;
@@ -108,21 +108,21 @@ export component VideoControls inherits Rectangle {
                     root.command("loop", 0);
                 }
             }
-            if root.built && root.video.can-pip: IconButton {
+            if root.built && !root.video.frame && root.video.can-pip: IconButton {
                 icon-path: Glyph.pip;
                 label: "Picture in picture";
                 clicked => {
                     root.command("pip", 0);
                 }
             }
-            if root.built: frame := IconButton {
+            if root.built && !root.video.frame: frame := IconButton {
                 icon-path: Glyph.camera;
                 label: "Save frame";
                 clicked => {
                     root.command("frame", 0);
                 }
             }
-            if root.built: mute := IconButton {
+            if root.built && !root.video.frame: mute := IconButton {
                 icon-path: root.video.muted ? Glyph.speaker-muted : Glyph.speaker;
                 label: root.video.muted ? "Unmute" : "Mute";
                 on: root.video.muted;
@@ -130,7 +130,7 @@ export component VideoControls inherits Rectangle {
                     root.command("mute", 0);
                 }
             }
-            if root.built && root.video.save != VideoSave.absent && root.width >= Shell.video-save-min: download := BDockSave {
+            if root.built && root.video.save != VideoSave.absent: download := BDockSave {
                 saving: root.video.save == VideoSave.saving;
                 saved: root.video.save == VideoSave.saved;
                 fraction: root.video.save-fraction;
