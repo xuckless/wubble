@@ -113,7 +113,7 @@ const parity = {
   // its default action prevented.
   grabSpace() { seen.grabSpace = true; return true; },
   reset() {
-    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.neutral = 0; seen.clip = {}; seen.copied = ''; seen.space = []; seen.spaceRepeat = []; seen.grabSpace = false;
+    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.ownUndo = false; seen.neutral = 0; seen.clip = {}; seen.copied = ''; seen.space = []; seen.spaceRepeat = []; seen.grabSpace = false;
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
     scrollTo(0, 0);
@@ -130,6 +130,8 @@ addEventListener('keydown', (e) => {
   seen.keys.push((e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.metaKey ? 'Cmd+' : '') + e.key + '/' + e.code);
   // A page that owns Ctrl+F (a web app's own search) when asked to.
   if (seen.grab && (e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); seen.keys.push('grabbed'); }
+  // A page with its own undo (a drawing app's) when asked to: Mod+Z is the page's.
+  if (seen.ownUndo && (e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); seen.keys.push('undone'); }
 });
 // What a player sees of Space (`parity.grabSpace`): `type key code` per event, the
 // keydowns' `repeat`.

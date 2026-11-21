@@ -521,9 +521,9 @@ impl Host {
                 self.panel_event(PanelEvent::Dismiss);
                 self.dispatch(super::new_tab(request.url, None));
             }
-            WebEvent::KeyUnhandled(key) => {
+            WebEvent::KeyUnhandled { key, editable } => {
                 if let Some(action) = self.page_first.unhandled(key) {
-                    self.perform(action);
+                    self.perform_unhandled(action, editable);
                 }
             }
             _ => {}

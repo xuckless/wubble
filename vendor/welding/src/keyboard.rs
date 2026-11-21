@@ -42,6 +42,8 @@ cef::wrap_keyboard_handler! {
                 self.events.push(CefSurfaceEvent::KeyUnhandled {
                     windows_key_code: event.windows_key_code,
                     modifiers: event.modifiers,
+                    // wubble change (56): the page's focus on an editable field
+                    focus_on_editable_field: event.focus_on_editable_field != 0,
                 });
             }
             // Not handled here: CEF's own default handling still runs.

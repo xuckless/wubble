@@ -82,6 +82,7 @@ use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
 use wubble_core::busy::Reason;
+use wubble_core::closed;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::keys::{Keymap, Platform};
@@ -514,6 +515,9 @@ pub struct Host {
     routing_rules: Vec<String>,
     /// The layout before the last tidy, to undo it with: one slot.
     tidy_undo: Option<(SpaceId, Vec<Item>)>,
+    /// This run's closes still on the recently-closed list, for undo close tab and the
+    /// reopen's place (`wubble_core::closed`).
+    close_undo: closed::Undo,
     /// The tab hover preview and the thumbnails it shows.
     preview: preview::Preview,
     /// The link status bubble (`host/status.rs`).
@@ -732,6 +736,7 @@ impl Host {
             archiving: HashMap::new(),
             routing_rules: vec![],
             tidy_undo: None,
+            close_undo: closed::Undo::default(),
             preview: preview::Preview::new(),
             status: status::Status::new(),
             tips: tooltip::Tips::new(),
@@ -1686,11 +1691,11 @@ impl Host {
                 self.busy_view_gone(tab);
                 self.dispatch(Command::RendererGone(tab));
             }
-            WebEvent::KeyUnhandled(key) => {
+            WebEvent::KeyUnhandled { key, editable } => {
                 if Some(tab) == self.shown()
                     && let Some(action) = self.page_first.unhandled(key)
                 {
-                    self.perform(action);
+                    self.perform_unhandled(action, editable);
                 }
             }
             // A page without an icon shows the neutral glyph; a new icon replaces the old one
@@ -2084,13 +2089,12 @@ impl Host {
                     });
                 });
             }
-            Plan::ReopenClosed => self.store.pop_closed(|closed| {
-                if let Some(closed) = closed {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.reopen_closed(closed));
-                    });
-                }
-            }),
+            Plan::ReopenClosed => {
+                self.close_undo(closed::Event::Reopen);
+            }
+            Plan::UndoClose => {
+                self.close_undo(closed::Event::Command);
+            }
             Plan::ToggleSidebar => {
                 if let Some(window) = self.w.window.upgrade() {
                     window.invoke_toggle_sidebar();
@@ -2108,10 +2112,62 @@ impl Host {
         }
     }
 
-    /// A tab off the recently-closed list, in the active Space (its own may
-    /// be gone), in its container if that still exists.
-    fn reopen_closed(&mut self, closed: ClosedTab) {
-        self.reopen(closed.url, None, Some(closed.container));
+    /// A page-first action whose key the page left alone: Mod+Z's undo close tab is told
+    /// whether the page's focus was on an editable element, so a field keeps its undo.
+    pub(super) fn perform_unhandled(&mut self, action: Action, editable: bool) {
+        match action {
+            Action::UndoCloseTab => {
+                self.close_undo(closed::Event::Key { editable });
+            }
+            action => self.perform(action),
+        }
+    }
+
+    /// Steps the closed-tab machine and runs its effects. The restores are returned: they
+    /// need the entry the store popped (`reopen_closed`).
+    fn close_undo(&mut self, event: closed::Event) -> Vec<closed::Effect> {
+        let (state, effects) = closed::transition(std::mem::take(&mut self.close_undo), event);
+        self.close_undo = state;
+        let mut restores = vec![];
+        for effect in effects {
+            match effect {
+                closed::Effect::Pop => self.store.pop_closed(|closed| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.reopen_closed(closed));
+                    });
+                }),
+                closed::Effect::FieldUndo => self.perform(Action::Undo),
+                closed::Effect::NothingToUndo => {
+                    if let Some(window) = self.w.window.upgrade() {
+                        self.toast(&window, "Nothing to undo");
+                    }
+                }
+                restore @ closed::Effect::Restore { .. } => restores.push(restore),
+            }
+        }
+        restores
+    }
+
+    /// The store's newest recently-closed entry, popped: a close of this run back in its Space
+    /// at its place (pinned, in its folder), an older one in the active Space; in its container
+    /// if that still exists. The one restore of a closed tab, for Mod+Shift+T and Mod+Z alike.
+    fn reopen_closed(&mut self, closed: Option<ClosedTab>) {
+        let popped = closed.as_ref().map(|c| (c.url.clone(), c.closed_at_ms));
+        let restores = self.close_undo(closed::Event::Popped(popped));
+        let Some(closed) = closed else {
+            return;
+        };
+        for restore in restores {
+            let closed::Effect::Restore { space, place } = restore else {
+                continue;
+            };
+            let newest = self.model.tabs.keys().next_back().copied();
+            self.reopen(closed.url.clone(), space, Some(closed.container));
+            let tab = self.model.tabs.keys().next_back().copied();
+            if let (Some(to), Some(tab)) = (place, tab.filter(|t| Some(*t) != newest)) {
+                self.dispatch(Command::MoveTab { tab, to });
+            }
+        }
     }
 
     /// Opens `url` again, the one way a tab comes back: in `space` if it still exists (the view
@@ -2256,30 +2312,35 @@ impl Host {
     /// `command` is about to run. None for a tab filed in the Archive, one an agent session
     /// drives, and what `Model::closes_into_recent` leaves out (a peek's, an agent Space's being
     /// deleted, an empty one).
-    fn closed_tab_entry(&self, tab: TabId, command: &Command) -> Option<ClosedTab> {
-        if self.archiving.contains_key(&tab)
-            || self.agent_drives(tab)
-            || !self.model.closes_into_recent(tab, command)
-        {
+    /// With it, the close as undo close tab keeps it (its place).
+    fn closed_tab_entry(
+        &self,
+        tab: TabId,
+        command: &Command,
+    ) -> Option<(ClosedTab, closed::Closed)> {
+        if self.archiving.contains_key(&tab) || self.agent_drives(tab) {
             return None;
         }
+        let undo = closed::Closed::of(&self.model, tab, command, now_ms())?;
         let t = self.model.tabs.get(&tab)?;
-        Some(ClosedTab {
-            url: t.url.clone(),
+        let entry = ClosedTab {
+            url: undo.url.clone(),
             title: t.title.clone(),
             container: t.container,
-            space: self.model.location(tab).map(|(space, _)| space),
-            closed_at_ms: now_ms(),
-        })
+            space: Some(undo.space),
+            closed_at_ms: undo.closed_at_ms,
+        };
+        Some((entry, undo))
     }
 
     /// Cleans up per-tab host state for a tab the model removed and records it if eligible.
-    fn finish_closed(&mut self, tab: TabId, closed: Option<ClosedTab>) {
+    fn finish_closed(&mut self, tab: TabId, closed: Option<(ClosedTab, closed::Closed)>) {
         self.media_tab_closed(tab);
         self.committed.remove(&tab);
         self.typed_nav.ended(tab);
-        if let Some(entry) = closed {
+        if let Some((entry, undo)) = closed {
             self.store.push_closed(entry);
+            self.close_undo(closed::Event::Closed(undo));
         }
     }
 

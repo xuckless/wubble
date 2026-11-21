@@ -838,10 +838,11 @@ impl View {
                 CefSurfaceEvent::KeyUnhandled {
                     windows_key_code,
                     modifiers,
-                } => self.events.push(WebEvent::KeyUnhandled(KeyId::reported(
-                    windows_key_code,
-                    modifiers,
-                ))),
+                    focus_on_editable_field,
+                } => self.events.push(WebEvent::KeyUnhandled {
+                    key: KeyId::reported(windows_key_code, modifiers),
+                    editable: focus_on_editable_field,
+                }),
                 CefSurfaceEvent::FrameMessage {
                     frame_id,
                     frame_url,

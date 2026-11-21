@@ -99,11 +99,13 @@ pub enum CefSurfaceEvent {
     /// follow for it. wubble change, see `WUBBLE_CHANGES.md`.
     BrowserClosed,
     /// A key-down the page did not handle (CEF `OnKeyEvent`), as CEF reports
-    /// it: its Windows key code and `EVENTFLAG_*` modifiers. wubble change,
-    /// see `WUBBLE_CHANGES.md`.
+    /// it: its Windows key code, `EVENTFLAG_*` modifiers and whether the
+    /// page's focus was on an editable field. wubble change, see
+    /// `WUBBLE_CHANGES.md`.
     KeyUnhandled {
         windows_key_code: i32,
         modifiers: u32,
+        focus_on_editable_field: bool,
     },
     /// The context script in one frame called its `send` with `text`. The
     /// frame's id, URL and kind are the browser process's own view of the
@@ -221,6 +223,7 @@ mod web_event_tests {
         events.push(CefSurfaceEvent::KeyUnhandled {
             windows_key_code: 0x52,
             modifiers: 1 << 2,
+            focus_on_editable_field: true,
         });
         assert!(events.push_frame_message(frame_message("f1", "after")));
 
@@ -276,6 +279,7 @@ mod web_event_tests {
             Some(CefSurfaceEvent::KeyUnhandled {
                 windows_key_code: 0x52,
                 modifiers: 4,
+                focus_on_editable_field: true,
             })
         ));
         assert!(matches!(

@@ -509,6 +509,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (`linux_cef/cef_backed.rs`, `macos_cef/cef_backed.rs`), so wubble writes and
     redraws only what changed. `Damage` is re-exported from `lib.rs`.
 
+56. **The unhandled key's editable focus.** `keyboard.rs`, `surface.rs`:
+    `CefSurfaceEvent::KeyUnhandled` (20) gains `focus_on_editable_field`,
+    CEF's own flag on the reported `CefKeyEvent` (set from the page's
+    `OnFocusChangedInPage`), so wubble's Mod+Z can tell a text field with
+    nothing to undo from a page with no field focused (undo close tab). The
+    surface test checks it travels.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

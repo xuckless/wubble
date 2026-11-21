@@ -15,7 +15,7 @@ pass and PRs #1 and #2, and switched off Chromium's autofill-server request; pre
 (quarantine), released on the owner's word without a run on a Mac. The site is live at https://wubble.cc (`site/`).
 Not released: extensions (they need the patched engine, which the release engine is not) and the npm launcher
 (`packages/wubble-mcp`, built, unpublished). Never run on a Mac by hand: the macOS drags, Cmd+Q, the socket
-check, the quarantine fix; `cargo test --workspace` there passes in CI only.
+check, the quarantine fix, Cmd+Z undo close tab; `cargo test --workspace` there passes in CI only.
 
 ## Website (wubble.cc)
 `site/` is plain HTML, CSS and JS, served by a Cloudflare Worker (`site/README.md`); it went live as first built, with
@@ -35,6 +35,7 @@ before and an after on the same build; the numbers to beat are in [docs/measurem
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
+- [ ] Undo close tab (Mod+Z) and Mod+Shift+T bring back the URL only: no split, no back/forward history (the recently-closed list would need CEF's navigation entries)
 - [ ] Build the engine with patch 40, then verify the touchpad pinch road (`--smoke pinch` takes it when the marker is there; unit-tested only so far); macOS engine too, and a real trackpad on GNOME and the Mac (the smoke injects through `Host::pinch`)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
