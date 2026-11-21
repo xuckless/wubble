@@ -161,6 +161,21 @@ pub struct CopyReport {
 struct CopyJob {
     report: Mutex<CopyReport>,
     done: Mutex<Option<CopyDone>>,
+    /// Set by [`CopyCancel::cancel`]: no cookie is set from then on, and the visit stops.
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Stops a copy in flight ([`copy_cookies`]): a session stopped while its sign-ins are copied.
+/// Visits and sets run on CEF's UI thread, as the host does, so after `cancel` no new set is
+/// issued; the sets issued before go down the target's cookie manager ahead of the deletion a
+/// teardown sends after them (`clear`).
+#[derive(Clone, Debug, Default)]
+pub struct CopyCancel(Arc<std::sync::atomic::AtomicBool>);
+
+impl CopyCancel {
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Drop for CopyJob {
@@ -199,6 +214,9 @@ cef::wrap_cookie_visitor! {
             _total: ::std::os::raw::c_int,
             _delete_cookie: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
+            if self.job.cancelled.load(::std::sync::atomic::Ordering::SeqCst) {
+                return 0;
+            }
             if let Some(cookie) = cookie {
                 copy_one(cookie, &self.filter, &self.target, &self.job);
             }
@@ -235,6 +253,9 @@ fn copy_one(
     if !domain.starts_with('.') {
         copy.domain = cef::CefString::from("");
     }
+    if job.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     job.report.lock().unwrap_or_else(|e| e.into_inner()).taken += 1;
     let mut callback = CookieSet::new(job.clone());
     let url = cef::CefString::from(url.as_str());
@@ -244,24 +265,31 @@ fn copy_one(
 }
 
 /// Copies the cookies of `from` that `filter` takes into `to` (the source is only read).
-/// `done` runs once every cookie was visited and every set answered, on a CEF thread. `false`
-/// (and `done` then runs at once, with nothing copied) when either context has no cookie
-/// manager or refuses the visit.
+/// `done` runs once, when every cookie was visited and every set answered, on a CEF thread;
+/// never when the copy could not start (`None`: either context has no cookie manager, or CEF
+/// refused the visit), which the caller reports itself.
 pub(crate) fn copy_cookies(
     from: &cef::RequestContext,
     to: &cef::RequestContext,
     filter: CookieFilter,
     done: CopyDone,
-) -> bool {
+) -> Option<CopyCancel> {
+    let (Some(source), Some(target)) = (from.cookie_manager(None), to.cookie_manager(None)) else {
+        return None;
+    };
+    let cancel = CopyCancel::default();
     let job = Arc::new(CopyJob {
         report: Mutex::new(CopyReport::default()),
         done: Mutex::new(Some(done)),
+        cancelled: cancel.0.clone(),
     });
-    let (Some(source), Some(target)) = (from.cookie_manager(None), to.cookie_manager(None)) else {
-        return false;
-    };
-    let mut visitor = CookieCopier::new(job, Arc::new(filter), target);
-    source.visit_all_cookies(Some(&mut visitor)) != 0
+    let mut visitor = CookieCopier::new(job.clone(), Arc::new(filter), target);
+    if source.visit_all_cookies(Some(&mut visitor)) == 0 {
+        // not started: the job's end must not report it as a copy
+        job.done.lock().unwrap_or_else(|e| e.into_inner()).take();
+        return None;
+    }
+    Some(cancel)
 }
 
 /// The open container contexts. Owned by the engine; empty after

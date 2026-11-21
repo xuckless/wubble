@@ -1012,28 +1012,27 @@ impl Engine {
 
     /// Copies the cookies of container `from` that `filter` takes into container `to`,
     /// bringing either up if it is not open (the source is only read: its own tabs keep
-    /// theirs). `done` gets what was copied, on a CEF thread, once every cookie was visited and
-    /// set (`storage::copy_cookies`).
+    /// theirs). `done` gets what was copied, once, on a CEF thread, when every cookie was
+    /// visited and set (`storage::copy_cookies`); on an error it never runs. The handle stops
+    /// the copy (a session stopped meanwhile).
     pub fn copy_cookies(
         &mut self,
         from: ContainerId,
         to: ContainerId,
         filter: storage::CookieFilter,
         done: storage::CopyDone,
-    ) -> Result<(), EngineError> {
+    ) -> Result<storage::CopyCancel, EngineError> {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
         let source = self.profiles.get(runtime, from)?.request_context();
         let target = self.profiles.get(runtime, to)?.request_context();
-        if storage::copy_cookies(&source, &target, filter, done) {
-            Ok(())
-        } else {
-            Err(EngineError::View(format!(
+        storage::copy_cookies(&source, &target, filter, done).ok_or_else(|| {
+            EngineError::View(format!(
                 "container {}: CEF refused to read its cookies",
                 from.0
-            )))
-        }
+            ))
+        })
     }
 
     /// `container` was deleted (its views are closing): its cookies go now,
