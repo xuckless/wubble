@@ -429,3 +429,29 @@ build of main before pf/perf was merged. Speedometer 3.1: 3 runs each, interleav
 
 The pass does not move Speedometer (score and CPU within 2 %): its 17 % gap to Chromium is not the shell's redraw.
 MotionMark: 9 % less CPU than before for the same score within noise; 2 % behind Chromium for 13 % more CPU (was 17 %).
+
+## The owner's Mac, preview.5 (2026-11-21)
+
+Taken by the owner on their Mac (Apple silicon, a 5K external display, 120 Hz) with 0.1.0-preview.5, by hand; the
+method and tools are the owner's and were not recorded here. CPU is a share of one core; "Tabs" is the page processes
+together.
+
+| Step | Main process | GPU process | Tabs | Total CPU (peak) | GPU busy |
+|---|---|---|---|---|---|
+| Idle, 1 blank tab | 2 % | 0 % | 2 % | 4 % (5 %) | 9 % |
+| Opening 10 sites | 53 % | 10 % | 45 % | 123 % (156 %) | 42 % |
+| Scrolling through them | 26 % | 6 % | 18 % | 51 % (65 %) | 50 % |
+| 10 tabs open, nothing happening | 10 % | 2 % | 13 % | 26 % (33 %) | 4 % |
+| 1 video, 1080p60 AV1, on screen | 26 % | 10 % | 57 % | 94 % (115 %) | 61 % |
+| Same video, fullscreen | 29 % | 10 % | 54 % | 92 % (117 %) | 68 % |
+| 3 videos playing (1 on screen) | 26 % | 12 % | 69 % | 107 % (133 %) | 71 % |
+| 3 videos, switching between them | 28 % | 14 % | 66 % | 108 % (131 %) | 78 % |
+| 3 videos in background, browsing in front | 24 % | 13 % | 76 % | 114 % (136 %) | 49 % |
+| 14 tabs, videos paused | 10 % | 2 % | 16 % | 28 % (37 %) | 2 % |
+| Everything closed | 2 % | 0 % | 5 % | 7 % | 4 % |
+
+Also noted: 9 of 10 sites loaded in 0.4 to 1.0 s (The Verge 2.4 s); the on-screen 60 fps AV1 video dropped 4 frames in
+about 2 minutes (fullscreen included), the 30 fps one 3; a background 60 fps VP9 video (hardware decode) dropped 130 of
+about 10,300 frames, more on tab switches; pausing the videos freed about 2 GB in the GPU process; the main process's
+footprint went from about 850 MB at the start to 1.18 GB after everything closed. The main process's 26 % for one video
+was 37 to 40 % on preview.1 by the same hand. What follows from it: TODO.md, "From the owner's Mac run of preview.5".
