@@ -1,4 +1,4 @@
-// derived: ListProgress(pages/list-progress.slint) + KitText(text.slint) roles st-row-title / st-row-note / st-path-wb-mono + IconButton(controls/icon-button.slint) + PressableButton(controls/button.slint) + OverlapLayer(motion/overlap.slint) + Tween(motion/tween.slint), pages/settings.css:41-47,98 browser/browser.css:75-78 pages/touch.css:139-140 @598f814
+// derived: ListProgress(pages/list-progress.slint) + DropMark(chrome/drop-mark.slint) + KitText(text.slint) roles st-row-title / st-row-note / st-path-wb-mono + IconButton(controls/icon-button.slint) + PressableButton(controls/button.slint) + OverlapLayer(motion/overlap.slint) + Tween(motion/tween.slint), pages/settings.css:41-47,98 browser/browser.css:75-78 pages/touch.css:139-140 @598f814
 // A list page's row (wubble-only.md section 32), the settings row's anatomy: `.st-row` (min 60,
 // padding 11 14, gap 16, radius 14; a target as a whole is `.st-row.tap`: white .04 under it on
 // hover over .15 s), led by an `.st-lead` tile (36, radius 12, white .06) round the favicon or a
@@ -11,6 +11,8 @@
 // (the design's `:focus-visible`). A folder's chevron is the design's disclosure (`.tp-chev`:
 // down, turned to up over .22 s ease-out while open).
 
+import { DropMark } from "../chrome/drop-mark.slint";
+import { DropMarkKind } from "../../components/model.slint";
 import { Palette, Motion } from "../gen/tokens.slint";
 import { SettingsCss, BrowserCss, TouchCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";
@@ -169,6 +171,9 @@ export component ListRow inherits Rectangle {
     out property <bool> hovered: ta.has-hover;
     // the row's actions show (RowAction `reveal`)
     out property <bool> reveal: ta.has-hover;
+    // wubble: a drag over the row would drop into it (a bookmarks folder): the kit drop mark
+    // over the row (`chrome/drop-mark.slint`)
+    in property <bool> drop-target;
 
     // wubble: rows past this many share the last step (a page's first screen staggers, the rest
     // comes with it); a count, not a design value
@@ -198,6 +203,9 @@ export component ListRow inherits Rectangle {
             border-radius: SettingsCss.st-row--border-radius;
             background: SettingsCss.st-row-tap-hover--background;
             opacity: hover.t;
+        }
+        DropMark {
+            kind: root.drop-target ? DropMarkKind.box : DropMarkKind.none;
         }
         // the row's controls sit inside its touch area, so its hover holds over them
         ta := TouchArea {

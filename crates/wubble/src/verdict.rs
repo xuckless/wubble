@@ -95,6 +95,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         Mode::Tabs => ("tabs", ok(o.tabs_passed)),
         Mode::Windows => ("windows", ok(o.windows_passed)),
         Mode::Split => ("split", ok(o.split_passed)),
+        Mode::Pinch => ("pinch", o.pinch_passed.as_ref().map(|s| format!("ok {s}"))),
         Mode::Page => ("page", o.page_zoom.map(|z| format!("ok zoom={z}%"))),
         Mode::Parity => (
             "parity",
@@ -102,6 +103,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
                 .as_ref()
                 .map(|gaps| format!("ok; known gaps: {}", gaps.join(", "))),
         ),
+        Mode::Dnd => ("dnd", ok(o.parity_passed.is_some())),
         Mode::Block => ("block", ok(o.blocked_seen.is_some())),
         Mode::Settings => ("settings", ok(o.settings_passed)),
         Mode::Start => ("start", ok(o.start_passed)),
@@ -109,7 +111,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         Mode::Data(_) => ("data", ok(o.data_passed)),
         Mode::Gallery => ("gallery", ok(o.gallery_passed)),
         Mode::Autofill { .. } => ("autofill", ok(o.autofill_passed)),
-        Mode::Media => ("media", ok(o.media_passed)),
+        Mode::Media { .. } => ("media", ok(o.media_passed)),
         Mode::Builtins => (
             "builtins",
             o.builtins_passed.as_ref().map(|w| format!("ok ({w})")),

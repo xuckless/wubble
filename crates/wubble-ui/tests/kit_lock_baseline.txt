@@ -1,14 +1,9 @@
 # The kit lock's recorded violations (tests/kit_lock.rs): file, rule, token, count.
 # Counts only go down: a lane that clears violations lowers them here (KIT_LOCK_WRITE=1).
-app.slint	paint	background	5
-app.slint	paint	border-color	1
-app.slint	paint	border-width	1
-app.slint	paint	drop-shadow-blur	1
-app.slint	paint	drop-shadow-color	1
-app.slint	text	Text	1
+app.slint	paint	background	3
 app.slint	token	Fonts	1
-app.slint	token	Palette	7
-app.slint	token	Radius	5
+app.slint	token	Palette	3
+app.slint	token	Radius	3
 app.slint	token	Type	1
 components/border-beam.slint	paint	fill	2
 components/border-beam.slint	paint	stroke	2

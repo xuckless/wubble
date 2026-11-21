@@ -149,12 +149,15 @@ enum SmokeArg {
     Boot,
     Update,
     Quit,
+    Spell,
     Frames(NonZeroU32),
     Nav,
     Tabs,
     Split,
+    Pinch,
     Page,
     Parity,
+    Dnd,
     Block,
     Settings,
     Pages,
@@ -164,6 +167,7 @@ enum SmokeArg {
     AutofillProbe,
     Windows,
     Media,
+    MediaProbe,
     Builtins,
     Video,
     Boost,
@@ -194,9 +198,12 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "boot" => Ok(SmokeArg::Boot),
         None if value == "update" => Ok(SmokeArg::Update),
         None if value == "quit" => Ok(SmokeArg::Quit),
+        None if value == "spell" => Ok(SmokeArg::Spell),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
+        None if value == "pinch" => Ok(SmokeArg::Pinch),
+        None if value == "dnd" => Ok(SmokeArg::Dnd),
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
@@ -208,6 +215,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("autofill", "probe")) => Ok(SmokeArg::AutofillProbe),
         None if value == "windows" => Ok(SmokeArg::Windows),
         None if value == "media" => Ok(SmokeArg::Media),
+        Some(("media", "probe")) => Ok(SmokeArg::MediaProbe),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
         None if value == "video" => Ok(SmokeArg::Video),
         None if value == "boost" => Ok(SmokeArg::Boost),
@@ -235,8 +243,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
-             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
+            "expected `boot`, `update`, `quit`, `spell`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
+             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `media=probe`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none`, `data` or `session-phase=1|2`"
                 .into(),
@@ -254,6 +262,9 @@ pub enum Smoke {
     /// Inspect on a selection, DevTools windows shown and counted, one more
     /// asked for just before the quit; the quit is clean (`quit_smoke.rs`).
     Quit,
+    /// A misspelt word in a textarea on loopback is marked, with suggestions, from the bundled
+    /// dictionary and no request off the machine (`spell_smoke.rs`).
+    Spell,
     /// Show `frames` accelerated frames of `url` (the bundled page if `None`).
     Frames {
         frames: NonZeroU32,
@@ -268,10 +279,16 @@ pub enum Smoke {
     /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
     /// pixels, then unsplit.
     Split,
+    /// A trackpad pinch through the host's pinch path on a loopback page: Blink's visual
+    /// viewport scale, never the page zoom; a page keeping the Ctrl+wheel; split panes apart.
+    Pinch,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
     /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
     Parity,
+    /// The bundled `dnd.html`: a page's drags inside the window (`dnd_smoke.rs`).
+    /// `--shot-dir DIR`: a PNG of the window mid-drag, per item that asks.
+    Dnd { dir: Option<PathBuf> },
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Open wubble://settings, flip a setting through its toggle, read the store back.
@@ -286,8 +303,9 @@ pub enum Smoke {
     /// With `probe`, a real page instead, read-only: what the chip would offer (by hand).
     Autofill { probe: Option<String> },
     /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
-    /// check sizes and hashes.
-    Media,
+    /// check sizes and hashes. With `probe`, a page instead, by hand: what the downloader lists,
+    /// and (`WUBBLE_PROBE_SAVE`) what each save does.
+    Media { probe: Option<String> },
     /// Dark mode for pages, reader mode, link hints, screenshots and the PDF viewer on
     /// bundled pages.
     Builtins,
@@ -445,7 +463,10 @@ impl TryFrom<Cli> for Command {
             }));
         }
         let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
-        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. } | SmokeArg::Start));
+        let overlay = matches!(
+            cli.smoke,
+            Some(SmokeArg::Overlay { .. } | SmokeArg::Start | SmokeArg::Dnd)
+        );
         if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
         }
@@ -499,15 +520,29 @@ impl TryFrom<Cli> for Command {
                     "--smoke autofill=probe needs --url",
                 ));
             }
-            (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
+            (Some(SmokeArg::MediaProbe), Some(url), None) => Smoke::Media {
+                probe: Some(wubble_core::url::from_cli_arg(&url)),
+            },
+            (Some(SmokeArg::MediaProbe), None, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke media=probe needs --url",
+                ));
+            }
+            (Some(_), Some(_), None) => {
+                return conflict("--url only applies to --smoke frames=N and the probes");
+            }
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
             (Some(SmokeArg::Quit), None, None) => Smoke::Quit,
+            (Some(SmokeArg::Spell), None, None) => Smoke::Spell,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
+            (Some(SmokeArg::Pinch), None, None) => Smoke::Pinch,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
+            (Some(SmokeArg::Dnd), None, None) => Smoke::Dnd { dir: cli.shot_dir },
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
@@ -519,7 +554,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Data), None, None) => Smoke::Data,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
-            (Some(SmokeArg::Media), None, None) => Smoke::Media,
+            (Some(SmokeArg::Media), None, None) => Smoke::Media { probe: None },
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
             (Some(SmokeArg::Video), None, None) => Smoke::Video,
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
@@ -871,6 +906,10 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "quit"]).ok(),
             Some(Command::Smoke(Smoke::Quit))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "spell"]).ok(),
+            Some(Command::Smoke(Smoke::Spell))
         );
         assert_eq!(
             parse(["wubble", "--smoke", "update"]).ok(),

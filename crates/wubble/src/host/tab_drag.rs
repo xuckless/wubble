@@ -1,4 +1,5 @@
-//! A tab dragged out of the sidebar's list: the pure machine is `wubble_core::tabdrag`; this
+//! A tab dragged out of the sidebar's list: the pure machine is `wubble_core::tabdrag` (a kind of
+//! `wubble_core::drag`, run by `drag.rs`'s `run_drag`); this
 //! feeds it the pointer and the window's drop targets and runs what it returns. Inside the
 //! list the row physics (`wubble_ui::driver`) reorders as before.
 //!
@@ -48,7 +49,7 @@ impl Host {
     /// The window's pointer while a press on a row is held: moved, or the left button let go,
     /// in this window's logical px.
     pub(super) fn tab_drag_pointer(&mut self, x: f32, y: f32, released: bool) {
-        if self.tab_drag == tabdrag::Drag::Idle || self.w.id != self.drag_window {
+        if self.drag.tab() == tabdrag::Drag::Idle || self.w.id != self.drag_window {
             return;
         }
         let Some(window) = self.w.window.upgrade() else {
@@ -142,52 +143,18 @@ impl Host {
 
     /// Esc during a drag: nothing moves.
     pub(super) fn cancel_tab_drag(&mut self) -> bool {
-        if self.tab_drag == tabdrag::Drag::Idle {
+        if self.drag.tab() == tabdrag::Drag::Idle {
             return false;
         }
         self.run_tab_drag(Input::Cancel);
         true
     }
 
-    /// A hover delay ran out: on the Spaces switcher (the popup opens) or off the popup (it
-    /// closes).
-    pub fn drag_tick(&mut self) {
-        self.run_tab_drag(Input::Tick {
-            now: Instant::now(),
-        });
-    }
-
-    /// Runs the machine, then draws the ghost in the window the drag started in. Effects may
-    /// move focus to another window (a tear-out, a drop on another window, a hovered Space
-    /// another window shows); the ghost is never drawn there, and the source's goes once idle.
     fn run_tab_drag(&mut self, input: Input) {
-        let (next, effects) = tabdrag::transition(self.tab_drag, input);
-        self.tab_drag = next;
-        let source = self.drag_window;
-        // a rest on the switcher opens the popup, a while off it closes it: the machine is asked
-        // again once the delay is up
-        if next.awaits_dwell() {
-            self.drag_timer.start(
-                slint::TimerMode::SingleShot,
-                tabdrag::SPACE_HOVER,
-                move || crate::with_host_in(source, Host::drag_tick),
-            );
-        } else {
-            self.drag_timer.stop();
-        }
-        for effect in effects {
-            self.tab_drag_effect(effect);
-        }
-        let here = self.w.id;
-        if self.enter(source)
-            && let Some(window) = self.w.window.upgrade()
-        {
-            self.render_tab_drag(&window);
-        }
-        self.enter(here);
+        self.run_drag(wubble_core::drag::Input::Tab(input));
     }
 
-    fn tab_drag_effect(&mut self, effect: Effect) {
+    pub(super) fn tab_drag_effect(&mut self, effect: Effect) {
         match effect {
             Effect::CancelRows => {
                 if self.enter(self.drag_window)
@@ -253,9 +220,10 @@ impl Host {
     }
 
     /// The ghost and the lit drop zone, from the drag state.
-    fn render_tab_drag(&self, window: &AppWindow) {
+    pub(super) fn render_tab_drag(&self, window: &AppWindow) {
         let ghost = self
-            .tab_drag
+            .drag
+            .tab()
             .ghost()
             .and_then(|t| self.model.tabs.get(&t))
             .map(crate::shell::tab_title)
@@ -264,7 +232,7 @@ impl Host {
         window.set_drag_x(self.drag_at.x as f32);
         window.set_drag_y(self.drag_at.y as f32);
         // the popup row a release would drop on, lit as the pointer lights one
-        let (line, top) = match self.tab_drag.over() {
+        let (line, top) = match self.drag.tab().over() {
             Some(DropTarget::Space(space)) => {
                 let g = spaces_geometry(&window.get_spaces_menu_geometry());
                 let popup = self.spaces_popup();
@@ -281,8 +249,8 @@ impl Host {
         };
         window.set_spaces_drop_line(line);
         window.set_spaces_drop_top(top);
-        window.set_spaces_drop_sticky(self.tab_drag.over() == Some(DropTarget::NewSpace));
-        window.set_drag_zone(match self.tab_drag.over() {
+        window.set_spaces_drop_sticky(self.drag.tab().over() == Some(DropTarget::NewSpace));
+        window.set_drag_zone(match self.drag.tab().over() {
             Some(DropTarget::SplitEdge(Side::Left)) => 1,
             Some(DropTarget::SplitEdge(Side::Right)) => 2,
             _ => 0,
@@ -290,7 +258,7 @@ impl Host {
     }
 
     /// This window's drop targets, in its logical px.
-    fn drop_rects(&self, window: &AppWindow) -> Rects {
+    pub(super) fn drop_rects(&self, window: &AppWindow) -> Rects {
         let win = window.window();
         let scale = win.scale_factor();
         let size = win.size().to_logical(scale);
@@ -374,7 +342,9 @@ impl Host {
 }
 
 /// The open popup's lines in window px, as the shell reports them.
-fn spaces_geometry(g: &wubble_ui::SpacesMenuGeometry) -> wubble_core::spacemenu::Geometry {
+pub(super) fn spaces_geometry(
+    g: &wubble_ui::SpacesMenuGeometry,
+) -> wubble_core::spacemenu::Geometry {
     wubble_core::spacemenu::Geometry {
         x: f64::from(g.rows_x),
         w: f64::from(g.rows_w),

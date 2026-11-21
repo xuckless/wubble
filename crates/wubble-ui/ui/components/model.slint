@@ -823,6 +823,8 @@ export struct VideoView {
     rate-index: int,
     speeds: bool,
     can-pip: bool,
+    // an embedded frame's area, not a video: only the save control is offered
+    frame: bool,
     save: VideoSave,
     // while saving: 0..1, below 0 while the size is unknown
     save-fraction: float,
@@ -940,4 +942,63 @@ export struct AgentAppItem {
     foreign: bool,
     writable: bool,
     opted-out: bool,
+}
+
+// A page's drag image inside the window (kit/chrome/drag-ghost.slint): the pointer, Chromium's
+// image (its logical size and hotspot) or, without one, the label's title and URL.
+export struct PageGhost {
+    shown: bool,
+    x: length,
+    y: length,
+    has-image: bool,
+    image: image,
+    width: length,
+    height: length,
+    hotspot-x: length,
+    hotspot-y: length,
+    title: string,
+    url: string,
+}
+
+export enum DropMarkKind { none, box, line }
+
+// The drop indicator a drag over a shell target shows (kit/chrome/drop-mark.slint).
+export struct DropMarkView {
+    kind: DropMarkKind,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
+// The shell's drop targets in window coordinates: the tab list's viewport and where its first
+// row's top is (scroll included), the row pitch and height, the address pill and the New tab row.
+export struct DropGeometry {
+    list-x: length,
+    list-y: length,
+    list-w: length,
+    list-h: length,
+    rows-top: length,
+    pitch: length,
+    row-h: length,
+    // the gap line's thickness
+    line: length,
+    pill-x: length,
+    pill-y: length,
+    pill-w: length,
+    pill-h: length,
+    new-tab-x: length,
+    new-tab-y: length,
+    new-tab-w: length,
+    new-tab-h: length,
+}
+
+// A drag over the bookmarks page (components/pages.slint): the pointer while `on`, and the
+// folder whose row is lit while `folder-on`.
+export struct BookmarksDrop {
+    on: bool,
+    x: length,
+    y: length,
+    folder-on: bool,
+    folder: int,
 }

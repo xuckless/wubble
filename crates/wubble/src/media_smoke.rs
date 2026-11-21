@@ -304,6 +304,90 @@ fn answer(mut stream: TcpStream) -> std::io::Result<()> {
     stream.write_all(slice)
 }
 
+/// What a probe saves once the list settles (`WUBBLE_PROBE_SAVE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeSave {
+    /// Only list what is offered.
+    Nothing,
+    /// What the strip's button does with "Ask which quality each time" off: the default quality
+    /// of the first saveable stream.
+    Default,
+    /// Every choice of every stream.
+    All,
+}
+
+/// `--smoke media=probe --url URL`, by hand: a page (a loopback fixture or a public one), what the
+/// downloader lists for it, and what each save does, printed as `probe:` lines. Settings from
+/// the environment: `WUBBLE_PROBE_SAVE=nothing|default|all`, `_QUALITY=best|1080p|...`,
+/// `_YOUTUBE=1` (the lookup setting), `_DIR=PATH` (the setting "Save videos to"), `_PLAY=1`
+/// (play the page's first video, muted, once it loaded), `_SETTLE_SECS=N` (how long to watch the
+/// list; default 8), `_MIN_BYTES=N`, `_ASK=1` (the menu setting on), `_STOP_BYTES=N` (stop a download at N bytes, a public
+/// stream's few first segments), `_CLOSE=same|other` (close the page's tab once a download runs), `_FULL=1` (watch the whole time), `_TRACE=1` (every response the hook sees). A tool for hand runs: it measures with the clock, so
+/// nothing in `cargo test` or CI runs it.
+#[derive(Clone, Debug)]
+pub struct Probe {
+    pub save: ProbeSave,
+    pub quality: Option<String>,
+    pub youtube: bool,
+    pub dir: Option<String>,
+    pub play: bool,
+    pub settle: std::time::Duration,
+    pub min_bytes: Option<u64>,
+    pub ask: bool,
+    /// `same` or `other`: once a download runs, open a tab (in the same container, or a new
+    /// one) and close the tab the download started from.
+    pub close: Option<String>,
+    pub closed: bool,
+    /// Watch for the whole settle time (a stream may be read late).
+    pub full: bool,
+    /// Stop a download at this many bytes (its part files are copied aside first).
+    pub stop_bytes: Option<u64>,
+    pub phase: ProbePhase,
+}
+
+#[derive(Clone, Debug)]
+pub enum ProbePhase {
+    /// Not started: the settings go in on the first run.
+    Start,
+    /// Watching the list until `until`.
+    Watching {
+        until: std::time::Instant,
+        played: bool,
+    },
+    /// Saves started; waiting for every download to end (or `until`).
+    Saving {
+        until: std::time::Instant,
+    },
+    Done,
+}
+
+impl Probe {
+    pub fn from_env() -> Self {
+        let env = |k: &str| std::env::var(format!("WUBBLE_PROBE_{k}")).ok();
+        Probe {
+            save: match env("SAVE").as_deref() {
+                Some("default") => ProbeSave::Default,
+                Some("all") => ProbeSave::All,
+                _ => ProbeSave::Nothing,
+            },
+            quality: env("QUALITY"),
+            youtube: env("YOUTUBE").as_deref() == Some("1"),
+            dir: env("DIR"),
+            play: env("PLAY").as_deref() == Some("1"),
+            settle: std::time::Duration::from_secs(
+                env("SETTLE_SECS").and_then(|v| v.parse().ok()).unwrap_or(8),
+            ),
+            min_bytes: env("MIN_BYTES").and_then(|v| v.parse().ok()),
+            ask: env("ASK").as_deref() == Some("1"),
+            close: env("CLOSE"),
+            closed: false,
+            full: env("FULL").as_deref() == Some("1"),
+            stop_bytes: env("STOP_BYTES").and_then(|v| v.parse().ok()),
+            phase: ProbePhase::Start,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

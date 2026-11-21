@@ -67,6 +67,9 @@ impl Host {
             PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
         ) {
             self.video_smoke_page(&event);
+            if self.pinch_smoke_answer(&event) {
+                return;
+            }
             if self.agent_answer(&event) || self.ax_answer(&event) || self.media_answer(tab, &event)
             {
                 return;
@@ -518,6 +521,7 @@ impl Host {
     /// The tab's view closed: its surfaces close without answering (welding
     /// answered every held request), its fullscreen, sound and blocked count end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
+        self.drag_gone(tab);
         if self.devtools.dock.tab() == Some(tab) {
             self.dock_event(DockEvent::TabGone(tab));
         }
@@ -797,6 +801,10 @@ impl Host {
     // ----- shell helpers
 
     pub(super) fn toast(&mut self, window: &AppWindow, text: &str) {
+        // `--smoke media=probe` (the probe's step holds its own state while it saves)
+        if std::env::var_os("WUBBLE_PROBE_SAVE").is_some() {
+            println!("probe: toast {text:?}");
+        }
         self.toast_replaced();
         self.show_toast(window, text, "", false);
     }

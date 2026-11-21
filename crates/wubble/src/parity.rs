@@ -160,6 +160,22 @@ impl Mods {
     }
 }
 
+/// A point on the shell or in a split pane, found by the host from the window (`--smoke dnd`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spot {
+    /// The tab list's gap before row `n` (the end past the last).
+    TabGap(usize),
+    /// The middle of the tab list's row `n`.
+    TabRow(usize),
+    NewTab,
+    /// The address pill.
+    Bar,
+    /// The open command bar's query field.
+    CommandField,
+    /// A point in the `n`-th pane on screen (left to right).
+    Pane(usize, Point),
+}
+
 /// Which pointer button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -188,6 +204,17 @@ pub enum HostOp {
     NewSpace,
     /// Deletes every Space after the first.
     OnlyFirstSpace,
+    /// A second tab on the smoke's page, beside the first (split view).
+    SplitHome,
+    /// A second tab on the smoke's page, the first still shown.
+    SecondTab,
+    /// The bookmarks page in a second tab, the first still shown.
+    BookmarksTab,
+    /// Text dragged in from another app and dropped here (the platform's drop events, as the
+    /// Wayland worker or macOS's view deliver them).
+    DropTextFromApp(Spot, &'static str),
+    /// The window as drawn, to `--shot-dir`'s `NN-<name>.png`.
+    Shot(&'static str),
     ZoomReset,
     /// The print sheet's Save / Print, as its button.
     AnswerPrint,
@@ -212,6 +239,10 @@ pub enum Step {
     Press(Point),
     MoveTo(Point),
     Release(Point),
+    /// The pointer to a shell point or another pane, the left button held.
+    MoveToSpot(Spot),
+    /// The left button let go there.
+    ReleaseAt(Spot),
     /// Space-separated chords as `wubble_core::keys::Chord` parses them.
     Keys(&'static str),
     /// Text typed key by key (US layout).
@@ -273,6 +304,12 @@ pub enum HostCheck {
     AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
+    /// A page drag's ghost is drawn: with Chromium's image (true) or as the label (false).
+    Ghost(bool),
+    /// The n-th tab (0-based) of the active Space has a URL ending in this.
+    TabUrl(usize, &'static str),
+    /// The n-th tab of the active Space has this title.
+    TabTitle(usize, &'static str),
     /// The page drag carries a PNG picture's own bytes under a `.png` name, and a drag image.
     DragPicture,
     /// The print sheet is open (true) or not.
@@ -286,6 +323,8 @@ pub enum HostCheck {
     PageEntered,
     /// The command bar's field holds this text (the start page's capsule is that field too).
     BarQuery(&'static str),
+    /// A bookmark of a URL with this in it.
+    Bookmarked(&'static str),
     /// The start page's capsule holds the keys.
     CapsuleFocused,
     /// The find bar's field holds this text.
@@ -326,7 +365,7 @@ use Step::*;
 /// full size (the window settles after start), zoom (until the page shows it), a page navigated away from (reloaded); menus, bars, held buttons, an autoscroll, click series and
 /// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click and the host
 /// runs neither an autoscroll nor a page drag; then the page's records, focus, selection and scroll.
-const RESET: [Step; 8] = [
+pub const RESET: [Step; 8] = [
     Restore,
     Until(H(C::PageEntered)),
     Until(J("parity.sized()")),

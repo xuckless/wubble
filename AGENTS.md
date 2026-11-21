@@ -103,6 +103,7 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - [docs/research/mcp-server.md](docs/research/mcp-server.md): wubble as an MCP server: Space-bound agent sessions, named secrets, airlocks (plan, after the release).
 - [docs/research/agent-widgets.md](docs/research/agent-widgets.md): Ultra Reactivate's thinking orb (ported) and bot mascots (researched): drawing, cost, roads, where they go.
 - [docs/research/extensions.md](docs/research/extensions.md): extensions on CEF 156 windowless: what works unpatched (loading, service workers, content scripts), the patches P1 to P4.
+- [docs/research/tts.md](docs/research/tts.md): tiny-voca as an on-device voice for a Read aloud feature (shelved; not a screen reader).
 
 ## Batches
 

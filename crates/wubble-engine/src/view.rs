@@ -44,6 +44,7 @@ use crate::page::{
     ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags,
     FrameChannel, LogLevel, MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
 };
+use crate::pinch::{self, Pinch};
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
 
@@ -220,6 +221,8 @@ pub struct View {
     host: Option<cef::BrowserHost>,
     clicks: ClickTracker,
     wheel: WheelRemainder,
+    /// A trackpad pinch over the page (`pinch.rs`).
+    pinch: Pinch,
     /// The page's root horizontal scroll offset (DIP), as CEF last reported it.
     scroll_x: f64,
     /// The accessibility tree wanted ([`View::set_accessibility`]), and whether CEF has been
@@ -247,6 +250,8 @@ pub struct View {
     favicons: crate::favicon::Sink,
     /// The scripts every new document runs first ([`Self::set_document_scripts`]).
     doc_scripts: cdp::DocScripts,
+    /// The navigations the page asked for, from its DevTools events.
+    nav_requests: cdp::NavRequests,
     /// The client DevTools windows are created with: it reports them to the
     /// engine (`app::extra`), which must close them before `cef::shutdown`.
     devtools_client: cef::Client,
@@ -267,6 +272,10 @@ pub struct PopupLayer {
     pub rect: Rect,
 }
 
+/// A page drag's data as CEF holds it: opaque, equal only to itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldDrag(welding::HeldDrag);
+
 /// Where a drag over the view is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DragPhase {
@@ -275,6 +284,9 @@ pub enum DragPhase {
     /// The view's own page drag entered it again: CEF gets the data the page
     /// gave, with the types [`DragData`] does not carry.
     EnterSource,
+    /// Another view's page drag entered this view, with that page's data as
+    /// it gave it ([`View::held_drag`]).
+    EnterFrom(HeldDrag),
     Over,
     Leave,
     Drop,
@@ -326,6 +338,7 @@ impl View {
             host: None,
             clicks: ClickTracker::default(),
             wheel: WheelRemainder::default(),
+            pinch: Pinch::new(pinch::touchpad_available()),
             scroll_x: 0.0,
             accessibility: (false, true),
             held_keys: Vec::new(),
@@ -341,6 +354,7 @@ impl View {
             drag: DragSource::default(),
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
+            nav_requests: cdp::NavRequests::default(),
             devtools_client,
             rule,
         })
@@ -555,6 +569,93 @@ impl View {
         self.send(|host| host.send_mouse_wheel_event(Some(&event), dx, dy));
     }
 
+    /// A trackpad pinch over the page (`pinch.rs`): Blink's pinch zoom, never the page zoom.
+    /// `Begin` carries the pointer, view-relative.
+    pub fn pinch(&mut self, gesture: pinch::Gesture) {
+        if !self.is_open() {
+            return;
+        }
+        let input = match gesture {
+            pinch::Gesture::Begin(at) => {
+                let size = target(self.state).map_or((0.0, 0.0), |l| {
+                    let scale = l.scale.max(f32::MIN_POSITIVE);
+                    (l.size.width as f32 / scale, l.size.height as f32 / scale)
+                });
+                pinch::Input::Begin { at, size }
+            }
+            pinch::Gesture::Scaled(f) => pinch::Input::Scaled(f),
+            pinch::Gesture::End => pinch::Input::End,
+        };
+        let effects = self.pinch.input(input, &mut || CdpId(cdp::next_id()));
+        self.execute_pinch(effects);
+    }
+
+    /// `zoom.js`'s word on a Ctrl+wheel: the pinch's own wheel's, or a real Ctrl+wheel the
+    /// page left alone, which zooms the page one step ([`PageEvent::WheelZoom`]).
+    fn zoom_answer(&mut self, body: &str, mode: RequestMode) {
+        let Some(answer) = pinch::Answer::parse(body) else {
+            return;
+        };
+        if let Some(effects) = self.pinch.answer(answer) {
+            return self.execute_pinch(effects);
+        }
+        let zoom_in = match answer {
+            pinch::Answer::In => true,
+            pinch::Answer::Out => false,
+            pinch::Answer::Kept => return,
+        };
+        self.emit_page(PageEvent::WheelZoom { zoom_in }, mode);
+    }
+
+    fn execute_pinch(&mut self, effects: Vec<pinch::Effect>) {
+        use pinch::{Effect, TouchKind};
+        for effect in effects {
+            match effect {
+                Effect::Wheel { at, dy } => {
+                    let event = input::ctrl_wheel_event(at);
+                    self.send(|host| host.send_mouse_wheel_event(Some(&event), 0, dy));
+                }
+                Effect::Touch { kind, points } => {
+                    let type_ = match kind {
+                        TouchKind::Press => cef::TouchEventType::PRESSED,
+                        TouchKind::Move => cef::TouchEventType::MOVED,
+                        TouchKind::Cancel => cef::TouchEventType::CANCELLED,
+                    };
+                    for (id, p) in (0..).zip(points) {
+                        let event = cef::TouchEvent {
+                            id,
+                            x: p.x,
+                            y: p.y,
+                            radius_x: 0.0,
+                            radius_y: 0.0,
+                            rotation_angle: 0.0,
+                            pressure: 1.0,
+                            type_,
+                            modifiers: 0,
+                            pointer_type: cef::PointerType::TOUCH,
+                        };
+                        self.send(|host| host.send_touch_event(Some(&event)));
+                    }
+                }
+                Effect::Hover(at) => {
+                    let event = input::mouse_event(at, &Modifiers::default());
+                    self.send(|host| host.send_mouse_move_event(Some(&event), 0));
+                }
+                Effect::Cdp { id, method, params } => {
+                    let message = cdp::message(id, method, &params);
+                    if let Err(e) = self.producer.send_devtools_message(&message) {
+                        eprintln!("wubble-engine: view {}: {method}: {e}", self.browser_id);
+                        let failed = Err(e.to_string());
+                        let mut ids = || CdpId(cdp::next_id());
+                        if let Some(more) = self.pinch.reply(id, &failed, &mut ids) {
+                            self.execute_pinch(more);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn key(&mut self, key: &KeyInput) {
         self.held_keys
             .retain(|(physical, _)| *physical != key.physical);
@@ -754,10 +855,14 @@ impl View {
                         is_main,
                         pid,
                     };
-                    if let Some((FrameChannel::Cosmetic, body)) = FrameChannel::split(&text) {
-                        self.answer_cosmetic(&frame, body);
-                    } else if let Some(event) = frame_message(frame, text) {
-                        self.emit_page(event, mode);
+                    match FrameChannel::split(&text) {
+                        Some((FrameChannel::Cosmetic, body)) => self.answer_cosmetic(&frame, body),
+                        Some((FrameChannel::Zoom, body)) => self.zoom_answer(body, mode),
+                        _ => {
+                            if let Some(event) = frame_message(frame, text) {
+                                self.emit_page(event, mode);
+                            }
+                        }
                     }
                 }
                 // The audible probe's answer, or one of `eval`'s: one id counter for both.
@@ -777,10 +882,19 @@ impl View {
             }
         }
         while let Some(text) = self.producer.poll_devtools_message() {
+            self.nav_requests.read(&text);
             // the engine's own requests first (freeze, target id), then `View::cdp`'s calls
             if let Some(event) = self.pending.reply(&text) {
                 self.page.push(event);
             } else if let Some((id, result)) = cdp::reply(&text) {
+                let mut ids = || CdpId(cdp::next_id());
+                if let Some(effects) = self.pinch.reply(id, &result, &mut ids) {
+                    if let Err(e) = &result {
+                        eprintln!("wubble-engine: view {}: pinch: {e}", self.browser_id);
+                    }
+                    self.execute_pinch(effects);
+                    continue;
+                }
                 match self.doc_scripts.reply(id, &result) {
                     Some(calls) => {
                         if let Err(e) = &result {
@@ -1271,6 +1385,11 @@ impl View {
         self.cdp("Storage.clearDataForOrigin", &params)
     }
 
+    /// How many navigations of its own the page has asked for so far (`cdp::NavRequests`).
+    pub fn navigations_requested(&self) -> u64 {
+        self.nav_requests.count()
+    }
+
     /// Sends one DevTools protocol call to this page (`cdp.rs`); its answer
     /// arrives as [`PageEvent::CdpReply`] with the id returned. `None` when
     /// the view cannot take it (closing, or CEF refused the message).
@@ -1446,17 +1565,19 @@ impl View {
         if !self.is_open() {
             return;
         }
-        let (kind, payload) = match phase {
-            DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into())),
-            DragPhase::EnterSource => (welding::DragEventKind::Enter, None),
-            DragPhase::Over => (welding::DragEventKind::Over, None),
-            DragPhase::Leave => (welding::DragEventKind::Leave, None),
-            DragPhase::Drop => (welding::DragEventKind::Drop, None),
+        let (kind, payload, from) = match phase {
+            DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into()), None),
+            DragPhase::EnterSource => (welding::DragEventKind::Enter, None, None),
+            DragPhase::EnterFrom(held) => (welding::DragEventKind::Enter, None, Some(held.0)),
+            DragPhase::Over => (welding::DragEventKind::Over, None, None),
+            DragPhase::Leave => (welding::DragEventKind::Leave, None, None),
+            DragPhase::Drop => (welding::DragEventKind::Drop, None, None),
         };
         let (x, y) = self.physical(point);
         let event = welding::DragInput {
             kind,
             payload,
+            from,
             x,
             y,
             modifiers: weld_modifiers(modifiers),
@@ -1465,6 +1586,12 @@ impl View {
         if let Err(e) = self.producer.send_drag_input(event) {
             eprintln!("wubble-engine: view {}: drag: {e}", self.browser_id);
         }
+    }
+
+    /// The page drag this view's page runs, as CEF holds it, for another
+    /// view's [`DragPhase::EnterFrom`]; `None` when none runs.
+    pub fn held_drag(&self) -> Option<HeldDrag> {
+        self.producer.held_drag().map(HeldDrag)
     }
 
     /// Lets pages start drags out of the view ([`PageEvent::DragStarted`]).
@@ -1650,15 +1777,8 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
             frame: frame.id,
             request: clipboard_request(body)?,
         },
-        // Answered by the engine itself (`View::answer_cosmetic`).
-        FrameChannel::Cosmetic => return None,
-        FrameChannel::Zoom => PageEvent::WheelZoom {
-            zoom_in: match body {
-                "in" => true,
-                "out" => false,
-                _ => return None,
-            },
-        },
+        // Answered by the engine itself (`View::answer_cosmetic`, `View::zoom_answer`).
+        FrameChannel::Cosmetic | FrameChannel::Zoom => return None,
     })
 }
 
@@ -2388,12 +2508,8 @@ mod tests {
         );
         assert_eq!(request("clipboard\nread\nx"), None);
         assert_eq!(request("clipboard\nformat\nc:"), None);
-        assert_eq!(at("zoom\nin"), Some(PageEvent::WheelZoom { zoom_in: true }));
-        assert_eq!(
-            at("zoom\nout"),
-            Some(PageEvent::WheelZoom { zoom_in: false })
-        );
-        assert_eq!(at("zoom\nsideways"), None);
+        // `zoom.js`'s answers are the view's own (`View::zoom_answer`, `pinch::Answer`).
+        assert_eq!(at("zoom\nin"), None);
         // No channel, or an unknown one: nothing.
         assert_eq!(at("{}"), None);
         assert_eq!(at("other\n{}"), None);

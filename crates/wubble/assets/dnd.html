@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble dnd</title>
+<style>
+/* `--smoke dnd` (dnd_smoke.rs) drags these by position: keep them in step with the constants
+   there. Logical px from the view's top left. */
+body { margin: 0; background: #f4f5f7; color: #1d2330; font: 16px sans-serif; }
+.at { position: absolute; box-sizing: border-box; }
+input, textarea { font: 16px monospace; }
+#link { left: 20px; top: 24px; }
+#inp { left: 20px; top: 60px; width: 260px; height: 28px; }
+#para { left: 20px; top: 110px; margin: 0; font: 16px monospace; white-space: nowrap; }
+#ta { left: 20px; top: 150px; width: 260px; height: 60px; }
+#img { left: 20px; top: 230px; width: 120px; height: 90px; }
+#ce { left: 20px; top: 340px; width: 260px; height: 40px; border: 1px solid #889; }
+#drag { left: 300px; top: 20px; width: 100px; height: 40px; background: #456; color: #fff; }
+#drop { left: 300px; top: 100px; width: 200px; height: 80px; background: #cde; }
+#zone { left: 300px; top: 230px; width: 200px; height: 90px; background: #ecd; }
+#dimg { left: -500px; top: 0; width: 90px; height: 30px; background: #e64; color: #fff; }
+</style>
+</head>
+<body>
+<a id="link" class="at" href="/dnd/linked" title="A linked page">a linked page</a>
+<input id="inp" class="at">
+<p id="para" class="at">alpha beta gamma</p>
+<textarea id="ta" class="at"></textarea>
+<img id="img" class="at" alt="picture">
+<div id="ce" class="at" contenteditable="true"></div>
+<div id="drag" class="at" draggable="true">drag me</div>
+<div id="drop" class="at">drop here</div>
+<div id="zone" class="at">zone</div>
+<div id="dimg" class="at">custom image</div>
+<script>
+const $ = (id) => document.getElementById(id);
+// What the page saw, for the smoke's checks.
+const seen = { neutral: 0, types: [], plain: '', custom: '', dragend: '', files: 0 };
+const dpr = devicePixelRatio;
+// The picture: drawn here, so the page needs nothing fetched.
+{
+  const c = document.createElement('canvas'); c.width = 120; c.height = 90;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 120, 90);
+  grad.addColorStop(0, '#2a7'); grad.addColorStop(1, '#27c');
+  g.fillStyle = grad; g.fillRect(0, 0, 120, 90);
+  g.fillStyle = '#fd4'; g.beginPath(); g.arc(80, 34, 18, 0, 7); g.fill();
+  $('img').src = c.toDataURL('image/png');
+}
+const parity = {
+  sized() { return (innerWidth > 520 && innerHeight > 400) || `view ${innerWidth}x${innerHeight}`; },
+  unzoomed() { return devicePixelRatio === dpr || `pixel ratio ${devicePixelRatio}, not ${dpr}`; },
+  answer(serial, r) {
+    document.title = `parity:${serial}:` + (r === true ? 'ok' : 'fail:' + String(r).slice(0, 200));
+  },
+  check(serial, f) {
+    let r;
+    try { r = f(); } catch (e) { r = 'threw ' + e; }
+    parity.answer(serial, r);
+  },
+  run(serial, f) {
+    try { f(); parity.answer(serial, true); } catch (e) { parity.answer(serial, 'threw ' + e); }
+  },
+  // Plain text selected in the paragraph (`from`..`to`).
+  select(from, to) {
+    document.activeElement && document.activeElement.blur();
+    const t = $('para').firstChild;
+    const r = document.createRange(); r.setStart(t, from); r.setEnd(t, to);
+    getSelection().removeAllRanges(); getSelection().addRange(r);
+  },
+  reset() {
+    seen.neutral = 0; seen.types = []; seen.plain = ''; seen.custom = ''; seen.dragend = ''; seen.files = 0;
+    $('inp').value = ''; $('ta').value = ''; $('ce').textContent = '';
+    getSelection().removeAllRanges();
+    document.activeElement && document.activeElement.blur();
+    scrollTo(0, 0);
+  },
+};
+const eq = (a, b) => a === b || `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`;
+const has = (list, want) => want.every((w) => list.includes(w)) || `got ${JSON.stringify(list)} want ${JSON.stringify(want)}`;
+addEventListener('mousedown', (e) => { if (e.isTrusted && e.button === 0 && e.clientX >= 520) seen.neutral++; });
+// Every drag that started here ends with its drop effect.
+addEventListener('dragend', (e) => { seen.dragend = e.dataTransfer.dropEffect; });
+$('drag').addEventListener('dragstart', (e) => {
+  e.dataTransfer.setData('text/plain', 'payload');
+  e.dataTransfer.setData('application/x-dnd', 'custom');
+  e.dataTransfer.setDragImage($('dimg'), 10, 10);
+});
+for (const id of ['drop', 'zone']) {
+  $(id).addEventListener('dragover', (e) => { e.preventDefault(); if (!document.title.startsWith('drop')) document.title = `over:${[...e.dataTransfer.types]}`; });
+  $(id).addEventListener('drop', (e) => {
+    e.preventDefault();
+    const dt = e.dataTransfer;
+    seen.types = [...dt.types];
+    seen.plain = dt.getData('text/plain');
+    seen.custom = dt.getData('application/x-dnd');
+    seen.files = dt.files.length;
+    // a pane the smoke runs no script in says it through its title
+    document.title = `drop:${seen.custom || seen.plain}`;
+  });
+}
+</script>
+</body>
+</html>

@@ -18,8 +18,7 @@ built but not released: they need the patched engine, which the release engine i
 Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
 `~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
 and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
-Owner decisions waiting: the spellcheck dictionary (its download was one of Chromium's own requests, now off);
-whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
+Owner decisions waiting: whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
 this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
 `WUBBLE_SMOKE_KEYRING=os` there before the release).
 
@@ -31,6 +30,7 @@ before and an after on the same build; the numbers to beat are in [docs/measurem
 hand only: nothing in `cargo test` or CI asserts a timing.
 
 Beside it, small and unordered:
+- [ ] Build the engine with patch 40, then verify the touchpad pinch road (`--smoke pinch` takes it when the marker is there; unit-tested only so far); macOS engine too, and a real trackpad on GNOME and the Mac (the smoke injects through `Host::pinch`)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
@@ -45,6 +45,13 @@ Beside it, small and unordered:
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
+
+## After the optimization pass (owner, 2026-11-21)
+
+Built as planned in the research, each as its own pass; nothing downloads or asks a server unless the owner turns it on.
+
+- [ ] Page translation, on-device: the pipeline in [docs/research/translate.md](docs/research/translate.md)
+- [ ] Live text in images, on-device OCR: the pipeline in [docs/research/ocr.md](docs/research/ocr.md)
 
 ## MCP server
 Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). Released in `0.1.0-preview.2`: 20 tools, sessions in their own Space and container held to their sites, the approval sheet, live hosting and agent-app registration from Settings, off by default.
@@ -63,8 +70,8 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Autofill: offer the login form a page shows right after a submit (the save check consumes that report today)
 - [ ] Autofill: re-probe Reddit (bot wall) and Wikipedia (redirects to auth.wikimedia.org) logins by hand
 - [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
-- [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
 - [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
+- [ ] Agent sign-ins: `--smoke mcp` under load failed once in 87 loaded runs with the session's first request to the shared site carrying no cookie ("sent: none") after the copy answered; not reproduced or traced yet (the copy's report was not printed)
 - [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
@@ -74,6 +81,9 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Task manager lists internal pages (wubble://history ...) with Discard and Never sleep though they have no process
 - [ ] List pages (History, Bookmarks, Downloads, Archive): a row cannot be opened from the keyboard (only its Delete is a Tab stop; a screen reader's default action opens it); no select, delete selection, undo, copy address or keyboard open in a new tab; a bookmark folder is deleted with its contents by one press; needs a focusable kit row and a design for selection and undo
 - [ ] History rows show no time of day (only a day header)
+- [ ] Media downloader: the Mac `wubble-ffmpeg` (scripts/release/build-ffmpeg.sh, signed in package-macos.sh) is written, never run: build and notarise it on the Mac, then try a YouTube pair and an HLS download in the app
+- [ ] Media downloader: YouTube's player API answered "Sign in to confirm you're not a bot" to the `android_vr` client from the dev box (shown to the user now, not worked around); its format URLs' own fetch is untried; an owner call: allow one 1 MB ranged fetch from a free video, and say which sites the owner tried
+- [ ] Media downloader: a DASH manifest of several periods is refused ("Not supported"); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)
 - [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page); downloads that an agent session's tab starts land in the user's list and folder with no prompt (the airlock is not built)
 - [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
 - [ ] Two things are called "Clear browsing data" (the History page's button clears visits; the command clears cookies and cache), and the command is not found by "history"
@@ -94,6 +104,7 @@ Open, for the owner's eye:
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
 - [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
+- [ ] Media downloader: a video a service worker answers is not seen by the detection (the worker's own fetch has no tab; `--smoke media=probe` on fixtures `sw`): the save control says nothing was found; fullscreen shows the strip without its glass (the scene does not render there): look by hand; an embedded YouTube player (an iframe of youtube.com) has no lookup, since the lookup keys on the tab's own address
 - [ ] Video strip button reads "Save video"; a second click mid-download re-enters the downloader
 - [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
 
@@ -108,7 +119,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
+- [ ] Spell check in other languages: the English dictionary is bundled; add an opt-in (off by default) download of others, from `redirector.gvt1.com` or a mirror, into `<profile>/Dictionaries`
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -127,7 +138,11 @@ Open, to build or check:
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
-- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps; picture drag-out on macOS and Windows
+- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
+- [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
+- [ ] Drag out on Windows (the stub: `wl::Null`)
+- [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
+- [ ] A bookmark dropped into a folder row lands at its end; Chrome's drop line between rows (a position) waits for drag reorder of bookmarks
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)
@@ -181,8 +196,7 @@ Open, to build or check:
 - [ ] One audit: walk every gallery surface against the three effects
 
 ## Shelved ideas
-- [ ] Translate pages on-device ([docs/research/translate.md](docs/research/translate.md))
-- [ ] Live text in images, on-device OCR ([docs/research/ocr.md](docs/research/ocr.md))
+- [ ] Read aloud with an on-device voice (tiny-voca or the OS voice); a voice, not a screen reader ([docs/research/tts.md](docs/research/tts.md))
 - [ ] OS password managers and passkey keychains, as a passthrough in a dedicated build after extensions ([docs/research/apple-passwords.md](docs/research/apple-passwords.md))
 
 ## M6: Own engine (ungoogled Chromium + CEF)

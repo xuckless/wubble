@@ -43,6 +43,7 @@ mod overlay;
 mod pages;
 mod panes;
 mod parity;
+mod pinch;
 mod preview;
 mod print;
 mod settings;
@@ -62,6 +63,7 @@ pub(crate) use data::DataSmoke;
 pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
+pub(crate) use pinch::fixture as pinch_fixture;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;
@@ -299,10 +301,14 @@ pub struct Checks {
     pub pages_smoke: Option<PagesSmoke>,
     pub passwords_smoke: Option<crate::passwords_smoke::PasswordsSmoke>,
     pub data_smoke: Option<DataSmoke>,
+    /// `--smoke pinch` (`host/pinch.rs`).
+    pub pinch_smoke: Option<crate::pinch_smoke::Run>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
+    /// `--smoke media=probe`.
+    pub media_probe: Option<crate::media_smoke::Probe>,
     pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
     /// `--smoke video` and `--smoke boost`.
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
@@ -380,6 +386,10 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    /// `--smoke pinch` passed, with its last scale.
+    pub pinch_passed: Option<String>,
+    /// `--smoke pinch`'s questions to the pages.
+    pinch_asked: pinch::Asked,
     /// `--smoke parity` passed: the known gaps that failed as expected.
     pub parity_passed: Option<Vec<&'static str>>,
     pub windows_passed: bool,
@@ -408,11 +418,16 @@ pub struct Host {
     /// Session changes not yet saved.
     save: SaveState,
     /// `None` until the first-run choice.
-    /// A page's drag inside the window, and the pointer it last went to
-    /// (relative to the drag's page).
     autoscroll: autoscroll::AutoscrollPointer,
-    page_drag: crate::page_drag::PageDrag,
-    drag_point: Point,
+    /// Every drag (a tab row's, a page's: `wubble_core::drag`): one pointer, so one for every
+    /// window (`drag.rs`, `tab_drag.rs`).
+    drag: wubble_core::drag::Drag<wubble_engine::page::DragData>,
+    /// Where a page drag's pointer last was, window px.
+    drag_win: (f32, f32),
+    /// The page drag's image, decoded once.
+    drag_ghost: Option<drag::Ghost>,
+    /// The bookmarks page's folder row under a drag, as the page reports it.
+    bookmark_drop: Option<i64>,
     /// A drag from another app over the window (`drag.rs`).
     external_drag: Option<drag::ExternalDrag>,
     /// Touchpad pinch and history swipe (`gesture.rs`).
@@ -439,9 +454,7 @@ pub struct Host {
     /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
     /// until the page commits another URL; the address pill offers them.
     held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
-    /// A tab dragged from a sidebar row (`drag.rs`): one pointer, so one for every window.
-    tab_drag: wubble_core::tabdrag::Drag,
-    /// Where the pointer was at the drag's last event, window px.
+    /// Where the pointer was at the tab drag's last event, window px.
     drag_at: wubble_core::tabdrag::Point,
     /// The window the drag started in: its pointer drives the drag, its ghost shows it.
     drag_window: WindowId,
@@ -643,6 +656,8 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            pinch_passed: None,
+            pinch_asked: pinch::Asked::default(),
             parity_passed: None,
             windows_passed: false,
             settings_passed: false,
@@ -663,8 +678,10 @@ impl Host {
             store,
             save: SaveState::default(),
             autoscroll: Default::default(),
-            page_drag: Default::default(),
-            drag_point: Point { x: 0.0, y: 0.0 },
+            drag: Default::default(),
+            drag_win: (0.0, 0.0),
+            drag_ghost: None,
+            bookmark_drop: None,
             external_drag: None,
             gestures: Default::default(),
             print: Default::default(),
@@ -682,7 +699,6 @@ impl Host {
             failure: None,
             surfaces: BTreeMap::new(),
             held_popups: BTreeMap::new(),
-            tab_drag: wubble_core::tabdrag::Drag::Idle,
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
             drag_window: WindowId(0),
             drag_timer: slint::Timer::default(),
@@ -1004,7 +1020,7 @@ impl Host {
                     Ok(id) => {
                         measure::mark(measure::Stage::FirstView);
                         self.views.insert(tab, id);
-                        // Page drags run inside the window (`page_drag`).
+                        // Page drags run inside the window (`drag.rs`).
                         if let Some(view) = self.engine.view(id) {
                             view.set_drag_source(true);
                         }
@@ -1369,6 +1385,7 @@ impl Host {
         }
         let presented = self.stats.accelerated != presented;
         self.split_smoke_step(&window);
+        self.pinch_smoke_worked(&window);
         self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();
@@ -2251,6 +2268,9 @@ impl Host {
     /// with `TitleChanged`.
     fn record_visit(&mut self, tab: TabId, url: &str) {
         let previous = self.committed.insert(tab, url.to_string());
+        if previous.as_deref().is_some_and(|p| p != url) {
+            self.drag_gone(tab);
+        }
         let typed = self.typed_nav.committed(tab);
         // an agent session's loads are none of the user's history
         if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
@@ -3294,6 +3314,7 @@ impl Host {
                     .borrow_mut()
                     .pointer_move(position.x, position.y);
                 self.tab_drag_pointer(position.x, position.y, false);
+                self.drag_window_pointer(false);
             }
             // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
             WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
@@ -3339,10 +3360,15 @@ impl Host {
                         (p.x, p.y)
                     });
                 self.tab_drag_pointer(at.0, at.1, true);
+                self.drag_window_pointer(true);
             }
             WindowEvent::Focused(focused) => {
                 // before Slint sees it: the start page's capsule keeps the bar through it
                 window.set_window_active(*focused);
+                // a page drag inside the window ends with nothing dropped (an OS drag goes on)
+                if !*focused {
+                    self.drag_cancelled();
+                }
                 let current = self.model.focused() == self.w.id;
                 if let Some(focused) = input::window_focus(current, *focused) {
                     self.input.window_focused = focused;
