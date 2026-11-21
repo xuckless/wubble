@@ -90,3 +90,25 @@ unpacked, unpacked beside the running version, checked again (`release.json`), a
 next launch runs; Settings and a toast offer "Restart to update". A new version that fails to start
 3 times (no 20 s healthy run) falls back to the previous one, which is never offered again; after a
 healthy start, versions older than the previous one are deleted.
+
+## The npm package `wubble-mcp`
+
+`packages/wubble-mcp/` (outside the Cargo workspace, no dependencies, no install scripts) is a launcher for agent
+apps that prefer `npx -y wubble-mcp`: it runs the installed browser's `wubble mcp`, found from a hosting browser's
+manifest, then PATH, then the install locations above, and passes `--profile` and `--list` on. It never starts the
+browser, never edits an app's configuration and makes no request. Not published yet; Rust CI and the release
+scripts do not build or test it.
+
+Versioning: its own semver, independent of wubble's. A patch for a launcher fix, a minor when it learns a new flag
+or location, a major only if the command line changes. It needs a wubble whose `wubble mcp --help` lists `--list`
+(older ones are named "too old").
+
+Publishing, by the owner, from the owner's npm account:
+
+1. `cd packages/wubble-mcp && node --test` (unit tests and the bin against stand-in binaries).
+2. Bump `version` in `package.json`; commit.
+3. `npm pack`, then from an empty directory with a hosting wubble running:
+   `npx --yes --package=/abs/wubble-mcp-<V>.tgz wubble-mcp --list` names it, and an `initialize` piped in gets
+   an answer.
+4. `npm login` (the owner's account, with two-factor), then `npm publish --access public` in `packages/wubble-mcp`.
+5. Check `npm view wubble-mcp` shows the version, and tag the commit `wubble-mcp-v<V>`.

@@ -1,0 +1,25 @@
+{
+  "name": "wubble-mcp",
+  "version": "0.1.0",
+  "description": "wubble's MCP server for agent harnesses: runs the installed wubble browser's stdio relay, which finds the running browser by itself.",
+  "license": "GPL-3.0-only",
+  "keywords": ["mcp", "model-context-protocol", "browser", "wubble", "agent"],
+  "homepage": "https://github.com/xuckless/wubble/tree/main/packages/wubble-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuckless/wubble.git",
+    "directory": "packages/wubble-mcp"
+  },
+  "bugs": "https://github.com/xuckless/wubble/issues",
+  "bin": {
+    "wubble-mcp": "bin/wubble-mcp.js"
+  },
+  "files": ["bin/", "lib/", "README.md"],
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
