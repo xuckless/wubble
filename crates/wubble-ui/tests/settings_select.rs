@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use i_slint_backend_testing::{
     AccessibleRole, ElementHandle, ElementQuery, init_integration_test_with_mock_time,
@@ -16,7 +16,7 @@ use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use wubble_core::pages::settings_page;
 use wubble_ui::settings::setting_items;
-use wubble_ui::{AppWindow, InternalPageKind};
+use wubble_ui::{AppWindow, GlassLayer, GlassOver, InternalPageKind};
 
 fn pump(ms: u64) {
     mock_elapsed_time(Duration::from_millis(ms));
@@ -74,7 +74,7 @@ fn the_search_engine_select_is_picked_by_pointer_and_by_key() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
     app.window().set_size(LogicalSize::new(1360.0, 880.0));
-    let _wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
+    let wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
     app.set_page(InternalPageKind::Settings);
     let stored = Rc::new(RefCell::new(HashMap::new()));
     render(&app, &stored.borrow());
@@ -147,4 +147,27 @@ fn the_search_engine_select_is_picked_by_pointer_and_by_key() {
     pump(400);
     assert!(!open(), "a press outside closes the list");
     assert!(changed.borrow().is_empty());
+
+    // The scene draws the window-level overlays' glass (GlassOver.top) in one image over the
+    // whole window, rows of a list in the page included: an open Select asks it for none, its
+    // panel is drawn in the page under its rows (it was an empty glass box).
+    app.global::<GlassLayer>().set_scene_active(true);
+    click(&app, &trigger(&app));
+    assert!(open());
+    let top = app.global::<GlassOver>().get_top();
+    let mut now = Instant::now();
+    let mut scene = None;
+    for _ in 0..30 {
+        pump(16);
+        now += Duration::from_millis(16);
+        if let (_, Some(glass)) = wired.frame(&app, now) {
+            scene = Some(glass);
+        }
+    }
+    let scene = scene.expect("the scene was given its glass");
+    assert!(
+        scene.iter().all(|g| g.layer != top),
+        "an open Select puts glass over the page: {:?}",
+        scene.iter().filter(|g| g.layer == top).collect::<Vec<_>>()
+    );
 }

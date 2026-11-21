@@ -226,6 +226,10 @@ export component Menu inherits Rectangle {
     in property <bool> icon-column;
     in property <int> checked: -1;
     in property <color> accent: Palette.sky;
+    // wubble: the scene layer the panel's glass is drawn in (GlassOver). The window-level top
+    // layer lies over everything in the page, so a menu that is part of a page (the Settings
+    // Select) takes 0: its panel is drawn here, under its rows, without the scene's blur.
+    in property <int> glass-layer: GlassOver.top;
     in property <length> panel-x;
     in property <length> panel-y;
     in property <length> origin-x: root.panel-width / 2;
@@ -380,7 +384,7 @@ export component Menu inherits Rectangle {
         GlassPanel {
             // the scene draws its glass above the page (GlassPanel `over-layer`)
             key: GlassKeys.menu;
-            over-layer: GlassOver.top;
+            over-layer: root.glass-layer;
             // the entrance fades the look, not this panel: the scene's glass shows only while it does
             present: root.mounted && tween.t > 0;
             tier: GlassTier.thick;

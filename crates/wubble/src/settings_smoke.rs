@@ -73,6 +73,9 @@ pub enum Do {
     Press(Keys),
     /// The wheel up, far: back to the page's top.
     ScrollTop,
+    /// After the animations have run, the window as a PNG named so in `WUBBLE_SETTINGS_SHOTS`
+    /// (nothing without it).
+    Shoot(&'static str),
 }
 
 /// What the page must show after a [`Do`].
@@ -116,6 +119,7 @@ pub const SCRIPT: &[Step] = &[
     // the pointer: open, pick
     Act(PressTrigger),
     Then(Open(true)),
+    Act(Shoot("select-open")),
     Act(PressRow("DuckDuckGo")),
     Then(Engine("duckduckgo")),
     Then(Open(false)),
@@ -352,7 +356,7 @@ pub mod drive {
     }
 
     /// Does one step; the reason when the page has nothing to act on.
-    pub fn run(window: &AppWindow, act: Do) -> Result<(), String> {
+    pub fn run(window: &AppWindow, act: Do, done: impl FnOnce() + 'static) -> Result<(), String> {
         let w = slint::ComponentHandle::window(window);
         let missing = || format!("no {SELECT} dropdown on the page");
         match act {
@@ -379,6 +383,22 @@ pub mod drive {
                     delta_y: 5000.0,
                 });
             }
+            Do::Shoot(name) => {
+                // later: the list's grow and its rows' stagger take a quarter of a second
+                let weak = slint::ComponentHandle::as_weak(window);
+                slint::Timer::single_shot(std::time::Duration::from_millis(900), move || {
+                    if let (Some(window), Ok(dir)) =
+                        (weak.upgrade(), std::env::var("WUBBLE_SETTINGS_SHOTS"))
+                    {
+                        let path = std::path::Path::new(&dir).join(format!("{name}.png"));
+                        if let Err(e) = crate::shot::take_to(&window, &path) {
+                            eprintln!("smoke: shot {name} failed: {e}");
+                        }
+                    }
+                    done();
+                });
+                return Ok(());
+            }
             Do::Press(keys) => {
                 let text: slint::SharedString = match keys {
                     Keys::Escape => Key::Escape,
@@ -390,6 +410,7 @@ pub mod drive {
                 w.dispatch_event(WindowEvent::KeyReleased { text });
             }
         }
+        done();
         Ok(())
     }
 }
@@ -484,6 +505,7 @@ mod tests {
                     pick(id, s);
                 }
                 Do::ScrollTop => s.select_found = true,
+                Do::Shoot(_) => {}
                 Do::PressOutside | Do::Press(Keys::Escape) => s.select_open = false,
                 Do::Press(Keys::Down) => self.row = (self.row + 1) % NAMES.len(),
                 Do::Press(Keys::Enter) => pick(NAMES[self.row].0, s),

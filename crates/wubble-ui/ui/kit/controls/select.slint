@@ -83,6 +83,8 @@ export component Select inherits Rectangle {
         checked: root.current;
         accent: root.accent;
         menu-width: TouchMenu.select-width;
+        // the list sits in the page, under the scene's window-level glass: its panel is its own
+        glass-layer: 0;
         // `.st-menu { right: 0 }`; `.st-menu.up { bottom: calc(100% + gap) }`
         panel-x: root.absolute-position.x + root.width - TouchMenu.select-width;
         panel-y: root.up ? root.absolute-position.y - TouchMenu.select-gap - self.panel-height : root.absolute-position.y + root.height + TouchMenu.select-gap;

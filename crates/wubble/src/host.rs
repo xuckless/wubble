@@ -2787,12 +2787,14 @@ impl Host {
                 // as the pointer and keys come: from the event loop, outside the host; the step
                 // counts as done a turn of the loop later, when what it set going has settled
                 let _ = self.w.window.upgrade_in_event_loop(move |window| {
-                    if let Err(why) = settings_smoke::drive::run(&window, act) {
+                    let done = || {
+                        let _ = slint::invoke_from_event_loop(|| {
+                            with_host(|host| host.settings_acted += 1);
+                        });
+                    };
+                    if let Err(why) = settings_smoke::drive::run(&window, act, done) {
                         with_host(|host| host.fail(why));
                     }
-                    let _ = slint::invoke_from_event_loop(|| {
-                        with_host(|host| host.settings_acted += 1);
-                    });
                 });
             }
             Some(settings_smoke::Action::Read { key }) => {

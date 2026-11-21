@@ -237,7 +237,7 @@ fn take() {
 }
 
 /// `window` as rendered, written to `path`.
-fn take_to(window: &AppWindow, path: &std::path::Path) -> Result<(), String> {
+pub(crate) fn take_to(window: &AppWindow, path: &std::path::Path) -> Result<(), String> {
     let shot = window.window().take_snapshot().map_err(|e| e.to_string())?;
     write_png(path, &shot)
 }
