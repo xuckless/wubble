@@ -127,6 +127,7 @@ Open, to build or check:
 - [ ] Content blocker: uBO scriptlet coverage
 
 ## Privacy and containers (hardening pass, open)
+- [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
 - [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
 - [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
 - [ ] First start without a compiled list cache: requests pass until the background compile ends (seen once on a loaded machine); hold the first navigation until the engine is ready
