@@ -7,7 +7,7 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 
 ## Status (2026-11-21)
 `main` builds, lints and passes 2293 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.4` for Linux and macOS (drag and drop, pinch, spellcheck, partial rendering, the autofill-server request off; its new macOS code compiled and shipped but was not run by hand before the release; preview.3 fixed MCP hosting on macOS; preview.2, with codecs,
+(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.5` for Linux and macOS (the macOS quarantine fix for updates, released on the owner's word without a run on a Mac) and `0.1.0-preview.4` (drag and drop, pinch, spellcheck, partial rendering, the autofill-server request off; its new macOS code compiled and shipped but was not run by hand before the release; preview.3 fixed MCP hosting on macOS; preview.2, with codecs,
 added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
 registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
 (made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
@@ -41,7 +41,7 @@ Beside it, small and unordered:
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
-- [ ] macOS: the quarantine fix for updates (`settle_quarantine`, the updater's clear before placing) is compiled but never run on a Mac: on the owner's Mac, an install updated by wubble itself must start from `/Applications` (Settings → Updates not "managed elsewhere") and offer the next update; cut preview.5 after that check
+- [ ] macOS: the quarantine fix for updates (`settle_quarantine`, the updater's clear before placing) is compiled but never run on a Mac: on the owner's Mac, an install updated by wubble itself must start from `/Applications` (Settings → Updates not "managed elsewhere") and offer the next update; preview.5 shipped it unchecked
 
 ## After the optimization pass (owner, 2026-11-21)
 
