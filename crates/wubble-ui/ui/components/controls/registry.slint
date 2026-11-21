@@ -65,6 +65,10 @@ export struct ControlView {
 export global Controls {
     in property <[ControlView]> views;
     in property <int> generation;
+    // Set once the registry is wired (`controls::wire`). A control made before that (a page
+    // built with the window) has no slot yet: it takes one when this turns true, with the value
+    // it has then.
+    in property <bool> wired;
     // kind: 0 toggle (value 0/1), 1 slider (value in its domain, 0..100 until `configure`),
     // 2 segmented (value the segment), 3 menu, 4 hold button (value 1: disabled), 5 confirm
     // button (value: its busy time, ms), 6 swatches (value the swatch the ring is on).

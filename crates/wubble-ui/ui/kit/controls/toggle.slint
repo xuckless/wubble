@@ -40,12 +40,27 @@ export component Toggle inherits Rectangle {
     property <int> slot: -1;
     out property <ControlView> v: Controls.view(root.slot);
     property <int> gen: Controls.generation;
-    init => {
+    // a toggle made before the registry was wired (a page built with the window) takes its
+    // slot once it is, with the value it has then
+    property <bool> wired: Controls.wired;
+    function take() {
         root.slot = Controls.acquire(0, root.on ? 1 : 0);
         Controls.resize(root.slot, root.travel);
     }
+    init => {
+        if root.wired {
+            root.take();
+        }
+    }
+    changed wired => {
+        if root.wired && root.slot < 0 {
+            root.take();
+        }
+    }
     changed on => {
-        Controls.set-value(root.slot, root.on ? 1 : 0);
+        if root.slot >= 0 {
+            Controls.set-value(root.slot, root.on ? 1 : 0);
+        }
     }
     changed gen => {
         Controls.alive(root.slot);

@@ -83,12 +83,25 @@ export component ElasticSlider inherits VerticalLayout {
     property <int> decimals: root.step >= 1 ? 0 : Math.ceil(-Math.log(root.step, 10) - 0.0001);
     property <string> text: root.shown.to-fixed(root.decimals) + root.unit;
 
-    init => {
+    // made before the registry was wired (a surface built with the window): the slot is
+    // taken once it is (`Controls.wired`), with the value then
+    property <bool> wired: Controls.wired;
+    function take() {
         root.slot = Controls.acquire(1, root.value);
         // the domain, then the value again in it (acquire snapped it to the default 0..100)
         Controls.configure(root.slot, root.min, root.max, root.step);
         Controls.set-value(root.slot, root.value);
         Controls.resize(root.slot, track.width);
+    }
+    init => {
+        if root.wired {
+            root.take();
+        }
+    }
+    changed wired => {
+        if root.wired && root.slot < 0 {
+            root.take();
+        }
     }
     changed value => {
         Controls.set-value(root.slot, root.value);

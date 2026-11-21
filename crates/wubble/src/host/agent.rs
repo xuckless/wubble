@@ -3440,6 +3440,15 @@ impl Host {
         if !self.mcp_serving() {
             return Err(format!("not hosting: {:?}", self.hosting.state));
         }
+        // the switch turned on at run time is drawn on, from the hosting state (Settings is
+        // not open here: drawn as it would be when it opens)
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_agents(&window);
+            let shown = window.get_settings_agents();
+            if !shown.on || !shown.status.contains("Hosting") {
+                return Err(format!("the switch shows {} ({})", shown.on, shown.status));
+            }
+        }
         let codex = home.join(".codex/config.toml");
         let has = |id: &str, file: &std::path::Path| {
             let h = harness::find(id).ok_or("no such app")?;
@@ -3493,6 +3502,14 @@ impl Host {
             return Err("no session runs".into());
         }
         self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "0");
+        if let Some(window) = self.w.window.upgrade()
+            && {
+                self.render_agents(&window);
+                window.get_settings_agents().on
+            }
+        {
+            return Err("the switch is drawn on after hosting stopped".into());
+        }
         if let Some(run) = &mut self.checks.mcp_smoke {
             run.hosting_off = true;
         }

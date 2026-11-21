@@ -181,6 +181,7 @@ fn wire(app: &SlideSpecimen) -> Reg {
         w(id);
         v
     });
+    g.set_wired(true);
     reg
 }
 
