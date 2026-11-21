@@ -244,9 +244,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::SessionPhase { phase, profile }) => {
-            with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
-        }
+        Command::Smoke(Smoke::SessionPhase { phase, profile }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
+            }
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::Passwords) => match smoke_passwords() {
             Ok(()) => {
                 println!("smoke: passwords ok");
@@ -257,9 +263,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::PasswordsPhase { phase, profile }) => {
-            with_smoke_dir(|config, _| report_run(Mode::Passwords(phase), config, &profile))
-        }
+        Command::Smoke(Smoke::PasswordsPhase { phase, profile }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                with_smoke_dir(|config, _| report_run(Mode::Passwords(phase), config, &profile))
+            }
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
             println!("{}", blocking::measure());
             ExitCode::SUCCESS
@@ -564,6 +576,7 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let profile = std::env::temp_dir().join(format!("wubble-session-{}", std::process::id()));
     let result = (|| {
+        mark_smoke_profile(&profile)?;
         let no_sandbox = app::no_sandbox_requested(std::env::args_os());
         for phase in ["session-phase=1", "session-phase=2"] {
             let status = std::process::Command::new(&exe)
@@ -585,6 +598,7 @@ fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let profile = std::env::temp_dir().join(format!("wubble-passwords-{}", std::process::id()));
     let result = (|| {
+        mark_smoke_profile(&profile)?;
         let no_sandbox = app::no_sandbox_requested(std::env::args_os());
         for phase in [VaultPhase::Write, VaultPhase::Read, VaultPhase::Broken] {
             let status = std::process::Command::new(&exe)
@@ -598,6 +612,29 @@ fn smoke_passwords() -> Result<(), Box<dyn std::error::Error>> {
     })();
     remove_cache(&profile);
     result
+}
+
+/// The file a parent smoke writes into its temporary profile; a phase run refuses any
+/// profile without it, so a phase pointed at a real profile cannot overwrite its session
+/// or replace its vault's key.
+const SMOKE_PROFILE_MARKER: &str = ".wubble-smoke-profile";
+
+/// Creates `dir` and marks it as a smoke's throwaway profile.
+fn mark_smoke_profile(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(SMOKE_PROFILE_MARKER), b"")
+}
+
+/// Whether a phase run may use `dir`: only a profile its parent smoke marked.
+fn smoke_profile(dir: &Path) -> Result<(), String> {
+    if dir.join(SMOKE_PROFILE_MARKER).is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} is not a smoke profile (no {SMOKE_PROFILE_MARKER}); phases run only under --smoke session or --smoke passwords",
+            dir.display()
+        ))
+    }
 }
 
 /// One `--smoke session` phase's command line; the parent's `--no-sandbox` goes with it,
@@ -2023,5 +2060,19 @@ mod tests {
         let off = session_phase_args("session-phase=2", profile, true);
         assert!(app::no_sandbox_requested(&off));
         assert_eq!(off[3], "/tmp/p");
+    }
+
+    #[test]
+    fn smoke_profile_accepts_a_marked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        mark_smoke_profile(dir.path()).unwrap();
+        assert_eq!(smoke_profile(dir.path()), Ok(()));
+    }
+
+    #[test]
+    fn smoke_profile_refuses_an_unmarked_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = smoke_profile(dir.path()).unwrap_err();
+        assert!(err.contains(&dir.path().display().to_string()), "{err}");
     }
 }
