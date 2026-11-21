@@ -1,9 +1,6 @@
-//! Touchpad gestures on the page: pinch zooms the page in browser zoom steps,
-//! a sideways swipe goes back or forward.
-//!
-//! Pinch is browser zoom, as Firefox and Safari's ctrl+wheel fallback do, not
-//! CEF touch events: pages would see synthetic touches, and a windowless
-//! CEF view has no pinch-to-page-scale.
+//! Touchpad gestures on the page: a pinch magnifies the page under the pointer
+//! ([`PinchInput`], driven in `wubble-engine/src/pinch.rs`), a sideways swipe goes back or
+//! forward.
 //!
 //! The history swipe is two fingers sideways, as in Firefox and Chromium on
 //! Linux: the touchpad's sideways scroll, which the page gets too. CEF does
@@ -19,51 +16,17 @@
 
 use crate::action::Action;
 
-/// ln-scale one zoom step needs (a fifth larger or smaller).
-pub const PINCH_STEP: f64 = 0.182_321_556_793_954_6; // ln(1.2)
-
-/// A pinch: the ln-scale not yet turned into zoom steps.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Pinch {
-    acc: f64,
-}
-
+/// A pinch on the trackpad, as the platform reports it. It magnifies the page under the
+/// pointer like a picture (Blink's visual viewport, `wubble-engine/src/pinch.rs`), never the
+/// page zoom.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PinchInput {
+    Begin,
     /// The scale changed by this factor (1.1 = 10 % larger). macOS gives the
     /// magnification delta `m` (factor `1 + m`); Wayland gives the scale since
     /// the pinch began, which the caller turns into the factor since the last update.
     Scaled(f64),
     End,
-}
-
-impl Pinch {
-    /// The zoom steps `input` completes (at most a few per update):
-    /// [`Action::ZoomIn`] or [`Action::ZoomOut`].
-    pub fn input(self, input: PinchInput) -> (Pinch, Vec<Action>) {
-        match input {
-            PinchInput::End => (Pinch::default(), vec![]),
-            // winit says the delta may be NaN; a zero or negative factor is not a scale.
-            PinchInput::Scaled(f) if !f.is_finite() || f <= 0.0 => (self, vec![]),
-            PinchInput::Scaled(f) => {
-                let mut acc = self.acc + f.ln();
-                let mut steps = vec![];
-                while acc.abs() >= PINCH_STEP && steps.len() < 4 {
-                    let step = if acc > 0.0 {
-                        Action::ZoomIn
-                    } else {
-                        Action::ZoomOut
-                    };
-                    acc -= PINCH_STEP.copysign(acc);
-                    steps.push(step);
-                }
-                if acc.abs() >= PINCH_STEP {
-                    acc = 0.0;
-                }
-                (Pinch { acc }, steps)
-            }
-        }
-    }
 }
 
 /// Fingers a history swipe takes: two (a sideways scroll) or three (a
@@ -165,40 +128,6 @@ pub fn transition(state: Swipe, input: SwipeInput) -> (Swipe, Vec<SwipeEffect>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_pinch_zooms_one_step_per_fifth() {
-        let p = Pinch::default();
-        let (p, z) = p.input(PinchInput::Scaled(1.1));
-        assert!(z.is_empty());
-        let (p, z) = p.input(PinchInput::Scaled(1.1));
-        assert_eq!(z, [Action::ZoomIn]);
-        let (p, z) = p.input(PinchInput::Scaled(1.0 / 1.25));
-        assert_eq!(z, [Action::ZoomOut]);
-        let (_, z) = p.input(PinchInput::Scaled(1.25 * 1.25));
-        assert_eq!(z, [Action::ZoomIn, Action::ZoomIn]);
-    }
-
-    #[test]
-    fn a_pinch_forgets_its_remainder_at_the_end() {
-        let (p, _) = Pinch::default().input(PinchInput::Scaled(1.15));
-        let (p, _) = p.input(PinchInput::End);
-        let (_, z) = p.input(PinchInput::Scaled(1.1));
-        assert!(z.is_empty());
-    }
-
-    #[test]
-    fn a_pinch_ignores_what_is_not_a_scale() {
-        for f in [f64::NAN, f64::INFINITY, 0.0, -2.0, 1.0] {
-            let (p, z) = Pinch::default().input(PinchInput::Scaled(f));
-            assert!(z.is_empty(), "{f}");
-            assert_eq!(p, Pinch::default(), "{f}");
-        }
-        // A huge jump zooms a few steps, not dozens.
-        let (p, z) = Pinch::default().input(PinchInput::Scaled(1e9));
-        assert_eq!(z.len(), 4);
-        assert_eq!(p, Pinch::default());
-    }
 
     fn run(inputs: &[SwipeInput]) -> (Swipe, Vec<SwipeEffect>) {
         inputs

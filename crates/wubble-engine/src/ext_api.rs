@@ -222,23 +222,28 @@ fn checked(table: *const ffi::cef_wubble_ext_t) -> Option<&'static ffi::cef_wubb
         .then_some(t)
 }
 
-/// `cef_wubble_ext_v1` among the symbols already loaded (libcef is linked by the binary).
+/// A symbol wubble's patches export, among those already loaded (libcef is linked by the
+/// binary); `None` on a stock CEF. `T` must be the symbol's own function type.
 #[cfg(target_os = "linux")]
-fn lookup() -> Option<&'static ffi::cef_wubble_ext_t> {
+pub(crate) fn exported<T: Copy>(name: &[u8]) -> Option<T> {
     let this = libloading::os::unix::Library::this();
-    // SAFETY: the symbol, when present, is `const cef_wubble_ext_t* cef_wubble_ext_v1(void)`.
-    let get = unsafe {
-        this.get::<unsafe extern "C" fn() -> *const ffi::cef_wubble_ext_t>(b"cef_wubble_ext_v1\0")
-    }
-    .ok()?;
-    // SAFETY: as above; it returns a pointer to a static.
-    checked(unsafe { get() })
+    // SAFETY: the caller names the symbol's type.
+    unsafe { this.get::<T>(name) }.ok().map(|f| *f)
 }
 
 /// The patch queue is built for Linux only so far (TODO.md); elsewhere CEF is stock.
 #[cfg(not(target_os = "linux"))]
-fn lookup() -> Option<&'static ffi::cef_wubble_ext_t> {
+pub(crate) fn exported<T: Copy>(_: &[u8]) -> Option<T> {
     None
+}
+
+/// `cef_wubble_ext_v1`, checked.
+fn lookup() -> Option<&'static ffi::cef_wubble_ext_t> {
+    // SAFETY: the symbol, when present, is `const cef_wubble_ext_t* cef_wubble_ext_v1(void)`.
+    let get =
+        exported::<unsafe extern "C" fn() -> *const ffi::cef_wubble_ext_t>(b"cef_wubble_ext_v1\0")?;
+    // SAFETY: as above; it returns a pointer to a static.
+    checked(unsafe { get() })
 }
 
 /// The table, looked up once per process: the one owner of whether this engine has the

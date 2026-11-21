@@ -1375,6 +1375,9 @@ impl Dispatch<ZwpPointerGesturePinchV1, ()> for State {
         match event {
             E::Begin { surface, .. } => {
                 state.pinch_on = state.window_of(&surface).map(|w| (w, 1.0));
+                if let Some((window, _)) = state.pinch_on {
+                    deliver(window, AuxEvent::Pinch(PinchInput::Begin));
+                }
             }
             E::Update { scale, .. } if scale > 0.0 => {
                 if let Some((window, last)) = &mut state.pinch_on {
