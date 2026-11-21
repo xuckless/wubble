@@ -51,8 +51,10 @@ export component GlassPanel inherits Rectangle {
     in property <length> clip-end: Shell.no-clip;
     property <length> item-w: root.width * root.transform-scale * root.scene-scale;
     property <length> item-h: root.height * root.transform-scale * root.scene-scale;
-    property <length> item-x: root.absolute-position.x + (root.width * root.transform-scale - root.item-w) / 2;
-    property <length> item-y: root.absolute-position.y + (root.height * root.transform-scale - root.item-h) / 2;
+    // absolute-position already carries the ancestors' scale (the wrapping OverlapLook's, about
+    // its origin): only the size takes `scene-scale`
+    property <length> item-x: root.absolute-position.x;
+    property <length> item-y: root.absolute-position.y;
     out property <GlassItem> item: {
         key: root.key,
         x: max(root.item-x, root.clip-start),
