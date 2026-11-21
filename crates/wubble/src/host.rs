@@ -389,6 +389,8 @@ pub struct Host {
     gallery_burst_start: std::time::Instant,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
+    /// Steps of the settings smoke's script the window has taken.
+    settings_acted: u32,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -641,6 +643,7 @@ impl Host {
             gallery_timer: slint::Timer::default(),
             gallery_burst_start: std::time::Instant::now(),
             settings_read: None,
+            settings_acted: 0,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
             keymap: Keymap::defaults(Platform::current()),
@@ -2720,6 +2723,8 @@ impl Host {
             self.checks.settings_smoke = Some(state);
             return;
         };
+        let found = settings_smoke::drive::look(&window);
+        let look = found.clone().unwrap_or_default();
         let seen = settings_smoke::Seen {
             ready: self.frame_rate.is_some(),
             on_settings: self
@@ -2732,6 +2737,16 @@ impl Host {
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
             scroll: window.global::<wubble_ui::PageScroll>().get_y(),
+            select_found: found.is_some(),
+            select_open: look.0,
+            select_shown: look.1,
+            engine_stored: wubble_core::apply::value_of(
+                &wubble_core::settings::SEARCH_ENGINE,
+                &self.settings.stored,
+            )
+            .to_owned(),
+            engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
+            acted: self.settings_acted,
         };
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
@@ -2765,6 +2780,27 @@ impl Host {
                                 });
                             });
                         })
+                    });
+                });
+            }
+            Some(settings_smoke::Action::Drive(act)) => {
+                // as the pointer and keys come: from the event loop, outside the host; the step
+                // counts as done a turn of the loop later, when what it set going has settled
+                let _ = self.w.window.upgrade_in_event_loop(move |window| {
+                    if let Err(why) = settings_smoke::drive::run(&window, act) {
+                        with_host(|host| host.fail(why));
+                    }
+                    let _ = slint::invoke_from_event_loop(|| {
+                        with_host(|host| host.settings_acted += 1);
+                    });
+                });
+            }
+            Some(settings_smoke::Action::Read { key }) => {
+                self.settings_read = None;
+                self.store.read_settings(move |rows| {
+                    let value = rows.get(key).cloned().unwrap_or_default();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.settings_read = Some(value));
                     });
                 });
             }

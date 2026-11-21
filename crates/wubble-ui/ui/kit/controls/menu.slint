@@ -304,8 +304,13 @@ export component Menu inherits Rectangle {
         }
     }
 
-    // Keys only; no area, so it never takes the pointer from the scrim.
+    // Keys only; no area, so it never takes the pointer from the scrim. At the panel, not at the
+    // menu's own origin: a Select's menu is placed at the window's corner, which the page's clip
+    // hides, and Slint takes the focus from an item that is clipped away (the Select's keys were
+    // dead on the Settings page).
     keys := FocusScope {
+        x: root.panel-x;
+        y: root.panel-y;
         width: 0px;
         height: 0px;
         key-pressed(event) => {
@@ -661,7 +666,9 @@ export component MenuButton inherits Rectangle {
     function toggle(by-key: bool) {
         root.via-key = by-key;
         root.open = !root.open;
-        if root.open && by-key {
+        // wubble: the keys take the focus however it opened, so Escape closes a list that
+        // a click opened (the design's only does after a key)
+        if root.open {
             menu.take-focus();
         }
     }

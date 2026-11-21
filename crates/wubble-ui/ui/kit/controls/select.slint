@@ -48,7 +48,9 @@ export component Select inherits Rectangle {
             root.up = root.fits-up();
         }
         root.open = !root.open;
-        if root.open && by-key {
+        // wubble: the keys take the focus however it opened, so Escape closes a list that
+        // a click opened (the design's only does after a key)
+        if root.open {
             menu.take-focus();
         }
     }
