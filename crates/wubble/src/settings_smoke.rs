@@ -44,6 +44,9 @@ pub struct Seen {
     pub blocking: bool,
     /// The page's scroll position, logical px.
     pub scroll: f32,
+    /// It has not moved since the last look: a press on a page still gliding is the scroller's,
+    /// not the control's.
+    pub still: bool,
     /// The page shows the dropdown (it is on screen).
     pub select_found: bool,
     /// The dropdown's list is open (the trigger says expanded).
@@ -56,6 +59,10 @@ pub struct Seen {
     /// screen), and the shell's own sidebar mode.
     pub sidebar_row: String,
     pub sidebar_shell: String,
+    /// The shortcut recorder: `idle`, `armed` or `conflict`.
+    pub capture: &'static str,
+    /// For each chord of [`PROBED`], the id of the action it runs now (`None`: none).
+    pub runs: Vec<(&'static str, Option<String>)>,
     /// The stored `ui.sidebar_mode`.
     pub sidebar_stored: String,
     /// The engine the address bar searches with now (`""` until one is picked).
@@ -85,6 +92,14 @@ pub enum Do {
     ToggleSidebar,
     /// The Sidebar row's tab of this label, by its action.
     SidebarTab(&'static str),
+    /// A press on the chord of the shortcut row with this label: it asks for a new chord.
+    PressBinding(&'static str),
+    /// A button of the shortcut row with this label, by its action.
+    BindingButton(&'static str, &'static str),
+    /// A button of the page, by its action (the recorder's "Replace" and "Cancel").
+    PressButton(&'static str),
+    /// The chord pressed and released as the keyboard sends it (through the host's key path).
+    Chord(&'static str),
     /// After the animations have run, the window as a PNG named so in `WUBBLE_SETTINGS_SHOTS`
     /// (nothing without it).
     Shoot(&'static str),
@@ -95,6 +110,8 @@ pub enum Do {
 pub enum Expect {
     /// The page is at its top, the dropdown on screen.
     Found,
+    /// The page has come to rest.
+    Still,
     Open(bool),
     /// The trigger's label.
     Shows(&'static str),
@@ -104,6 +121,10 @@ pub enum Expect {
     Sidebar(&'static str),
     /// `ui.sidebar_mode` is stored as this.
     SidebarStored(&'static str),
+    /// The recorder is in this state.
+    Capture(&'static str),
+    /// The chord runs this action (its id), `None` none.
+    Runs(&'static str, Option<&'static str>),
 }
 
 /// The keys the script presses.
@@ -163,6 +184,7 @@ pub const SCRIPT: &[Step] = &[
     Then(Shows("Google")),
     // the Sidebar row follows the shell, and drives it
     Act(Goto("Appearance")),
+    Then(Still),
     Then(Sidebar("extended")),
     Act(ToggleSidebar),
     Then(Sidebar("hidden")),
@@ -172,6 +194,56 @@ pub const SCRIPT: &[Step] = &[
     Act(SidebarTab("Extended")),
     Then(Sidebar("extended")),
     Then(SidebarStored("extended")),
+    // the shortcut editor
+    Act(Goto("Keyboard shortcuts")),
+    Then(Still),
+    Then(Runs("Ctrl+T", Some("new-tab"))),
+    Then(Runs("Ctrl+Shift+Y", None)),
+    // a chord with no modifier is refused; Escape stops the recording
+    Act(PressBinding("New tab")),
+    Then(Capture("armed")),
+    Act(Chord("Y")),
+    Then(Capture("armed")),
+    Act(Chord("Escape")),
+    Then(Capture("idle")),
+    // a free chord is taken: the new one runs the action at once, the old one no longer does
+    Act(PressBinding("New tab")),
+    Act(Chord("Ctrl+Shift+Y")),
+    Then(Capture("idle")),
+    Then(Runs("Ctrl+Shift+Y", Some("new-tab"))),
+    Then(Runs("Ctrl+T", None)),
+    // a chord another action runs asks first; Cancel leaves both as they were
+    Act(PressBinding("New tab")),
+    Act(Chord("Ctrl+W")),
+    Then(Capture("conflict")),
+    Act(PressButton("Cancel")),
+    Then(Capture("idle")),
+    Then(Runs("Ctrl+W", Some("close-tab"))),
+    // Replace moves it: the other action is left without
+    Act(PressBinding("New tab")),
+    Act(Chord("Ctrl+W")),
+    Then(Capture("conflict")),
+    Act(PressButton("Replace")),
+    Then(Capture("idle")),
+    Then(Runs("Ctrl+W", Some("new-tab"))),
+    // Reset gives the row its own chord back, and the other action its chord
+    Act(BindingButton("New tab", "Reset")),
+    Then(Runs("Ctrl+T", Some("new-tab"))),
+    Then(Runs("Ctrl+W", Some("close-tab"))),
+    Then(Runs("Ctrl+Shift+Y", None)),
+    // and a last change, kept for the read back
+    Act(PressBinding("New tab")),
+    Act(Chord("Ctrl+Shift+Y")),
+    Then(Runs("Ctrl+Shift+Y", Some("new-tab"))),
+];
+
+/// The chords the script asks about.
+pub const PROBED: &[&str] = &["Ctrl+T", "Ctrl+W", "Ctrl+Shift+Y"];
+
+/// What the store must hold after the script, by key: the text contains the wanted one.
+pub const READ_BACK: &[(&str, &str)] = &[
+    (SELECT_KEY, FINAL_ENGINE),
+    ("keys.overrides", "Ctrl+Shift+Y"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,7 +261,9 @@ pub enum Stage {
         acting: Option<u32>,
     },
     /// The script's last pick, asked of the store.
-    ReadBack,
+    ReadBack {
+        at: usize,
+    },
     Done,
 }
 
@@ -269,7 +343,12 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
             None => None,
         },
         Stage::Script { at, acting } => match (SCRIPT.get(at), acting) {
-            (None, _) => Some((Stage::ReadBack, Some(Action::Read { key: SELECT_KEY }))),
+            (None, _) => Some((
+                Stage::ReadBack { at: 0 },
+                Some(Action::Read {
+                    key: READ_BACK[0].0,
+                }),
+            )),
             (Some(Step::Do(act)), None) => Some((
                 Stage::Script {
                     at,
@@ -293,13 +372,22 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
             )),
             _ => None,
         },
-        Stage::ReadBack => match seen.stored.as_deref() {
-            Some(FINAL_ENGINE) => Some((Stage::Done, Some(Action::Pass))),
-            Some(other) => fail(format!(
-                "stored {SELECT_KEY} = {other:?} after the script, wanted {FINAL_ENGINE:?}"
-            )),
-            None => None,
-        },
+        Stage::ReadBack { at } => {
+            let (key, wanted) = READ_BACK[at];
+            match seen.stored.as_deref() {
+                Some(text) if text.contains(wanted) => match READ_BACK.get(at + 1) {
+                    Some((next, _)) => Some((
+                        Stage::ReadBack { at: at + 1 },
+                        Some(Action::Read { key: next }),
+                    )),
+                    None => Some((Stage::Done, Some(Action::Pass))),
+                },
+                Some(other) => fail(format!(
+                    "stored {key} = {other:?} after the script, wanted {wanted:?} in it"
+                )),
+                None => None,
+            }
+        }
         _ => None,
     };
     match step {
@@ -329,10 +417,16 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
 /// Whether the page shows what `want` says.
 fn met(want: Expect, seen: &Seen) -> bool {
     match want {
-        Found => seen.select_found && seen.scroll < 1.0,
+        Found => seen.select_found && seen.scroll < 1.0 && seen.still,
+        Still => seen.still,
         Open(open) => seen.select_found && seen.select_open == open,
         Shows(label) => seen.select_shown == label,
         Engine(id) => seen.engine_stored == id && seen.engine_applied == id,
+        Capture(state) => seen.capture == state,
+        Runs(chord, id) => seen
+            .runs
+            .iter()
+            .any(|(c, runs)| *c == chord && runs.as_deref() == id),
         Sidebar(mode) => seen.sidebar_row == mode && seen.sidebar_shell == mode,
         SidebarStored(mode) => seen.sidebar_stored == mode,
     }
@@ -367,6 +461,27 @@ pub mod drive {
                     .find_all()
             })
             .unwrap_or_default()
+    }
+
+    /// The chord of the shortcut row `label`.
+    fn chord(window: &AppWindow, label: &str) -> Result<ElementHandle, String> {
+        ElementHandle::find_by_accessible_label(window, label)
+            // not the sidebar's button of the same name: the caps are one line high
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Button) && e.size().height < 30.0)
+            .ok_or_else(|| format!("no shortcut row {label:?}"))
+    }
+
+    /// The button `text` in the row of `chord`: on its line.
+    fn beside(
+        window: &AppWindow,
+        chord: &ElementHandle,
+        text: &str,
+    ) -> Result<ElementHandle, String> {
+        let line = centre(chord).y;
+        ElementHandle::find_by_accessible_label(window, text)
+            .filter(|e| e.accessible_role() == Some(AccessibleRole::Button))
+            .find(|e| (centre(e).y - line).abs() < chord.size().height)
+            .ok_or_else(|| format!("no {text:?} button on the line of the shortcut"))
     }
 
     /// The Sidebar row's selected tab, lower-cased; `""` while the row is not on screen.
@@ -443,6 +558,21 @@ pub mod drive {
                 .find(|t| t.accessible_label().as_deref() == Some(label))
                 .ok_or_else(|| format!("no {label:?} tab in the Sidebar row"))?
                 .invoke_accessible_default_action(),
+            Do::PressBinding(label) => {
+                click(window, centre(&chord(window, label)?));
+            }
+            Do::BindingButton(label, text) => {
+                let kbd = chord(window, label)?;
+                click(window, centre(&beside(window, &kbd, text)?));
+            }
+            Do::PressButton(text) => {
+                let button = ElementHandle::find_by_accessible_label(window, text)
+                    .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                    .ok_or_else(|| format!("no {text:?} button on the page"))?;
+                click(window, centre(&button));
+            }
+            // through the host's key path: the caller sends it
+            Do::Chord(_) => {}
             Do::Shoot(name) => {
                 // later: the list's grow and its rows' stagger take a quarter of a second
                 let weak = slint::ComponentHandle::as_weak(window);
@@ -478,6 +608,7 @@ pub mod drive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::keys;
 
     fn ready() -> Seen {
         Seen {
@@ -534,16 +665,75 @@ mod tests {
     }
 
     /// A page that does what a user would see: the script's every step against it, the way
-    /// the host runs them.
-    #[derive(Default)]
+    /// the host runs them. The shortcut editor is wubble-core's own (the host's too).
     struct Page {
         seen: Seen,
         row: usize,
+        overrides: Vec<keys::Override>,
+        capture: keys::Capture,
+    }
+
+    impl Default for Page {
+        fn default() -> Self {
+            let mut page = Page {
+                seen: Seen {
+                    still: true,
+                    ..Seen::default()
+                },
+                row: 0,
+                overrides: vec![],
+                capture: keys::Capture::Idle,
+            };
+            page.look();
+            page
+        }
     }
 
     impl Page {
+        fn keymap(&self) -> keys::Keymap {
+            keys::Keymap::defaults(keys::Platform::Linux).with_overrides(&self.overrides)
+        }
+
+        /// What the host shows of the editor.
+        fn look(&mut self) {
+            self.seen.capture = match self.capture {
+                keys::Capture::Idle => "idle",
+                keys::Capture::Armed(_) => "armed",
+                keys::Capture::Conflict { .. } => "conflict",
+            };
+            let keymap = self.keymap();
+            self.seen.runs = PROBED
+                .iter()
+                .map(|c| {
+                    let chord = keys::Chord::parse(c).unwrap();
+                    (*c, keymap.action_for(chord).map(|(a, _)| a.id()))
+                })
+                .collect();
+        }
+
+        fn record(&mut self, event: keys::CaptureEvent) {
+            let (state, bind) = keys::capture(self.capture, event, &self.keymap());
+            self.capture = state;
+            if let Some((action, chord)) = bind {
+                self.overrides =
+                    keys::set_binding(&self.overrides, keys::Platform::Linux, action, chord).0;
+            }
+        }
+
+        fn read(&self, key: &str) -> String {
+            match key {
+                SELECT_KEY => self.seen.engine_stored.clone(),
+                _ => keys::overrides_to_entries(&self.overrides).concat(),
+            }
+        }
+
         fn press(&mut self, act: Do) {
             const NAMES: [(&str, &str); 2] = [("google", "Google"), ("duckduckgo", "DuckDuckGo")];
+            let action_of = |label: &str| {
+                wubble_core::action::Action::all()
+                    .into_iter()
+                    .find(|a| a.label() == label)
+            };
             let s = &mut self.seen;
             let pick = |id: &str, s: &mut Seen| {
                 s.engine_stored = id.into();
@@ -566,11 +756,38 @@ mod tests {
                 }
                 Do::ScrollTop => s.select_found = true,
                 Do::Shoot(_) | Do::Goto(_) | Do::ToggleSidebar | Do::SidebarTab(_) => {}
-                Do::PressOutside | Do::Press(Keys::Escape) => s.select_open = false,
+                Do::PressOutside => s.select_open = false,
+                Do::Press(Keys::Escape) if self.capture != keys::Capture::Idle => {
+                    self.record(keys::CaptureEvent::Cancel)
+                }
+                Do::Press(Keys::Escape) => s.select_open = false,
                 Do::Press(Keys::Down) => self.row = (self.row + 1) % NAMES.len(),
                 Do::Press(Keys::Enter) => pick(NAMES[self.row].0, s),
+                Do::PressBinding(label) => {
+                    self.record(keys::CaptureEvent::Arm(action_of(label).unwrap()))
+                }
+                Do::Chord("Escape") if self.capture != keys::Capture::Idle => {
+                    self.record(keys::CaptureEvent::Cancel)
+                }
+                Do::Chord(chord) => {
+                    if self.capture != keys::Capture::Idle {
+                        self.record(keys::CaptureEvent::Pressed(
+                            keys::Chord::parse(chord).unwrap(),
+                        ));
+                    }
+                }
+                Do::PressButton("Cancel") => self.record(keys::CaptureEvent::Cancel),
+                Do::PressButton(_) => self.record(keys::CaptureEvent::Confirm),
+                Do::BindingButton(label, _) => {
+                    self.overrides = keys::reset_binding(
+                        &self.overrides,
+                        keys::Platform::Linux,
+                        action_of(label).unwrap(),
+                    )
+                }
             }
-            s.acted += 1;
+            self.seen.acted += 1;
+            self.look();
         }
     }
 
@@ -587,9 +804,7 @@ mod tests {
             s = next_state;
             match action {
                 Some(Action::Drive(act)) => page.press(act),
-                Some(Action::Read { .. }) => {
-                    page.seen.stored = Some(page.seen.engine_stored.clone())
-                }
+                Some(Action::Read { key }) => page.seen.stored = Some(page.read(key)),
                 Some(other) => return (s, Some(other)),
                 None => {}
             }

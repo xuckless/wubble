@@ -49,6 +49,11 @@ impl SettingsPage {
         }
     }
 
+    /// The recorder's state (`--smoke settings` reads it).
+    pub fn capture(&self) -> Capture {
+        self.capture
+    }
+
     /// The stored keybinding overrides.
     fn overrides(&self) -> Vec<Override> {
         let entries = match apply::effect_of(defs::KEYBINDING_OVERRIDES.key, &self.stored) {

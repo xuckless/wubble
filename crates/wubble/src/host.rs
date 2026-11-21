@@ -391,6 +391,8 @@ pub struct Host {
     settings_read: Option<String>,
     /// Steps of the settings smoke's script the window has taken.
     settings_acted: u32,
+    /// ... and where the page's scroll was at the last look.
+    settings_scroll_seen: f32,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -644,6 +646,7 @@ impl Host {
             gallery_burst_start: std::time::Instant::now(),
             settings_read: None,
             settings_acted: 0,
+            settings_scroll_seen: 0.0,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
             keymap: Keymap::defaults(Platform::current()),
@@ -2723,6 +2726,7 @@ impl Host {
             self.checks.settings_smoke = Some(state);
             return;
         };
+        let scroll = window.global::<wubble_ui::PageScroll>().get_y();
         let found = settings_smoke::drive::look(&window);
         let look = found.clone().unwrap_or_default();
         let seen = settings_smoke::Seen {
@@ -2736,7 +2740,8 @@ impl Host {
             views: self.engine.view_count(),
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
-            scroll: window.global::<wubble_ui::PageScroll>().get_y(),
+            scroll,
+            still: (scroll - self.settings_scroll_seen).abs() < 0.01,
             sidebar_row: settings_smoke::drive::sidebar_row(&window),
             sidebar_shell: wubble_core::seam::SidebarMode::from(window.get_sidebar_mode())
                 .id()
@@ -2747,6 +2752,18 @@ impl Host {
                 .get(wubble_core::settings::SIDEBAR_MODE.key)
                 .cloned()
                 .unwrap_or_default(),
+            capture: match self.settings.capture() {
+                wubble_core::keys::Capture::Idle => "idle",
+                wubble_core::keys::Capture::Armed(_) => "armed",
+                wubble_core::keys::Capture::Conflict { .. } => "conflict",
+            },
+            runs: settings_smoke::PROBED
+                .iter()
+                .map(|c| {
+                    let chord = wubble_core::keys::Chord::parse(c).expect("a probed chord parses");
+                    (*c, self.keymap.action_for(chord).map(|(a, _)| a.id()))
+                })
+                .collect(),
             select_found: found.is_some(),
             select_open: look.0,
             select_shown: look.1,
@@ -2758,6 +2775,7 @@ impl Host {
             engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
             acted: self.settings_acted,
         };
+        self.settings_scroll_seen = scroll;
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
@@ -2791,6 +2809,19 @@ impl Host {
                             });
                         })
                     });
+                });
+            }
+            Some(settings_smoke::Action::Drive(settings_smoke::Do::Chord(chord))) => {
+                // the keyboard's way in: the host's key path, then the step is done
+                match wubble_core::keys::Chord::parse(chord)
+                    .ok()
+                    .and_then(crate::parity::key_inputs)
+                {
+                    Some(keys) => self.smoke_keys(keys),
+                    None => self.fail(format!("no keys for the chord {chord:?}")),
+                }
+                let _ = slint::invoke_from_event_loop(|| {
+                    with_host(|host| host.settings_acted += 1);
                 });
             }
             Some(settings_smoke::Action::Drive(act)) => {
