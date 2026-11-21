@@ -77,10 +77,31 @@ pub fn bind(path: &Path) -> io::Result<Listener> {
     options.create_sync()
 }
 
-/// A bound, listening MCP socket: [`Hosted::stop`] stops accepting and removes it.
+/// Connection ids, process-wide: a connection left from an earlier hosting run never shares
+/// one with a later run's.
+static NEXT_CONN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The connections open on one hosting run, to close when it stops.
+type Open = Arc<std::sync::Mutex<Vec<(ConnId, Arc<Stream>)>>>;
+
+/// Both directions of `stream` closed: a thread blocked reading it wakes with its end.
+fn shut(stream: &Stream) {
+    // on Unix a local socket is only ever a Unix domain socket
+    #[cfg(unix)]
+    {
+        let Stream::UdSocket(s) = stream;
+        let _ = s.inner().shutdown(std::net::Shutdown::Both);
+    }
+    #[cfg(not(unix))]
+    let _ = stream;
+}
+
+/// A bound, listening MCP socket: [`Hosted::stop`] stops accepting, closes the connections it
+/// took and removes the socket.
 pub struct Hosted {
     path: std::path::PathBuf,
     stop: Arc<AtomicBool>,
+    open: Open,
 }
 
 impl Hosted {
@@ -91,17 +112,23 @@ impl Hosted {
     ) -> io::Result<Hosted> {
         let listener = bind(path)?;
         let stop = Arc::new(AtomicBool::new(false));
-        listen_until(listener, Arc::clone(&stop), deliver);
+        let open: Open = Arc::default();
+        listen_until(listener, Arc::clone(&stop), Arc::clone(&open), deliver);
         Ok(Hosted {
             path: path.to_owned(),
             stop,
+            open,
         })
     }
 
-    /// No new connection is taken, and the socket file goes. Connections already open end
-    /// with their next line (the host answers nothing on them meanwhile).
+    /// No new connection is taken, the open ones are closed (each reports `Gone`), and the
+    /// socket file goes.
     pub fn stop(self) {
         self.stop.store(true, Ordering::SeqCst);
+        let open = std::mem::take(&mut *self.open.lock().unwrap_or_else(|e| e.into_inner()));
+        for (_, stream) in open {
+            shut(&stream);
+        }
         // wakes the accept loop, which sees the flag and ends
         if let Ok(name) = self.path.as_path().to_fs_name::<GenericFilePath>() {
             let _ = Stream::connect(name);
@@ -113,22 +140,33 @@ impl Hosted {
 fn listen_until(
     listener: Listener,
     stop: Arc<AtomicBool>,
+    open: Open,
     deliver: impl Fn(Event) + Send + Sync + 'static,
 ) {
     let deliver = Arc::new(deliver);
     let spawned = std::thread::Builder::new()
         .name("wubble-mcp".into())
         .spawn(move || {
-            for (n, stream) in listener.incoming().filter_map(Result::ok).enumerate() {
+            for stream in listener.incoming().filter_map(Result::ok) {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                let conn = n as ConnId + 1;
+                let conn = NEXT_CONN.fetch_add(1, Ordering::SeqCst);
+                let stream = Arc::new(stream);
+                open.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((conn, Arc::clone(&stream)));
                 let deliver = Arc::clone(&deliver);
                 let stop = Arc::clone(&stop);
+                let open = Arc::clone(&open);
                 let served = std::thread::Builder::new()
                     .name("wubble-mcp-conn".into())
-                    .spawn(move || serve(conn, stream, &stop, &*deliver));
+                    .spawn(move || {
+                        serve(conn, stream, &stop, &*deliver);
+                        open.lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .retain(|(c, _)| *c != conn);
+                    });
                 if let Err(e) = served {
                     eprintln!("wubble: mcp connection {conn}: {e}");
                 }
@@ -140,10 +178,14 @@ fn listen_until(
 }
 
 /// One connection: reads until it ends, then says so.
-fn serve(conn: ConnId, stream: Stream, stop: &AtomicBool, deliver: &(dyn Fn(Event) + Send + Sync)) {
+fn serve(
+    conn: ConnId,
+    stream: Arc<Stream>,
+    stop: &AtomicBool,
+    deliver: &(dyn Fn(Event) + Send + Sync),
+) {
     let client = client_of(&stream);
     // `&Stream` reads and writes: one thread each.
-    let stream = Arc::new(stream);
     let send = Arc::clone(&stream);
     let (tx, rx) = mpsc::channel::<Value>();
     let writer = std::thread::Builder::new()
@@ -382,5 +424,41 @@ mod tests {
         hosted.stop();
         assert!(!path.exists());
         assert!(Stream::connect(path.to_fs_name::<GenericFilePath>().unwrap()).is_err());
+    }
+
+    /// Hosting off and on again while an old client is still connected: the old connection is
+    /// closed by the stop, and its id is never one a new connection gets, so its going cannot
+    /// end a new client's session.
+    #[test]
+    fn a_stop_closes_open_connections_and_ids_never_repeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::instance::path_of(
+            crate::instance::Socket::Mcp,
+            dir.path(),
+            &crate::instance::runtime_dir(),
+        );
+        let connect = || Stream::connect(path.as_path().to_fs_name::<GenericFilePath>().unwrap());
+        let (tx, rx) = mpsc::channel();
+        let first = Hosted::start(&path, move |e| tx.send(e).unwrap()).unwrap();
+        let old = connect().unwrap();
+        let Event::Connected { conn: old_id, .. } = rx.recv().unwrap() else {
+            panic!("connected first");
+        };
+        first.stop();
+        // the stop ends the old connection: its reader sees the end
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(Event::Gone(c)) if c == old_id
+        ));
+        let mut buf = [0u8; 8];
+        assert_eq!((&old).read(&mut buf).unwrap_or(0), 0);
+        let (tx, rx) = mpsc::channel();
+        let second = Hosted::start(&path, move |e| tx.send(e).unwrap()).unwrap();
+        let _new = connect().unwrap();
+        let Event::Connected { conn: new_id, .. } = rx.recv().unwrap() else {
+            panic!("connected");
+        };
+        assert_ne!(new_id, old_id);
+        second.stop();
     }
 }
