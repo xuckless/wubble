@@ -220,6 +220,61 @@ pub fn seed(db: &Path, keyring: &FakeKeyRing) -> Result<(), Box<dyn std::error::
                 })
                 .await?;
         }
+        // hand check of long lists: `WUBBLE_SEED_SCALE=5000` adds that many visits and
+        // bookmarks, a tenth as many downloads and half as many archived tabs (the smoke's own
+        // counts then no longer hold: for `--smoke gallery`)
+        let scale: i64 = std::env::var("WUBBLE_SEED_SCALE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        for i in 0..scale {
+            let at = now - i * 60_000;
+            store
+                .record_visit(
+                    &format!("https://site{}.test/page/{i}", i % 97),
+                    &format!(
+                        "Visit number {i} \u{2013} a long enough title to show how rows elide"
+                    ),
+                    at,
+                    Transition::Link,
+                )
+                .await?;
+            store
+                .add_bookmark(
+                    None::<BookmarkId>,
+                    &format!("Bookmark {i}"),
+                    &format!("https://b{i}.test/"),
+                    at,
+                )
+                .await?;
+        }
+        for i in 0..scale / 10 {
+            store
+                .add_download(&DownloadEntry {
+                    id: 100 + i,
+                    url: format!("https://a.test/big-{i}.zip"),
+                    name: format!("big-{i}.zip"),
+                    path: format!("/tmp/big-{i}.zip").into(),
+                    received: 4,
+                    total: Some(4),
+                    state: DownloadState::Complete,
+                    started_ms: now - i * 1000,
+                })
+                .await?;
+        }
+        for i in 0..scale / 2 {
+            store
+                .push_archive(&ArchivedTab {
+                    id: 0,
+                    url: format!("https://old{i}.test/"),
+                    title: format!("Archived {i}"),
+                    container: ContainerId::DEFAULT,
+                    space: None,
+                    last_active_ms: now - 10 * DAY_MS,
+                    archived_at_ms: now - 3 * DAY_MS - i * 60_000,
+                })
+                .await?;
+        }
         Ok::<_, wubble_store::Error>(())
     })?;
     let mut vault = Vault::new(keyring.clone(), StoreLogins::new(store), &profile_name(db));

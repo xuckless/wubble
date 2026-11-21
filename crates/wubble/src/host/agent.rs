@@ -2965,7 +2965,7 @@ impl Host {
         }
     }
 
-    fn agent_log(
+    pub(super) fn agent_log(
         &mut self,
         session: &SessionId,
         tool: &str,
