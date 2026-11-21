@@ -294,6 +294,7 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub start_smoke: Option<crate::start_smoke::StartSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub passwords_smoke: Option<crate::passwords_smoke::PasswordsSmoke>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
@@ -381,6 +382,7 @@ pub struct Host {
     pub settings_passed: bool,
     pub start_passed: bool,
     pub pages_passed: bool,
+    pub passwords_passed: bool,
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
@@ -637,6 +639,7 @@ impl Host {
             settings_passed: false,
             start_passed: false,
             pages_passed: false,
+            passwords_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
             gallery_burst_start: std::time::Instant::now(),
@@ -1337,6 +1340,7 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        self.passwords_smoke_step();
         self.start_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
@@ -2831,6 +2835,83 @@ impl Host {
             }
             Some(pages_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
+        }
+    }
+
+    /// `--smoke passwords`: what the passwords page shows, and the page's own callbacks.
+    fn passwords_smoke_step(&mut self) {
+        use crate::passwords_smoke::{self as smoke, Shown};
+        use slint::Model;
+        let Some(state) = self.checks.passwords_smoke.take() else {
+            return;
+        };
+        let Some(window) = self.w.window.upgrade() else {
+            self.checks.passwords_smoke = Some(state);
+            return;
+        };
+        let view = window.get_passwords_view();
+        let seen = smoke::Seen {
+            ready: self.frame_rate.is_some(),
+            on_page: self.shown_page() == Some(InternalPage::Passwords),
+            shown: match view.state {
+                wubble_ui::VaultState::Locked => Shown::Locked,
+                wubble_ui::VaultState::Unlocked => Shown::Unlocked,
+                wubble_ui::VaultState::Unavailable => Shown::Unavailable,
+                wubble_ui::VaultState::Unreadable => Shown::Unreadable,
+            },
+            body: view.body.to_string(),
+            notice: view.notice.to_string(),
+            rows: window
+                .get_logins()
+                .iter()
+                .map(|l| smoke::Row {
+                    id: l.id.to_string(),
+                    origin: l.origin.to_string(),
+                    username: l.username.to_string(),
+                    revealed: l.has_revealed.then(|| l.revealed.to_string()),
+                })
+                .collect(),
+        };
+        let (state, actions) = smoke::next(state, &seen);
+        self.checks.passwords_smoke = Some(state);
+        let weak = self.w.window.clone();
+        // the page's own callbacks, as a click sends them: later, outside the host
+        let call = |f: Box<dyn FnOnce(AppWindow) + Send>| {
+            let _ = weak.upgrade_in_event_loop(f);
+        };
+        for action in actions {
+            match action {
+                smoke::Action::OpenPage => self.perform(Action::OpenPasswords),
+                smoke::Action::Leave => self.perform(Action::NewTab),
+                smoke::Action::Unlock => call(Box::new(|w| w.invoke_passwords_unlock())),
+                smoke::Action::Add {
+                    site,
+                    user,
+                    password,
+                } => call(Box::new(move |w| {
+                    w.invoke_login_added(site.into(), user.into(), password.into())
+                })),
+                smoke::Action::Edit {
+                    id,
+                    site,
+                    user,
+                    password,
+                } => call(Box::new(move |w| {
+                    w.invoke_login_edited(id.into(), site.into(), user.into(), password.into())
+                })),
+                smoke::Action::Reveal(id) => {
+                    call(Box::new(move |w| w.invoke_login_reveal(id.into())))
+                }
+                smoke::Action::Delete(id) => {
+                    call(Box::new(move |w| w.invoke_login_deleted(id.into())))
+                }
+                smoke::Action::Pass => {
+                    println!("smoke: passwords {:?} ok", state.phase);
+                    self.passwords_passed = true;
+                    quit();
+                }
+                smoke::Action::Fail(reason) => self.fail(reason),
+            }
         }
     }
 

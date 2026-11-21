@@ -125,6 +125,7 @@ pub fn login_items(rows: &[LoginView], revealed: Option<(&str, &str)>) -> Vec<Lo
             LoginItem {
                 id: r.id.as_str().into(),
                 site: r.site().into(),
+                origin: r.origin.as_str().into(),
                 username: r.username.as_deref().unwrap_or("(cannot be read)").into(),
                 revealed: shown.unwrap_or_default().into(),
                 has_revealed: shown.is_some(),

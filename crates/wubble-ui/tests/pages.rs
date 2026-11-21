@@ -82,6 +82,7 @@ fn login(id: &str) -> LoginItem {
     LoginItem {
         id: id.into(),
         site: "a.test".into(),
+        origin: "https://a.test".into(),
         username: "me".into(),
         revealed: Default::default(),
         has_revealed: false,

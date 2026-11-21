@@ -124,6 +124,12 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
                 ok(o.session_passed),
             );
         }
+        Mode::Passwords(phase) => {
+            return (
+                format!("smoke: passwords phase {phase:?}"),
+                ok(o.passwords_passed),
+            );
+        }
         Mode::Browse { .. } | Mode::Frames { .. } | Mode::Measure { .. } => {
             unreachable!("not a pass-or-fail smoke")
         }

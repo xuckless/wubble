@@ -1652,6 +1652,59 @@ mod tests {
         client.shutdown();
     }
 
+    /// The passwords page's own path, as the owner uses it: unlock, add a login by hand, list
+    /// it, leave the page (lock) while the session and history keep saving, quit; start again,
+    /// unlock, and the login is listed and opens.
+    #[test]
+    fn a_login_added_on_the_page_survives_a_restart() {
+        use wubble_core::pages::VaultStatus;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p/wubble.db");
+        let keyring = wubble_vault::FakeKeyRing::default();
+        let ask = |client: &StoreClient, command: VaultCommand| {
+            let (tx, rx) = mpsc::channel();
+            client.vault_command(command, move |a| tx.send(a).unwrap());
+            rx.recv().unwrap()
+        };
+        let listed = |client: &StoreClient| match ask(client, VaultCommand::List) {
+            VaultAnswer::Entries(rows) => rows
+                .into_iter()
+                .map(|r| (r.origin, r.username.unwrap_or_default()))
+                .collect::<Vec<_>>(),
+            other => panic!("not a list: {other:?}"),
+        };
+        let (client, _) = start_with(&path, keyring.clone());
+        assert!(matches!(
+            ask(&client, VaultCommand::Unlock),
+            VaultAnswer::Status(VaultStatus::Unlocked)
+        ));
+        let add = VaultCommand::Add {
+            site: "example.com".into(),
+            username: "alice".into(),
+            password: zeroize::Zeroizing::new("hunter2".into()),
+        };
+        assert!(matches!(ask(&client, add), VaultAnswer::Done));
+        let want = vec![("https://example.com".to_owned(), "alice".to_owned())];
+        assert_eq!(listed(&client), want);
+        let ui = Settings::default().ui;
+        client.save(&Model::new(std::time::Instant::now()), &[], ui);
+        client.record_visit("https://example.com/", "E", 5, Transition::Typed);
+        assert!(matches!(
+            ask(&client, VaultCommand::Lock),
+            VaultAnswer::Status(VaultStatus::Locked)
+        ));
+        client.save(&Model::new(std::time::Instant::now()), &[], ui);
+        client.shutdown();
+
+        let (client, _) = start_with(&path, keyring);
+        assert!(matches!(
+            ask(&client, VaultCommand::Unlock),
+            VaultAnswer::Status(VaultStatus::Unlocked)
+        ));
+        assert_eq!(listed(&client), want);
+        client.shutdown();
+    }
+
     /// The page and autofill share the one vault: autofill unlocks it, the page's lock locks it,
     /// and autofill's next request unlocks it again.
     #[test]

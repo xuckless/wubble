@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
+use crate::passwords_smoke::VaultPhase;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
 pub use crate::load_run::Variant;
@@ -174,6 +175,8 @@ enum SmokeArg {
     },
     Start,
     SessionPhase(Phase),
+    Passwords,
+    PasswordsPhase(VaultPhase),
     /// `extensions` or `extensions-none`.
     Extensions {
         installed: bool,
@@ -213,6 +216,10 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
+        None if value == "passwords" => Ok(SmokeArg::Passwords),
+        Some(("passwords-phase", "1")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Write)),
+        Some(("passwords-phase", "2")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Read)),
+        Some(("passwords-phase", "3")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Broken)),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)
@@ -294,6 +301,10 @@ pub enum Smoke {
     Overlay { dark: bool, dir: Option<PathBuf> },
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
+    /// The passwords page across restarts on a temporary profile (`passwords_smoke.rs`).
+    Passwords,
+    /// One process of `Passwords`, on the profile in `profile`.
+    PasswordsPhase { phase: VaultPhase, profile: PathBuf },
     /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
     /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
     Start { dir: Option<PathBuf> },
@@ -428,6 +439,15 @@ impl TryFrom<Cli> for Command {
                     "--smoke session-phase=N needs --profile",
                 ));
             }
+            (Some(SmokeArg::PasswordsPhase(phase)), None, Some(profile)) => {
+                Smoke::PasswordsPhase { phase, profile }
+            }
+            (Some(SmokeArg::PasswordsPhase(_)), _, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke passwords-phase=N needs --profile",
+                ));
+            }
             (Some(_), _, Some(_)) => {
                 return conflict(
                     "--profile only applies to the browser; smokes use a temporary one",
@@ -459,6 +479,7 @@ impl TryFrom<Cli> for Command {
                 dir: cli.shot_dir.expect("checked with the smoke above"),
             },
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
+            (Some(SmokeArg::Passwords), None, None) => Smoke::Passwords,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Media), None, None) => Smoke::Media,
