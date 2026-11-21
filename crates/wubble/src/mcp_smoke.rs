@@ -106,6 +106,39 @@ document.getElementById('src').addEventListener('mousedown', () => { from = 'Sou
 document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' on ' + (e.target.id || e.target.tagName)); from = null; });
 </script></body></html>"##;
 
+/// The form tools' page: a `<select>` (a label with a no-break space, a disabled option, two equal
+/// labels), one in a disabled fieldset, a popup button, a plain field, an editor stand-in that
+/// focuses an off-screen textarea beside it on mousedown (as Monaco, CodeMirror 5 and Ace do),
+/// and two custom widgets: one that takes focus itself, one that takes none (focus stays where it
+/// was).
+const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title></head>
+<body style="font:16px sans-serif">
+<label for="city">City</label>
+<select id="city" onchange="document.getElementById('picked').textContent='picked '+this.value">
+<option value="">Pick one</option>
+<option value="yyz">Toronto,&nbsp;ON</option>
+<option value="yul">Montreal</option>
+<option value="sold" disabled>Sold out</option>
+<option value="par1">Paris</option>
+<option value="par2">Paris</option>
+</select>
+<p id="picked">nothing picked</p>
+<fieldset disabled><legend>Locked</legend><label for="locked">Size</label> <select id="locked"><option>One</option><option>Two</option></select></fieldset>
+<button aria-haspopup="listbox">Colour</button>
+<p><label for="a">Field A</label> <input id="a"></p>
+<div style="position:relative">
+<div id="ed" role="textbox" aria-label="Editor" style="width:300px;height:40px;border:1px solid #000">code</div>
+<textarea id="hidden" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;top:0;width:1px;height:1px"></textarea>
+</div>
+<div id="w1" tabindex="0" role="button" aria-label="Widget" style="width:120px;height:30px;border:1px solid #000">Widget</div>
+<div id="w2" role="button" aria-label="Chooser" style="width:120px;height:30px;border:1px solid #000">Chooser</div>
+<script>
+const hidden = document.getElementById('hidden');
+document.getElementById('ed').addEventListener('mousedown', e => { e.preventDefault(); hidden.focus(); });
+// takes no focus: a press leaves it where it was
+document.getElementById('w2').addEventListener('mousedown', e => e.preventDefault());
+</script></body></html>"##;
+
 /// The site whose sign-ins the owner shares with a session, and one the owner is signed in to
 /// that the session's sites leave out (`.localhost`: loopback).
 pub const SIGNIN_HOST: &str = "signin.localhost";
@@ -157,6 +190,7 @@ pub fn route(path: &str, port: u16, cookie: &str) -> Option<Route> {
         "/mcp/next" => page(NEXT),
         "/mcp/sticky" => page(STICKY),
         "/mcp/tools" => page(TOOLS),
+        "/mcp/forms" => page(FORMS),
         // a server's redirect off the web: Chromium must not follow it for a session
         "/mcp/to-file" => Some(Route::Redirect("file:///etc/passwd".into())),
         "/mcp/to-chrome" => Some(Route::Redirect("chrome://version".into())),
@@ -606,6 +640,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     keys(&mut c, &s, page)?;
     shots(&mut c, &s, &base)?;
     pointer(&mut c, &s, &base)?;
+    forms(&mut c, &s, &base)?;
     reading(&mut c, &s, &base)?;
     safety(&mut c, &s, &session, page, &base)?;
 
@@ -1180,6 +1215,113 @@ fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(),
     c.step(
         "scroll",
         "Bottom brought into view, the wheel scrolled the page up and down",
+    );
+    Ok(())
+}
+
+/// `select` and `type` on form fields ([`FORMS`]).
+fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp/forms")})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
+    let js = |c: &mut Client, script: &str| -> Result<String, String> {
+        Ok(text(&c.ok("evaluate", s(json!({"script": script})))?))
+    };
+    let city = find("- comboBoxSelect \"City\"")?;
+    let pick =
+        |c: &mut Client, option: &str| c.tool("select", s(json!({"ref": city, "option": option})));
+    let value = |c: &mut Client| {
+        js(
+            c,
+            "document.getElementById('city').value + ' ' + document.getElementById('picked').textContent",
+        )
+    };
+    // by label, by value, a label's no-break space as a plain one, without case
+    for (option, want) in [
+        ("Montreal", "\"yul picked yul\""),
+        ("yyz", "\"yyz picked yyz\""),
+        ("Pick one", "\" picked \""),
+        ("Toronto, ON", "\"yyz picked yyz\""),
+        ("MONTREAL", "\"yul picked yul\""),
+    ] {
+        pick(c, option)?.map_err(|e| format!("select {option:?}: {e}"))?;
+        let got = value(c)?;
+        if got != want {
+            return Err(format!("select {option:?}: {got}, not {want}"));
+        }
+    }
+    // equal labels: the first, said
+    let both = pick(c, "Paris")?.map(|r| text(&r));
+    if !matches!(&both, Ok(t) if t.contains("2 options match"))
+        || value(c)? != "\"par1 picked par1\""
+    {
+        return Err(format!("select of two equal labels: {both:?}"));
+    }
+    match pick(c, "Ottawa")? {
+        Err(e)
+            if e.contains("no option matches \"Ottawa\"")
+                && e.contains("\"Montreal\" (value=\"yul\")") => {}
+        r => return Err(format!("select with no match: {r:?}")),
+    }
+    match pick(c, "sold out")? {
+        Err(e) if e.contains("option \"Sold out\" is disabled") => {}
+        r => return Err(format!("select of a disabled option: {r:?}")),
+    }
+    let locked = find("- comboBoxSelect \"Size\"")?;
+    match c.tool("select", s(json!({"ref": locked, "option": "Two"})))? {
+        Err(e) if e.contains("is disabled") => {}
+        r => return Err(format!("select in a disabled fieldset: {r:?}")),
+    }
+    let colour = find("- popUpButton \"Colour\"")?;
+    match c.tool("type", s(json!({"ref": colour, "text": "x"})))? {
+        Err(e) if e.contains("click it") && !e.contains("select tool") => {}
+        r => return Err(format!("type on a popup button: {r:?}")),
+    }
+    match c.tool("select", s(json!({"ref": colour, "option": "x"})))? {
+        Err(e) if e.contains("<button> is not a native <select>") && e.contains("click it") => {}
+        r => return Err(format!("select on a popup button: {r:?}")),
+    }
+    c.step(
+        "select",
+        "by label, value, a no-break space, without case; the first of two equal labels, said; no match lists the options; a disabled option, a disabled fieldset refused; a popup button sent to click by type and select",
+    );
+
+    let field = find("- textField \"Field A\"")?;
+    c.ok("type", s(json!({"ref": field, "text": TYPED})))?;
+    let a = |c: &mut Client| js(c, "document.getElementById('a').value");
+    if a(c)? != format!("{TYPED:?}") {
+        return Err(format!("type into Field A: {}", a(c)?));
+    }
+    // an editor that focuses a hidden textarea beside what shows: taken, the text arrives
+    let editor = find("- textField \"Editor\"")?;
+    c.ok("type", s(json!({"ref": editor, "text": "fn main() {}"})))
+        .map_err(|e| format!("type into the editor stand-in: {e}"))?;
+    let code = js(c, "document.getElementById('hidden').value")?;
+    if code != "\"fn main() {}\"" {
+        return Err(format!("the editor's hidden textarea holds {code}"));
+    }
+    // Field A focused again, then custom widgets: one takes focus itself (not editable), one
+    // takes none (focus stays on Field A, unrelated): both refused, Field A untouched
+    for (name, why) in [
+        ("Widget", "is not editable"),
+        ("Chooser", "stayed on an earlier <input>"),
+    ] {
+        let widget = find(&format!("- button \"{name}\""))?;
+        c.ok("type", s(json!({"ref": field, "text": TYPED})))?;
+        match c.tool("type", s(json!({"ref": widget, "text": "overwritten"})))? {
+            Err(e) if e.contains(why) => {}
+            r => return Err(format!("type on the {name} widget: {r:?}")),
+        }
+        if a(c)? != format!("{TYPED:?}") {
+            return Err(format!(
+                "Field A after type on the {name} widget: {}",
+                a(c)?
+            ));
+        }
+    }
+    c.step(
+        "type (forms)",
+        "a plain field; an editor stand-in's hidden textarea took the text; a widget that takes focus and one that leaves it on Field A refused, Field A unchanged",
     );
     Ok(())
 }
