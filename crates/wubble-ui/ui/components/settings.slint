@@ -262,14 +262,12 @@ component BindingRow inherits Row {
             keys: root.armed ? ["Press a shortcut"] : root.item.chord == "" ? ["None"] : root.item.keys;
             accessible-role: AccessibleRole.button;
             accessible-label: root.item.label;
+            clickable: true;
             accessible-action-default => {
                 root.record(root.item.action);
             }
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.record(root.item.action);
-                }
+            clicked => {
+                root.record(root.item.action);
             }
         }
     }
