@@ -59,6 +59,7 @@ pub mod sleep;
 pub mod snapshot;
 pub mod space;
 pub mod spacemenu;
+pub mod spell;
 pub mod split;
 pub mod sponsor;
 pub mod start;

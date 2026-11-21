@@ -14,6 +14,7 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
     cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
     cargo run -p wubble -- --smoke update   # windowless, no CEF: a signed fake release of the next version on loopback, checked, downloaded, verified and staged into a temp install root; a tampered archive refused; exits
     cargo run -p wubble -- --smoke quit   # Inspect on a selection and DevTools windows (shown, counted), one more just before the quit; clean quit; exits; run by hand only
+    cargo run -p wubble -- --smoke spell   # windowless, throwaway profile, loopback `assets/spell.html`: a misspelt word ("teh") typed into a focused textarea is right-clicked until Chromium's menu names it with suggestions ("the" among them: the bundled en-US dictionary, `wubble_engine::dictionary`); then the net log (`log-net-log`) must hold the page's own loopback request and no `gvt1.com` or `.bdic` URL (the other hosts Chromium asked for, refused at name resolution, are listed); exits; run by hand only
     cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
     cargo run -p wubble -- --smoke nav   # window navigates between two bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke tabs   # window opens, switches, sleeps, restores and closes tabs, exits; run by hand only

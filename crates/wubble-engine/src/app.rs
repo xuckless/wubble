@@ -931,6 +931,7 @@ impl Engine {
         }
         // Deleted containers' storage goes before CEF can open any of it.
         storage::sweep(&config.cache_dir);
+        crate::dictionary::install(&config.cache_dir);
         let runtime = CefRuntime::initialize(cef).map_err(|e| EngineError::Init(e.to_string()))?;
         let mut engine = Self {
             views: Vec::new(),

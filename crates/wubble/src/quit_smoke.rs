@@ -55,13 +55,13 @@ const VISIBLE: &str = "document.title = 'wubble-visible ' + document.visibilityS
                        + innerWidth + 'x' + innerHeight";
 
 /// CEF's pump requests and the host's single-shot timer, as `main.rs` runs them.
-struct Pump {
-    requests: Arc<Mutex<Vec<i64>>>,
+pub(crate) struct Pump {
+    pub(crate) requests: Arc<Mutex<Vec<i64>>>,
     timer: Option<Instant>,
 }
 
 impl Pump {
-    fn new() -> (Self, PumpScheduler) {
+    pub(crate) fn new() -> (Self, PumpScheduler) {
         let requests: Arc<Mutex<Vec<i64>>> = Arc::default();
         let sink = requests.clone();
         let scheduler = PumpScheduler::new(move |delay| {
@@ -78,7 +78,7 @@ impl Pump {
 
     /// Runs what CEF asked for and the timer if due, then pauses; the page
     /// events reported meanwhile.
-    fn turn(&mut self, engine: &mut Engine) -> Vec<(ViewId, PageEvent)> {
+    pub(crate) fn turn(&mut self, engine: &mut Engine) -> Vec<(ViewId, PageEvent)> {
         let requests =
             std::mem::take(&mut *self.requests.lock().unwrap_or_else(PoisonError::into_inner));
         let mut outcomes: Vec<PumpOutcome> = requests
@@ -101,7 +101,7 @@ impl Pump {
     }
 
     /// Turns until `done` holds, at most [`MAX_TURNS`]; `step` names it.
-    fn until(
+    pub(crate) fn until(
         &mut self,
         engine: &mut Engine,
         step: &str,
@@ -121,7 +121,7 @@ fn view(engine: &mut Engine, id: ViewId) -> Result<&mut View, &'static str> {
     engine.view(id).ok_or("a view closed by itself")
 }
 
-fn right_click(view: &mut View, at: Point) {
+pub(crate) fn right_click(view: &mut View, at: Point) {
     let up = Modifiers {
         keys: ModifiersState::empty(),
         buttons: Buttons::default(),

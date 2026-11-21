@@ -57,6 +57,7 @@ mod shell;
 mod shot;
 mod shot_io;
 mod slint_backend;
+mod spell_smoke;
 mod split_smoke;
 mod sponsor_net;
 mod start_smoke;
@@ -127,6 +128,8 @@ pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 /// `--smoke pinch`'s fixture, served on loopback (`autofill_smoke::serve`).
 pub const PINCH_PAGE: &str = include_str!("../assets/pinch.html");
+/// `--smoke spell`'s fixture, served on loopback.
+pub const SPELL_PAGE: &str = include_str!("../assets/spell.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 /// `--smoke builtins`' pages: an article (reader, dark mode, link hints), a page 3000 CSS px
@@ -207,6 +210,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("smoke: quit FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Spell) => match with_smoke_dir(spell_smoke::run) {
+            Ok(line) => {
+                println!("smoke: spell ok {line}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: spell FAILED: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -394,6 +407,7 @@ fn main() -> ExitCode {
                 Smoke::Boot
                 | Smoke::Update
                 | Smoke::Quit
+                | Smoke::Spell
                 | Smoke::Codecs { .. }
                 | Smoke::Extensions { .. }
                 | Smoke::Session

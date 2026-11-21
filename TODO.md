@@ -18,8 +18,7 @@ built but not released: they need the patched engine, which the release engine i
 Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
 `~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
 and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
-Owner decisions waiting: the spellcheck dictionary (its download was one of Chromium's own requests, now off);
-whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
+Owner decisions waiting: whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
 this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
 `WUBBLE_SMOKE_KEYRING=os` there before the release).
 
@@ -110,7 +109,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
+- [ ] Spell check in other languages: the English dictionary is bundled; add an opt-in (off by default) download of others, from `redirector.gvt1.com` or a mirror, into `<profile>/Dictionaries`
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)

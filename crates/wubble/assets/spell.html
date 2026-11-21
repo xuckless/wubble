@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>spell</title>
+<style>
+  body { margin: 0; }
+  textarea { position: absolute; left: 20px; top: 20px; width: 400px; height: 120px; padding: 4px; font: 24px monospace; }
+</style>
+<textarea spellcheck="true" lang="en-US"></textarea>
+<script>
+  // The smoke reads these lines from the console.
+  const box = document.querySelector('textarea');
+  box.addEventListener('focus', () => console.log('spell: focused'));
+  box.addEventListener('input', () => console.log('spell: input ' + JSON.stringify(box.value)));
+  console.log('spell: ready');
+</script>
