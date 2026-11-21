@@ -109,12 +109,12 @@ document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' 
 /// The form tools' page: a `<select>` (a label with a no-break space, a disabled option, two equal
 /// labels), one in a disabled fieldset, a popup button, a plain field, an editor stand-in that
 /// focuses an off-screen textarea beside it on mousedown (as Monaco, CodeMirror 5 and Ace do),
-/// and two custom widgets: one that takes focus itself, one that takes none (focus stays where it
-/// was).
+/// two custom widgets: one that takes focus itself, one that takes none (focus stays where it
+/// was), a bare file input and a custom upload button that clicks a hidden one.
 const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title></head>
 <body style="font:16px sans-serif">
 <label for="city">City</label>
-<select id="city" onchange="document.getElementById('picked').textContent='picked '+this.value">
+<select id="city" oninput="window.ev=(window.ev||'')+'i'" onchange="window.ev=(window.ev||'')+'c';document.getElementById('picked').textContent='picked '+this.value">
 <option value="">Pick one</option>
 <option value="yyz">Toronto,&nbsp;ON</option>
 <option value="yul">Montreal</option>
@@ -132,6 +132,11 @@ const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title
 </div>
 <div id="w1" tabindex="0" role="button" aria-label="Widget" style="width:120px;height:30px;border:1px solid #000">Widget</div>
 <div id="w2" role="button" aria-label="Chooser" style="width:120px;height:30px;border:1px solid #000">Chooser</div>
+<label for="resume">Resume</label>
+<input id="resume" type="file" accept=".pdf">
+<input id="hidden-file" type="file" style="display:none" onchange="document.getElementById('custom-out').textContent='attached '+Array.from(this.files).map(f=>f.name).join(',')">
+<button id="custom-btn" type="button" onclick="document.getElementById('hidden-file').click()">Upload cover</button>
+<p id="custom-out">no cover</p>
 <script>
 const hidden = document.getElementById('hidden');
 document.getElementById('ed').addEventListener('mousedown', e => { e.preventDefault(); hidden.focus(); });
@@ -1219,7 +1224,7 @@ fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(),
     Ok(())
 }
 
-/// `select` and `type` on form fields ([`FORMS`]).
+/// `select`, `type` and `upload_file` on form fields ([`FORMS`]).
 fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
     c.ok("navigate", s(json!({"url": format!("{base}/mcp/forms")})))?;
     let read = text(&c.ok("read_page", s(json!({})))?);
@@ -1245,6 +1250,12 @@ fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), S
         ("MONTREAL", "\"yul picked yul\""),
     ] {
         pick(c, option)?.map_err(|e| format!("select {option:?}: {e}"))?;
+        if option == "Montreal" && js(c, "window.ev")? != "\"ic\"" {
+            return Err(format!(
+                "select fired {}, not input then change",
+                js(c, "window.ev")?
+            ));
+        }
         let got = value(c)?;
         if got != want {
             return Err(format!("select {option:?}: {got}, not {want}"));
@@ -1322,6 +1333,56 @@ fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), S
     c.step(
         "type (forms)",
         "a plain field; an editor stand-in's hidden textarea took the text; a widget that takes focus and one that leaves it on Field A refused, Field A unchanged",
+    );
+
+    let resume = find("- button \"Resume")?;
+    let custom = find("- button \"Upload cover\"")?;
+    // `click` on a file input must cancel the OS chooser and tell the agent to use `upload_file`.
+    match c.tool("click", s(json!({"ref": resume})))? {
+        Err(e) if e.contains("upload_file") => {}
+        r => return Err(format!("click on file input: {r:?}")),
+    }
+
+    // `upload_file` on a bare `<input type="file">` AND on a custom button; `read_page` must
+    // immediately reflect `resume.pdf` (never stale "No file chosen").
+    let dir = std::env::temp_dir().join(format!("wubble-mcp-upload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let resume_path = dir.join("resume.pdf");
+    let cover_path = dir.join("cover.txt");
+    std::fs::write(&resume_path, b"%PDF-1.4\n%wubble-smoke\n").map_err(|e| e.to_string())?;
+    std::fs::write(&cover_path, b"hello cover").map_err(|e| e.to_string())?;
+
+    let up = text(&c.ok(
+        "upload_file",
+        s(json!({"ref": resume, "path": resume_path.to_string_lossy()})),
+    )?);
+    if !up.contains("resume.pdf") {
+        return Err(format!("upload_file bare input: {up}"));
+    }
+    let after_read = text(&c.ok("read_page", s(json!({})))?);
+    if !after_read.contains("resume.pdf") || after_read.contains("No file chosen") {
+        return Err(format!("read_page stale after upload_file: {after_read}"));
+    }
+
+    let up2 = text(&c.ok(
+        "upload_file",
+        s(json!({"ref": custom, "path": cover_path.to_string_lossy()})),
+    )?);
+    if !up2.contains("cover.txt") {
+        return Err(format!("upload_file custom button: {up2}"));
+    }
+    let custom_out = text(&c.ok(
+        "evaluate",
+        s(json!({"script": "document.getElementById('custom-out').textContent"})),
+    )?);
+    if custom_out != "\"attached cover.txt\"" {
+        return Err(format!("custom upload button result: {custom_out}"));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    c.step(
+        "upload_file",
+        "click on a file input refused with the advice; a bare input and a custom button attached, read_page fresh",
     );
     Ok(())
 }

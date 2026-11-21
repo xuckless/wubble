@@ -497,9 +497,7 @@ enum Then {
         mark: u64,
     },
     /// `upload_file`'s click: wait briefly for the page to open a file chooser.
-    Upload {
-        paths: Vec<PathBuf>,
-    },
+    Upload { paths: Vec<PathBuf> },
     /// A drag let go.
     Dragged,
     /// The answer now.
@@ -645,8 +643,8 @@ fn validate_upload_paths(paths: &[String]) -> Result<Vec<PathBuf>, String> {
         if !meta.is_file() {
             return Err(format!("not a file: {raw}"));
         }
-        let canon = std::fs::canonicalize(path)
-            .map_err(|e| format!("cannot resolve {raw:?}: {e}"))?;
+        let canon =
+            std::fs::canonicalize(path).map_err(|e| format!("cannot resolve {raw:?}: {e}"))?;
         out.push(canon);
     }
     Ok(out)
@@ -3611,7 +3609,10 @@ impl Host {
             _ => false,
         });
         if busy {
-            return self.agent_fail(reply, "another file upload is already in progress on this tab");
+            return self.agent_fail(
+                reply,
+                "another file upload is already in progress on this tab",
+            );
         }
         self.agent_act(reply, tab, target, None, Act::Upload { paths });
     }
@@ -5347,8 +5348,14 @@ mod tests {
             bounds: Bounds::default(),
         };
         let one = upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]);
-        assert!(!ax_shows_upload(&[item("Resume: No file chosen", "No file chosen")], &one));
-        assert!(ax_shows_upload(&[item("Resume: resume.pdf", "resume.pdf")], &one));
+        assert!(!ax_shows_upload(
+            &[item("Resume: No file chosen", "No file chosen")],
+            &one
+        ));
+        assert!(ax_shows_upload(
+            &[item("Resume: resume.pdf", "resume.pdf")],
+            &one
+        ));
         let two = upload_ax_markers(&[PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b.pdf")]);
         assert!(ax_shows_upload(&[item("Cover: 2 files", "2 files")], &two));
 
