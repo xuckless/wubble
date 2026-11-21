@@ -444,7 +444,7 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "type",
         description: "Type text into a text field by ref (replacing what it holds). Only for text \
-            fields (use select for a native dropdown). With submit, press Enter and wait as \
+            fields (use select for a native dropdown, upload_file for a file input). With submit, press Enter and wait as \
             navigate does when a page load follows.",
         args: &[
             SESSION,
@@ -725,9 +725,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "upload_file",
-        description: "Attach one or more local files to a file input or upload button by ref: \
-            clicks the element and answers the page's file chooser directly without opening an OS \
-            file dialog.",
+        description: "Attach local files by ref: a file input (hidden ones too) takes them \
+            directly, firing input and change; any other element (an upload button, a label) is \
+            clicked and the file chooser it opens is answered without an OS dialog, when its page \
+            is on the session's sites. One path, or paths for an <input multiple>; absolute paths.",
         args: &[
             SESSION,
             TAB,
@@ -987,6 +988,7 @@ mod tests {
         }
         let ty = find("type").unwrap();
         assert!(ty.description.contains("select"));
+        assert!(ty.description.contains("upload_file"));
     }
 
     #[test]
