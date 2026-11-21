@@ -1913,8 +1913,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         E::DownloadInterrupted { id, reason } => one(Route::Download(
             DownloadId(id),
             DownloadInput::Interrupted {
-                // cef_download_interrupt_reason_t.
-                error: format!("interrupted ({reason})"),
+                error: crate::download::interrupt_reason_text(reason),
             },
         )),
         E::DownloadCancelled { id, .. } => {
@@ -2720,7 +2719,7 @@ mod tests {
             Route::Download(
                 DownloadId(11),
                 DownloadInput::Interrupted {
-                    error: "interrupted (20)".into()
+                    error: "Network error".into()
                 }
             )
         );

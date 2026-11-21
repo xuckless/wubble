@@ -208,6 +208,45 @@ pub fn transition(
     }
 }
 
+/// What an interrupted download tells the person: Chromium's
+/// `cef_download_interrupt_reason_t` in words (`download_interrupt_reason_values.h`, BSD-3-Clause),
+/// the number kept only for a reason this table does not know.
+pub fn interrupt_reason_text(reason: i32) -> String {
+    match reason {
+        1 => "The file could not be written",
+        2 => "No permission to write the file",
+        3 => "Not enough disk space",
+        5 => "The file name is too long",
+        6 => "The file is too large",
+        7 => "A virus was found",
+        10 => "A temporary file error",
+        11 => "The file was blocked",
+        12 => "The security check failed",
+        13 => "The file is incomplete",
+        14 => "The file is damaged",
+        15 => "The file would overwrite its source",
+        20 => "Network error",
+        21 => "Network timeout",
+        22 => "Network disconnected",
+        23 => "Server down",
+        24 => "Invalid request",
+        30 => "Server error",
+        31 => "The server cannot resume the download",
+        33 => "The server sent unusable content",
+        34 => "Sign-in required",
+        35 => "Certificate problem",
+        36 => "Forbidden by the server",
+        37 => "Server unreachable",
+        38 => "The connection ended before the whole file arrived",
+        39 => "Redirected to another site",
+        40 => "Cancelled",
+        41 => "wubble was closing",
+        50 => "wubble crashed",
+        other => return format!("interrupted ({other})"),
+    }
+    .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Download::*, DownloadEffect::*, DownloadInput as In, *};
@@ -306,6 +345,18 @@ mod tests {
                 total: Some(100)
             })
         );
+    }
+
+    #[test]
+    fn interrupt_reasons_read_as_words() {
+        assert_eq!(interrupt_reason_text(2), "No permission to write the file");
+        assert_eq!(interrupt_reason_text(20), "Network error");
+        assert_eq!(
+            interrupt_reason_text(38),
+            "The connection ended before the whole file arrived"
+        );
+        // an unknown reason keeps its number
+        assert_eq!(interrupt_reason_text(999), "interrupted (999)");
     }
 
     fn interrupted() -> In {
