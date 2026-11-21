@@ -309,7 +309,13 @@ impl Store {
     ) -> Result<HistoryDeleted> {
         let tx = self.conn.transaction().await?;
         let out = delete_visits_between(&tx, from_ms, to_ms).await?;
+        tx.execute(
+            "DELETE FROM recently_closed WHERE closed_at >= ?1 AND closed_at < ?2",
+            (from_ms, to_ms),
+        )
+        .await?;
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -318,7 +324,10 @@ impl Store {
         let tx = self.conn.transaction().await?;
         let found = ids(&tx, "SELECT id FROM urls WHERE url = ?1", [url]).await?;
         let out = delete_urls(&tx, &found).await?;
+        tx.execute("DELETE FROM recently_closed WHERE url = ?1", [url])
+            .await?;
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -346,6 +355,7 @@ impl Store {
         drop(rows);
         let out = delete_urls(&tx, &found).await?;
         tx.commit().await?;
+        self.prune_unreferenced_favicons().await?;
         Ok(out)
     }
 
@@ -443,6 +453,54 @@ mod tests {
             assert_eq!(next[0].url, "https://a.test/one");
             assert!(s.list_visits(10, None, "zzz").await.unwrap().is_empty());
             assert_eq!(s.list_visits(10, None, "").await.unwrap().len(), 4);
+        });
+    }
+
+    #[test]
+    fn clearing_history_also_forgets_closed_tabs_and_unreferenced_icons() {
+        use crate::{ClosedTab, Favicon};
+        use wubble_core::space::ContainerId;
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let icon = |u: &str| Favicon {
+                icon_url: format!("{u}icon.png"),
+                width: 1,
+                height: 1,
+                rgba: vec![1; 4],
+            };
+            let all = [
+                "https://seen.test/",
+                "https://kept.test/",
+                "https://other.test/",
+            ];
+            for (i, url) in all.into_iter().enumerate() {
+                s.record_visit(url, "T", 10 + i as i64, Transition::Link)
+                    .await
+                    .unwrap();
+                s.put_favicon(url, &icon(url), 1).await.unwrap();
+            }
+            s.add_bookmark(None, "Kept", "https://kept.test/", 1)
+                .await
+                .unwrap();
+            s.push_closed(&ClosedTab {
+                url: "https://seen.test/".into(),
+                title: "T".into(),
+                container: ContainerId::DEFAULT,
+                space: None,
+                closed_at_ms: 50,
+            })
+            .await
+            .unwrap();
+            // One page forgotten: its closed tab and its icon go, the others stay.
+            s.delete_history_url("https://other.test/").await.unwrap();
+            let got = s.favicons_for(&all).await.unwrap();
+            assert!(!got.contains_key("https://other.test/"));
+            assert!(got.contains_key("https://seen.test/"));
+            // Everything: the closed tab and the icon of a site no bookmark keeps go too.
+            s.delete_history_range(i64::MIN, i64::MAX).await.unwrap();
+            assert_eq!(s.pop_closed().await.unwrap(), None);
+            let got = s.favicons_for(&all).await.unwrap();
+            assert_eq!(got.keys().collect::<Vec<_>>(), ["https://kept.test/"]);
         });
     }
 
