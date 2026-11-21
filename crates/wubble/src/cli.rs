@@ -89,7 +89,8 @@ struct Cli {
     /// Also write `--measure`'s samples as CSV to this file.
     #[arg(long, value_name = "PATH", requires = "measure")]
     out: Option<PathBuf>,
-    /// Page for `--smoke frames=N` instead of the bundled test page.
+    /// Page for `--smoke frames=N` instead of the bundled test page; the page
+    /// `--smoke autofill=probe` looks at.
     #[arg(long, requires = "smoke", conflicts_with = "measure")]
     url: Option<String>,
     /// Profile directory (database and CEF cache) instead of the per-user one.
@@ -155,6 +156,7 @@ enum SmokeArg {
     Gallery,
     Session,
     Autofill,
+    AutofillProbe,
     Windows,
     Media,
     Builtins,
@@ -194,6 +196,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "gallery" => Ok(SmokeArg::Gallery),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
+        Some(("autofill", "probe")) => Ok(SmokeArg::AutofillProbe),
         None if value == "windows" => Ok(SmokeArg::Windows),
         None if value == "media" => Ok(SmokeArg::Media),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
@@ -216,7 +219,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
-             `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
+             `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none` or `session-phase=1|2`"
                 .into(),
@@ -262,8 +265,9 @@ pub enum Smoke {
     Gallery { dir: PathBuf },
     /// Runs both session phases on a temporary profile.
     Session,
-    /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
-    Autofill,
+    /// The sign-in corpus on loopback: fill from the key menu, submit, save, the vault rows.
+    /// With `probe`, a real page instead, read-only: what the chip would offer (by hand).
+    Autofill { probe: Option<String> },
     /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
     /// check sizes and hashes.
     Media,
@@ -430,6 +434,15 @@ impl TryFrom<Cli> for Command {
                 );
             }
             (Some(SmokeArg::Frames(frames)), url, None) => Smoke::Frames { frames, url },
+            (Some(SmokeArg::AutofillProbe), Some(url), None) => Smoke::Autofill {
+                probe: Some(wubble_core::url::from_cli_arg(&url)),
+            },
+            (Some(SmokeArg::AutofillProbe), None, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke autofill=probe needs --url",
+                ));
+            }
             (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
@@ -446,7 +459,7 @@ impl TryFrom<Cli> for Command {
                 dir: cli.shot_dir.expect("checked with the smoke above"),
             },
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
-            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
+            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Media), None, None) => Smoke::Media,
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,

@@ -325,7 +325,7 @@ fn main() -> ExitCode {
                     Mode::Start
                 }
                 Smoke::Pages => Mode::Pages,
-                Smoke::Autofill => Mode::Autofill,
+                Smoke::Autofill { probe } => Mode::Autofill { probe },
                 Smoke::Media => Mode::Media,
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
@@ -576,21 +576,23 @@ fn session_phase_args(phase: &str, profile: &Path, no_sandbox: bool) -> Vec<std:
     args
 }
 
-/// `--smoke autofill`: the login the key menu must offer on the smoke's page.
-fn seed_autofill_login(store: &StoreClient, port: u16) {
-    let origin = format!("http://127.0.0.1:{port}");
+/// The logins the smokes' key menus must offer: `--smoke autofill`'s fixtures' (origin,
+/// username, password), or the loopback page's one for the smokes that share its server.
+fn seed_autofill_logins(store: &StoreClient, logins: Vec<(String, String, String)>) {
     store.vault(move |vault| {
-        let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
-            return;
-        };
-        let login = wubble_vault::NewLogin {
-            origin,
-            form_action_origin: None,
-            username: autofill_smoke::SEEDED_USER.into(),
-            password: zeroize::Zeroizing::new(autofill_smoke::SEEDED_PASSWORD.into()),
-        };
-        if let Err(e) = vault.save(login, 0) {
-            eprintln!("smoke: autofill: the login was not seeded: {e}");
+        for (origin, username, password) in logins {
+            let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
+                continue;
+            };
+            let login = wubble_vault::NewLogin {
+                origin,
+                form_action_origin: None,
+                username,
+                password: zeroize::Zeroizing::new(password),
+            };
+            if let Err(e) = vault.save(login, 0) {
+                eprintln!("smoke: autofill: a login was not seeded: {e}");
+            }
         }
     });
 }
@@ -701,8 +703,8 @@ enum Mode {
     Pages,
     /// `--smoke gallery` (on the pages smoke's seeded profile).
     Gallery,
-    /// `--smoke autofill`.
-    Autofill,
+    /// `--smoke autofill`, or with `probe` its hand-run look at a real page.
+    Autofill { probe: Option<String> },
     /// `--smoke media`.
     Media,
     /// `--smoke builtins`.
@@ -1333,10 +1335,16 @@ fn run(
     );
     let autofill_port = (matches!(
         mode,
-        Mode::Autofill | Mode::Block | Mode::Parity | Mode::Mcp
+        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Mcp
     ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
+    // `--smoke autofill`'s fixtures (or its probe), seeded below.
+    let mut autofill_plan = match &mode {
+        Mode::Autofill { probe: Some(url) } => Some(autofill_smoke::probe(url)),
+        Mode::Autofill { probe: None } => autofill_port.map(autofill_smoke::corpus),
+        _ => None,
+    };
     // `--smoke media`'s fixtures, on a loopback port.
     let media_port = matches!(mode, Mode::Media)
         .then(media_smoke::serve)
@@ -1366,7 +1374,23 @@ fn run(
     // as CEF's start), while CEF starts.
     let (store, loaded) = StoreClient::spawn(db, keyring);
     if let Some(port) = autofill_port.filter(|_| !matches!(mode, Mode::Parity)) {
-        seed_autofill_login(&store, port);
+        let logins = match &autofill_plan {
+            Some(plan) => plan.iter().flat_map(|f| f.logins.clone()).collect(),
+            None => vec![
+                (
+                    format!("http://127.0.0.1:{port}"),
+                    autofill_smoke::SEEDED_USER.into(),
+                    autofill_smoke::SEEDED_PASSWORD.into(),
+                ),
+                // `--smoke mcp`'s login the sheet binds a session's names to
+                (
+                    format!("http://{}:{port}", mcp_smoke::SIGNIN_HOST),
+                    mcp_smoke::SIGNIN_USER.into(),
+                    mcp_smoke::SIGNIN_PASSWORD.into(),
+                ),
+            ],
+        };
+        seed_autofill_logins(&store, logins);
     }
     let gpu_init = std::thread::Builder::new()
         .name("wubble-gpu-init".into())
@@ -1510,13 +1534,17 @@ fn run(
                 ..none
             },
         ),
-        Mode::Autofill => (
-            autofill_port.map(|port| format!("http://127.0.0.1:{port}/")),
-            Checks {
-                autofill_smoke: Some(autofill_smoke::AutofillSmoke::default()),
-                ..none
-            },
-        ),
+        Mode::Autofill { .. } => {
+            let smoke =
+                autofill_smoke::AutofillSmoke::new(autofill_plan.take().unwrap_or_default());
+            (
+                smoke.start_url().map(str::to_owned),
+                Checks {
+                    autofill_smoke: Some(smoke),
+                    ..none
+                },
+            )
+        }
         Mode::Media => (
             media_port.map(|port| format!("http://127.0.0.1:{port}/")),
             Checks {

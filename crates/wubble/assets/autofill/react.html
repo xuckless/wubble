@@ -1,0 +1,42 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Log in</title>
+<!-- A React-style controlled form: each input's value property is wrapped (React's value
+     tracker), and the root's delegated input listener takes a change only when the DOM value
+     differs from the tracked one, so a fill seen only through the wrapped setter is dropped. The
+     submit handler prevents the post and swaps in the next view (a single-page sign-in). -->
+<div id="root"><form class="LoginForm_form__x" novalidate>
+<input id="email" name="email" type="email" autocomplete="username" class="Input_input__a">
+<input id="password" name="password" type="password" autocomplete="current-password" class="Input_input__a">
+<button type="submit" class="Button_primary go">Log in</button></form></div>
+<script>
+const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+const tracked = {}, state = { email: "", password: "" };
+for (const el of document.querySelectorAll("#root input")) {
+  tracked[el.id] = "";
+  Object.defineProperty(el, "value", {
+    configurable: true,
+    get() { return native.get.call(this); },
+    set(v) { tracked[this.id] = String(v); native.set.call(this, v); },
+  });
+}
+const render = () => { for (const id in state) fx.$("#" + id).value = state[id]; };
+let filled = false;
+fx.$("#root").addEventListener("input", (e) => {
+  const el = e.target, v = native.get.call(el);
+  if (v === tracked[el.id]) return;
+  tracked[el.id] = v;
+  state[el.id] = v;
+  render();
+  if (!filled && state.email === "frank@react.test" && state.password === "re4ct") {
+    filled = true;
+    fx.say("filled ok");
+    state.password = "re4ct-new";
+    render();
+  }
+});
+fx.$("#root form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  fx.$("#root").innerHTML = "<p>Welcome back.</p>";
+  history.pushState({}, "", "/f/react/home");
+});
+</script>

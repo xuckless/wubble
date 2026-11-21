@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Create your account</title>
+<!-- A sign-up form: autocomplete new-password twice. A saved login of the site must never be
+     offered or filled here; the generator fills both new-password fields. -->
+<form action="/f/welcome" method="post" id="signup-form">
+<label for="email">Email</label><input type="email" name="email" id="email" autocomplete="username">
+<label for="new">Password</label><input type="password" name="password" id="new" autocomplete="new-password">
+<label for="confirm">Confirm password</label><input type="password" name="password_confirmation" id="confirm" autocomplete="new-password">
+<input type="submit" value="Create account" class="go">
+</form>
+<script>
+const a = fx.$("#new"), b = fx.$("#confirm");
+b.addEventListener("change", () => {
+  const p = fx.get(a);
+  if (p.length >= 12 && fx.get(b) === p && fx.get(fx.$("#email")) === "") {
+    fx.say("filled ok");
+    fx.type("#email", "henry@signup.test");
+  }
+});
+</script>

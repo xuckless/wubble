@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in to your Microsoft account</title>
+<!-- Modelled on login.live.com: one form, the password field already there but off-screen
+     (moveOffScreen, tabindex -1, aria-hidden) until the username is submitted; then the page
+     hides the username and shows the password in the same document. -->
+<form name="f1" id="i0281" novalidate spellcheck="false" method="post" target="_top" autocomplete="off" action="/f/welcome">
+<div id="usernameSection"><div role="heading" aria-level="1" id="loginHeader">Sign in</div>
+<input type="email" name="loginfmt" id="i0116" maxlength="113" lang="en" class="form-control ltr_override input ext-input text-box ext-text-box" aria-required="true" aria-describedby="loginHeader usernameError" placeholder="Email, phone, or Skype" aria-label="Email, phone, or Skype" autocomplete="username"></div>
+<input name="passwd" type="password" id="i0118" autocomplete="current-password" class="form-control input ext-input text-box ext-text-box moveOffScreen" aria-required="true" placeholder="Password" aria-label="Enter password" tabindex="-1" aria-hidden="true">
+<input type="submit" id="idSIButton9" class="win-button button_primary button ext-button primary ext-primary go" value="Next">
+</form>
+<style>.moveOffScreen { position: fixed; bottom: 0; right: 0; height: 0 !important; width: 0 !important; overflow: hidden; opacity: 0; }</style>
+<script>
+let step = 1;
+const pw = fx.$("#i0118");
+fx.$("#i0281").addEventListener("submit", (e) => {
+  if (step !== 1) return;
+  e.preventDefault();
+  step = 2;
+  fx.$("#usernameSection").style.display = "none";
+  pw.classList.remove("moveOffScreen");
+  pw.tabIndex = 0;
+  pw.removeAttribute("aria-hidden");
+  fx.$("#idSIButton9").value = "Sign in";
+  fx.expect([[pw, "ms-pw"]], "filled ok 2", () => fx.type(pw, "ms-new"));
+});
+fx.expect([["#i0116", "bob@outlook.test"]], "filled ok");
+</script>

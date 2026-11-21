@@ -107,7 +107,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         Mode::Start => ("start", ok(o.start_passed)),
         Mode::Pages => ("pages", ok(o.pages_passed)),
         Mode::Gallery => ("gallery", ok(o.gallery_passed)),
-        Mode::Autofill => ("autofill", ok(o.autofill_passed)),
+        Mode::Autofill { .. } => ("autofill", ok(o.autofill_passed)),
         Mode::Media => ("media", ok(o.media_passed)),
         Mode::Builtins => (
             "builtins",

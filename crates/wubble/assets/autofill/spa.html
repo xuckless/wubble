@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Sign in</title>
+<!-- A formless single-page sign-in: no form element, a div role=button, Enter in the password
+     field signs in by script and the fields leave the page. -->
+<div id="app"><div class="box login-card">
+<input id="email" type="email" autocomplete="username" placeholder="Email">
+<input id="pw" type="password" autocomplete="current-password" placeholder="Password" class="enter">
+<div role="button" tabindex="0" class="btn go" id="go">Sign in</div></div></div>
+<script>
+const signIn = () => { fx.$("#app").innerHTML = "<p>Welcome back.</p>"; history.pushState({}, "", "/f/spa/home"); };
+fx.$("#pw").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn(); });
+fx.$("#go").addEventListener("click", signIn);
+fx.expect([["#email", "judy@spa.test"], ["#pw", "judy-pw"]], "filled ok", () => fx.type("#pw", "judy-new"));
+</script>

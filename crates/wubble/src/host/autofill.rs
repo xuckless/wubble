@@ -4,22 +4,26 @@
 //! the page (`View::send_frame_message`) and the shell (the key chip, its
 //! menu and the save prompt, written by [`Host::render_autofill`]).
 //!
-//! The origin a report speaks for is the frame's as CEF names it, checked
-//! against the tab's page (`autofill::may_report`): a cross-origin iframe is
-//! never offered a login and never saved. A fill happens only on a click on
-//! a menu row, only into the frame and fields the offer named, and only while
-//! the page is still on the origin the login was saved for (checked again
-//! here when the vault answers, and by the script against its own
-//! `location.origin`). Passwords cross threads as [`Secret`]s and are never
-//! logged; none of this is part of the saved session.
+//! The origin a report speaks for is the frame's own as CEF names it, on a
+//! web page (`autofill::may_report`): a cross-origin iframe is offered only
+//! its own origin's logins, and its save prompt names its origin. A fill
+//! happens only on a click on a menu row, only into the frame and fields the
+//! offer named, only while the tab is still on the page origin it was picked
+//! on (checked here when the vault answers) and the frame on the login's
+//! origin (checked by the script against its own `location.origin`).
+//! Passwords cross threads as [`Secret`]s and are never logged; none of this
+//! is part of the saved session.
+//!
+//! `WUBBLE_AUTOFILL_TRACE=1` (and `--smoke autofill=probe`) prints each
+//! report's frame origin, its forms' classes and field kinds, never a value.
 
 use std::collections::HashMap;
 
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use wubble_core::apply::PasswordSettings;
 use wubble_core::autofill::{
-    self, AutofillState, Candidate, Effect, Event, FieldId, MenuRow, Policy, SaveKind, SaveVerdict,
-    ScriptMessage, View,
+    self, AutofillState, Candidate, Effect, Event, FieldId, FormSnapshot, MenuRow, Mode, Phase,
+    Policy, SaveKind, SaveVerdict, ScriptMessage, View,
 };
 use wubble_core::secret::Secret;
 use wubble_core::site::{Decision, Permission};
@@ -40,6 +44,8 @@ pub(super) struct Autofill {
     tabs: HashMap<TabId, AutofillState>,
     settings: PasswordSettings,
     drawn: Option<(Option<TabId>, View)>,
+    /// Print what each report holds (`WUBBLE_AUTOFILL_TRACE`; the probe does too).
+    trace: bool,
 }
 
 impl Autofill {
@@ -49,6 +55,7 @@ impl Autofill {
             tabs: HashMap::new(),
             settings: PasswordSettings::default(),
             drawn: None,
+            trace: std::env::var_os("WUBBLE_AUTOFILL_TRACE").is_some_and(|v| v != "0"),
         }
     }
 
@@ -69,22 +76,33 @@ impl Host {
         else {
             return;
         };
+        let probe = self
+            .checks
+            .autofill_smoke
+            .as_ref()
+            .is_some_and(AutofillSmoke::is_probe);
+        if self.autofill.trace || probe {
+            trace(&origin, frame.is_main, &message);
+        }
         let FrameInfo { id, is_main, .. } = frame;
         let event = match message {
             ScriptMessage::Forms(forms) => Event::Forms {
                 frame: id,
                 origin,
+                is_main,
                 forms,
             },
             ScriptMessage::Submit(form) => Event::Submit {
                 frame: id,
                 origin,
                 form,
+                at: now_ms(),
             },
             ScriptMessage::Gone(form) => Event::Gone {
                 frame: id,
                 origin,
                 form,
+                at: now_ms(),
             },
             ScriptMessage::Settled(forms) => Event::Settled {
                 frame: id,
@@ -117,10 +135,10 @@ impl Host {
     }
 
     fn autofill_event(&mut self, tab: TabId, event: Event) {
-        let policy = self.autofill_policy(tab);
+        let policy = self.autofill_policy(tab, event.origin().map(str::to_owned));
         let state = self.autofill.tabs.remove(&tab).unwrap_or_default();
         let (next, effects) = autofill::transition(state, event, policy);
-        if next != AutofillState::Idle {
+        if next != AutofillState::default() {
             self.autofill.tabs.insert(tab, next);
         }
         for effect in effects {
@@ -135,8 +153,9 @@ impl Host {
         self.tab_view(tab).map(|v| v.nav().page.url.clone())
     }
 
-    fn autofill_policy(&mut self, tab: TabId) -> Policy {
-        let origin = self.page_url(tab).and_then(|u| autofill::web_origin(&u));
+    /// The settings, and "never save" for `origin` (a frame's), else the page's origin.
+    fn autofill_policy(&mut self, tab: TabId, origin: Option<String>) -> Policy {
+        let origin = origin.or_else(|| self.page_url(tab).and_then(|u| autofill::web_origin(&u)));
         let never_save = origin.is_some_and(|o| {
             self.site_permissions.get(&o, Permission::SavePasswords) == Some(Decision::Block)
         });
@@ -182,21 +201,27 @@ impl Host {
                 username,
                 username_field,
                 password_field,
-            } => self.store.vault(move |vault| {
-                let id = RecordId(record);
-                let Ok(password) = vault.reveal(&id) else {
-                    return;
-                };
-                let _ = vault.mark_used(&id, now_ms());
-                let fields: Vec<(FieldId, Secret)> = username_field
-                    .map(|f| (f, Secret::new(username)))
-                    .into_iter()
-                    .chain([(password_field, Secret::new(password.as_str()))])
-                    .collect();
-                let _ = slint::invoke_from_event_loop(move || {
-                    with_host(|host| host.autofill_fill(tab, &frame, &origin, &fields));
+            } => {
+                let top = self.page_origin(tab);
+                self.store.vault(move |vault| {
+                    let id = RecordId(record);
+                    let mut fields: Vec<(FieldId, Secret)> = username_field
+                        .map(|f| (f, Secret::new(username)))
+                        .into_iter()
+                        .collect();
+                    // A username step has no password field: nothing is revealed.
+                    if let Some(field) = password_field {
+                        let Ok(password) = vault.reveal(&id) else {
+                            return;
+                        };
+                        let _ = vault.mark_used(&id, now_ms());
+                        fields.push((field, Secret::new(password.as_str())));
+                    }
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.autofill_fill(tab, &top, &frame, &origin, &fields));
+                    });
                 });
-            }),
+            }
             Effect::FillGenerated {
                 frame,
                 origin,
@@ -209,7 +234,8 @@ impl Host {
                     .into_iter()
                     .map(|f| (f, Secret::new(password.as_str())))
                     .collect();
-                self.autofill_fill(tab, &frame, &origin, &fields);
+                let top = self.page_origin(tab);
+                self.autofill_fill(tab, &top, &frame, &origin, &fields);
             }
             Effect::CheckSave { origin, creds } => self.vault_then(tab, move |vault| {
                 let verdict = Origin::parse(&origin).ok().and_then(|o| {
@@ -256,16 +282,22 @@ impl Host {
         }
     }
 
-    /// Hands `fields` to the script in `frame`, if the tab is still on `origin`.
+    fn page_origin(&mut self, tab: TabId) -> Option<String> {
+        self.page_url(tab).and_then(|u| autofill::web_origin(&u))
+    }
+
+    /// Hands `fields` to the script in `frame` (which fills only while its
+    /// document is on `origin`), if the tab's page is still on `top`, the
+    /// origin it was on when the row was picked.
     fn autofill_fill(
         &mut self,
         tab: TabId,
+        top: &Option<String>,
         frame: &str,
         origin: &str,
         fields: &[(FieldId, Secret)],
     ) {
-        let here = self.page_url(tab).and_then(|u| autofill::web_origin(&u));
-        if here.as_deref() != Some(origin) {
+        if top.is_none() || self.page_origin(tab) != *top {
             return;
         }
         let text = fill_message(origin, fields);
@@ -334,24 +366,31 @@ impl Host {
         if self.checks.autofill_smoke.is_none() {
             return;
         }
-        let view = self
-            .shown()
-            .and_then(|t| self.autofill.tabs.get(&t))
-            .map(autofill::view)
-            .unwrap_or_default();
-        let chip = view.chip
-            && matches!(
-                self.shown().and_then(|t| self.autofill.tabs.get(&t)),
-                Some(AutofillState::Offer(o)) if o.candidates.len() == 1
-                    && o.candidates[0].username == autofill_smoke::SEEDED_USER
-            );
-        let save_prompt = matches!(
-            view.prompt,
-            Some((SaveKind::New, ref user, _)) if user == autofill_smoke::NEW_USER
-        );
+        let state = self.shown().and_then(|t| self.autofill.tabs.get(&t));
+        let offer = state.and_then(|s| match &s.phase {
+            Phase::Offer(o) if !o.rows().is_empty() => Some(autofill_smoke::OfferView {
+                rows: o
+                    .rows()
+                    .into_iter()
+                    .map(|r| match r {
+                        MenuRow::Login { username } => username,
+                        MenuRow::Generate => autofill_smoke::GENERATE.to_owned(),
+                    })
+                    .collect(),
+                password: o.fills_password(),
+            }),
+            _ => None,
+        });
+        let prompt = state
+            .and_then(|s| autofill::view(s).prompt)
+            .map(|(kind, user, origin)| autofill_smoke::PromptView {
+                update: matches!(kind, SaveKind::Update(_)),
+                user,
+                origin,
+            });
         self.autofill_smoke_step(autofill_smoke::Input::Worked {
-            chip,
-            save_prompt,
+            offer,
+            prompt,
             painted,
         });
     }
@@ -363,54 +402,138 @@ impl Host {
         let (state, actions): (AutofillSmoke, _) = autofill_smoke::next(state, input);
         self.checks.autofill_smoke = Some(state);
         for action in actions {
-            match action {
-                autofill_smoke::Action::Pick => {
-                    // As the chip and the row would.
-                    self.autofill_menu(-1);
-                    self.autofill_menu(0);
+            self.autofill_smoke_act(action);
+        }
+    }
+
+    fn autofill_smoke_act(&mut self, action: autofill_smoke::Action) {
+        use autofill_smoke::Action;
+        use slint::platform::WindowEvent;
+        match action {
+            Action::Open(url) => {
+                if let Some(tab) = self.shown() {
+                    self.dispatch(wubble_core::model::Command::Navigate { tab, url });
                 }
-                autofill_smoke::Action::Submit => {
-                    let pane = self.shown().map_or(-1, crate::shell::pane_id);
-                    let at = autofill_smoke::SUBMIT_AT;
-                    let left = slint::platform::PointerEventButton::Left;
-                    self.pointer_moved(pane, at);
-                    self.pointer_button(pane, left, true, at);
-                    self.pointer_button(pane, left, false, at);
+            }
+            Action::Pick(row) => {
+                // As the chip and the row would.
+                self.autofill_menu(-1);
+                self.autofill_menu(i32::try_from(row).unwrap_or(-2));
+            }
+            Action::Click(at) => {
+                // Through the window, as a user's click: the page takes the shell's focus.
+                let Some(window) = self.w.window.upgrade() else {
+                    return;
+                };
+                let (x, y) = self.focus_origin(&window);
+                let position = slint::LogicalPosition::new(x + at.x, y + at.y);
+                let button = slint::platform::PointerEventButton::Left;
+                let weak = self.w.window.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(window) = weak.upgrade() else { return };
+                    with_host(|h| h.input.pointer = Some(position));
+                    for event in [
+                        WindowEvent::PointerMoved { position },
+                        WindowEvent::PointerPressed { position, button },
+                        WindowEvent::PointerReleased { position, button },
+                    ] {
+                        window.window().dispatch_event(event);
+                    }
+                });
+            }
+            Action::Enter => {
+                // The smoke window may not be the desktop's focused one; a user's is.
+                if let Some(window) = self.w.window.upgrade()
+                    && !self.input.window_focused
+                {
+                    self.input.window_focused = true;
+                    self.sync_focus(&window);
                 }
-                autofill_smoke::Action::Save => self.autofill_answer(AutofillAnswer::Save),
-                autofill_smoke::Action::ReadBack => {
-                    let Some(origin) = self
-                        .shown()
-                        .and_then(|t| self.page_url(t))
-                        .and_then(|u| Origin::parse(&u).ok())
-                    else {
-                        self.fail("the smoke page has no origin".into());
-                        continue;
-                    };
-                    self.store.vault(move |vault| {
-                        let rows = vault.find_for_origin(&origin).unwrap_or_default();
-                        let has = |user: &str, password: &str| {
-                            rows.iter().any(|c| {
-                                c.username == user
-                                    && vault.reveal(&c.id).is_ok_and(|p| p.as_str() == password)
+                let keys = crate::parity::chords("Enter")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(crate::parity::key_inputs)
+                    .flatten()
+                    .collect();
+                self.smoke_keys(keys);
+            }
+            Action::Save => self.autofill_answer(AutofillAnswer::Save),
+            Action::ReadBack {
+                origin,
+                user,
+                password,
+            } => {
+                let Ok(origin) = Origin::parse(&origin) else {
+                    self.autofill_smoke_step(autofill_smoke::Input::ReadBack(false));
+                    return;
+                };
+                self.store.vault(move |vault| {
+                    let rows = vault.find_for_origin(&origin).unwrap_or_default();
+                    let ok = rows.iter().any(|c| {
+                        c.username == user
+                            && vault.reveal(&c.id).is_ok_and(|p| match &password {
+                                autofill_smoke::Want::Is(want) => p.as_str() == want,
+                                autofill_smoke::Want::Not(old) => p.as_str() != old,
                             })
-                        };
-                        let ok = has(autofill_smoke::NEW_USER, autofill_smoke::NEW_PASSWORD)
-                            && has(autofill_smoke::SEEDED_USER, autofill_smoke::SEEDED_PASSWORD);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            with_host(|host| {
-                                host.autofill_smoke_step(autofill_smoke::Input::ReadBack(ok));
-                            });
+                    });
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| {
+                            host.autofill_smoke_step(autofill_smoke::Input::ReadBack(ok));
                         });
                     });
-                }
-                autofill_smoke::Action::Pass => {
-                    self.autofill_passed = true;
-                    quit();
-                }
-                autofill_smoke::Action::Fail(reason) => self.fail(reason),
+                });
             }
+            Action::Print(line) => println!("{line}"),
+            Action::Pass => {
+                self.autofill_passed = true;
+                quit();
+            }
+            Action::Fail(reason) => self.fail(reason),
         }
+    }
+}
+
+/// One line per form of a report: the frame's origin, the form's class and
+/// its fields' kinds (`*` shown, `-` hidden, `r` read-only), autocomplete,
+/// name and id attributes, never a value.
+fn trace(origin: &str, is_main: bool, message: &ScriptMessage) {
+    let (what, forms): (&str, Vec<&FormSnapshot>) = match message {
+        ScriptMessage::Forms(f) => ("forms", f.iter().collect()),
+        ScriptMessage::Settled(f) => ("settled", f.iter().collect()),
+        ScriptMessage::Submit(f) => ("submit", vec![f]),
+        ScriptMessage::Gone(f) => ("gone", vec![f]),
+        ScriptMessage::Start => ("start", vec![]),
+    };
+    eprintln!(
+        "autofill-trace: {what} from {origin} (main {is_main}): {} form(s)",
+        forms.len()
+    );
+    for form in forms {
+        let mode = match message {
+            ScriptMessage::Submit(_) | ScriptMessage::Gone(_) => Mode::Saving,
+            _ => Mode::Filling,
+        };
+        let fields: Vec<String> = form
+            .fields
+            .iter()
+            .map(|f| {
+                let shown = match (f.visible, f.readonly) {
+                    (_, true) => "r",
+                    (true, false) => "*",
+                    (false, false) => "-",
+                };
+                format!(
+                    "{}:{:?}{shown}[{}] name={:?} id={:?}",
+                    f.id, f.kind, f.autocomplete, f.name, f.id_attr
+                )
+            })
+            .collect();
+        eprintln!(
+            "autofill-trace:   form {}: {:?} fields {}",
+            form.id,
+            autofill::classify(form, mode),
+            fields.join(" ")
+        );
     }
 }
 

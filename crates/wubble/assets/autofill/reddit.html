@@ -1,0 +1,44 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><script src="/fixture.js"></script>
+<title>Reddit - Log in</title>
+<!-- Modelled on reddit.com/login: the form inside a web component's open shadow root, each
+     field a faceplate-text-input whose own shadow root holds the input (defined late, after
+     load, as a hydrating page would), the submit button in the shadow root too. A host-level
+     listener sees the fill's composed input events. -->
+<auth-flow-login id="flow"></auth-flow-login>
+<script>
+customElements.define("auth-flow-login", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML =
+      '<link rel="stylesheet" href="/fixture.css"><form id="login" action="/f/welcome" method="post">' +
+      '<faceplate-text-input id="login-username" name="username" type="text" autocomplete="username" label="Email or username"></faceplate-text-input>' +
+      '<faceplate-text-input id="login-password" name="password" type="password" autocomplete="current-password" label="Password"></faceplate-text-input>' +
+      '<faceplate-tracker source="onboarding"><button type="submit" class="login go">Log In</button></faceplate-tracker></form>';
+  }
+});
+const inner = (id) => fx.$("#flow").shadowRoot.querySelector(id).shadowRoot.querySelector("input");
+window.addEventListener("load", () => requestAnimationFrame(() => {
+  customElements.define("faceplate-text-input", class extends HTMLElement {
+    constructor() {
+      super();
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<label></label><input>';
+      root.querySelector("label").textContent = this.getAttribute("label");
+      const input = root.querySelector("input");
+      for (const a of ["name", "type", "autocomplete"]) input.setAttribute(a, this.getAttribute(a));
+    }
+  });
+  const seen = new Map();
+  fx.$("#flow").addEventListener("input", (e) => seen.set(e.composedPath()[0].name, e.composedPath()[0].value));
+  // The host's listener runs after the field's own, once the event bubbled out of both roots.
+  fx.expect([[inner("#login-username"), "erin"], [inner("#login-password"), "r3ddit"]], "inner ok", () => setTimeout(() => {
+    if (seen.get("username") !== "erin" || seen.get("password") !== "r3ddit") {
+      fx.say("composed input events missed");
+      return;
+    }
+    fx.type(inner("#login-username"), "erin2");
+    fx.type(inner("#login-password"), "r3ddit2");
+    fx.say("filled ok");
+  }));
+}));
+</script>
