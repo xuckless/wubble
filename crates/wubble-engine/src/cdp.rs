@@ -79,6 +79,49 @@ pub fn reply(text: &str) -> Option<(CdpId, Result<Value, String>)> {
     Some((CdpId(id), result))
 }
 
+/// The main frame's navigations the page asked for, counted from the Page domain's events
+/// (enabled on every view for its document scripts): `Page.frameRequestedNavigation` is sent,
+/// flushed, as the page asks (a form submitted, a link followed, a script's `location`), before
+/// the input or script that asked has returned, so a reply that comes after that input was
+/// handled (an input fence) finds it counted. Only the current tab's: a new tab or window, a
+/// download is not this page's navigation. The main frame is the one `Page.frameNavigated`
+/// names with no parent; before one is seen, any frame counts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NavRequests {
+    main: Option<String>,
+    count: u64,
+}
+
+impl NavRequests {
+    /// Reads one DevTools message; anything but those two events is ignored.
+    pub fn read(&mut self, text: &str) {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return;
+        };
+        let params = &value["params"];
+        match value["method"].as_str() {
+            Some("Page.frameNavigated") if params["frame"]["parentId"].is_null() => {
+                self.main = params["frame"]["id"].as_str().map(str::to_owned);
+            }
+            Some("Page.frameRequestedNavigation")
+                if params["disposition"] == "currentTab"
+                    && self
+                        .main
+                        .as_deref()
+                        .is_none_or(|m| params["frameId"].as_str() == Some(m)) =>
+            {
+                self.count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// How many the page has asked for so far.
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+}
+
 /// A call that keeps a view's document-start scripts as wanted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocCall {
@@ -341,6 +384,27 @@ mod tests {
         let a = next_id();
         let b = next_id();
         assert!(a >= FIRST_ID && b > a);
+    }
+
+    #[test]
+    fn the_main_frames_requested_navigations_are_counted() {
+        let mut n = NavRequests::default();
+        let asked = |frame: &str, disposition: &str| {
+            format!(
+                r#"{{"method":"Page.frameRequestedNavigation","params":{{"frameId":"{frame}","reason":"formSubmissionGet","url":"http://a/","disposition":"{disposition}"}}}}"#
+            )
+        };
+        // before the main frame is known, any frame's counts
+        n.read(&asked("SUB", "currentTab"));
+        assert_eq!(n.count(), 1);
+        n.read(r#"{"method":"Page.frameNavigated","params":{"frame":{"id":"MAIN","loaderId":"L","url":"http://a/"},"type":"Navigation"}}"#);
+        n.read(r#"{"method":"Page.frameNavigated","params":{"frame":{"id":"SUB","parentId":"MAIN","url":"http://b/"},"type":"Navigation"}}"#);
+        n.read(&asked("MAIN", "currentTab"));
+        n.read(&asked("SUB", "currentTab"));
+        n.read(&asked("MAIN", "newTab"));
+        n.read(r#"{"id":12,"result":{}}"#);
+        n.read("not json");
+        assert_eq!(n.count(), 2);
     }
 
     #[test]

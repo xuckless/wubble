@@ -250,6 +250,8 @@ pub struct View {
     favicons: crate::favicon::Sink,
     /// The scripts every new document runs first ([`Self::set_document_scripts`]).
     doc_scripts: cdp::DocScripts,
+    /// The navigations the page asked for, from its DevTools events.
+    nav_requests: cdp::NavRequests,
     /// The client DevTools windows are created with: it reports them to the
     /// engine (`app::extra`), which must close them before `cef::shutdown`.
     devtools_client: cef::Client,
@@ -345,6 +347,7 @@ impl View {
             drag: DragSource::default(),
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
+            nav_requests: cdp::NavRequests::default(),
             devtools_client,
             rule,
         })
@@ -872,6 +875,7 @@ impl View {
             }
         }
         while let Some(text) = self.producer.poll_devtools_message() {
+            self.nav_requests.read(&text);
             // the engine's own requests first (freeze, target id), then `View::cdp`'s calls
             if let Some(event) = self.pending.reply(&text) {
                 self.page.push(event);
@@ -1372,6 +1376,11 @@ impl View {
     pub fn forget_site(&mut self, origin: &str) -> Option<CdpId> {
         let params = serde_json::json!({ "origin": origin, "storageTypes": "all" });
         self.cdp("Storage.clearDataForOrigin", &params)
+    }
+
+    /// How many navigations of its own the page has asked for so far (`cdp::NavRequests`).
+    pub fn navigations_requested(&self) -> u64 {
+        self.nav_requests.count()
     }
 
     /// Sends one DevTools protocol call to this page (`cdp.rs`); its answer

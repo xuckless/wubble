@@ -348,9 +348,18 @@ enum Wait {
     Input {
         id: u64,
         tab: TabId,
+        /// The page's requested navigations before the input (`View::navigations_requested`).
+        asked: u64,
         /// A load the input began may begin before the fence answers.
         load: Load,
         then: Then,
+    },
+    /// An action's input asked for a navigation: its answer once the load began (or the
+    /// navigation was refused: `agent_refused`).
+    Started {
+        tab: TabId,
+        load: Load,
+        answer: String,
     },
 }
 
@@ -391,10 +400,11 @@ impl Fence {
 
 /// What an action does once the page has handled its input (its [`Fence`] answered).
 enum Then {
-    /// The answer, after [`SETTLE`] (a navigation the input started may be refused).
+    /// The answer once a navigation the input asked for began; with none asked for, after
+    /// [`SETTLE`] (a page's script may still navigate, and be refused).
     Settle(String),
-    /// `type` with `submit`: waits as `navigate` does; no load begun within [`SUBMIT_GRACE`]
-    /// means none follows.
+    /// `type` with `submit`: waits as `navigate` does when the Enter asked for a navigation;
+    /// else a load begun within [`SUBMIT_GRACE`] (a script's) still counts.
     Submitted { before: Option<String> },
     /// `fill_secret`'s click at `at`: the page is asked where focus went.
     Focus {
@@ -496,6 +506,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Vault { tab, .. }
         | Wait::Focus { tab, .. }
         | Wait::Input { tab, .. }
+        | Wait::Started { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
     }
@@ -2676,11 +2687,13 @@ impl Host {
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
         };
+        let asked = view.navigations_requested();
         match view.cdp(method, &params) {
             Some(id) => {
                 let wait = Wait::Input {
                     id: id.0,
                     tab,
+                    asked,
                     load: Load::Asked,
                     then,
                 };
@@ -2690,22 +2703,29 @@ impl Host {
         }
     }
 
-    /// The page has handled an action's input (its [`Fence`] answered; `load`: how far a load
-    /// it began came meanwhile): the action goes on.
-    fn agent_then(&mut self, reply: Reply, tab: TabId, load: Load, then: Then) {
+    /// The page has handled an action's input (its [`Fence`] answered; `navigated`: the input
+    /// asked for a navigation of the page): the action goes on.
+    fn agent_then(&mut self, reply: Reply, tab: TabId, navigated: bool, load: Load, then: Then) {
         match then {
+            Then::Settle(answer) if navigated => {
+                let wait = Wait::Started { tab, load, answer };
+                self.agent_wait(reply, wait, WAIT);
+            }
             Then::Settle(answer) => self.agent_settle(reply, tab, answer),
             Then::Submitted { before } => {
                 // as `navigate` when a load follows; a page that stays shows no load
+                let grace = (!navigated).then(|| {
+                    (
+                        Instant::now() + SUBMIT_GRACE,
+                        "typed and submitted; no page load followed".into(),
+                    )
+                });
                 let wait = Wait::Navigated {
                     tab,
                     before,
                     load,
                     answer: "typed and submitted; the page loaded".into(),
-                    grace: Some((
-                        Instant::now() + SUBMIT_GRACE,
-                        "typed and submitted; no page load followed".into(),
-                    )),
+                    grace,
                 };
                 self.agent_wait(reply, wait, WAIT);
             }
@@ -3175,8 +3195,9 @@ impl Host {
             (load, _) => load,
         };
         for p in &mut self.agents.pending {
-            if let Wait::Navigated { tab: t, load, .. } | Wait::Input { tab: t, load, .. } =
-                &mut p.wait
+            if let Wait::Navigated { tab: t, load, .. }
+            | Wait::Started { tab: t, load, .. }
+            | Wait::Input { tab: t, load, .. } = &mut p.wait
                 && *t == tab
             {
                 *load = step(*load);
@@ -3492,13 +3513,20 @@ impl Host {
             }
             (Wait::Input { .. }, PageEvent::CdpReply { result, .. }) => {
                 let Wait::Input {
-                    tab, load, then, ..
+                    tab,
+                    asked,
+                    load,
+                    then,
+                    ..
                 } = p.wait
                 else {
                     return true;
                 };
+                let navigated = self
+                    .tab_view(tab)
+                    .is_some_and(|v| v.navigations_requested() > asked);
                 match result {
-                    Ok(_) => self.agent_then(p.reply, tab, load, then),
+                    Ok(_) => self.agent_then(p.reply, tab, navigated, load, then),
                     Err(e) => {
                         let why = format!("the page did not take the input: {e}");
                         self.agent_fail(p.reply, &why);
@@ -3605,6 +3633,7 @@ impl Host {
             | Wait::Url { tab, .. }
             | Wait::Moved { tab, .. }
             | Wait::Settle { tab, .. }
+            | Wait::Started { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
@@ -3649,6 +3678,17 @@ impl Host {
             }
             Wait::Loaded { .. } => (!loading && document.is_some()).then(|| Ok("loaded".into())),
             Wait::Settle { answer, .. } => late.then(|| Ok(answer.clone())),
+            Wait::Started { load, answer, .. } => {
+                if *load != Load::Asked {
+                    Some(Ok(answer.clone()))
+                } else if late {
+                    Some(Ok(format!(
+                        "{answer}; the navigation it asked for did not begin"
+                    )))
+                } else {
+                    None
+                }
+            }
             Wait::Opened { answer, .. } => {
                 (phase == Some(Phase::Loaded)).then(|| Ok(answer.clone()))
             }
