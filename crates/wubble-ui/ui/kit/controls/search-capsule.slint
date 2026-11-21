@@ -10,6 +10,9 @@
 // start page's capsule (`.wb-start-search`: 54 high, radius 27, padding 0 20, gap 12, an 18 px
 // icon, 15 px, mist; its `<kbd>` hint while empty) is this same field; Up / Down are `step`
 // for a list under it (derived: docs/fidelity/derived-review.md).
+// A query longer than the field stays inside it: the input is clipped to its cell and slides
+// so the caret stays in view, as a browser's `<input>` does (the scrolling from slint-ui/slint
+// 1.19.0 `widgets/common/lineedit-base.slint`, GPL-3.0-only; THIRD_PARTY_NOTICES.md).
 
 import { Palette, TouchMenu } from "../gen/tokens.slint";
 import { SettingsCss } from "../gen/css.slint";
@@ -101,6 +104,10 @@ export component SearchCapsule inherits Rectangle {
             }
             Rectangle {
                 horizontal-stretch: 1;
+                // the cell's width is the layout's, never the text's
+                min-width: 0px;
+                preferred-width: 0px;
+                clip: true;
                 KitText {
                     width: parent.width;
                     height: parent.height;
@@ -112,8 +119,18 @@ export component SearchCapsule inherits Rectangle {
                     overflow: elide;
                 }
                 input := TextInput {
-                    width: parent.width;
+                    // where a long text is slid to (0 or less), set as the caret moves
+                    property <length> slid;
+                    x: min(0px, max(parent.width - self.width - self.text-cursor-width, self.slid));
+                    width: max(parent.width - self.text-cursor-width, self.preferred-width);
                     height: parent.height;
+                    cursor-position-changed(caret) => {
+                        if caret.x + self.slid < 0px {
+                            self.slid = -caret.x;
+                        } else if caret.x + self.slid > parent.width - self.text-cursor-width {
+                            self.slid = parent.width - caret.x - self.text-cursor-width;
+                        }
+                    }
                     font-family: root.role.family;
                     font-size: root.role.size;
                     font-weight: root.role.weight;
