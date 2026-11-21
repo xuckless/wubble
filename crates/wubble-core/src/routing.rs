@@ -81,15 +81,10 @@ impl Rule {
         }
         let pattern = pattern.trim().to_lowercase();
         let pattern = pattern.strip_suffix('.').unwrap_or(&pattern);
+        let host = |h: &str| ascii_host(h).filter(|h| valid_host(h));
         let pattern = match pattern.strip_prefix("*.") {
-            Some(base) => match ascii_host(base).filter(|b| valid_host(b)) {
-                Some(base) => Pattern::Subdomains(base),
-                None => return None,
-            },
-            None => match ascii_host(pattern).filter(|h| valid_host(h)) {
-                Some(host) => Pattern::Host(host),
-                None => return None,
-            },
+            Some(base) => Pattern::Subdomains(host(base)?),
+            None => Pattern::Host(host(pattern)?),
         };
         let (space, container) = match target.split_once(',') {
             Some((s, c)) => (s, c),
