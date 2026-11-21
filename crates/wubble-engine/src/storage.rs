@@ -143,6 +143,9 @@ pub(crate) fn clear(context: &cef::RequestContext, container: ContainerId) {
 /// domain cookie). The host's matcher (`wubble_core::agent::shares_cookie`).
 pub type CookieFilter = Box<dyn Fn(&str, &str, bool) -> bool + Send + Sync>;
 
+/// What runs when a copy ended, with what it did.
+pub type CopyDone = Box<dyn FnOnce(CopyReport) + Send>;
+
 /// What a copy did: the cookies the source holds that the filter took, and how many of those
 /// the target accepted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -157,7 +160,7 @@ pub struct CopyReport {
 /// `done`, on whichever CEF thread that is.
 struct CopyJob {
     report: Mutex<CopyReport>,
-    done: Mutex<Option<Box<dyn FnOnce(CopyReport) + Send>>>,
+    done: Mutex<Option<CopyDone>>,
 }
 
 impl Drop for CopyJob {
@@ -224,7 +227,10 @@ fn copy_one(
     }
     let host = domain.strip_prefix('.').unwrap_or(&domain);
     let scheme = if secure { "https" } else { "http" };
-    let url = format!("{scheme}://{host}{}", if path.is_empty() { "/" } else { &path });
+    let url = format!(
+        "{scheme}://{host}{}",
+        if path.is_empty() { "/" } else { &path }
+    );
     let mut copy = cookie.clone();
     if !domain.starts_with('.') {
         copy.domain = cef::CefString::from("");
@@ -245,7 +251,7 @@ pub(crate) fn copy_cookies(
     from: &cef::RequestContext,
     to: &cef::RequestContext,
     filter: CookieFilter,
-    done: Box<dyn FnOnce(CopyReport) + Send>,
+    done: CopyDone,
 ) -> bool {
     let job = Arc::new(CopyJob {
         report: Mutex::new(CopyReport::default()),

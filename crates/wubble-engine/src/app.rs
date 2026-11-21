@@ -1019,7 +1019,7 @@ impl Engine {
         from: ContainerId,
         to: ContainerId,
         filter: storage::CookieFilter,
-        done: Box<dyn FnOnce(storage::CopyReport) + Send>,
+        done: storage::CopyDone,
     ) -> Result<(), EngineError> {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
