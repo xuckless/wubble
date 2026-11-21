@@ -343,6 +343,11 @@ enum Wait {
         text: Secret,
         name: String,
     },
+    /// `focus_tab`: the tab shows in its pane a frame of its own at its pane's size
+    /// ([`Host::agent_shows`]).
+    Shown {
+        tab: TabId,
+    },
     /// An action's input was sent: the [`Fence`] after it, answered once the page has
     /// handled all of it; then the action goes on.
     Input {
@@ -506,6 +511,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Vault { tab, .. }
         | Wait::Focus { tab, .. }
         | Wait::Input { tab, .. }
+        | Wait::Shown { tab }
         | Wait::Started { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
@@ -549,6 +555,12 @@ fn line(item: &AxItem, r: &str) -> String {
     }
     out.push_str(&format!(" [ref={r}]"));
     out
+}
+
+/// Whether a frame of `shows` (px) fills a pane that wants `wanted`: CEF may paint a pixel more
+/// or less.
+fn fills(shows: (u32, u32), wanted: (u32, u32)) -> bool {
+    shows.0 + 1 >= wanted.0 && shows.1 + 1 >= wanted.1
 }
 
 fn inside(b: Bounds, outer: Bounds) -> bool {
@@ -2013,7 +2025,9 @@ impl Host {
                 };
                 self.dispatch(Command::SwitchSpace(space));
                 self.dispatch(Command::ActivateTab(tab));
-                self.agent_send(reply, ToolResult::text("focused"), Outcome::Done);
+                // answered once the window shows the tab's own frame at its pane's size, so
+                // what the agent does next meets the page the owner sees
+                self.agent_wait(reply, Wait::Shown { tab }, WAIT);
             }
             AgentCall::OpenTab { url, .. } => self.agent_open_tab(reply, &session, url),
             AgentCall::CloseTab { .. } => {
@@ -3227,6 +3241,20 @@ impl Host {
         }
     }
 
+    /// Whether the window shows `tab` in its pane with a frame of its own at its view's size:
+    /// not the snapshot standing in for it, nor a frame of the size it had while unshown.
+    pub(super) fn agent_shows(&mut self, tab: TabId) -> bool {
+        if self.model.window_of(tab) != Some(self.w.id) || self.snapshots.standing_in(tab) {
+            return false;
+        }
+        let shows = self.w.frames.get(&tab).map(|f| f.image.size());
+        let wanted = self.tab_view(tab).and_then(|v| v.wanted_frame());
+        match (shows, wanted) {
+            (Some(s), Some(w)) => fills((s.width, s.height), (w.width, w.height)),
+            _ => false,
+        }
+    }
+
     /// An action's answer once a navigation it started had [`SETTLE`] to be refused.
     fn agent_settle(&mut self, reply: Reply, tab: TabId, answer: String) {
         self.agent_wait(reply, Wait::Settle { tab, answer }, SETTLE);
@@ -3633,6 +3661,7 @@ impl Host {
             | Wait::Url { tab, .. }
             | Wait::Moved { tab, .. }
             | Wait::Settle { tab, .. }
+            | Wait::Shown { tab }
             | Wait::Started { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             Wait::Input { .. } if late => {
@@ -3678,6 +3707,7 @@ impl Host {
             }
             Wait::Loaded { .. } => (!loading && document.is_some()).then(|| Ok("loaded".into())),
             Wait::Settle { answer, .. } => late.then(|| Ok(answer.clone())),
+            Wait::Shown { .. } => self.agent_shows(tab).then(|| Ok("focused".into())),
             Wait::Started { load, answer, .. } => {
                 if *load != Load::Asked {
                     Some(Ok(answer.clone()))
@@ -4145,15 +4175,14 @@ impl Host {
                 if h.checks.mcp_smoke.as_ref().and_then(|r| r.switch) != Some((step, tab)) {
                     return;
                 }
-                let wanted = h.tab_view(tab).and_then(|v| v.wanted_frame());
+                let full = h.agent_shows(tab);
                 let shows = h.w.frames.get(&tab).map(|f| f.image.size());
                 let Some(run) = &mut h.checks.mcp_smoke else {
                     return;
                 };
-                let (Some(w), Some(s)) = (wanted, shows) else {
+                let Some(s) = shows else {
                     return;
                 };
-                let full = s.width + 1 >= w.width && s.height + 1 >= w.height;
                 let resized = run
                     .sized
                     .is_some_and(|before| before != (s.width, s.height));
@@ -4510,6 +4539,14 @@ mod tests {
         let mut r = ToolResult::text("nothing secret");
         redact(&mut r, &[Secret::new("pa\"ss")]);
         assert_eq!(text(&r), "nothing secret");
+    }
+
+    #[test]
+    fn a_frame_fills_its_pane_within_a_pixel() {
+        assert!(fills((800, 600), (800, 600)));
+        assert!(fills((799, 601), (800, 600)));
+        assert!(!fills((798, 600), (800, 600)));
+        assert!(!fills((800, 300), (800, 600)));
     }
 
     #[test]
