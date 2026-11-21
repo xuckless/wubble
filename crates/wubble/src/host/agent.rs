@@ -951,11 +951,11 @@ impl Host {
         if !approved {
             return;
         }
-        self.agent_event(&id, agent::answer(&["github.com".to_string()], true, false));
+        self.agent_event(&id, agent::answer(&[GALLERY_SITE.to_string()], true, false));
         let Some((space, _)) = self.agents.sessions.get(&id).and_then(|s| s.space) else {
             return;
         };
-        for url in ["https://github.com/", "https://github.com/releases"] {
+        for url in [GALLERY_PAGES[0], GALLERY_PAGES[1]] {
             self.dispatch(Command::OpenInSpace {
                 space,
                 url: url.into(),
@@ -985,7 +985,7 @@ impl Host {
         self.dispatch(Command::MarkAgentSpace(space));
         self.dispatch(Command::OpenInSpace {
             space,
-            url: "https://github.com/issues/new".into(),
+            url: GALLERY_PAGES[2].into(),
         });
     }
 
@@ -3563,3 +3563,12 @@ const SMOKE_OPENCODE: &str =
 /// `--smoke mcp`: Cursor's file with a wubble entry the owner wrote by hand.
 const SMOKE_CURSOR: &str =
     "{\"mcpServers\": {\"wubble\": {\"command\": \"/home/me/bin/wubble\", \"args\": [\"mcp\"]}}}\n";
+
+/// `--smoke gallery`: the agent scenes' site and pages. A `.localhost` host is loopback in
+/// Chromium (no DNS, nothing leaves the machine): a gallery run asks the network for nothing.
+const GALLERY_SITE: &str = "github.localhost";
+const GALLERY_PAGES: [&str; 3] = [
+    "http://github.localhost/",
+    "http://github.localhost/releases",
+    "http://github.localhost/issues/new",
+];
