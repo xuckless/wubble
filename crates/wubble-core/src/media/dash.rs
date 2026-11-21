@@ -176,12 +176,15 @@ fn segments_of(
         .or(set.SegmentList.as_ref())
         .or(period.SegmentList.as_ref());
     if let Some(list) = list {
-        let init = list.Initialization.as_ref().and_then(|i| {
-            Some(Segment {
-                url: join_url(base, i.sourceURL.as_deref()?),
-                range: i.range.as_deref().and_then(parse_range),
-                key: None,
-            })
+        // An `Initialization` without a `sourceURL` is a byte range of the representation's
+        // own file (ISO/IEC 23009-1 5.3.9.2; ffmpeg's `-single_file 1` writes it so).
+        let init = list.Initialization.as_ref().map(|i| Segment {
+            url: i
+                .sourceURL
+                .as_deref()
+                .map_or_else(|| base.to_owned(), |u| join_url(base, u)),
+            range: i.range.as_deref().and_then(parse_range),
+            key: None,
         });
         let media = list.segment_urls.iter().map(|s| Segment {
             url: s
@@ -427,6 +430,35 @@ mod tests {
             Some(ByteRange { start: 10, len: 10 })
         );
         assert_eq!(plan.segments[2].url, "https://cdn.test/dash/media/s2.webm");
+    }
+
+    /// One file per representation, its init and media segments byte ranges of it (the
+    /// on-demand shape, ffmpeg's `-single_file 1`): the init range is the file's first bytes,
+    /// and without it the saved file has no `moov` and does not play.
+    #[test]
+    fn a_segment_list_in_one_file_starts_with_its_init_range() {
+        let body = "<AdaptationSet mimeType=\"video/mp4\"><Representation id=\"1\" bandwidth=\"1\" height=\"360\">\
+            <BaseURL>v.mp4</BaseURL><SegmentList duration=\"2\"><Initialization range=\"0-819\"/>\
+            <SegmentURL mediaRange=\"820-1000\"/><SegmentURL mediaRange=\"1001-2000\"/></SegmentList>\
+            </Representation></AdaptationSet>";
+        let v = variants(&mpd(body), BASE).unwrap();
+        let Source::Planned(plan) = &v[0].source else {
+            panic!()
+        };
+        let got: Vec<(&str, Option<ByteRange>)> = plan
+            .segments
+            .iter()
+            .map(|s| (s.url.as_str(), s.range))
+            .collect();
+        let file = "https://cdn.test/dash/v.mp4";
+        assert_eq!(
+            got,
+            [
+                (file, Some(ByteRange { start: 0, len: 820 })),
+                (file, Some(ByteRange { start: 820, len: 181 })),
+                (file, Some(ByteRange { start: 1001, len: 1000 })),
+            ]
+        );
     }
 
     #[test]
