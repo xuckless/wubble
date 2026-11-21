@@ -7,7 +7,7 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 
 ## Status (2026-11-21)
 `main` builds, lints and passes 2293 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.4` for Linux (drag and drop, pinch, spellcheck, partial rendering, the autofill-server request off; its macOS build is not made yet: the owner's, on the Mac, from the tag, then signed and added here; the Mac stays on preview.3 until then) and `0.1.0-preview.3` for Linux and macOS (preview.3 fixes MCP hosting on macOS; preview.2, with codecs,
+(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.4` for Linux and macOS (drag and drop, pinch, spellcheck, partial rendering, the autofill-server request off; its new macOS code compiled and shipped but was not run by hand before the release; preview.3 fixed MCP hosting on macOS; preview.2, with codecs,
 added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
 registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
 (made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
