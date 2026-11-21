@@ -401,14 +401,19 @@ impl Store {
             return Ok(Vec::new());
         }
         let key = url_key(&needle);
+        // SQLite's `lower()` folds ASCII only: for a query with other letters every link is
+        // read and matched below.
+        let sql = if needle.is_ascii() {
+            "SELECT title, url, date_added, id FROM bookmarks WHERE kind = 0 \
+             AND (instr(lower(title), ?1) > 0 OR instr(lower(url), ?1) > 0 \
+                  OR (?2 <> '' AND instr(lower(url), ?2) > 0))"
+        } else {
+            "SELECT title, url, date_added, id FROM bookmarks WHERE kind = 0 \
+             AND (?1 <> '' OR ?2 <> '')"
+        };
         let mut rows = self
             .conn
-            .query(
-                "SELECT title, url, date_added, id FROM bookmarks WHERE kind = 0 \
-                 AND (instr(lower(title), ?1) > 0 OR instr(lower(url), ?1) > 0 \
-                      OR (?2 <> '' AND instr(lower(url), ?2) > 0))",
-                (needle.as_str(), key.as_str()),
-            )
+            .query(sql, (needle.as_str(), key.as_str()))
             .await?;
         let mut hits: Vec<(u8, i64, i64, Bookmark)> = Vec::new();
         while let Some(r) = rows.next().await? {
@@ -763,6 +768,24 @@ mod tests {
             assert_eq!(s.delete_bookmark(a).await.unwrap(), 1);
             assert_eq!(s.bookmark_children(None).await.unwrap()[0].id, c);
             consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn search_ignores_case_in_any_script() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.add_bookmark(None, "Привет мир", "https://a.test/", 1)
+                .await
+                .unwrap();
+            s.add_bookmark(None, "Plain", "https://b.test/", 2)
+                .await
+                .unwrap();
+            for query in ["привет", "ПРИВЕТ", "Привет"] {
+                let hits = s.search_bookmarks(query, 10).await.unwrap();
+                assert_eq!(hits.len(), 1, "query {query:?}");
+                assert_eq!(hits[0].url, "https://a.test/");
+            }
         });
     }
 

@@ -21,6 +21,7 @@ mod ax;
 mod boost;
 mod builtins;
 mod busy;
+mod data;
 mod devtools;
 mod downloads;
 mod drag;
@@ -57,6 +58,7 @@ mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
+pub(crate) use data::DataSmoke;
 pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
@@ -294,6 +296,7 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub start_smoke: Option<crate::start_smoke::StartSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub data_smoke: Option<DataSmoke>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
@@ -381,6 +384,7 @@ pub struct Host {
     pub settings_passed: bool,
     pub start_passed: bool,
     pub pages_passed: bool,
+    pub data_passed: bool,
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
@@ -637,6 +641,7 @@ impl Host {
             settings_passed: false,
             start_passed: false,
             pages_passed: false,
+            data_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
             gallery_burst_start: std::time::Instant::now(),
@@ -1337,6 +1342,7 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        self.data_smoke_step();
         self.start_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);

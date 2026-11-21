@@ -115,7 +115,19 @@ impl Host {
             procs.iter().map(|p| (p.pid, p.sample)).collect();
         let processes: Vec<(u32, String)> =
             procs.iter().map(|p| (p.pid, p.label.clone())).collect();
-        let t = tasks::rows(&self.model, &self.tasks.pids, &processes, &samples);
+        // a renderer reports the id it has in its sandbox's PID namespace: the system's id is
+        // what the meter knows
+        let all: Vec<u32> = procs.iter().map(|p| p.pid).collect();
+        let pids: BTreeMap<TabId, u32> = self
+            .tasks
+            .pids
+            .iter()
+            .filter_map(|(tab, reported)| {
+                let pid = wubble_sysmem::host_pid(*reported, &all, wubble_sysmem::namespace_pid)?;
+                Some((*tab, pid))
+            })
+            .collect();
+        let t = tasks::rows(&self.model, &pids, &processes, &samples);
         let own = std::process::id();
         wubble_ui::sync(
             &self.tasks.rows,

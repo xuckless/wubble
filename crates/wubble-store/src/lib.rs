@@ -111,6 +111,15 @@ impl Store {
     }
 }
 
+/// Rows read at a time when a query is matched in Rust ([`contains_folded`]).
+pub(crate) const SCAN_CHUNK: usize = 500;
+
+/// Whether `haystack` holds `needle_lower` (already lowercase), ignoring case in every script.
+/// SQLite's `lower()` folds ASCII only, so a query with other letters cannot be matched there.
+pub(crate) fn contains_folded(haystack: &str, needle_lower: &str) -> bool {
+    haystack.to_lowercase().contains(needle_lower)
+}
+
 /// Read a column as `i64` and convert to a narrower id type.
 fn narrow<T: TryFrom<i64>>(v: i64, what: &str) -> Result<T> {
     T::try_from(v).map_err(|_| Error::Corrupt(format!("{what} out of range: {v}")))
