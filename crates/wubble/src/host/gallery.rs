@@ -108,6 +108,9 @@ impl Host {
                 if SCENES[i].wheel > 0 {
                     shot::wheel(&window, SCENES[i].wheel as f32);
                 }
+                if SCENES[i].side_wheel > 0 {
+                    shot::side_wheel(&window, SCENES[i].side_wheel as f32);
+                }
                 if SCENES[i].overlay == Overlay::SpacesDrag {
                     self.gallery_drag_to_spaces();
                 }

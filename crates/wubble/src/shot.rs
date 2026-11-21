@@ -201,10 +201,18 @@ fn scroll_page() {
 
 /// A wheel over the page, `px` logical px down.
 pub fn wheel(window: &AppWindow, px: f32) {
-    let position = slint::LogicalPosition::new(
-        window.get_content_x() + window.get_content_width() * 0.7,
-        window.get_content_y() + 200.0,
-    );
+    wheel_at(window, px, window.get_content_width() * 0.7, 200.0);
+}
+
+/// A wheel over Settings' section list (its column starts near the page's left edge).
+pub fn side_wheel(window: &AppWindow, px: f32) {
+    wheel_at(window, px, 120.0, 400.0);
+}
+
+/// A wheel `px` logical px down at (`x`, `y`) in the page area.
+fn wheel_at(window: &AppWindow, px: f32, x: f32, y: f32) {
+    let position =
+        slint::LogicalPosition::new(window.get_content_x() + x, window.get_content_y() + y);
     window
         .window()
         .dispatch_event(slint::platform::WindowEvent::PointerScrolled {

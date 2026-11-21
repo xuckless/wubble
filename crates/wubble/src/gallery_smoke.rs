@@ -28,6 +28,9 @@ pub struct Scene {
     /// Scrolls the page this many logical px (a wheel over it) once it settled, then settles
     /// again.
     pub wheel: u32,
+    /// The same over Settings' section list (its own scroller when the window is shorter than
+    /// the list), after `wheel`.
+    pub side_wheel: u32,
     /// Where the pointer rests while the scene is shot, logical px in the window; `None`
     /// moves it out of the window.
     pub pointer: Option<(u16, u16)>,
@@ -150,7 +153,10 @@ pub enum Long {
 impl Scene {
     /// Acted on once it settled (`Action::Scroll`): clicked, scrolled, or a tab dragged.
     pub fn acts(&self) -> bool {
-        self.wheel > 0 || self.click.is_some() || matches!(self.overlay, Overlay::SpacesDrag)
+        self.wheel > 0
+            || self.side_wheel > 0
+            || self.click.is_some()
+            || matches!(self.overlay, Overlay::SpacesDrag)
     }
 }
 
@@ -161,6 +167,7 @@ const fn scene(name: &'static str) -> Scene {
         page: None,
         overlay: Overlay::None,
         wheel: 0,
+        side_wheel: 0,
         pointer: None,
         click: None,
         then: None,
@@ -344,6 +351,14 @@ pub const SCENES: &[Scene] = &[
     Scene {
         wheel: 700,
         ..on("settings-4", InternalPage::Settings)
+    },
+    // the section list scrolled to its end under the title and search (the window is shorter
+    // than the list: the last built-in pages are reached); General picked first, so the page
+    // is back at its top whatever the scenes before it scrolled
+    Scene {
+        click: Some(NAV_GENERAL),
+        side_wheel: 2000,
+        ..on("settings-nav-end", InternalPage::Settings)
     },
     // the list editors: General's routing rules (a row selected, then a new rule's draft), the
     // Spaces section (its second Space selected), the Sites lists

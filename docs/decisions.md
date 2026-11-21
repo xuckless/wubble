@@ -274,3 +274,4 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Performance tests | Nothing in `cargo test` or CI asserts timings; performance is measured by hand ([measurements.md](measurements.md)). | 2026-11-18 |
 | Batches | Roadmap items run as parallel lanes; see [orchestration.md](orchestration.md). | 2026-11-18 |
 | macOS access | The Mac is driven only from a session on the Mac; other sessions report macOS as not run ([macos.md](macos.md)). | 2026-11-19 |
+| Settings side column scrolls | The title and search stay pinned; the section list under them scrolls on its own kit scroller (`NavScroll`, a second `Scroller` in the driver through the same `scroller_global!` macro) when taller than the window; the wheel scrolls the column under the pointer and hovering never moves focus. The design's pin rides the page's one scroller, so it has no answer ([derived-review.md](fidelity/derived-review.md)). | 2026-11-20 |
