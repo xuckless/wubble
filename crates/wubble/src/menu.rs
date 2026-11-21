@@ -1349,7 +1349,7 @@ mod tests {
             labels,
             [
                 "A",
-                "Saving a YouTube video asks YouTube for its formats: off in Settings",
+                "YouTube format lookup is off",
                 "Open Settings",
                 "",
                 "B",

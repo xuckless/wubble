@@ -286,9 +286,7 @@ impl Refusal {
             Refusal::Unsupported(what) => format!("Not supported: {what}"),
             Refusal::SiteChanged(what) => format!("This site changed: {what}"),
             Refusal::Failed(why) => format!("Cannot read the stream: {why}"),
-            Refusal::LookupOff => {
-                "Saving a YouTube video asks YouTube for its formats: off in Settings".into()
-            }
+            Refusal::LookupOff => "YouTube format lookup is off".into(),
         }
     }
 }
