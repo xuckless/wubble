@@ -162,30 +162,12 @@ impl Host {
                     eprintln!("wubble: process {pid} is not one of wubble's; not ended");
                 }
             }
-            (TaskAction::Discard, Some(tab)) => {
-                let internal = self
-                    .model
-                    .tabs
-                    .get(&tab)
-                    .is_some_and(|t| wubble_core::pages::InternalPage::from_url(&t.url).is_some());
-                if !internal {
-                    self.dispatch(Command::DiscardNow(tab));
-                }
-            }
+            // a tab row of an internal page has neither button (`TaskRow::internal`)
+            (_, Some(tab)) if self.model.tabs.get(&tab).is_none_or(tasks::is_internal) => {}
+            (TaskAction::Discard, Some(tab)) => self.dispatch(Command::DiscardNow(tab)),
             (TaskAction::NeverSleep, Some(tab)) => {
-                let internal = self
-                    .model
-                    .tabs
-                    .get(&tab)
-                    .is_some_and(|t| wubble_core::pages::InternalPage::from_url(&t.url).is_some());
-                if !internal {
-                    let on = self
-                        .model
-                        .tabs
-                        .get(&tab)
-                        .is_some_and(|t| !t.busy.contains(Reason::NeverSleep));
-                    self.set_busy(tab, Reason::NeverSleep, on);
-                }
+                let on = !self.model.tabs[&tab].busy.contains(Reason::NeverSleep);
+                self.set_busy(tab, Reason::NeverSleep, on);
             }
             (_, None) => {}
         }

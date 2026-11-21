@@ -78,6 +78,12 @@ pub fn state_label(state: Liveness) -> &'static str {
     }
 }
 
+/// Whether a tab shows an internal `wubble://` page ([`TaskRow::internal`]): no renderer process
+/// of its own to discard or keep awake.
+pub fn is_internal(tab: &crate::tab::Tab) -> bool {
+    InternalPage::from_url(&tab.url).is_some()
+}
+
 /// The page's rows: the tabs in sidebar order (Space by Space), then `processes` (pid, label).
 /// `pids` maps a tab to its renderer; `samples` holds each process's numbers.
 pub fn rows(
@@ -114,7 +120,7 @@ pub fn rows(
                 busy: t.busy.labels(),
                 shared_with: pid.map_or(0, |p| sharing[&p]),
                 never_sleep: t.busy.contains(Reason::NeverSleep),
-                internal: InternalPage::from_url(&t.url).is_some(),
+                internal: is_internal(t),
                 space: (model.spaces.len() > 1).then(|| space.name.clone()),
             });
         }
