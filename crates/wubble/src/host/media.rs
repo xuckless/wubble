@@ -827,12 +827,15 @@ impl Host {
                 body,
             } => {
                 let text = String::from_utf8_lossy(&body);
-                let protected =
-                    result.is_ok() && hls::parse_media(&text, &url) == Err(Refusal::Protected);
-                let result = if protected {
-                    Err(Refusal::Protected)
-                } else {
-                    Ok(resolution)
+                let probed = result.is_ok().then(|| hls::parse_media(&text, &url));
+                let result = match probed {
+                    Some(Err(Refusal::Protected)) => Err(Refusal::Protected),
+                    // The playlist shows whether the segments are MPEG-TS or fragmented MP4.
+                    Some(Ok(plan)) => Ok(Resolution {
+                        variants: hls::with_container(resolution.variants, plan.container),
+                        ..resolution
+                    }),
+                    _ => Ok(resolution),
                 };
                 self.media_update(tab, MediaEvent::Resolved { id: item, result });
             }
@@ -943,7 +946,8 @@ impl Host {
             let first = list.items.iter().find_map(|i| match &i.found {
                 Found::Ready(variants) => {
                     let choices = select::choices(variants);
-                    select::choose(&choices, self.media.settings.quality).map(|c| (i.id, c))
+                    let can_join = wubble_engine::save::find_ffmpeg().is_some();
+                    select::choose(&choices, self.media.settings.quality, can_join).map(|c| (i.id, c))
                 }
                 _ => None,
             });
@@ -975,7 +979,7 @@ impl Host {
                 found: &i.found,
             })
             .collect();
-        let entries = crate::menu::media_entries(&rows);
+        let entries = crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });

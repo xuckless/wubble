@@ -109,15 +109,25 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
                 .audio
                 .as_deref()
                 .is_some_and(|g| audio.iter().any(|a| a.group.as_deref() == Some(g)));
+            // A variant whose codecs name no picture and which has no resolution is sound only
+            // (Apple's `gear0`), not "the smallest video".
+            let sound_only = v.resolution.is_none()
+                && v.codecs.as_deref().is_some_and(|c| !c.trim().is_empty() && !names_picture(c));
             Variant {
-                track: if separate { Track::Video } else { Track::Muxed },
+                track: if sound_only {
+                    Track::Audio
+                } else if separate {
+                    Track::Video
+                } else {
+                    Track::Muxed
+                },
                 container: Container::of_url(&v.uri).unwrap_or(Container::Ts),
                 height: v.resolution.and_then(|r| u32::try_from(r.height).ok()),
                 bandwidth: Some(v.average_bandwidth.unwrap_or(v.bandwidth)),
                 codecs: v.codecs.clone().unwrap_or_default(),
                 size: None,
                 source: Source::HlsPlaylist(join_url(base, &v.uri)),
-                group: v.audio.clone().filter(|_| separate),
+                group: v.audio.clone().filter(|_| separate && !sound_only),
                 headers: vec![],
             }
         })
@@ -127,6 +137,32 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
         return Err(Refusal::Failed("the playlist lists no streams".into()));
     }
     Ok(out)
+}
+
+/// Whether a `CODECS` list names a video codec (RFC 6381 four-character codes).
+fn names_picture(codecs: &str) -> bool {
+    const VIDEO: [&str; 9] = [
+        "avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe", "av01", "vp09", "vp8",
+    ];
+    codecs.split(',').any(|c| {
+        let c = c.trim().to_ascii_lowercase();
+        VIDEO.iter().any(|p| c.starts_with(p)) || c.starts_with("vp9")
+    })
+}
+
+/// The variants of a master, now that one of its media playlists has shown what the segments
+/// are (a master names no container: MPEG-TS or fragmented MP4 is only seen in a playlist,
+/// by its `EXT-X-MAP`): the same for every variant of a stream.
+pub fn with_container(mut variants: Vec<Variant>, plan: Container) -> Vec<Variant> {
+    for v in &mut variants {
+        if matches!(v.source, Source::HlsPlaylist(_)) {
+            v.container = match (v.track, plan) {
+                (Track::Audio, Container::Mp4) => Container::M4a,
+                _ => plan,
+            };
+        }
+    }
+    variants
 }
 
 /// `0x` followed by 32 hex digits.
@@ -264,6 +300,23 @@ v1080/index.m3u8
 v480/index.m3u8
 #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=90000,URI=\"iframes.m3u8\"
 ";
+
+    #[test]
+    fn sound_only_variants_are_audio_and_a_playlist_names_the_container() {
+        let text = "#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS=\"mp4a.40.2, avc1.4d401f\"
+gear4/prog_index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=41457,CODECS=\"mp4a.40.2\"
+gear0/prog_index.m3u8
+";
+        let Parsed::Master(v) = parse(text, BASE).unwrap() else {
+            panic!("not a master")
+        };
+        assert_eq!((v[0].track, v[1].track), (Track::Muxed, Track::Audio));
+        let fmp4 = with_container(v, Container::Mp4);
+        assert_eq!((fmp4[0].container, fmp4[1].container), (Container::Mp4, Container::M4a));
+        assert!(names_picture("mp4a.40.2, hvc1.2.4.L93") && !names_picture("mp4a.40.5,ec-3"));
+    }
 
     #[test]
     fn a_master_lists_its_streams_and_audio() {

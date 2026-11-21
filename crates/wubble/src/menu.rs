@@ -993,8 +993,8 @@ pub struct MediaRow<'a> {
 }
 
 /// The media menu: per stream a title line, then a row per way to save it (or why it cannot be
-/// saved).
-pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
+/// saved). Without a muxer (`can_join`) a row for separate video and audio says it is two files.
+pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
     use wubble_core::media::detect::Found;
     let info = |label: String| Entry {
         label,
@@ -1026,7 +1026,11 @@ pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
                         .into_iter()
                         .enumerate()
                         .map(|(choice, c)| Entry {
-                            label: format!("Save {}", c.label),
+                            label: if c.pair && !can_join {
+                                format!("Save {} \u{b7} video and audio as two files", c.label)
+                            } else {
+                                format!("Save {}", c.label)
+                            },
                             command: Command::SaveMedia {
                                 item: row.item,
                                 choice,
@@ -1294,7 +1298,7 @@ mod tests {
                 found: &resolving,
             },
         ];
-        let entries = media_entries(&rows);
+        let entries = media_entries(&rows, true);
         let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -1315,6 +1319,27 @@ mod tests {
         );
         assert!(entries[1].enabled && !entries[4].enabled);
         assert_eq!(entries[2].command, Command::Separator);
+    }
+
+    #[test]
+    fn a_pair_without_a_muxer_says_it_is_two_files() {
+        use wubble_core::media::detect::Found;
+        use wubble_core::media::{Container, Track, Variant};
+        let mut video = Variant::file("https://a.test/v.mp4", Track::Video, Container::Mp4, None, false);
+        video.height = Some(720);
+        let audio = Variant::file("https://a.test/a.m4a", Track::Audio, Container::M4a, None, false);
+        let found = Found::Ready(vec![video, audio]);
+        let rows = [MediaRow {
+            item: 0,
+            title: "Clip",
+            found: &found,
+        }];
+        let label = |join| media_entries(&rows, join)[1].label.clone();
+        assert_eq!(label(true), "Save 720p \u{b7} MP4");
+        assert_eq!(
+            label(false),
+            "Save 720p \u{b7} MP4 \u{b7} video and audio as two files"
+        );
     }
 
     #[test]
