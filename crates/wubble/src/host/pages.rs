@@ -125,6 +125,32 @@ impl fmt::Debug for Revealed {
     }
 }
 
+/// A password put on the clipboard: cleared from it at `until` if it is still there. Only a
+/// keyed hash of it is kept, never the password.
+#[derive(Debug, Clone)]
+struct Copied {
+    hasher: RandomState,
+    digest: u64,
+    until: Instant,
+}
+
+impl Copied {
+    fn of(password: &str, until: Instant) -> Self {
+        let hasher = RandomState::new();
+        let digest = hasher.hash_one(password);
+        Self {
+            hasher,
+            digest,
+            until,
+        }
+    }
+
+    /// Whether `text` (the clipboard now) is the password copied.
+    fn is(&self, text: &str) -> bool {
+        self.hasher.hash_one(text) == self.digest
+    }
+}
+
 #[derive(Debug)]
 struct Passwords {
     status: VaultStatus,
@@ -134,6 +160,8 @@ struct Passwords {
     query: String,
     /// The last import's report or the last refusal, under the status card.
     notice: String,
+    /// The password last copied, until its [`REVEAL_FOR`] is up; kept when the page is left.
+    copied: Option<Copied>,
 }
 
 impl Default for Passwords {
@@ -144,8 +172,18 @@ impl Default for Passwords {
             revealed: None,
             query: String::new(),
             notice: String::new(),
+            copied: None,
         }
     }
+}
+
+/// What a [`Passwords::tick`] asks of the host.
+#[derive(Debug, Default)]
+struct Ticked {
+    /// The revealed password was hidden: draw the page again.
+    hidden: bool,
+    /// Clear the clipboard if it still holds this copied password.
+    clear: Option<Copied>,
 }
 
 /// What a vault answer is for.
@@ -168,9 +206,6 @@ pub(super) struct PagesState {
     archive: History,
     bookmarks: Bookmarks,
     passwords: Passwords,
-    /// One-shot timer that clears a copied password from the clipboard after `REVEAL_FOR`
-    /// if the clipboard still holds it; lives here so leaving the Passwords page does not cancel it.
-    clipboard_clear_timer: slint::Timer,
 }
 
 impl fmt::Debug for PagesState {
@@ -181,7 +216,7 @@ impl fmt::Debug for PagesState {
             .field("archive", &self.archive)
             .field("bookmarks", &self.bookmarks)
             .field("passwords", &self.passwords)
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -221,7 +256,10 @@ impl Passwords {
                     });
                     (None, None)
                 }
-                Then::Copy => (None, Some(password)),
+                Then::Copy => {
+                    self.copied = Some(Copied::of(&password, now + REVEAL_FOR));
+                    (None, Some(password))
+                }
                 Then::Apply => (None, None),
             },
             VaultAnswer::Done => (Some(VaultCommand::List), None),
@@ -234,6 +272,30 @@ impl Passwords {
                 (None, None)
             }
         }
+    }
+
+    /// Time passes: a revealed password is hidden and a copied one cleared once their
+    /// [`REVEAL_FOR`] is up.
+    fn tick(&mut self, now: Instant) -> Ticked {
+        let hidden = self.revealed.as_ref().is_some_and(|r| r.until <= now);
+        if hidden {
+            self.revealed = None;
+        }
+        let due = self.copied.as_ref().is_some_and(|c| c.until <= now);
+        Ticked {
+            hidden,
+            clear: if due { self.copied.take() } else { None },
+        }
+    }
+
+    /// The page was left: everything it showed is forgotten, but a copied password is still
+    /// cleared when its time is up.
+    fn left(&mut self) {
+        let copied = self.copied.take();
+        *self = Passwords {
+            copied,
+            ..Passwords::default()
+        };
     }
 }
 
@@ -912,17 +974,8 @@ impl Host {
     fn vault_answered(&mut self, then: Then, answer: VaultAnswer) {
         let (next, copy) = self.pages.passwords.apply(then, answer, Instant::now());
         if let Some(password) = copy {
-            let hasher = RandomState::new();
-            let digest = hasher.hash_one(password.as_str());
             self.copy(&password);
             drop(password);
-            self.pages.clipboard_clear_timer.start(
-                slint::TimerMode::SingleShot,
-                REVEAL_FOR,
-                move || {
-                    with_host(|host| host.clear_copied_password(&hasher, digest));
-                },
-            );
             if let Some(window) = self.w.window.upgrade() {
                 self.toast(&window, "Password copied");
             }
@@ -935,13 +988,13 @@ impl Host {
         }
     }
 
-    /// Clears the clipboard if it still holds the password that was copied `REVEAL_FOR` ago.
-    fn clear_copied_password(&mut self, hasher: &RandomState, digest: u64) {
+    /// Clears the clipboard if it still holds the password `copied`.
+    fn clear_copied_password(&mut self, copied: &Copied) {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
         if let Some(current) = self.clipboard.load(window.window(), Buffer::Clipboard)
-            && hasher.hash_one(current.as_str()) == digest
+            && copied.is(&current)
         {
             self.copy("");
         }
@@ -949,7 +1002,7 @@ impl Host {
 
     /// The page was left: lock the vault and forget everything it showed.
     fn passwords_left(&mut self) {
-        self.pages.passwords = Passwords::default();
+        self.pages.passwords.left();
         self.vault_request(VaultCommand::Lock, Then::Apply);
         if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
@@ -958,12 +1011,14 @@ impl Host {
 
     /// Hides a revealed password once its time is up (the lifecycle tick).
     pub(super) fn passwords_tick(&mut self, now: Instant) {
-        let p = &mut self.pages.passwords;
-        if p.revealed.as_ref().is_some_and(|r| r.until <= now) {
-            p.revealed = None;
-            if let Some(window) = self.w.window.upgrade() {
-                self.render_passwords(&window);
-            }
+        let ticked = self.pages.passwords.tick(now);
+        if ticked.hidden
+            && let Some(window) = self.w.window.upgrade()
+        {
+            self.render_passwords(&window);
+        }
+        if let Some(copied) = ticked.clear {
+            self.clear_copied_password(&copied);
         }
     }
 
@@ -1246,6 +1301,25 @@ mod tests {
         );
         assert_eq!(copy.as_deref().map(String::as_str), Some("pw"));
         assert!(p.revealed.is_none());
+    }
+
+    /// A copied password is cleared once its time is up, also after the page was left, and
+    /// only while the clipboard still holds it.
+    #[test]
+    fn a_copied_password_is_cleared_when_its_time_is_up() {
+        let now = Instant::now();
+        let mut p = Passwords::default();
+        p.apply(
+            Then::Copy,
+            VaultAnswer::Revealed(Zeroizing::new("pw".into())),
+            now,
+        );
+        assert!(p.tick(now + REVEAL_FOR / 2).clear.is_none());
+        p.left();
+        let ticked = p.tick(now + REVEAL_FOR);
+        let copied = ticked.clear.expect("cleared when due");
+        assert!(copied.is("pw") && !copied.is("something the user copied since"));
+        assert!(p.copied.is_none() && p.tick(now + REVEAL_FOR * 2).clear.is_none());
     }
 
     #[test]
