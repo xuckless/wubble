@@ -88,6 +88,9 @@ pub fn field_load(_buffer: Buffer) -> Option<Option<String>> {
 pub struct Arboard {
     /// Opened on first use.
     clipboard: Option<arboard::Clipboard>,
+    /// Drags out of and into the windows (`crate::wl::macos`).
+    #[cfg(target_os = "macos")]
+    mac: crate::wl::macos::Mac,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -138,6 +141,11 @@ impl Bridge for Arboard {
 
     fn load(&mut self, _window: &slint::Window, buffer: Buffer) -> Option<String> {
         self.load_text(buffer)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn extras(&self) -> Option<&dyn crate::wl::Aux> {
+        Some(&self.mac)
     }
 }
 
