@@ -958,6 +958,14 @@ impl CefSurfaceProducer for LinuxCefProducer {
         Err(pending("cef_browser_host_t drag target input"))
     }
 
+    // wubble change 54: the page drag held for another producer's enter.
+    fn held_drag(&self) -> Option<crate::HeldDrag> {
+        #[cfg(feature = "cef-runtime")]
+        return self.requests.source_drag().map(|data| crate::HeldDrag { data });
+        #[cfg(not(feature = "cef-runtime"))]
+        None
+    }
+
     fn finish_drag_source(
         &mut self,
         x: i32,

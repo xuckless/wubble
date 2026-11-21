@@ -1,0 +1,21 @@
+// derived: the split drop zone's look (ink .12 fill, ink .35 rim of `Shell.drag-zone-border`, radius md) for a target's box; its rim alone as a line for a gap
+// Where a drop would land, while a drag is over a target that takes it: the split edge a tab would
+// split into, the address bar, the New tab row, a Space row (a box over the target), or the gap
+// in the tab list a link would open into (a line across the list, as Chrome's tab strip shows its
+// drop arrow between tabs). Written for wubble: the design repo has no drop target. Recorded in
+// docs/fidelity/derived-review.md.
+
+import { Radius } from "../gen/tokens.slint";
+import { Shell } from "../derived.slint";
+import { DropMarkKind } from "../../components/model.slint";
+
+
+export component DropMark inherits Rectangle {
+    in property <DropMarkKind> kind: DropMarkKind.none;
+
+    visible: root.kind != DropMarkKind.none;
+    border-radius: root.kind == DropMarkKind.line ? Shell.drag-zone-border / 2 : Radius.md;
+    background: root.kind == DropMarkKind.line ? Shell.drop-rim : Shell.drop-fill;
+    border-width: root.kind == DropMarkKind.box ? Shell.drag-zone-border : 0px;
+    border-color: Shell.drop-rim;
+}

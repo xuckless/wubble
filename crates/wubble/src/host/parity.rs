@@ -33,13 +33,25 @@ pub struct ParityRun {
     held: Option<Point>,
     /// Known gaps that failed, as expected.
     gaps: Vec<&'static str>,
+    /// What its report lines start with: `parity`, `dnd`.
+    label: &'static str,
+    /// `HostOp::Shot`s taken.
+    shots: usize,
 }
 
 impl ParityRun {
     pub fn new(home: String) -> Self {
+        let items = parity::selected(std::env::var("WUBBLE_PARITY").ok().as_deref());
+        Self::suite("parity", home, items)
+    }
+
+    /// Another checklist on the same driver (`--smoke dnd`), on its own page.
+    pub fn suite(label: &'static str, home: String, items: Vec<parity::Item>) -> Self {
         Self {
             home,
-            items: parity::selected(std::env::var("WUBBLE_PARITY").ok().as_deref()),
+            items,
+            label,
+            shots: 0,
             state: Parity::default(),
             failed: vec![],
             restoring: false,
@@ -230,18 +242,21 @@ impl Host {
             }
             Action::Report { name, result, gap } => {
                 let Some(run) = self.parity_run() else { return };
+                let label = run.label;
                 match (&result, gap) {
-                    (Ok(()), false) => println!("parity: {name} ok"),
+                    (Ok(()), false) => println!("{label}: {name} ok"),
                     (Err(why), false) => {
-                        println!("parity: {name} FAIL: {why}");
+                        println!("{label}: {name} FAIL: {why}");
                         run.failed.push(name);
                     }
                     (Err(why), true) => {
-                        println!("parity: {name} known gap: {why}");
+                        println!("{label}: {name} known gap: {why}");
                         run.gaps.push(name);
                     }
                     (Ok(()), true) => {
-                        println!("parity: {name} FAIL: passes, but the table marks it a known gap");
+                        println!(
+                            "{label}: {name} FAIL: passes, but the table marks it a known gap"
+                        );
                         run.failed.push(name);
                     }
                 }
@@ -369,6 +384,16 @@ impl Host {
                 let p = at(p);
                 self.parity_pointer(parity::NONE, vec![moved(p), release(p, Button::Left)]);
             }
+            Step::MoveToSpot(spot) => {
+                if let Some(p) = self.parity_spot(window, spot) {
+                    self.parity_pointer(parity::NONE, vec![moved(p)]);
+                }
+            }
+            Step::ReleaseAt(spot) => {
+                if let Some(p) = self.parity_spot(window, spot) {
+                    self.parity_pointer(parity::NONE, vec![moved(p), release(p, Button::Left)]);
+                }
+            }
             Step::Keys(spec) => {
                 let keys = parity::chords(spec)
                     .unwrap_or_default()
@@ -435,8 +460,64 @@ impl Host {
         }
     }
 
+    /// Where `spot` is in the window, logical px.
+    fn parity_spot(
+        &self,
+        window: &AppWindow,
+        spot: parity::Spot,
+    ) -> Option<slint::LogicalPosition> {
+        use parity::Spot;
+        let g = window.get_drop_geometry();
+        let (x, y) = match spot {
+            // just inside the row after the gap (the end: just inside the last row's bottom)
+            Spot::TabGap(n) => (
+                g.list_x + g.list_w / 2.0,
+                g.rows_top + n as f32 * g.pitch + if n == 0 { 2.0 } else { -2.0 },
+            ),
+            Spot::TabRow(n) => (
+                g.list_x + g.list_w / 2.0,
+                g.rows_top + n as f32 * g.pitch + g.row_h / 2.0,
+            ),
+            Spot::NewTab => (
+                g.new_tab_x + g.new_tab_w / 2.0,
+                g.new_tab_y + g.new_tab_h / 2.0,
+            ),
+            Spot::Bar => (g.pill_x + g.pill_w / 2.0, g.pill_y + g.pill_h / 2.0),
+            Spot::Pane(n, p) => {
+                let tab = *self.shown_tabs().get(n)?;
+                let (x, y) = self.view_origin(window, tab);
+                (x + p.x, y + p.y)
+            }
+        };
+        Some(slint::LogicalPosition::new(x, y))
+    }
+
     fn parity_host_op(&mut self, window: &AppWindow, op: HostOp) {
         match op {
+            HostOp::SplitHome | HostOp::SecondTab => {
+                let (Some(home), Some(first)) = (self.parity_home(), self.model.visible_tab())
+                else {
+                    return;
+                };
+                self.dispatch(super::new_tab(home, Some(first)));
+                if let Some(second) = self.model.visible_tab() {
+                    self.dispatch(wubble_core::model::Command::ActivateTab(first));
+                    if op == HostOp::SplitHome {
+                        self.dispatch(wubble_core::model::Command::SplitWith(second));
+                        // the first pane keeps the keys (and the smoke's scripts)
+                        self.dispatch(wubble_core::model::Command::ActivateTab(first));
+                    }
+                }
+            }
+            HostOp::Shot(name) => {
+                let Some(run) = self.parity_run() else { return };
+                let index = run.shots;
+                run.shots += 1;
+                match crate::shot::take_scene(window, index, name) {
+                    Ok(path) => println!("smoke: shot {}", path.display()),
+                    Err(e) => println!("smoke: shot {name}: {e}"),
+                }
+            }
             HostOp::CloseBar => {
                 if window.get_command_bar_state() != CommandBarState::Closed {
                     self.parity_input(window, Step::Keys("Escape"));
@@ -650,6 +731,33 @@ impl Host {
             HostCheck::PageEntered => {
                 let e = window.get_page_enter();
                 is(e >= 1.0, format!("page entrance at {e}"))
+            }
+            HostCheck::Ghost(image) => {
+                let got = self.drag_ghost_shown();
+                is(
+                    got.is_some_and(|(i, (w, h))| i == image && w > 0.0 && h > 0.0),
+                    format!("ghost {got:?}"),
+                )
+            }
+            HostCheck::TabUrl(i, end) => {
+                let got = order
+                    .get(i)
+                    .and_then(|t| self.model.tabs.get(t))
+                    .map(|t| t.url.clone());
+                is(
+                    got.as_deref().is_some_and(|u| u.ends_with(end)),
+                    format!("tab {i} at {got:?}"),
+                )
+            }
+            HostCheck::TabTitle(i, want) => {
+                let got = order
+                    .get(i)
+                    .and_then(|t| self.model.tabs.get(t))
+                    .map(|t| t.title.clone());
+                is(
+                    got.as_deref() == Some(want),
+                    format!("tab {i} titled {got:?}"),
+                )
             }
             HostCheck::Drag(want) => {
                 let dragging = !self.drag_idle();

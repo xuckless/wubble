@@ -103,6 +103,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
                 .as_ref()
                 .map(|gaps| format!("ok; known gaps: {}", gaps.join(", "))),
         ),
+        Mode::Dnd => ("dnd", ok(o.parity_passed.is_some())),
         Mode::Block => ("block", ok(o.blocked_seen.is_some())),
         Mode::Settings => ("settings", ok(o.settings_passed)),
         Mode::Start => ("start", ok(o.start_passed)),

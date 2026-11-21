@@ -427,6 +427,8 @@ export global Shell {
     out property <length> window-height: 800px; // derived from wubble-only: as window-width
     out property <float> address-icon-stroke: 1.9; // derived from browser/chrome.tsx address lock icon drawn at stroke 1.9 (icons.tsx default 1.7)
     out property <color> drag-ghost-shadow: BrowserCss.wb-tab-drag--box-shadow-shadow-1-color; // derived from browser/browser.css:70 .wb-tab-drag shadow 0 10px 24px .4 (was .25)
+    out property <color> drop-fill: Palette.ink.with-alpha(0.12); // derived from wubble-only: the split drop zone's fill (moved from app.slint), every drop target's box
+    out property <color> drop-rim: Palette.ink.with-alpha(0.35); // derived from wubble-only: the split drop zone's rim (moved from app.slint), the tab list's gap line
     out property <length> sidebar-open: 0.5px; // derived from technical: a sidebar narrower than half a pixel counts as hidden
     out property <length> no-clip: 100000px; // derived from technical: an unbounded clip range for GlassPanel
     out property <int> sheet-title-weight: Role.st-sec-head-h2.weight; // derived from wubble-only sheet title, 19 px like .st-sec-head h2 (settings.css:36): its weight 600 (was 560)

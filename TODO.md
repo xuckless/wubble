@@ -48,6 +48,13 @@ Beside it, small and unordered:
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
+## After the optimization pass (owner, 2026-11-21)
+
+Built as planned in the research, each as its own pass; nothing downloads or asks a server unless the owner turns it on.
+
+- [ ] Page translation, on-device: the pipeline in [docs/research/translate.md](docs/research/translate.md)
+- [ ] Live text in images, on-device OCR: the pipeline in [docs/research/ocr.md](docs/research/ocr.md)
+
 ## MCP server
 Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). Released in `0.1.0-preview.2`: 20 tools, sessions in their own Space and container held to their sites, the approval sheet, live hosting and agent-app registration from Settings, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
@@ -133,7 +140,10 @@ Open, to build or check:
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
-- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps; picture drag-out on macOS and Windows
+- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
+- [ ] Drag out on macOS (`Aux` impl: NSDraggingSource, pasteboard items with the link, text, HTML and a promised file for a picture) and Windows (the stub: `wl::Null`); written for neither yet
+- [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
+- [ ] A page drag dropped on the bookmarks page or a folder row makes a bookmark (the built-in pages take no drop yet); text or a link onto an open command bar's field (the pill only)
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)
@@ -187,8 +197,7 @@ Open, to build or check:
 - [ ] One audit: walk every gallery surface against the three effects
 
 ## Shelved ideas
-- [ ] Translate pages on-device ([docs/research/translate.md](docs/research/translate.md))
-- [ ] Live text in images, on-device OCR ([docs/research/ocr.md](docs/research/ocr.md))
+- [ ] Read aloud with an on-device voice (tiny-voca or the OS voice); a voice, not a screen reader ([docs/research/tts.md](docs/research/tts.md))
 - [ ] OS password managers and passkey keychains, as a passthrough in a dedicated build after extensions ([docs/research/apple-passwords.md](docs/research/apple-passwords.md))
 
 ## M6: Own engine (ungoogled Chromium + CEF)

@@ -152,6 +152,7 @@ enum SmokeArg {
     Pinch,
     Page,
     Parity,
+    Dnd,
     Block,
     Settings,
     Pages,
@@ -196,6 +197,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "pinch" => Ok(SmokeArg::Pinch),
+        None if value == "dnd" => Ok(SmokeArg::Dnd),
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
@@ -235,7 +237,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `block`, \
+            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `pinch`, `page`, `parity`, `dnd`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `media=probe`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none`, `data` or `session-phase=1|2`"
@@ -275,6 +277,9 @@ pub enum Smoke {
     Page,
     /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
     Parity,
+    /// The bundled `dnd.html`: a page's drags inside the window (`dnd_smoke.rs`).
+    /// `--shot-dir DIR`: a PNG of the window mid-drag, per item that asks.
+    Dnd { dir: Option<PathBuf> },
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Open wubble://settings, flip a setting through its toggle, read the store back.
@@ -440,7 +445,10 @@ impl TryFrom<Cli> for Command {
             }));
         }
         let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
-        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. } | SmokeArg::Start));
+        let overlay = matches!(
+            cli.smoke,
+            Some(SmokeArg::Overlay { .. } | SmokeArg::Start | SmokeArg::Dnd)
+        );
         if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
         }
@@ -515,6 +523,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Pinch), None, None) => Smoke::Pinch,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
+            (Some(SmokeArg::Dnd), None, None) => Smoke::Dnd { dir: cli.shot_dir },
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,

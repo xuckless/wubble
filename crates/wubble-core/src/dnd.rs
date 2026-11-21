@@ -124,6 +124,10 @@ fn percent_decode(text: &str) -> Option<Vec<u8>> {
 pub enum Part {
     /// `text/uri-list`: the picture's file, else the files and the link.
     UriList,
+    /// `text/x-moz-url`: the link's URL, a line feed, its title (Chromium's Wayland form,
+    /// UTF-8: `WaylandExchangeDataProvider::ExtractData`); what browsers' address bars and
+    /// GNOME's text fields take as a link with its name.
+    MozUrl,
     /// The picture's bytes.
     Picture,
     Html,
@@ -136,16 +140,23 @@ pub enum Part {
 pub struct Outgoing {
     /// Files, a link or a picture's file.
     pub uris: bool,
+    /// A link (or a dragged picture's URL).
+    pub link: bool,
     /// The picture's MIME type, when it has bytes of a known type.
     pub picture: Option<&'static str>,
     pub html: bool,
     pub text: bool,
 }
 
-/// The types a drag out offers, best first: files and links, the picture
-/// itself, HTML, then text.
+/// The types a drag out offers, best first: files and links, the link with its title, the
+/// picture itself, HTML, then text. Chromium on Wayland offers `text/x-moz-url`, `text/html`
+/// and the plain texts for a link (`BuildMimeTypesList` in
+/// ui/ozone/platform/wayland/host/wayland_exchange_data_provider.cc); `text/uri-list` is kept
+/// first, as Firefox offers it, for file managers and the desktop. No `_NETSCAPE_URL`: that is
+/// X11's (Chromium offers it only there).
 pub fn offers(out: &Outgoing) -> Vec<(&'static str, Part)> {
     let uris = out.uris.then_some(("text/uri-list", Part::UriList));
+    let moz = out.link.then_some(("text/x-moz-url", Part::MozUrl));
     let picture = out.picture.map(|mime| (mime, Part::Picture));
     let html = out.html.then_some(("text/html", Part::Html));
     let text = OFFERED_TEXT
@@ -153,6 +164,7 @@ pub fn offers(out: &Outgoing) -> Vec<(&'static str, Part)> {
         .filter(|_| out.text)
         .map(|mime| (*mime, Part::Text));
     uris.into_iter()
+        .chain(moz)
         .chain(picture)
         .chain(html)
         .chain(text)
@@ -402,6 +414,7 @@ mod tests {
     fn a_drag_out_offers_files_the_picture_html_then_text() {
         let all = Outgoing {
             uris: true,
+            link: true,
             picture: Some("image/png"),
             html: true,
             text: true,
@@ -410,6 +423,7 @@ mod tests {
             offers(&all),
             [
                 ("text/uri-list", Part::UriList),
+                ("text/x-moz-url", Part::MozUrl),
                 ("image/png", Part::Picture),
                 ("text/html", Part::Html),
                 ("text/plain;charset=utf-8", Part::Text),
@@ -422,14 +436,15 @@ mod tests {
             ..all
         };
         let types: Vec<_> = offers(&jpeg).into_iter().map(|(m, _)| m).collect();
-        assert_eq!(types[1], "image/jpeg");
+        assert_eq!(types[2], "image/jpeg");
         assert!(!types.contains(&"image/png"));
         let link = Outgoing {
             uris: true,
+            link: true,
             text: true,
             ..Outgoing::default()
         };
-        assert_eq!(offers(&link).len(), 4);
+        assert_eq!(offers(&link).len(), 5);
         assert!(offers(&Outgoing::default()).is_empty());
     }
 

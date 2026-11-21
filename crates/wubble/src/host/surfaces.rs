@@ -521,6 +521,7 @@ impl Host {
     /// The tab's view closed: its surfaces close without answering (welding
     /// answered every held request), its fullscreen, sound and blocked count end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
+        self.drag_gone(tab);
         if self.devtools.dock.tab() == Some(tab) {
             self.dock_event(DockEvent::TabGone(tab));
         }
