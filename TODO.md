@@ -52,9 +52,9 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
 - [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
 - [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
-- [ ] Passwords: the owner's "saved by hand, then gone" not reproduced on Linux; run `--smoke passwords` with the Keychain on the Mac
+- [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
-- [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, the airlocks
+- [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
 
 ## Review findings (perpetual)
 The design-fidelity phase is over; this list never closes and gates nothing: findings from reviews, QA rounds and the
