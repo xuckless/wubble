@@ -490,7 +490,7 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     asks it for each main-frame navigation, every redirect hop included, before
     the request is sent, and cancels a refused one (returns true), pushing
     `NavigationEvent::NavigationRefused { url, redirect }`. A panicking guard
-    allows. wubble keeps an agent session's tab on the sites its grant allows.
+    refuses (fails closed). wubble keeps an agent session's tab on the sites its grant allows.
 
 ## Not changed, on purpose
 

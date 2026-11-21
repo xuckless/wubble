@@ -857,9 +857,10 @@ impl NavigationGuard {
         Self(Arc::new(guard))
     }
 
-    /// Whether the main frame may go to `url`.
+    /// Whether the main frame may go to `url`. A guard that panics refuses (wubble change:
+    /// fail closed, the guard holds an agent session's tab to its sites).
     pub fn allows(&self, url: &str) -> bool {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(url))).unwrap_or(true)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(url))).unwrap_or(false)
     }
 }
 
@@ -2764,5 +2765,21 @@ mod context_menu_tests {
         let effects = DragOperations::COPY | DragOperations::MOVE;
         assert_eq!(effects.0, 0b1_0001);
         assert_eq!(DragOperations::NONE.0, 0);
+    }
+}
+
+// wubble change: the navigation guard fails closed.
+#[cfg(test)]
+mod navigation_guard_tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_guard_refuses() {
+        let guard = NavigationGuard::new(|url| {
+            assert!(!url.contains("boom"), "the rule broke");
+            true
+        });
+        assert!(guard.allows("https://a.test/"));
+        assert!(!guard.allows("https://boom.test/"));
     }
 }
