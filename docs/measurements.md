@@ -262,6 +262,29 @@ smoke shows 4 frames where the pane is drawn empty and filled in the whole redra
 Re-measure on a real display: `scripts/bench/profile.sh` against both builds (README there), and
 `SLINT_SKIA_PARTIAL_RENDERING=off` on the same build for an A/B without a rebuild.
 
+## Energy per scenario, Linux (2026-11-21)
+
+`scripts/bench/energy.sh` on the release build of 5c12553, invisible display (60 Hz, 1360x880), 10 s per
+scenario after a 9 s warm-up, one run each; load average 19 (other work on the machine). CPU is the whole tree's
+(user + system) in seconds per second; wake-ups are context switches of every thread of the tree; the GPU column
+(whole GPU, nvidia-smi) includes the desktop's own use.
+
+| scenario | CPU s/s | wake-ups/s | CEF fps | Slint renders/s | scene renders/s | pump runs/s | GPU |
+|---|---|---|---|---|---|---|---|
+| idle still page | 0.01 | 555 | 0 | 0 | 0 | 32.6 | 4.2 %, 22.9 W |
+| start page | 0.12 | 1257 | 0 | 56.8 | 56.8 | 30.1 | 4.4 %, 26.2 W |
+| 16 px CSS spinner | 0.23 | 2357 | 55.3 | 57.3 | 7.5 | 157 | 4.7 %, 26.5 W |
+| focused text field (caret) | 0.02 | 677 | 1.6 | 3.3 | 1.6 | 35.9 | 2.0 %, 20.8 W |
+| scroll (`--measure scroll`) | 0.36 | 2450 | 59.6 | 55.5 | 8.5 | 120 | 4.6 %, 23.9 W |
+| canvas (`--measure video`) | 0.74 | 3272 | 50.7 | 35.8 | 7.8 | 135 | 3.8 %, 27.8 W |
+| 1080p60 VP9 clip | 0.58 | 5061 | 55.9 | 56.4 | 7.4 | 61.7 | 6.5 %, 24.9 W |
+
+Read: a still page costs the CEF pump's 30 wake-ups a second (its 33 ms ceiling, decisions.md) and Chromium's own;
+the start page renders the scene and the whole window at the display's rate for as long as it is shown (its liquid
+and bubble); a 16 px spinner makes CEF paint the whole page at the display's rate and the shell redraw the pane
+with it. Occluded, minimised and another-workspace windows are not measurable on the headless compositor (it
+reports no occlusion); their pages stop by state since 239edd1.
+
 ## One thinking orb (xm/orbs)
 
 2026-11-20, Linux release, RTX 5060, headless display (`scripts/headless.sh`, 60 Hz, 1360x880 at 1x), `--measure idle --seconds 8` on the idle page, with `WUBBLE_MEASURE_ORB=<state>` putting one 64 px orb, moving, on the library's stage (`host/gallery_orbs.rs` `measure_one`). Load average 12 to 17 (a build on the box).
