@@ -35,7 +35,7 @@ pub mod vault;
 pub use command::{VaultAnswer, VaultCommand, status_of};
 pub use generate::{GenError, GeneratorOptions, generate};
 pub use import::{ApplyReport, Import, ImportError, ImportRow, apply, parse_csv};
-pub use keyring::{FakeKeyRing, KeyRing, OsKeyRing};
+pub use keyring::{FakeKeyRing, FileKeyRing, KeyRing, OsKeyRing};
 pub use origin::Origin;
 pub use record::{Candidate, Meta, NewLogin, RecordId};
 pub use state::VaultState;
