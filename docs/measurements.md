@@ -455,3 +455,52 @@ about 2 minutes (fullscreen included), the 30 fps one 3; a background 60 fps VP9
 about 10,300 frames, more on tab switches; pausing the videos freed about 2 GB in the GPU process; the main process's
 footprint went from about 850 MB at the start to 1.18 GB after everything closed. The main process's 26 % for one video
 was 37 to 40 % on preview.1 by the same hand. What follows from it: TODO.md, "From the owner's Mac run of preview.5".
+
+## The owner's Mac, preview.5, Low Power Mode, with stack samples (2026-11-21)
+
+The same workflow (`tools/mcp-bench` on branch `bench/mcp-workflow`, about 9 minutes), run over ssh through the
+owner's MCP bridge, the Mac in Low Power Mode on its adapter (80 to 88 %, charging by the end), one run. Beside the
+sampler, `sample` took 5 s of the main process and of the GPU process 8 s into each phase (1 ms interval; under load
+it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo).
+
+| phase | main CPU % | GPU proc % | tabs % | total % (p95) | main MB | GPU proc MB | GPU util % |
+|---|---|---|---|---|---|---|---|
+| 1-idle | 1 | 0 | 6 | 8 (16) | 1030 | 363 | 10 |
+| 2-browse-open | 61 | 11 | 39 | 126 (135) | 1377 | 2208 | 53 |
+| 2-browse-scroll | 29 | 7 | 24 | 60 (91) | 1214 | 2151 | 62 |
+| 2-browse-idle | 9 | 2 | 15 | 26 (54) | 1235 | 2199 | 15 |
+| 3-video1-play | 30 | 10 | 54 | 95 (111) | 1574 | 3102 | 63 |
+| 3-video1-fullscreen | 29 | 10 | 50 | 89 (110) | 1671 | 2873 | 60 |
+| 4-video3-play | 29 | 14 | 76 | 121 (160) | 1554 | 2758 | 55 |
+| 4-video3-switch | 32 | 16 | 72 | 121 (157) | 1517 | 2757 | 63 |
+| 5-mixed | 25 | 15 | 72 | 114 (140) | 1440 | 2817 | 50 |
+| 6-paused | 11 | 2 | 22 | 35 (65) | 1321 | 469 | 4 |
+| 7-recovered | 2 | 0 | 11 | 13 (49) | 1256 | 522 | 3 |
+
+Within a few points of the owner's own run on mains power: Low Power Mode did not change the picture.
+
+The main thread, from the stack samples (share of the samples in which it was not waiting):
+
+| phase | busy | in wubble's own code | in CEF | the accessibility mirror |
+|---|---|---|---|---|
+| 1-idle (one blank tab) | 1.8 % | 0.1 % | 0.3 % | 0 |
+| 2-browse-idle (10 tabs, still) | 8.8 % | 6.6 % | 1.3 % | about 6.6 % |
+| 2-browse-scroll | 35.7 % | 20.7 % | 6.6 % | 7.7 % |
+| 3-video1-play | 33.8 % | 20.7 % | 5.4 % | 6.0 % |
+| 3-video1-fullscreen | 20.5 % | 11.3 % | 2.7 % | 4.1 % |
+| 4-video3-switch | 25.6 % | 14.0 % | 3.9 % | 2.7 % |
+
+What the samples show and do not:
+- The shipped Mac binary has no symbols (`strip = "symbols"`), so wubble's own code shows as addresses. One path was
+  identified from the strings its code refers to (B-tree assertions beside the accessibility tree's field names,
+  `childTreeId`, `tree_data`, `hierarchicalLevel`): the mirror of CEF's accessibility tree (`host/ax.rs`,
+  `wubble_ax::PageTree`). Every tab of an agent session has accessibility on (`wanted = on || agent_drives(tab)`),
+  and this benchmark drives all its tabs through an agent session. So "10 idle tabs keep the main process at 10 %"
+  is the mirror applying updates from pages that animate while hidden: a cost of agent sessions, and of the way the
+  benchmark is driven, not of ten tabs a person opened (not yet measured: needs tabs opened outside a session).
+  The same path is 3 to 8 points of every other phase's main thread.
+- Metal, IOSurface and the GPU driver are 1 to 2 % of the main thread during video: present is not where the main
+  thread's time goes. Most of it is in wubble's own stripped code (Slint and Skia are linked into it); naming it
+  needs a build with symbols.
+- Nothing here counts frames, so the paint rate during video (60 or 120) and the lag on a tab switch a tester
+  reported are not answered by this run.
