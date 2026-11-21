@@ -96,6 +96,8 @@ pub(crate) fn send_drag(
 
     match event.kind {
         DragEventKind::Enter => {
+            // wubble change 54: another producer's page drag comes first.
+            let held = event.from.map(|from| from.data).or(held);
             let mut data = match (event.payload, held) {
                 (Some(payload), _) => to_cef_payload(&payload)?,
                 // CEF's Clone copies the whole DropData, custom types included.

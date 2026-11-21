@@ -492,6 +492,17 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     `NavigationEvent::NavigationRefused { url, redirect }`. A panicking guard
     refuses (fails closed). wubble keeps an agent session's tab on the sites its grant allows.
 
+54. **A page drag entered into another view.** `surface.rs`: new opaque
+    `HeldDrag` (a CEF clone of a page drag's data; equal only to itself),
+    `CefSurfaceProducer::held_drag()` (default `None`; the Linux, macOS and
+    Windows producers return the data held since `StartDragging`, change 48)
+    and `DragInput::from`: an enter without a payload uses it before the
+    producer's own (`drag::send_drag`). CEF's `DragTargetDragEnter` takes any
+    browser's `CefDragData` (`browser_platform_delegate_osr.cc`), so a drag
+    from one pane drops into another, or into another tab's page, with the
+    page's custom types and the picture's bytes. No unit test (it needs a
+    live CEF): wubble's `--smoke dnd` drops between two split panes.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
