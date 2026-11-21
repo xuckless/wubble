@@ -1171,6 +1171,9 @@ pub struct View {
     pub chip: bool,
     /// The key menu's rows, while it is open.
     pub menu: Option<Vec<MenuRow>>,
+    /// The origin the menu's logins belong to, when it is a frame's, not the page's own: the
+    /// menu names it.
+    pub menu_origin: Option<String>,
     /// The save prompt: its kind, the username and the origin.
     pub prompt: Option<(SaveKind, String, String)>,
 }
@@ -1184,6 +1187,7 @@ pub fn view(state: &AutofillState) -> View {
         Phase::Menu(o) => View {
             chip: true,
             menu: Some(o.rows()),
+            menu_origin: (!o.main).then(|| o.origin.clone()),
             prompt: None,
         },
         Phase::Prompt { kind, pending } => View {
@@ -1878,6 +1882,30 @@ mod tests {
         assert!(matches!(s.phase, Phase::Offer(_)));
         let (s, _) = transition(s, forms("main", vec![]), ON);
         assert_eq!(s.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn a_frames_menu_names_the_origin_its_logins_belong_to() {
+        let offer = |main: bool| Offer {
+            frame: "f".into(),
+            origin: "https://login.idp.test".into(),
+            main,
+            form: 0,
+            class: FormClass::Login {
+                username: Some(1),
+                password: 2,
+            },
+            candidates: vec![],
+        };
+        let state = |o| AutofillState {
+            phase: Phase::Menu(o),
+            first_step: None,
+        };
+        assert_eq!(view(&state(offer(true))).menu_origin, None);
+        assert_eq!(
+            view(&state(offer(false))).menu_origin.as_deref(),
+            Some("https://login.idp.test")
+        );
     }
 
     #[test]

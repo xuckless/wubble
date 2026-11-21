@@ -349,6 +349,7 @@ impl Host {
                         },
                         MenuRow::Generate,
                     ]),
+                    menu_origin: None,
                     prompt: None,
                 }
             }
@@ -356,6 +357,7 @@ impl Host {
                 autofill = View {
                     chip: true,
                     menu: None,
+                    menu_origin: None,
                     prompt: Some((SaveKind::New, "alice".into(), origin)),
                 }
             }

@@ -585,7 +585,14 @@ pub(super) fn shell_view(view: &View) -> AutofillView {
         .iter()
         .flatten()
         .map(|row| match row {
-            MenuRow::Login { username } => named(username).into(),
+            // a frame's logins say whose they are
+            MenuRow::Login { username } => match &view.menu_origin {
+                Some(origin) => {
+                    let site = origin.split_once("://").map_or(origin.as_str(), |(_, h)| h);
+                    format!("{} on {site}", named(username)).into()
+                }
+                None => named(username).into(),
+            },
             MenuRow::Generate => "Suggest a strong password".into(),
         })
         .collect();
@@ -639,12 +646,26 @@ mod tests {
                 },
                 MenuRow::Generate,
             ]),
+            menu_origin: None,
             prompt: None,
         };
         let shown = shell_view(&view);
         assert!(shown.chip && shown.menu_open);
         let rows: Vec<String> = slint::Model::iter(&shown.rows).map(Into::into).collect();
         assert_eq!(rows, ["(no username)", "Suggest a strong password"]);
+        // a frame's logins name the origin they belong to
+        let framed = View {
+            chip: true,
+            menu: Some(vec![MenuRow::Login {
+                username: "bob".into(),
+            }]),
+            menu_origin: Some("https://login.idp.test".into()),
+            prompt: None,
+        };
+        let rows: Vec<String> = slint::Model::iter(&shell_view(&framed).rows)
+            .map(Into::into)
+            .collect();
+        assert_eq!(rows, ["bob on login.idp.test"]);
         let prompt = View {
             prompt: Some((
                 SaveKind::Update("r".into()),
