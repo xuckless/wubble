@@ -2980,6 +2980,11 @@ impl Host {
             outcome,
         };
         self.store.push_agent_log(entry);
+        // the activity page, if it is open, shows the call at once (the store answers a read
+        // after the write it follows)
+        if self.shown_page() == Some(wubble_core::pages::InternalPage::AgentLog) {
+            self.agent_log_shown();
+        }
     }
 
     /// `--smoke mcp`: the sheet is up. Checks what it shows against the next row of
