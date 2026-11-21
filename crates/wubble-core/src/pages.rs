@@ -479,8 +479,17 @@ pub fn relative_age(now: u64, then: u64) -> String {
     format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
+/// The exception that turns blocking off on `page_url`: its own host's, or a parent's (an entry
+/// covers its subdomains, as the blocker reads them); a port is no part of a site.
+pub fn blocker_exception<'a>(page_url: &str, exceptions: &'a [String]) -> Option<&'a str> {
+    exceptions
+        .iter()
+        .map(String::as_str)
+        .find(|e| crate::routing::host_in(&[*e], page_url))
+}
+
 pub fn blocker_state(count: u32, page_url: &str, exceptions: &[String]) -> BlockerBadge {
-    let site_allowed = crate::zoom::host_of(page_url).is_some_and(|h| exceptions.contains(&h));
+    let site_allowed = blocker_exception(page_url, exceptions).is_some();
     BlockerBadge {
         count,
         site_allowed,
@@ -729,17 +738,12 @@ pub struct Entry {
 /// The column titles of a list or map setting's list editor; the first names the entry.
 /// Empty for the other kinds.
 pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
-    let sites = [
-        settings::BLOCKER_EXCEPTIONS.key,
-        settings::SLEEP_NEVER_SITES.key,
-        settings::VIDEO_HIDDEN_SITES.key,
-    ];
     match def.kind {
         SettingKind::List if def.key == settings::ROUTING_RULES.key => {
             &["Site", "Space", "Container"]
         }
         SettingKind::List if def.key == settings::BLOCKER_CUSTOM_LISTS.key => &["Address"],
-        SettingKind::List if sites.contains(&def.key) => &["Site"],
+        SettingKind::List if settings::SITE_LISTS.contains(&def.key) => &["Site"],
         SettingKind::List => &["Entry"],
         SettingKind::Map if def.key == settings::BLOCKER_LISTS.key => &["List", "Switched"],
         SettingKind::Map => &["Entry", "Value"],
@@ -1578,6 +1582,27 @@ mod tests {
         let s = blocker_state(0, "https://A.test/x", &ex);
         assert!(s.site_allowed && s.visible);
         assert!(!blocker_state(0, "about:blank", &ex).visible);
+    }
+
+    /// The pill must say what the blocker does: it skips a site's subdomains and never sees a
+    /// port.
+    #[test]
+    fn the_pill_follows_the_blocker_s_own_reading_of_an_exception() {
+        let ex = vec!["a.test".to_owned(), "127.0.0.1".to_owned()];
+        // a subdomain is covered by its parent's entry, which is the one to remove
+        assert_eq!(
+            blocker_exception("https://www.a.test/x", &ex),
+            Some("a.test")
+        );
+        assert!(blocker_state(0, "https://www.a.test/x", &ex).site_allowed);
+        // a page on a port is the site without it
+        assert_eq!(
+            blocker_exception("http://127.0.0.1:8080/p", &ex),
+            Some("127.0.0.1")
+        );
+        assert!(blocker_state(0, "http://127.0.0.1:8080/", &ex).site_allowed);
+        assert_eq!(blocker_exception("https://nota.test/", &ex), None);
+        assert_eq!(blocker_exception("https://a.test.evil.org/", &ex), None);
     }
 
     #[test]

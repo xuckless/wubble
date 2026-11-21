@@ -120,6 +120,11 @@ impl Downloads {
         self.inflight.values().any(|f| f.tab == tab)
     }
 
+    /// The list, newest first (`--smoke data`).
+    pub(super) fn entries(&self) -> &[DownloadEntry] {
+        &self.list
+    }
+
     pub(super) fn get(&self, id: i64) -> Option<&DownloadEntry> {
         self.list.iter().find(|e| e.id == id)
     }

@@ -20,7 +20,7 @@ mod meter;
 mod thread;
 
 pub use detail::{footprint, gpu_by_pid, memory, namespace_pid, rollup};
-pub use meter::{Meter, Proc, descendants, label};
+pub use meter::{Meter, Proc, descendants, host_pid, label};
 pub use thread::lower_current_thread;
 use wubble_core::pressure::Reading;
 

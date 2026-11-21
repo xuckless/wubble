@@ -644,16 +644,9 @@ impl Host {
     }
 
     fn agent_env(&self) -> Env {
-        use wubble_core::apply::value_of;
-        use wubble_core::settings as defs;
-        let stored = &self.settings.stored;
         Env {
             mcp_enabled: self.mcp_serving(),
-            remote_port: defs::remote_port(
-                value_of(&defs::DEVTOOLS_REMOTE_PORT, stored)
-                    .parse()
-                    .unwrap_or(0),
-            ),
+            remote_port: self.debug_port(),
         }
     }
 
@@ -2965,7 +2958,7 @@ impl Host {
         }
     }
 
-    fn agent_log(
+    pub(super) fn agent_log(
         &mut self,
         session: &SessionId,
         tool: &str,
@@ -2980,6 +2973,11 @@ impl Host {
             outcome,
         };
         self.store.push_agent_log(entry);
+        // the activity page, if it is open, shows the call at once (the store answers a read
+        // after the write it follows)
+        if self.shown_page() == Some(wubble_core::pages::InternalPage::AgentLog) {
+            self.agent_log_shown();
+        }
     }
 
     /// `--smoke mcp`: the sheet is up. Checks what it shows against the next row of

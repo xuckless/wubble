@@ -341,8 +341,13 @@ impl Model {
         vec![create, Effect::WindowOpened(id)]
     }
 
-    pub(super) fn open_little(&mut self, url: String, space: Option<SpaceId>) -> Vec<Effect> {
-        let Some((tab, _, create)) = self.place_new_tab(url, None, None, space) else {
+    pub(super) fn open_little(
+        &mut self,
+        url: String,
+        space: Option<SpaceId>,
+        container: Option<ContainerId>,
+    ) -> Vec<Effect> {
+        let Some((tab, _, create)) = self.place_new_tab(url, container, None, space) else {
             return vec![];
         };
         let id = self.push_window(Shown::Little(tab), None);

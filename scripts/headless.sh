@@ -18,8 +18,11 @@
 #   stage. The ticker maps before the command starts, so the command's first window takes focus.
 # - Xwayland: mutter's own, as on the desktop (arboard's image clipboard falls back to X11 on
 #   GNOME, which offers no data-control protocol); the command gets its DISPLAY and XAUTHORITY.
-# The command keeps the caller's environment (its D-Bus session included) except WAYLAND_DISPLAY,
-# DISPLAY, XAUTHORITY and XDG_SESSION_TYPE.
+# The command keeps the caller's environment except WAYLAND_DISPLAY, DISPLAY, XAUTHORITY,
+# XDG_SESSION_TYPE and its D-Bus session: it gets a session bus address nothing listens on, so
+# what it would ask the desktop for (the keyring, the file manager, notifications, portals)
+# fails as on a machine without them instead of reaching the owner's desktop.
+# WUBBLE_HEADLESS_BUS=ADDRESS gives it that bus instead (a private one the caller started).
 # Env: WUBBLE_HEADLESS_SIZE (default 1360x880); WUBBLE_HEADLESS_LOG=FILE keeps the compositor's
 # output there (default: a file in $XDG_RUNTIME_DIR, removed afterwards).
 set -u
@@ -213,6 +216,8 @@ XML
   { read -r xdisplay; read -r xauth; } <"$ready"
   # In the background, so a signal to this script is handled at once and passed on.
   env WAYLAND_DISPLAY="$name" DISPLAY="$xdisplay" XAUTHORITY="$xauth" XDG_SESSION_TYPE=wayland \
+    DBUS_SESSION_BUS_ADDRESS="${WUBBLE_HEADLESS_BUS:-unix:path=/nonexistent/wubble-headless-bus}" \
+    GIO_USE_VFS=local GTK_USE_PORTAL=0 \
     "$@" <&0 &
   cmd=$!
   trap 'kill -TERM "$cmd" 2>/dev/null; wait "$cmd"; stop; exit 143' TERM INT HUP

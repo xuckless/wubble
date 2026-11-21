@@ -699,6 +699,7 @@ mod tests {
                     url: "https://l.test".into(),
                     // the empty Space: its only tab is the Little window's
                     space: Some(SpaceId(2)),
+                    container: None,
                 },
             );
             assert_eq!(with_little.windows.len(), 3);

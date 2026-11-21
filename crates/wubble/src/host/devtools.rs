@@ -51,6 +51,23 @@ impl Docked {
 }
 
 impl Host {
+    /// The debugging port that refuses every agent session (`agent::refusing_port`): the one the
+    /// engine of this run opened, else the stored one.
+    pub(super) fn debug_port(&self) -> Option<u16> {
+        use wubble_core::apply::value_of;
+        use wubble_core::settings as defs;
+        let opened = match self.devtools.mode {
+            Mode::Docked { port } => Some(port),
+            Mode::DetachedOnly => None,
+        };
+        let stored = defs::remote_port(
+            value_of(&defs::DEVTOOLS_REMOTE_PORT, &self.settings.stored)
+                .parse()
+                .unwrap_or(0),
+        );
+        wubble_core::agent::refusing_port(opened, stored)
+    }
+
     /// The docked panel's width in this window: it docks in the window showing the tab it
     /// inspects, 0 in the others and while it is closed.
     pub(super) fn panel_width(&self) -> f64 {

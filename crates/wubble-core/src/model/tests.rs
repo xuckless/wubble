@@ -758,6 +758,7 @@ fn a_peek_from_a_little_window_opens_a_tab() {
         Command::OpenLittle {
             url: "https://l.test".into(),
             space: None,
+            container: None,
         },
     );
     let l = opened(&fx);
@@ -2451,6 +2452,7 @@ fn a_tab_is_on_screen_in_at_most_one_window() {
         Command::OpenLittle {
             url: "https://l.test".into(),
             space: None,
+            container: None,
         },
         Command::FocusWindow(WindowId(1)),
         Command::CloseWindow(WindowId(2)),
@@ -2605,6 +2607,7 @@ fn popup_and_little_windows_own_their_tab() {
         Command::OpenLittle {
             url: "https://l.test".into(),
             space: None,
+            container: None,
         },
     );
     let l = opened(&fx);
@@ -2623,6 +2626,7 @@ fn a_little_window_promotes_into_a_space() {
         Command::OpenLittle {
             url: "https://l.test".into(),
             space: None,
+            container: None,
         },
     );
     let l = opened(&fx);
@@ -2772,6 +2776,7 @@ fn the_main_window_is_the_one_showing_the_active_space() {
         Command::OpenLittle {
             url: "https://l.test".into(),
             space: None,
+            container: None,
         },
     );
     assert_ne!(m.focused(), w);
@@ -3584,4 +3589,58 @@ fn an_agent_space_stays_one() {
     );
     assert!(m.spaces[0].agent);
     assert!(m.for_session(&[]).spaces[0].agent, "saved like any Space");
+}
+
+/// A link from another app that a routing rule sends to a container opens in that container from
+/// its first request, whatever the Space's own container is (cookies never cross).
+#[test]
+fn a_little_window_opens_in_the_container_it_is_given() {
+    let m = Model::new(Instant::now());
+    let (m, _) = apply(
+        m,
+        Command::NewContainer {
+            name: "Bank".into(),
+        },
+    );
+    let bank = m.containers[1].id;
+    let (m, fx) = apply(
+        m,
+        Command::OpenLittle {
+            url: "https://bank.test".into(),
+            space: None,
+            container: Some(bank),
+        },
+    );
+    let creates: Vec<_> = fx
+        .iter()
+        .filter_map(|e| match e {
+            Effect::CreateTab { container, .. } => Some(*container),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(creates, [bank]);
+    let tab = m.window(m.focused()).unwrap().tab().unwrap();
+    assert_eq!(m.tabs[&tab].container, bank);
+    // an unknown container opens nothing (never a silent fall back to another jar)
+    let (m2, fx) = apply(
+        m.clone(),
+        Command::OpenLittle {
+            url: "https://x.test".into(),
+            space: None,
+            container: Some(ContainerId(99)),
+        },
+    );
+    assert!(fx.is_empty());
+    assert_eq!(m2.tabs.len(), m.tabs.len());
+    // none: the Space's own
+    let (m3, _) = apply(
+        m,
+        Command::OpenLittle {
+            url: "https://y.test".into(),
+            space: None,
+            container: None,
+        },
+    );
+    let tab = m3.window(m3.focused()).unwrap().tab().unwrap();
+    assert_eq!(m3.tabs[&tab].container, ContainerId::DEFAULT);
 }
