@@ -16,6 +16,7 @@ pub mod log;
 pub mod manifest;
 pub mod refs;
 pub mod spot;
+pub mod upload;
 
 use std::collections::BTreeMap;
 use std::fmt;

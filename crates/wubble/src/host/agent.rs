@@ -28,6 +28,7 @@ use wubble_core::agent::keys::{KeyPlan, SessionNav};
 use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
 use wubble_core::agent::spot;
+use wubble_core::agent::upload::{self, Stage};
 use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
 use wubble_core::agent::{MoreAnswer, Refusal, StopReason, Token};
 use wubble_core::model::Command;
@@ -613,6 +614,36 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Uploaded { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
+    }
+}
+
+/// What a waiting call is doing, as a file chooser opening on its tab sees it
+/// ([`upload::Stage`]): every stage of `upload_file`, and the calls whose input or script may
+/// open one.
+fn stage(wait: &Wait) -> Stage {
+    match wait {
+        Wait::Input {
+            then: Then::Upload { .. },
+            ..
+        }
+        | Wait::Chooser { .. } => Stage::UploadClicked,
+        Wait::Locate {
+            act: Act::Upload { .. },
+            ..
+        }
+        | Wait::Scroll {
+            act: Act::Upload { .. },
+            ..
+        }
+        | Wait::Uploaded { .. } => Stage::Upload,
+        Wait::Input { .. }
+        | Wait::Settle { .. }
+        | Wait::Started { .. }
+        | Wait::Eval { .. }
+        | Wait::Focus { .. }
+        | Wait::TypeMark { .. }
+        | Wait::TypeFocus { .. } => Stage::Input,
+        _ => Stage::Other,
     }
 }
 
@@ -3599,19 +3630,10 @@ impl Host {
             Ok(p) => p,
             Err(why) => return self.agent_fail(reply, &why),
         };
-        let busy = self.agents.pending.iter().any(|p| match &p.wait {
-            Wait::Chooser { tab: t, .. } => *t == tab,
-            Wait::Input {
-                tab: t,
-                then: Then::Upload { .. },
-                ..
-            } => *t == tab,
-            _ => false,
-        });
-        if busy {
-            return self.agent_fail(
+        if upload::upload_in_flight(&self.agent_stages(tab)) {
+            return self.agent_refuse(
                 reply,
-                "another file upload is already in progress on this tab",
+                "another upload_file is in flight on this tab: wait for its answer",
             );
         }
         self.agent_act(reply, tab, target, None, Act::Upload { paths });
@@ -3629,15 +3651,10 @@ impl Host {
         if !self.agent_drives(tab) {
             return false;
         }
-        let armed = self.agents.pending.iter().position(|p| match &p.wait {
-            Wait::Chooser { tab: t, .. } => *t == tab,
-            Wait::Input {
-                tab: t,
-                then: Then::Upload { .. },
-                ..
-            } => *t == tab,
-            _ => false,
-        });
+        let armed =
+            self.agents.pending.iter().position(|p| {
+                wait_tab(&p.wait) == Some(tab) && stage(&p.wait) == Stage::UploadClicked
+            });
         if let Some(i) = armed {
             let p = self.agents.pending.remove(i);
             let paths = match p.wait {
@@ -3727,6 +3744,16 @@ impl Host {
         }
         self.agent_arm();
         true
+    }
+
+    /// What each call waiting on `tab` is doing ([`stage`]).
+    fn agent_stages(&self, tab: TabId) -> Vec<Stage> {
+        self.agents
+            .pending
+            .iter()
+            .filter(|p| wait_tab(&p.wait) == Some(tab))
+            .map(|p| stage(&p.wait))
+            .collect()
     }
 
     // ----- waiting
@@ -5286,6 +5313,83 @@ mod tests {
             );
         }
         assert_eq!(held_group(&Wait::Shot { id: 1 }), None);
+    }
+
+    #[test]
+    fn every_stage_of_an_upload_counts_as_one_in_flight() {
+        let tab = TabId(3);
+        let paths = || vec![PathBuf::from("/tmp/a.pdf")];
+        let viewport = Bounds::default();
+        let early = [
+            Wait::Locate {
+                id: 1,
+                tab,
+                node: 9,
+                stage: Locating::Revealing,
+                at: None,
+                viewport,
+                act: Act::Upload { paths: paths() },
+            },
+            Wait::Scroll {
+                id: 1,
+                tab,
+                bounds: viewport,
+                viewport,
+                act: Act::Upload { paths: paths() },
+            },
+            Wait::Uploaded {
+                tab,
+                rev: 0,
+                markers: vec![],
+                settle_at: Instant::now(),
+                answer: String::new(),
+            },
+        ];
+        for wait in &early {
+            assert_eq!(stage(wait), Stage::Upload);
+            assert!(upload::upload_in_flight(&[stage(wait)]));
+        }
+        let clicked = [
+            Wait::Input {
+                id: 1,
+                tab,
+                asked: 0,
+                load: Load::Asked,
+                then: Then::Upload { paths: paths() },
+            },
+            Wait::Chooser {
+                tab,
+                paths: paths(),
+            },
+        ];
+        for wait in &clicked {
+            assert_eq!(stage(wait), Stage::UploadClicked);
+        }
+        // a click's own stages are input, not an upload
+        let click = Wait::Input {
+            id: 1,
+            tab,
+            asked: 0,
+            load: Load::Asked,
+            then: Then::Settle("clicked".into()),
+        };
+        assert_eq!(stage(&click), Stage::Input);
+        let locating_click = Wait::Locate {
+            id: 1,
+            tab,
+            node: 9,
+            stage: Locating::Measuring,
+            at: None,
+            viewport,
+            act: Act::Click {
+                button: MouseButton::Left,
+                count: 1,
+            },
+        };
+        assert!(!upload::upload_in_flight(&[
+            stage(&click),
+            stage(&locating_click)
+        ]));
     }
 
     #[test]
