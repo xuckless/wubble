@@ -366,9 +366,10 @@ impl Host {
         self.apply_download(id, event);
     }
 
-    /// "Clear finished": every entry that is done goes, through the one remove path.
+    /// "Clear finished": every entry that is done goes, through the one remove path (none while
+    /// the page's search hides rows: `download::clearable_ids`).
     pub(crate) fn downloads_cleared(&mut self) {
-        for id in download::finished_ids(&self.downloads.list) {
+        for id in download::clearable_ids(&self.downloads.list, &self.downloads.query) {
             self.apply_download(id, DownloadEvent::Remove);
         }
     }
@@ -613,7 +614,9 @@ impl Host {
             window.set_downloads_page_items(m)
         });
         window.set_downloads_searching(!self.downloads.query.trim().is_empty());
-        window.set_downloads_has_finished(!download::finished_ids(&self.downloads.list).is_empty());
+        window.set_downloads_has_finished(
+            !download::clearable_ids(&self.downloads.list, &self.downloads.query).is_empty(),
+        );
     }
 }
 

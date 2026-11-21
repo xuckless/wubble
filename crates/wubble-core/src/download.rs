@@ -318,6 +318,17 @@ pub fn finished_ids(entries: &[DownloadEntry]) -> Vec<i64> {
         .collect()
 }
 
+/// What the downloads page's "Clear finished" removes while its search shows `query`: the
+/// finished entries, or none while a search hides some rows (the button is off then, so it
+/// never clears rows the user cannot see).
+pub fn clearable_ids(entries: &[DownloadEntry], query: &str) -> Vec<i64> {
+    if query.trim().is_empty() {
+        finished_ids(entries)
+    } else {
+        vec![]
+    }
+}
+
 /// Entries whose file name or URL matches `query` (case-insensitive; blank returns all).
 pub fn filter_entries(entries: &[DownloadEntry], query: &str) -> Vec<DownloadEntry> {
     let q = query.trim().to_lowercase();
@@ -601,6 +612,11 @@ mod tests {
             with(6, Interrupted("x".into())),
         ];
         assert_eq!(finished_ids(&list), [2, 4, 5]);
+        assert_eq!(clearable_ids(&list, " "), [2, 4, 5]);
+        assert!(
+            clearable_ids(&list, "report").is_empty(),
+            "a search hides rows: nothing is cleared"
+        );
         assert!(entry(Complete).can_open());
         assert!(!entry(Cancelled).can_open());
         assert!(!entry(Running).can_open());
