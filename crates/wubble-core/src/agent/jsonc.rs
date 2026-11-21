@@ -28,6 +28,8 @@ struct Member {
     key: String,
     /// Where the key's opening quote is.
     start: usize,
+    /// Where the value starts (past the colon and any blanks).
+    value_start: usize,
     /// Just past the value.
     end: usize,
     value: Node,
@@ -180,10 +182,13 @@ impl Scanner<'_> {
                         return self.fail("a key with no colon");
                     }
                     self.i += 1;
+                    self.skip()?;
+                    let value_start = self.i;
                     let value = self.value()?;
                     members.push(Member {
                         key,
                         start,
+                        value_start,
                         end: self.i,
                         value,
                     });
@@ -218,12 +223,38 @@ fn parse(text: &str) -> Result<Node, ParseError> {
     Ok(node)
 }
 
+const BOM: &str = "\u{feff}";
+
+/// A leading byte-order mark, kept as it is, and the text after it.
+fn split_bom(text: &str) -> (&str, &str) {
+    match text.strip_prefix(BOM) {
+        Some(body) => (BOM, body),
+        None => ("", text),
+    }
+}
+
+/// The line end the file uses: CRLF if it has one, else LF.
+fn line_end_of(text: &str) -> &'static str {
+    if text.contains("\r\n") { "\r\n" } else { "\n" }
+}
+
+/// Where the next token is at or after `at` (past blanks and comments).
+fn next_token(text: &str, at: usize) -> Result<usize, ParseError> {
+    let mut sc = Scanner {
+        s: text.as_bytes(),
+        i: at,
+    };
+    sc.skip()?;
+    Ok(sc.i)
+}
+
 /// Whether the text parses as JSONC with an object at the top (an empty file counts as `{}`).
 pub fn check(text: &str) -> Result<(), ParseError> {
-    if text.trim().is_empty() {
+    let (_, body) = split_bom(text);
+    if body.trim().is_empty() {
         return Ok(());
     }
-    parse(text).map(|_| ())
+    parse(body).map(|_| ())
 }
 
 fn members_of(node: &Node) -> Option<&Vec<Member>> {
@@ -242,37 +273,173 @@ fn find<'a>(root: &'a Node, path: &[&str]) -> Option<&'a Node> {
     Some(at)
 }
 
-/// Whether the object at `path` has a member `name`.
-pub fn has(text: &str, path: &[&str], name: &str) -> Result<bool, ParseError> {
-    if text.trim().is_empty() {
-        return Ok(false);
+/// The index of member `name` in `members`; two of that name are refused (which one a program
+/// reads is its own choice).
+fn index_of(members: &[Member], name: &str) -> Result<Option<usize>, ParseError> {
+    let mut found = members.iter().enumerate().filter(|(_, m)| m.key == name);
+    let first = found.next();
+    match (first, found.next()) {
+        (Some(_), Some((_, m))) => Err(ParseError {
+            at: m.start,
+            what: "a second member of the same name",
+        }),
+        (first, _) => Ok(first.map(|(i, _)| i)),
     }
-    let root = parse(text)?;
-    Ok(find(&root, path)
-        .and_then(members_of)
-        .is_some_and(|m| m.iter().any(|m| m.key == name)))
 }
 
-/// The value of member `name` of the object at `path`, as JSON, if it is plain JSON.
-pub fn get(text: &str, path: &[&str], name: &str) -> Result<Option<Value>, ParseError> {
-    if text.trim().is_empty() {
+/// Whether the object at `path` has a member `name`.
+pub fn has(text: &str, path: &[&str], name: &str) -> Result<bool, ParseError> {
+    get_raw(text, path, name).map(|raw| raw.is_some())
+}
+
+/// Member `name`'s value text, if the object at `path` has it.
+fn get_raw<'a>(text: &'a str, path: &[&str], name: &str) -> Result<Option<&'a str>, ParseError> {
+    let (_, body) = split_bom(text);
+    if body.trim().is_empty() {
         return Ok(None);
     }
-    let root = parse(text)?;
-    let member = find(&root, path)
-        .and_then(members_of)
-        .and_then(|m| m.iter().rev().find(|m| m.key == name).cloned());
-    Ok(member.and_then(|m| {
-        let raw = &text[m.start..m.end];
-        let value = raw.split_once(':').map(|(_, v)| v)?;
-        serde_json::from_str(value.trim()).ok()
-    }))
+    let root = parse(body)?;
+    let Some(members) = find(&root, path).and_then(members_of) else {
+        return Ok(None);
+    };
+    Ok(index_of(members, name)?
+        .and_then(|i| members.get(i))
+        .and_then(|m| body.get(m.value_start..m.end)))
+}
+
+/// The value of member `name` of the object at `path`, as JSON (comments in it dropped).
+pub fn get(text: &str, path: &[&str], name: &str) -> Result<Option<Value>, ParseError> {
+    match get_raw(text, path, name)? {
+        None => Ok(None),
+        Some(raw) => serde_json::from_str(&strip_comments(raw))
+            .map(Some)
+            .map_err(|_| ParseError {
+                at: 0,
+                what: "a value that is not JSON",
+            }),
+    }
+}
+
+/// JSONC as JSON: comments blanked, trailing commas dropped; strings kept as they are.
+fn strip_comments(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        match c {
+            b'"' => {
+                out.push(c);
+                i += 1;
+                while let Some(&d) = b.get(i) {
+                    out.push(d);
+                    i += 1;
+                    if d == b'\\' {
+                        if let Some(&e) = b.get(i) {
+                            out.push(e);
+                            i += 1;
+                        }
+                    } else if d == b'"' {
+                        break;
+                    }
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while b.get(i).is_some_and(|d| *d != b'\n') {
+                    out.push(b' ');
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                out.extend_from_slice(b"  ");
+                i += 2;
+                while i < b.len() && !(b[i] == b'*' && b.get(i + 1) == Some(&b'/')) {
+                    out.push(if b[i] == b'\n' { b'\n' } else { b' ' });
+                    i += 1;
+                }
+                out.extend_from_slice(b"  ");
+                i += 2;
+            }
+            b',' => {
+                // a trailing comma: the next token closes
+                let next = next_token(text, i + 1).unwrap_or(b.len());
+                out.push(if matches!(b.get(next), Some(b'}' | b']')) {
+                    b' '
+                } else {
+                    b','
+                });
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// The whole file as JSON (an empty one as `{}`).
+fn to_value(text: &str) -> Result<Value, ParseError> {
+    let (_, body) = split_bom(text);
+    if body.trim().is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    parse(body)?;
+    serde_json::from_str(&strip_comments(body)).map_err(|_| ParseError {
+        at: 0,
+        what: "a file that is not JSON once its comments are gone",
+    })
+}
+
+/// `v` without member `name` at `path`, and without the objects of `path` that are then empty.
+fn without(v: &mut Value, path: &[&str], name: &str) {
+    let Some(obj) = v.as_object_mut() else {
+        return;
+    };
+    match path.split_first() {
+        None => {
+            obj.remove(name);
+        }
+        Some((key, rest)) => {
+            if let Some(child) = obj.get_mut(*key) {
+                without(child, rest, name);
+                if child.as_object().is_some_and(|o| o.is_empty()) {
+                    obj.remove(*key);
+                }
+            }
+        }
+    }
+}
+
+/// The edit from `before` to `after` touched member `name` at `path` only: `after` parses, the
+/// rest of both is the same, and `name` is `value` (added) or gone (`None`).
+fn verify(
+    before: &str,
+    after: &str,
+    path: &[&str],
+    name: &str,
+    value: Option<&Value>,
+) -> Result<(), ParseError> {
+    let fail = |what| Err(ParseError { at: 0, what });
+    let (mut a, mut b) = (to_value(before)?, to_value(after)?);
+    without(&mut a, path, name);
+    without(&mut b, path, name);
+    if a != b {
+        return fail("an edit that would change the rest of the file");
+    }
+    if get(after, path, name)?.as_ref() != value {
+        return fail("an edit that did not come out as asked");
+    }
+    Ok(())
 }
 
 /// The indentation of the line `at` is on.
 fn indent_at(text: &str, at: usize) -> &str {
-    let line = text[..at].rfind('\n').map_or(0, |i| i + 1);
-    let rest = &text[line..];
+    let line = text
+        .get(..at)
+        .and_then(|t| t.rfind('\n'))
+        .map_or(0, |i| i + 1);
+    let rest = text.get(line..).unwrap_or("");
     &rest[..rest.len() - rest.trim_start_matches([' ', '\t']).len()]
 }
 
@@ -286,8 +453,8 @@ fn step_of(text: &str) -> String {
         .to_owned()
 }
 
-/// `value` as pretty JSON whose lines after the first start with `indent`.
-fn pretty(value: &Value, indent: &str, step: &str) -> String {
+/// `value` as pretty JSON whose lines after the first start with `indent`, ended by `nl`.
+fn pretty(value: &Value, indent: &str, step: &str, nl: &str) -> String {
     let text = serde_json::to_string_pretty(value).unwrap_or_default();
     text.lines()
         .enumerate()
@@ -301,20 +468,44 @@ fn pretty(value: &Value, indent: &str, step: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(nl)
+}
+
+fn slice(text: &str, from: usize, to: usize) -> Result<&str, ParseError> {
+    text.get(from..to).ok_or(ParseError {
+        at: from,
+        what: "a span that does not fit the text",
+    })
 }
 
 /// The text with member `name: value` in the object at `path`, made where missing; unchanged
 /// when the object already has a member of that name (whatever its value: the file's owner may
-/// have edited it).
+/// have edited it). The result is checked: it parses and nothing else in it changed.
 pub fn add(text: &str, path: &[&str], name: &str, value: &Value) -> Result<String, ParseError> {
+    let (bom, body) = split_bom(text);
+    let out = add_body(body, path, name, value)?;
+    let Some(out) = out else {
+        return Ok(text.to_owned());
+    };
+    let out = format!("{bom}{out}");
+    verify(text, &out, path, name, Some(value))?;
+    Ok(out)
+}
+
+fn add_body(
+    text: &str,
+    path: &[&str],
+    name: &str,
+    value: &Value,
+) -> Result<Option<String>, ParseError> {
+    let nl = line_end_of(text);
     if text.trim().is_empty() {
-        // build {path..: {name: value}} from the inside out
+        // {path..: {name: value}} from the inside out
         let mut v = serde_json::json!({ name: value.clone() });
         for key in path.iter().rev() {
             v = serde_json::json!({ *key: v });
         }
-        return Ok(format!("{}\n", pretty(&v, "", "  ")));
+        return Ok(Some(format!("{}{nl}", pretty(&v, "", "  ", nl))));
     }
     let root = parse(text)?;
     let step = step_of(text);
@@ -322,14 +513,18 @@ pub fn add(text: &str, path: &[&str], name: &str, value: &Value) -> Result<Strin
     let mut at = &root;
     let mut made = 0;
     for key in path {
-        match members_of(at).and_then(|m| m.iter().rev().find(|m| m.key == *key)) {
+        let members = members_of(at).ok_or(ParseError {
+            at: 0,
+            what: "no object",
+        })?;
+        match index_of(members, key)?.and_then(|i| members.get(i)) {
             Some(m) if matches!(m.value, Node::Object { .. }) => {
                 at = &m.value;
                 made += 1;
             }
-            Some(_) => {
+            Some(m) => {
                 return Err(ParseError {
-                    at: 0,
+                    at: m.start,
                     what: "a key on the way that is not an object",
                 });
             }
@@ -347,81 +542,80 @@ pub fn add(text: &str, path: &[&str], name: &str, value: &Value) -> Result<Strin
             what: "no object",
         });
     };
-    if made == path.len() && members.iter().any(|m| m.key == name) {
-        return Ok(text.to_owned());
+    let (open, close) = (*open, *close);
+    if made == path.len() && index_of(members, name)?.is_some() {
+        return Ok(None);
     }
     // the member to write: the rest of the path around `name: value`
     let (mut key, mut v) = (name, value.clone());
-    for k in path[made..].iter().rev() {
+    for k in path.get(made..).unwrap_or(&[]).iter().rev() {
         v = serde_json::json!({ key: v });
         key = k;
     }
-    let parent_indent = indent_at(text, *open).to_owned();
+    let key = serde_json::to_string(key).unwrap_or_default();
+    let parent_indent = indent_at(text, open).to_owned();
     match members.last() {
         Some(last) => {
             let indent = indent_at(text, last.start).to_owned();
-            let member = format!(
-                "{}: {}",
-                serde_json::to_string(key).unwrap_or_default(),
-                pretty(&v, &indent, &step)
-            );
+            let member = format!("{key}: {}", pretty(&v, &indent, &step, nl));
             // after the last member (and its trailing comma, if the file has one), and after a
             // line comment that ends its line: the comment stays with its member
-            let after = &text[last.end..*close];
-            let comma = after.trim_start().starts_with(',');
-            let past = if comma {
-                last.end + after.find(',').unwrap_or(0) + 1
-            } else {
-                last.end
+            let next = next_token(text, last.end)?;
+            let comma = text.as_bytes().get(next) == Some(&b',');
+            let past = if comma { next + 1 } else { last.end };
+            let rest = slice(text, past, close)?;
+            let line_end = match rest.find('\n') {
+                Some(n) if rest.get(..n).is_some_and(|r| r.ends_with('\r')) => past + n - 1,
+                Some(n) => past + n,
+                None => close,
             };
-            let line_end = text[past..]
-                .find('\n')
-                .map_or(*close, |n| past + n)
-                .min(*close);
-            let rest = text[past..line_end].trim();
-            let at_end = if rest.is_empty() || rest.starts_with("//") {
+            let tail = slice(text, past, line_end)?.trim();
+            let at_end = if tail.is_empty() || (tail.starts_with("//") && !tail.contains('\n')) {
                 line_end
             } else {
                 past
             };
             let (before, between) = if comma {
-                (String::new(), format!("\n{indent}{member},"))
+                (String::new(), format!("{nl}{indent}{member},"))
             } else {
-                (",".to_owned(), format!("\n{indent}{member}"))
+                (",".to_owned(), format!("{nl}{indent}{member}"))
             };
-            Ok(format!(
+            Ok(Some(format!(
                 "{}{before}{}{between}{}",
-                &text[..last.end],
-                &text[last.end..at_end],
-                &text[at_end..]
-            ))
+                slice(text, 0, last.end)?,
+                slice(text, last.end, at_end)?,
+                slice(text, at_end, text.len())?
+            )))
         }
         None => {
             let indent = format!("{parent_indent}{step}");
-            let member = format!(
-                "{}: {}",
-                serde_json::to_string(key).unwrap_or_default(),
-                pretty(&v, &indent, &step)
-            );
-            let inside = &text[open + 1..*close];
-            Ok(format!(
-                "{}\n{indent}{member}\n{parent_indent}{}{}",
-                &text[..open + 1],
-                if inside.trim().is_empty() {
-                    ""
-                } else {
-                    inside.trim()
-                },
-                &text[*close..]
-            ))
+            let member = format!("{key}: {}", pretty(&v, &indent, &step, nl));
+            let inside = slice(text, open + 1, close)?.trim();
+            Ok(Some(format!(
+                "{}{nl}{indent}{member}{nl}{parent_indent}{inside}{}",
+                slice(text, 0, open + 1)?,
+                slice(text, close, text.len())?
+            )))
         }
     }
 }
 
-/// The text without member `name` of the object at `path`; unchanged when it has none.
+/// The text without member `name` of the object at `path`; unchanged when it has none. The cut
+/// follows the members and their commas, never whole lines, so a member that shares its line
+/// with others goes alone. The result is checked as [`add`]'s is.
 pub fn remove(text: &str, path: &[&str], name: &str) -> Result<String, ParseError> {
-    if text.trim().is_empty() {
+    let (bom, body) = split_bom(text);
+    let Some(out) = remove_body(body, path, name)? else {
         return Ok(text.to_owned());
+    };
+    let out = format!("{bom}{out}");
+    verify(text, &out, path, name, None)?;
+    Ok(out)
+}
+
+fn remove_body(text: &str, path: &[&str], name: &str) -> Result<Option<String>, ParseError> {
+    if text.trim().is_empty() {
+        return Ok(None);
     }
     let root = parse(text)?;
     let Some(Node::Object {
@@ -430,51 +624,82 @@ pub fn remove(text: &str, path: &[&str], name: &str) -> Result<String, ParseErro
         close,
     }) = find(&root, path)
     else {
-        return Ok(text.to_owned());
+        return Ok(None);
     };
-    let Some(i) = members.iter().position(|m| m.key == name) else {
-        return Ok(text.to_owned());
+    let (open, close) = (*open, *close);
+    let Some(i) = index_of(members, name)? else {
+        return Ok(None);
     };
+    let bytes = text.as_bytes();
     let m = &members[i];
-    let line_start = |at: usize| text[..at].rfind('\n').unwrap_or(at);
-    let (from, to) = if let Some(next) = members.get(i + 1) {
-        // up to the next member, from the end of the line before this one
-        (line_start(m.start), line_start(next.start))
-    } else if let Some(prev) = i.checked_sub(1).map(|p| &members[p]) {
-        // from the previous member's end (its comma goes), through a trailing comma of ours
-        let after = &text[m.end..];
-        let trailing = after.trim_start().starts_with(',');
-        let to = if trailing {
-            m.end + after.find(',').unwrap_or(0) + 1
-        } else {
-            m.end
-        };
-        // keep a trailing comma style: if ours had one, the previous member's comma stays
-        let from = if trailing {
-            line_start(m.start)
-        } else {
-            prev.end
-        };
-        (from, to)
+    // the comma after this member, if any
+    let after = next_token(text, m.end)?;
+    let comma = (bytes.get(after) == Some(&b',')).then_some(after);
+    // the blanks just before `at`, back to `floor` (never into a comment or a sibling)
+    let blanks_from = |at: usize, floor: usize| {
+        let mut from = at;
+        while from > floor && matches!(bytes.get(from - 1), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            from -= 1;
+        }
+        from
+    };
+    let (from, to) = if members.get(i + 1).is_some() {
+        // first or middle: this member, its comma and the blanks after it; the next member
+        // takes its place
+        let comma = comma.ok_or(ParseError {
+            at: m.end,
+            what: "members with no comma between them",
+        })?;
+        let mut to = comma + 1;
+        while matches!(bytes.get(to), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            to += 1;
+        }
+        (m.start, to)
+    } else if let Some(prev) = i.checked_sub(1).and_then(|p| members.get(p)) {
+        // last: the comma between the two goes, unless this one had its own trailing comma
+        let separator = next_token(text, prev.end)?;
+        if bytes.get(separator) != Some(&b',') {
+            return Err(ParseError {
+                at: prev.end,
+                what: "members with no comma between them",
+            });
+        }
+        let from = blanks_from(m.start, separator + 1);
+        match comma {
+            Some(own) => (from, own + 1),
+            None => {
+                let kept = format!(
+                    "{}{}{}",
+                    slice(text, 0, separator)?,
+                    slice(text, separator + 1, from)?,
+                    slice(text, m.end, text.len())?
+                );
+                return Ok(Some(kept));
+            }
+        }
     } else {
-        // the only member: the object becomes empty
-        let after = &text[m.end..];
-        let to = if after.trim_start().starts_with(',') {
-            m.end + after.find(',').unwrap_or(0) + 1
-        } else {
-            m.end
-        };
-        let from = line_start(m.start);
-        // nothing else inside: back to `{}`
-        if (text[open + 1..from].to_owned() + &text[to..*close])
-            .trim()
-            .is_empty()
-        {
-            return Ok(format!("{}{}", &text[..=*open], &text[*close..]));
+        // the only member: the object becomes empty, `{}` when nothing else is inside
+        let from = blanks_from(m.start, open + 1);
+        let to = comma.map_or(m.end, |c| c + 1);
+        let left = format!(
+            "{}{}",
+            slice(text, open + 1, from)?,
+            slice(text, to, close)?
+        );
+        if left.trim().is_empty() {
+            return Ok(Some(format!(
+                "{}{}",
+                slice(text, 0, open + 1)?,
+                slice(text, close, text.len())?
+            )));
         }
         (from, to)
     };
-    Ok(format!("{}{}", &text[..from], &text[to..]))
+    Ok(Some(format!(
+        "{}{}",
+        slice(text, 0, from)?,
+        slice(text, to, text.len())?
+    )))
 }
 
 #[cfg(test)]
@@ -580,5 +805,132 @@ mod tests {
             Some(json!({"command": "x"}))
         );
         assert_eq!(get(file, PATH, "other").unwrap(), None);
+    }
+
+    /// What the review found: a member sharing its line with others.
+    #[test]
+    fn a_member_on_a_shared_line_goes_alone() {
+        // (a) the only member, on one line with its object's key
+        let a = "{\n  \"mcpServers\": {\"wubble\": {\"command\": \"x\"}}\n}\n";
+        assert_eq!(
+            remove(a, PATH, "wubble").unwrap(),
+            "{\n  \"mcpServers\": {}\n}\n"
+        );
+        // (b) last, with a trailing comma, after a sibling on the same line
+        let b =
+            "{\"mcpServers\": {\"git\": {\"command\": \"g\"}, \"wubble\": {\"command\": \"x\"},}}";
+        assert_eq!(
+            remove(b, PATH, "wubble").unwrap(),
+            "{\"mcpServers\": {\"git\": {\"command\": \"g\"},}}"
+        );
+        // (c) first, on the line of its object's key, the next member below
+        let c =
+            "{\n  \"mcpServers\": {\"wubble\": {\"command\": \"x\"},\n    \"git\": {}\n  }\n}\n";
+        assert_eq!(
+            remove(c, PATH, "wubble").unwrap(),
+            "{\n  \"mcpServers\": {\"git\": {}\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn single_line_files_and_every_position() {
+        let cases = [
+            ("{\"mcpServers\":{\"wubble\":1}}", "{\"mcpServers\":{}}"),
+            ("{\"mcpServers\":{\"wubble\":1,}}", "{\"mcpServers\":{}}"),
+            (
+                "{\"mcpServers\":{\"wubble\":1,\"b\":2}}",
+                "{\"mcpServers\":{\"b\":2}}",
+            ),
+            (
+                "{\"mcpServers\":{\"a\":0,\"wubble\":1,\"b\":2}}",
+                "{\"mcpServers\":{\"a\":0,\"b\":2}}",
+            ),
+            (
+                "{\"mcpServers\":{\"a\":0, \"wubble\":1}}",
+                "{\"mcpServers\":{\"a\":0}}",
+            ),
+            (
+                "{\"mcpServers\":{\"a\":0, \"wubble\":1,}}",
+                "{\"mcpServers\":{\"a\":0,}}",
+            ),
+            (
+                "{\"mcpServers\":{\"a\":0, /* c */ \"wubble\":1 /* d */, \"b\":2}}",
+                "{\"mcpServers\":{\"a\":0, /* c */ \"b\":2}}",
+            ),
+        ];
+        for (file, want) in cases {
+            assert_eq!(remove(file, PATH, "wubble").unwrap(), want, "{file}");
+        }
+    }
+
+    #[test]
+    fn crlf_files_get_crlf_lines_and_a_bom_stays() {
+        let file = "\u{feff}{\r\n  \"mcpServers\": {\r\n    \"git\": {}\r\n  }\r\n}\r\n";
+        let added = add(file, PATH, "wubble", &entry()).unwrap();
+        assert!(added.starts_with('\u{feff}'));
+        assert!(!added.replace("\r\n", "").contains('\n'), "{added:?}");
+        assert!(has(&added, PATH, "wubble").unwrap());
+        assert_eq!(remove(&added, PATH, "wubble").unwrap(), file);
+        let empty = add("\u{feff}", PATH, "wubble", &entry()).unwrap();
+        assert!(empty.starts_with('\u{feff}') && has(&empty, PATH, "wubble").unwrap());
+    }
+
+    #[test]
+    fn two_members_of_that_name_refuse_the_file() {
+        let file = "{\"mcpServers\": {\"wubble\": 1, \"wubble\": 2}}";
+        assert!(add(file, PATH, "wubble", &entry()).is_err());
+        assert!(remove(file, PATH, "wubble").is_err());
+        assert!(has(file, PATH, "wubble").is_err());
+    }
+
+    /// Every layout of a few members, separators, comments and line ends: removing `wubble` from
+    /// any position parses and keeps the rest; adding to a layout without it and removing again
+    /// gives the same bytes.
+    #[test]
+    fn generated_layouts_keep_the_rest() {
+        let members = |n: usize, at: Option<usize>| -> Vec<String> {
+            (0..n)
+                .map(|i| {
+                    if Some(i) == at {
+                        "\"wubble\": {\"command\": \"w\"}".to_owned()
+                    } else {
+                        format!("\"m{i}\": [{i}, {{\"k\": \"v,}}\"}}]")
+                    }
+                })
+                .collect()
+        };
+        let seps = [
+            ",",
+            ", ",
+            ",\n    ",
+            ",\r\n    ",
+            ", // c\n    ",
+            " /* c */ ,\n    ",
+        ];
+        let mut count = 0;
+        for n in 1..=4 {
+            for at in (0..n).map(Some).chain([None]) {
+                for sep in seps {
+                    for trailing in [false, true] {
+                        for open in ["{", "{\n    ", "{ // o\n    "] {
+                            let body = members(n, at).join(sep);
+                            let tail = if trailing { "," } else { "" };
+                            let file = format!(
+                                "{{\n  \"x\": 1,\n  \"mcpServers\": {open}{body}{tail}\n  }}\n}}\n"
+                            );
+                            check(&file).unwrap();
+                            let removed = remove(&file, PATH, "wubble").unwrap();
+                            assert!(!has(&removed, PATH, "wubble").unwrap(), "{file}");
+                            if at.is_none() {
+                                let added = add(&file, PATH, "wubble", &entry()).unwrap();
+                                assert_eq!(remove(&added, PATH, "wubble").unwrap(), file);
+                            }
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(count > 400);
     }
 }
