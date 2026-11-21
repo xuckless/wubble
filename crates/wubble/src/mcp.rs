@@ -436,11 +436,6 @@ pub fn relay(path: &Path) -> io::Result<()> {
             return answer_offline(io::stdin().lock(), io::stdout().lock());
         }
     };
-    #[cfg(unix)]
-    if !crate::instance::peer_is_me(&stream) {
-        eprintln!("wubble mcp: refused socket owned by another user");
-        return answer_offline(io::stdin().lock(), io::stdout().lock());
-    }
     let stream = Arc::new(stream);
     let send = Arc::clone(&stream);
     std::thread::Builder::new()

@@ -321,16 +321,50 @@ pub fn sweep(runtime: &Path) {
 #[cfg(not(unix))]
 pub fn sweep(_runtime: &Path) {}
 
-/// Whether the peer on `stream` runs as this effective user.
+/// Whether the peer on `stream` runs as this effective user. The uid is read from the socket
+/// itself (Linux `SO_PEERCRED`, macOS and the BSDs `getpeereid`), not through interprocess's
+/// `peer_creds`, which refuses a peer in another PID namespace (a sandboxed `wubble`: its pid
+/// reads 0 here) though its uid is known.
 #[cfg(unix)]
 pub(crate) fn peer_is_me(stream: &Stream) -> bool {
+    use std::os::fd::{AsFd, AsRawFd};
+    let Stream::UdSocket(socket) = stream;
     // SAFETY: geteuid has no preconditions and cannot fail.
     let me = unsafe { libc::geteuid() };
-    stream
-        .peer_creds()
-        .ok()
-        .and_then(|c| c.euid())
-        .is_some_and(|uid| uid == me)
+    peer_uid(socket.as_fd().as_raw_fd()) == Some(me)
+}
+
+/// The effective uid of the peer of the connected Unix socket `fd`.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(fd: std::os::fd::RawFd) -> Option<libc::uid_t> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `cred` and `len` are valid for writes of the sizes given; `fd` is borrowed from a
+    // live stream for the length of the call.
+    let got = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut cred).cast(),
+            &raw mut len,
+        )
+    };
+    (got == 0 && len as usize == std::mem::size_of::<libc::ucred>()).then_some(cred.uid)
+}
+
+/// The effective uid of the peer of the connected Unix socket `fd`.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn peer_uid(fd: std::os::fd::RawFd) -> Option<libc::uid_t> {
+    let (mut uid, mut gid) = (0, 0);
+    // SAFETY: both out pointers are valid for writes; `fd` is borrowed from a live stream for the
+    // length of the call.
+    let got = unsafe { libc::getpeereid(fd, &raw mut uid, &raw mut gid) };
+    (got == 0).then_some(uid)
 }
 
 /// Accepts later starts on `listener` until the process ends, handing each one's message to
@@ -500,6 +534,19 @@ mod tests {
             private_root_from("linux", |_| None, PathBuf::from("rel")),
             PathBuf::from("/tmp")
         );
+    }
+
+    /// Both ends of a connection by this user see this user on the other end.
+    #[cfg(unix)]
+    #[test]
+    fn a_peer_of_this_user_is_me() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.sock");
+        let listener = bind_instance(&path).unwrap();
+        let client = Stream::connect(path.to_fs_name::<GenericFilePath>().unwrap()).unwrap();
+        let server = listener.accept().unwrap();
+        assert!(peer_is_me(&server));
+        assert!(peer_is_me(&client));
     }
 
     #[cfg(unix)]
