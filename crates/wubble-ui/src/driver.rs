@@ -435,9 +435,12 @@ impl Driver {
         window.set_page_enter(overlap_in(self.page_t) as f32);
         // The outgoing page (the host's copy of its last frame, `exit-page`) leaves under the
         // incoming one; once gone, or when reduced motion skips the exit, the copy is dropped on
-        // the edge without reading `get_exit_page()` inside `BeforeRendering`.
+        // the edge without reading `get_exit_page()` inside `BeforeRendering`. A copy the host
+        // took when no switch hid the tab (the shown tab changed into a split, or to none) is
+        // dropped at once, on that change.
         window.set_exit_t(tween(ease::inOut, self.exit_t, PAGE_OUT) as f32);
-        if (prev_exit_t < PAGE_OUT || switched) && self.exit_t >= PAGE_OUT {
+        let ended = (prev_exit_t < PAGE_OUT || switched) && self.exit_t >= PAGE_OUT;
+        if ended || (was != tab && !switched) {
             window.set_exit_page(slint::Image::default());
         }
         self.page_t < OVERLAP_IN || self.exit_t < PAGE_OUT

@@ -11,8 +11,8 @@ use i_slint_backend_testing::{
     ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
 use slint::platform::PointerEventButton;
-use slint::{ComponentHandle, Image, LogicalSize, Rgba8Pixel, SharedPixelBuffer};
-use wubble_ui::{AppWindow, DialogView, ErrorView, GlanceView, driver};
+use slint::{ComponentHandle, Image, LogicalSize, ModelRc, Rgba8Pixel, SharedPixelBuffer};
+use wubble_ui::{AppWindow, DialogView, ErrorView, GlanceView, SplitPane, driver};
 
 fn opacity_of(app: &AppWindow, label: &str) -> Option<f32> {
     ElementHandle::find_by_accessible_label(app, label)
@@ -95,6 +95,25 @@ fn outgoing_page_plays_and_is_dropped(app: &AppWindow) {
     assert_eq!(app.get_exit_page().size().width, 0, "dropped once gone");
 }
 
+/// The host copies the hidden tab's last frame, but no switch hid it (the shown tab went into a
+/// split): the copy is dropped at once, not kept until some later switch ends.
+fn outgoing_page_without_a_switch_is_dropped(app: &AppWindow) {
+    let wired = driver::wire(app, wubble_core::seam::Seam::new());
+    let driver = wired.driver;
+    app.set_active_tab_id(1);
+    for _ in 0..30 {
+        driver.borrow_mut().advance(app, 0.016);
+    }
+    let pixels = SharedPixelBuffer::<Rgba8Pixel>::new(4, 4);
+    app.set_exit_page(Image::from_rgba8(pixels));
+    app.set_panes(ModelRc::from(vec![SplitPane::default(); 2].as_slice()));
+    app.set_active_tab_id(2);
+    driver.borrow_mut().advance(app, 0.016);
+    assert_eq!(app.get_exit_t(), 1.0, "no switch: nothing plays");
+    assert_eq!(app.get_exit_page().size().width, 0, "dropped at once");
+    app.set_panes(ModelRc::default());
+}
+
 fn glance_card_promotes_closes_and_leaves(app: &AppWindow) {
     let log = Rc::new(RefCell::new(vec![]));
     let l = log.clone();
@@ -161,4 +180,5 @@ fn exits_keep_their_view() {
     error_panel_leaves_with_its_view(&app);
     glance_card_promotes_closes_and_leaves(&app);
     outgoing_page_plays_and_is_dropped(&app);
+    outgoing_page_without_a_switch_is_dropped(&app);
 }
