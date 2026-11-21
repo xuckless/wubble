@@ -90,6 +90,10 @@ pub struct VideoState {
     /// The element has MediaKeys attached (EME: Widevine, PlayReady, FairPlay, ClearKey): its
     /// stream is protected, whatever the downloader saw of it.
     pub drm: bool,
+    /// Not a video: the area of an embedded frame the page kit cannot reach into (a
+    /// cross-origin player), where only the save control is offered, over what the downloader
+    /// saw of the page.
+    pub frame: bool,
 }
 
 impl VideoState {
@@ -123,6 +127,7 @@ impl VideoState {
             muted: flag("muted"),
             doc: finite(num("doc").unwrap_or(0.0)).unwrap_or(0.0),
             drm: flag("drm"),
+            frame: flag("frame"),
         })
     }
 
@@ -604,15 +609,19 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
     }
 }
 
-/// The strip's save button: what the media downloader offers for the page and how the latest
+/// The strip's save control: where the downloader stands for the page and how the latest
 /// download started from it stands. Derived at each draw from the downloader's own state (the
 /// tab's list of streams, the downloads list's entry); nothing of it is kept here.
+///
+/// The rule: whenever the strip shows over a video the control is there (the downloader on), and
+/// pressing it either saves or says why it cannot (protected, live, YouTube's lookup off, nothing
+/// found): a missing control reads as "this browser never saw my video".
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Save {
-    /// No button: nothing the downloader can save, or protected media (DRM).
+    /// No control: the downloader is off (`media.enabled`).
     Absent,
     Offered,
-    /// A download from the page runs (or is paused, or interrupted); its fraction, to the
+    /// A download from the page runs (or is paused); its fraction, to the
     /// percent, once the size is known.
     Saving(Option<f32>),
     Saved,
@@ -620,22 +629,31 @@ pub enum Save {
 }
 
 impl Save {
-    /// The button for `video`, from the tab's streams (`media`: the downloader's list, empty
-    /// while it is off or saw nothing) and the downloads entry of the latest download from the page. DRM is
-    /// absolute: an element with MediaKeys, or a stream of the page the downloader refused as
-    /// protected, takes the button away, whatever else the page offers.
-    pub fn of(video: &VideoState, media: &[Detected], latest: Option<&DownloadEntry>) -> Save {
+    /// The control for the strip over `video`, with the downloads entry of the latest download
+    /// from the page. `enabled`: the downloader is on. Protected media (an element with
+    /// MediaKeys, or a stream the downloader refused as protected) keeps the control, which
+    /// then explains: the menu never offers such a video, whatever else the page lists.
+    pub fn of(
+        video: &VideoState,
+        media: &[Detected],
+        latest: Option<&DownloadEntry>,
+        enabled: bool,
+    ) -> Save {
         let protected = video.drm
             || media
                 .iter()
                 .any(|i| i.found == Found::Refused(Refusal::Protected));
-        let ready = media.iter().any(|i| matches!(i.found, Found::Ready(_)));
-        if protected || !ready {
+        if !enabled {
             return Save::Absent;
+        }
+        if protected {
+            return Save::Offered;
         }
         match latest.map(|e| (&e.state, e.fraction())) {
             Some((DownloadState::Complete, _)) => Save::Saved,
-            Some((DownloadState::Failed(_), _)) => Save::Failed,
+            // An interrupted download waits for a resume in the downloads list; the strip
+            // does not pretend it is still saving.
+            Some((DownloadState::Failed(_) | DownloadState::Interrupted(_), _)) => Save::Failed,
             Some((state, fraction)) if state.is_active() => {
                 Save::Saving(fraction.map(|f| (f * 100.0).round() / 100.0))
             }
@@ -700,6 +718,7 @@ mod tests {
             muted: false,
             doc: 1.0,
             drm: false,
+            frame: false,
         }
     }
 
@@ -1133,37 +1152,38 @@ mod tests {
     }
 
     #[test]
-    fn the_save_button_is_offered_only_for_what_the_downloader_can_save() {
+    fn the_save_control_is_there_whenever_the_downloader_is_on() {
         let v = video();
-        // Nothing seen (or the downloader off), only streams still resolving, live or broken.
-        assert_eq!(Save::of(&v, &[], None), Save::Absent);
+        // Nothing seen, streams still resolving, live or broken: the control stays, and its
+        // menu says why there is nothing to save.
+        assert_eq!(Save::of(&v, &[], None, true), Save::Offered);
         let unsaveable = media(&[
             Found::Resolving,
             Found::Refused(Refusal::Live),
             Found::Refused(Refusal::Failed("x".into())),
         ]);
-        assert_eq!(Save::of(&v, &unsaveable, None), Save::Absent);
-        assert!(!Save::Absent.offered());
-        // A stream ready to save.
+        assert_eq!(Save::of(&v, &unsaveable, None, true), Save::Offered);
         let page = media(&[Found::Resolving, ready()]);
-        assert_eq!(Save::of(&v, &page, None), Save::Offered);
-        assert!(Save::Offered.offered());
+        assert_eq!(Save::of(&v, &page, None, true), Save::Offered);
+        // Only the setting takes it away.
+        assert_eq!(Save::of(&v, &page, None, false), Save::Absent);
+        assert!(!Save::Absent.offered() && Save::Offered.offered());
     }
 
     #[test]
-    fn protected_media_never_gets_the_save_button() {
+    fn protected_media_keeps_the_control_but_never_saves() {
         let page = media(&[ready()]);
-        // The element has MediaKeys: protected, whatever the downloader saw.
+        // The element has MediaKeys: protected, whatever the downloader saw; a running or
+        // finished download of the page does not change that.
         let drm = VideoState {
             drm: true,
             ..video()
         };
-        assert_eq!(Save::of(&drm, &page, None), Save::Absent);
+        assert_eq!(Save::of(&drm, &page, None, true), Save::Offered);
         let running = entry(DownloadState::Running, 1, Some(2));
-        assert_eq!(Save::of(&drm, &page, Some(&running)), Save::Absent);
-        // A stream of the page the downloader refused as protected, beside a saveable one.
+        assert_eq!(Save::of(&drm, &page, Some(&running), true), Save::Offered);
         let mixed = media(&[ready(), Found::Refused(Refusal::Protected)]);
-        assert_eq!(Save::of(&video(), &mixed, None), Save::Absent);
+        assert_eq!(Save::of(&video(), &mixed, None, true), Save::Offered);
         // The snapshot reads the flag.
         let v = serde_json::json!({"x": 0, "y": 0, "w": 1, "h": 1, "drm": true});
         assert!(VideoState::from_json(&v).unwrap().drm);
@@ -1172,7 +1192,7 @@ mod tests {
     #[test]
     fn the_save_button_follows_the_latest_download() {
         let (v, page) = (video(), media(&[ready()]));
-        let at = |e: DownloadEntry| Save::of(&v, &page, Some(&e));
+        let at = |e: DownloadEntry| Save::of(&v, &page, Some(&e), true);
         assert_eq!(
             at(entry(DownloadState::Running, 1, Some(3))),
             Save::Saving(Some(0.33))
@@ -1183,7 +1203,7 @@ mod tests {
         );
         assert_eq!(
             at(entry(DownloadState::Interrupted("net".into()), 0, Some(2))),
-            Save::Saving(Some(0.0))
+            Save::Failed
         );
         // Size unknown: saving, no fraction.
         assert_eq!(

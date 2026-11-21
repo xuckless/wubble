@@ -234,11 +234,6 @@ export global Shell {
     out property <length> video-knob: 10px;
     // The strip's widest: compact in the video's corner, the page's own controls left free.
     out property <length> video-strip-width: 380px;
-    // The narrowest video the strip offers its save button on: the strip's widest and one more
-    // tile (410). Narrower, the strip has no room for it (its other tiles, the speed and the
-    // inset take about 340, and the scrubber keeps some room to travel); the address pill's
-    // glyph still offers the save.
-    out property <length> video-save-min: self.video-strip-width + self.icon-button;
     // The picture-in-picture window (Chromium's overlay window opens about this size, and goes
     // no smaller than its controls need).
     out property <length> pip-min-width: 240px;

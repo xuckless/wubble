@@ -741,7 +741,7 @@ impl Host {
     // ----- bookmarks
 
     /// Applies `edit` (or only reads), then draws from the store's rows.
-    fn bookmarks_request(&mut self, edit: Option<BookmarkEdit>) {
+    pub(super) fn bookmarks_request(&mut self, edit: Option<BookmarkEdit>) {
         self.store.bookmarks(edit.map(|e| (e, now_ms())), |page| {
             let _ = slint::invoke_from_event_loop(move || {
                 with_host(|host| host.bookmarks_arrived(page));

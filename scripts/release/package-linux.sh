@@ -8,9 +8,10 @@
 #   wubble-<V>-linux-x86_64.debug.tar.xz   the split debug symbols (not shipped in the bundle)
 #   *.sha256                               `sha256sum` lines for each
 #
-# The bundle's one top folder holds wubble, wubble-helper, the CEF runtime, release.json, the
-# desktop entry and icons under share/, and the notices (LICENSE, THIRD_PARTY_NOTICES.md,
-# CREDITS.html, SOURCE.md). wubble finds libcef.so through its RUNPATH ($ORIGIN). chrome-sandbox
+# The bundle's one top folder holds wubble, wubble-helper, wubble-ffmpeg (a stream-copy-only
+# ffmpeg, built by build-ffmpeg.sh), the CEF runtime, release.json, the desktop entry and icons
+# under share/, and the notices (LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.html, SOURCE.md,
+# COPYING.LGPLv2.1). wubble finds libcef.so through its RUNPATH ($ORIGIN). chrome-sandbox
 # ships without the setuid bit (an install without root cannot set it): CEF then uses the
 # user-namespace sandbox.
 #
@@ -73,6 +74,8 @@ if [ "$build" = 1 ]; then
     CARGO_PROFILE_DIST_STRIP=none CARGO_PROFILE_DIST_DEBUG=line-tables-only \
         cargo build --locked --profile dist -p wubble -p wubble-helper
 fi
+say "ffmpeg for stream copy (scripts/release/build-ffmpeg.sh; downloads the pinned source once)"
+"$repo/scripts/release/build-ffmpeg.sh" --out "$repo/dist/ffmpeg"
 for b in wubble wubble-helper; do
     [ -x "$bin/$b" ] || die "$bin/$b is missing (build first, or drop --no-build)"
 done
@@ -94,6 +97,11 @@ for b in wubble wubble-helper; do
     objcopy --add-gnu-debuglink="$debug/$b.debug" "$stage/$b"
 done
 
+cp "$repo/dist/ffmpeg/wubble-ffmpeg" "$stage/wubble-ffmpeg"
+cp "$repo/dist/ffmpeg/COPYING.LGPLv2.1" "$stage/COPYING.LGPLv2.1"
+ffmpeg_version=$(sed -n 's/^ffmpeg \([^ ]*\) .*/\1/p' "$repo/dist/ffmpeg/ffmpeg-build.txt")
+ffmpeg_config=$(sed -n 's/^ffmpeg [^ ]* [^ ]* [^ ]* //p' "$repo/dist/ffmpeg/ffmpeg-build.txt")
+
 say "copying the CEF runtime"
 for f in libcef.so libvk_swiftshader.so libvulkan.so.1 vk_swiftshader_icd.json chrome-sandbox \
     icudtl.dat v8_context_snapshot.bin chrome_100_percent.pak chrome_200_percent.pak resources.pak; do
@@ -110,6 +118,7 @@ cp assets/icons/linux/wubble.desktop "$stage/share/applications/wubble.desktop"
 cp -R assets/icons/linux/hicolor "$stage/share/icons/hicolor"
 cp LICENSE "$stage/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$stage/THIRD_PARTY_NOTICES.md"
+cp crates/wubble-engine/assets/dictionaries/README_en_US.txt "$stage/DICTIONARY_NOTICE_en_US.txt"
 if [ -f "$cef_dir/CREDITS.html" ]; then
     cp "$cef_dir/CREDITS.html" "$stage/CREDITS.html"
 elif [ "$prebuilt" = 1 ]; then
@@ -131,6 +140,12 @@ v$version of https://github.com/xuckless/wubble (git clone, then git checkout v$
 It embeds the Chromium Embedded Framework built from $cef_name with proprietary codecs, by
 scripts/build-cef.sh in that source (docs/research/cef-codec-build.md); Chromium's own source
 and licences: https://chromium.googlesource.com/chromium/src and CREDITS.html.
+
+wubble-ffmpeg is FFmpeg $ffmpeg_version, a separate program under the GNU Lesser General Public
+License 2.1 or later (COPYING.LGPLv2.1), built unmodified from the upstream release
+https://ffmpeg.org/releases/ffmpeg-$ffmpeg_version.tar.xz with scripts/release/build-ffmpeg.sh in
+the wubble source (configured: $ffmpeg_config). It copies a video's streams between containers and
+changes nothing in them. To use another build, set WUBBLE_FFMPEG to its path.
 EOF
 
 say "packing"

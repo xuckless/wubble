@@ -94,7 +94,13 @@ rand = "0.8"
 dispatch2 = "0.3"
 # The OS reduced-motion preference (`os_motion.rs`); the version already in Cargo.lock through
 # wubble-ui and wubble-engine (Zlib OR Apache-2.0 OR MIT).
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "block2", "NSApplication", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSFilePromiseProvider", "NSImage", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSView"] }
+# Drags out of and into the window (`wl/macos.rs`): the versions already in Cargo.lock through
+# objc2-app-kit and winit (MIT; raw-window-handle MIT OR Apache-2.0 OR Zlib).
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSEnumerator", "NSError", "NSGeometry", "NSObject", "NSString", "NSURL"] }
+block2 = "0.6"
+raw-window-handle = "0.6"
 
 # The OS reduced-motion preference (`os_motion.rs`, "Animation effects"); the version already in
 # Cargo.lock through wubble-sysmem (MIT OR Apache-2.0).

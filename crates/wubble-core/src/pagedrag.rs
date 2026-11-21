@@ -54,6 +54,10 @@ pub trait Payload: Clone {
     fn link(&self) -> Option<&str>;
     /// The selection's plain text.
     fn text(&self) -> Option<&str>;
+    /// The link's title.
+    fn title(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// What a drop on the shell opens or fills: the link, else the text.
@@ -81,6 +85,10 @@ pub enum Shell {
     SpacesTrigger,
     /// A Space row of the open Spaces popup.
     Space(SpaceId),
+    /// The bookmarks page: into this folder (`None`: the top level).
+    Bookmarks {
+        folder: Option<i64>,
+    },
 }
 
 /// Where the pointer is during a drag.
@@ -196,6 +204,12 @@ pub enum Effect<P> {
         text: String,
         space: SpaceId,
     },
+    /// A bookmark of this link, with its title (`None`: the URL), in this folder.
+    Bookmark {
+        url: String,
+        title: Option<String>,
+        folder: Option<i64>,
+    },
     /// Show this tab (the drag rested on its row).
     Activate(TabId),
     OpenSpaces,
@@ -210,7 +224,17 @@ pub enum Effect<P> {
 
 /// What a drop of `text` (a link or text) on `at` does; the switcher takes none. A drag from
 /// another app dropped on the shell does the same.
-pub fn shell_drop<P>(at: Shell, text: String) -> Option<Effect<P>> {
+pub fn shell_drop<P: Payload, Q>(at: Shell, data: &P) -> Option<Effect<Q>> {
+    if let Shell::Bookmarks { folder } = at {
+        // a link only: text is no bookmark
+        let url = data.link().map(str::trim).filter(|u| !u.is_empty())?;
+        return Some(Effect::Bookmark {
+            url: url.to_owned(),
+            title: data.title().map(str::to_owned),
+            folder,
+        });
+    }
+    let text = dropped_text(data)?;
     match at {
         Shell::List { index, .. } => Some(Effect::OpenTab {
             text,
@@ -219,7 +243,7 @@ pub fn shell_drop<P>(at: Shell, text: String) -> Option<Effect<P>> {
         Shell::NewTab => Some(Effect::OpenTab { text, index: None }),
         Shell::Bar => Some(Effect::FillBar(text)),
         Shell::Space(space) => Some(Effect::OpenInSpace { text, space }),
-        Shell::SpacesTrigger => None,
+        Shell::SpacesTrigger | Shell::Bookmarks { .. } => None,
     }
 }
 
@@ -235,7 +259,7 @@ pub fn drop_operation(allowed: DragOps) -> DragOps {
 /// What a drop on the shell does: a copy (or a link) when it carries a link or text and the
 /// target takes it; the switcher only opens the popup.
 fn shell_operation<P: Payload>(data: &P, allowed: DragOps, at: Shell) -> DragOps {
-    if at == Shell::SpacesTrigger || dropped_text(data).is_none() {
+    if shell_drop::<P, P>(at, data).is_none() {
         return DragOps::NONE;
     }
     drop_operation(DragOps(allowed.0 & (DragOps::COPY.0 | DragOps::LINK.0)))
@@ -460,9 +484,7 @@ pub fn transition<P: Payload>(
                 }
                 Over::Shell(s) => {
                     let op = shell_operation(&d.data, d.allowed, s);
-                    let open = dropped_text(&d.data)
-                        .filter(|_| op != DragOps::NONE)
-                        .and_then(|text| shell_drop(s, text));
+                    let open = shell_drop(s, &d.data).filter(|_| op != DragOps::NONE);
                     (op, open)
                 }
                 Over::Elsewhere => (DragOps::NONE, None),
@@ -1038,5 +1060,25 @@ mod tests {
             Input::Released(Over::Shell(Shell::NewTab)),
         );
         assert_eq!(fx, [E::Leave { tab: A }, E::End(DragOps::NONE)]);
+    }
+
+    #[test]
+    fn a_link_on_the_bookmarks_page_is_a_bookmark_text_is_not() {
+        let at = Over::Shell(Shell::Bookmarks { folder: Some(7) });
+        let (s, fx) = mv(started(link()), at, 5);
+        assert!(fx.contains(&E::Mark(Some(Shell::Bookmarks { folder: Some(7) }))));
+        let (_, fx) = transition(s, Input::Released(at));
+        assert_eq!(
+            fx.last(),
+            Some(&E::Bookmark {
+                url: "https://a.test/".into(),
+                title: None,
+                folder: Some(7)
+            })
+        );
+        let (s, fx) = mv(started(text()), at, 5);
+        assert!(fx.contains(&E::Feedback(DragOps::NONE)));
+        let (_, fx) = transition(s, Input::Released(at));
+        assert_eq!(fx.last(), Some(&E::End(DragOps::NONE)));
     }
 }

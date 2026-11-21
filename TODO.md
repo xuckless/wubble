@@ -18,8 +18,7 @@ built but not released: they need the patched engine, which the release engine i
 Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
 `~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
 and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
-Owner decisions waiting: the spellcheck dictionary (its download was one of Chromium's own requests, now off);
-whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
+Owner decisions waiting: whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
 this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
 `WUBBLE_SMOKE_KEYRING=os` there before the release).
 
@@ -69,8 +68,8 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Autofill: offer the login form a page shows right after a submit (the save check consumes that report today)
 - [ ] Autofill: re-probe Reddit (bot wall) and Wikipedia (redirects to auth.wikimedia.org) logins by hand
 - [ ] Agent sign-ins: copy a site's localStorage/IndexedDB too (DevTools DOMStorage needs a live page per container; MSAL, Firebase and SPA tokens live there)
-- [ ] Agent sign-ins: the key menu in a shared site's session tab (now off: with it on, `fill_secret`'s focus check failed in `--smoke mcp`)
 - [ ] Agent sign-ins: CHIPS-partitioned cookies arrive unpartitioned (CEF's cookie struct has no partition key)
+- [ ] Agent sign-ins: `--smoke mcp` under load failed once in 87 loaded runs with the session's first request to the shared site carrying no cookie ("sent: none") after the copy answered; not reproduced or traced yet (the copy's report was not printed)
 - [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
@@ -80,7 +79,10 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 ## Hardening pass: built-in pages and their data (2026-11-21, open findings; checklist in the report)
 - [ ] Task manager on Linux with the sandbox: each renderer is pid 1 in its own PID namespace, so a tab cannot be tied to its renderer (tab rows have no memory, CPU or End) and renderers are listed as "Zygote"; needs a way to ask CEF's browser process for a tab's renderer pid
 - [ ] List pages (History, Bookmarks, Downloads, Archive): a row cannot be opened from the keyboard (only its Delete is a Tab stop; a screen reader's default action opens it); no select, delete selection, undo, copy address or keyboard open in a new tab; a bookmark folder is deleted with its contents by one press; needs a focusable kit row and a design for selection and undo
-- [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page)
+- [ ] Media downloader: the Mac `wubble-ffmpeg` (scripts/release/build-ffmpeg.sh, signed in package-macos.sh) is written, never run: build and notarise it on the Mac, then try a YouTube pair and an HLS download in the app
+- [ ] Media downloader: YouTube's player API answered "Sign in to confirm you're not a bot" to the `android_vr` client from the dev box (shown to the user now, not worked around); its format URLs' own fetch is untried; an owner call: allow one 1 MB ranged fetch from a free video, and say which sites the owner tried
+- [ ] Media downloader: a DASH manifest of several periods is refused ("Not supported"); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)
+- [ ] Downloads: Retry restarts from any tab of the download's container, not the tab it came from (a login-gated file can come back as a sign-in page)
 - [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
 - [ ] `--smoke data` runs each process on its own CEF cache: a cookie cleared right before a SIGKILL and read after the next start is not checked
 
@@ -99,6 +101,7 @@ Open, for the owner's eye:
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
 - [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
+- [ ] Media downloader: a video a service worker answers is not seen by the detection (the worker's own fetch has no tab; `--smoke media=probe` on fixtures `sw`): the save control says nothing was found; fullscreen shows the strip without its glass (the scene does not render there): look by hand; an embedded YouTube player (an iframe of youtube.com) has no lookup, since the lookup keys on the tab's own address
 - [ ] Video strip button reads "Save video"; a second click mid-download re-enters the downloader
 - [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
 
@@ -113,7 +116,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
+- [ ] Spell check in other languages: the English dictionary is bundled; add an opt-in (off by default) download of others, from `redirector.gvt1.com` or a mirror, into `<profile>/Dictionaries`
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -133,9 +136,10 @@ Open, to build or check:
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
 - [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
-- [ ] Drag out on macOS (`Aux` impl: NSDraggingSource, pasteboard items with the link, text, HTML and a promised file for a picture) and Windows (the stub: `wl::Null`); written for neither yet
+- [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
+- [ ] Drag out on Windows (the stub: `wl::Null`)
 - [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
-- [ ] A page drag dropped on the bookmarks page or a folder row makes a bookmark (the built-in pages take no drop yet); text or a link onto an open command bar's field (the pill only)
+- [ ] A bookmark dropped into a folder row lands at its end; Chrome's drop line between rows (a position) waits for drag reorder of bookmarks
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)

@@ -138,6 +138,12 @@ impl Host {
         let policy = self.autofill_policy(tab, event.origin().map(str::to_owned));
         let state = self.autofill.tabs.remove(&tab).unwrap_or_default();
         let (next, effects) = autofill::transition(state, event, policy);
+        if autofill::view(&next).chip && self.checks.mcp_smoke.is_some() && self.agent_drives(tab) {
+            let origin = self.page_url(tab).and_then(|u| autofill::web_origin(&u));
+            if let (Some(run), Some(origin)) = (self.checks.mcp_smoke.as_mut(), origin) {
+                run.key_chips.insert(origin);
+            }
+        }
         if next != AutofillState::default() {
             self.autofill.tabs.insert(tab, next);
         }
@@ -159,12 +165,17 @@ impl Host {
         let never_save = origin.is_some_and(|o| {
             self.site_permissions.get(&o, Permission::SavePasswords) == Some(Decision::Block)
         });
-        // an agent session's tab: no key menu and no save prompt (its sign-ins come by
-        // `fill_secret`; the key menu took the field's focus from it: TODO.md)
-        let session = self.agent_grant_of(tab).is_some();
+        // an agent session's tab: the key menu only on a site whose sign-ins the owner shared
+        // with it (for the owner watching; what it fills is the agent's as `fill_secret`'s
+        // is: `agent_autofilled`), and never a save prompt
+        let session = self.agent_grant_of(tab).map(|(_, grant)| grant);
+        let page = self.page_url(tab);
+        let menu = session
+            .as_ref()
+            .is_none_or(|g| page.as_deref().is_some_and(|u| g.signs_in(u)));
         Policy {
-            autofill: self.autofill.settings.autofill && !session,
-            offer_to_save: self.autofill.settings.offer_to_save && !session,
+            autofill: self.autofill.settings.autofill && menu,
+            offer_to_save: self.autofill.settings.offer_to_save && session.is_none(),
             never_save,
         }
     }
@@ -307,6 +318,7 @@ impl Host {
         if let Some(view) = self.tab_view(tab) {
             view.send_frame_message(frame, FrameChannel::Autofill, text.expose());
         }
+        self.agent_autofilled(tab, origin, fields.iter().map(|(_, v)| v.clone()));
     }
 
     /// Writes the visible tab's autofill into the shell when it changed (a

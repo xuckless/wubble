@@ -30,6 +30,7 @@ mod media_smoke;
 mod memory;
 mod menu;
 mod nav_smoke;
+mod net_audit;
 mod orbs;
 mod os_motion;
 mod os_scope;
@@ -57,6 +58,7 @@ mod shell;
 mod shot;
 mod shot_io;
 mod slint_backend;
+mod spell_smoke;
 mod split_smoke;
 mod sponsor_net;
 mod start_smoke;
@@ -127,6 +129,8 @@ pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 /// `--smoke pinch`'s fixture, served on loopback (`autofill_smoke::serve`).
 pub const PINCH_PAGE: &str = include_str!("../assets/pinch.html");
+/// `--smoke spell`'s fixture, served on loopback.
+pub const SPELL_PAGE: &str = include_str!("../assets/spell.html");
 pub const DND_PAGE: &str = include_str!("../assets/dnd.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
@@ -208,6 +212,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("smoke: quit FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Spell) => match with_smoke_dir(spell_smoke::run) {
+            Ok(line) => {
+                println!("smoke: spell ok {line}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: spell FAILED: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -381,7 +395,7 @@ fn main() -> ExitCode {
                 }
                 Smoke::Pages => Mode::Pages,
                 Smoke::Autofill { probe } => Mode::Autofill { probe },
-                Smoke::Media => Mode::Media,
+                Smoke::Media { probe } => Mode::Media { probe },
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
@@ -401,6 +415,7 @@ fn main() -> ExitCode {
                 Smoke::Boot
                 | Smoke::Update
                 | Smoke::Quit
+                | Smoke::Spell
                 | Smoke::Codecs { .. }
                 | Smoke::Extensions { .. }
                 | Smoke::Session
@@ -742,6 +757,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                 .env("PATH", std::env::join_paths(dirs)?)
                 // no session bus: Show in folder would otherwise reach the person's file manager
                 .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+                // the quit run's net log is audited below (a killed run leaves none to read)
+                .env(
+                    "WUBBLE_PROBE_SWITCHES",
+                    net_audit::probe_switch(&profile.join(data_smoke::NET_LOG)),
+                )
                 .status()?;
             match ending {
                 data_smoke::Ending::Quit if !status.success() => {
@@ -751,6 +771,11 @@ fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(format!("the {word} run was not killed: {status}").into());
                 }
                 _ => {}
+            }
+            if ending == data_smoke::Ending::Quit {
+                let log = std::fs::read_to_string(profile.join(data_smoke::NET_LOG))?;
+                let report = net_audit::audit(&log)?;
+                println!("smoke: data: {}", report.line());
             }
             let shown = std::fs::read_to_string(profile.join(data_smoke::SUMMARY))?;
             let db = Profile {
@@ -905,8 +930,8 @@ enum Mode {
     Gallery,
     /// `--smoke autofill`, or with `probe` its hand-run look at a real page.
     Autofill { probe: Option<String> },
-    /// `--smoke media`.
-    Media,
+    /// `--smoke media`, or with `probe` its hand-run look at a page.
+    Media { probe: Option<String> },
     /// `--smoke builtins`.
     Builtins,
     /// `--smoke video`.
@@ -1426,6 +1451,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     });
     window.on_bookmarks_query_changed(move |q| with_host_in(win, |host| host.bookmarks_query(&q)));
     window.on_bookmark_toggled(move |id| with_host_in(win, |host| host.bookmark_toggled(id)));
+    window.on_bookmark_drop_hovered(move |id, on| {
+        with_host_in(win, |host| host.bookmark_drop_hovered(id, on))
+    });
     window.on_bookmark_rename_requested(move |id| {
         with_host_in(win, |host| host.bookmark_rename_requested(id))
     });
@@ -1577,7 +1605,7 @@ fn run(
         .then(data_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
-    let media_port = matches!(mode, Mode::Media)
+    let media_port = matches!(mode, Mode::Media { probe: None })
         .then(media_smoke::serve)
         .transpose()?;
     // `--smoke video`'s and `--smoke boost`'s pages and fake endpoint, on a loopback port.
@@ -1632,6 +1660,12 @@ fn run(
                     mcp_smoke::SIGNIN_USER.into(),
                     mcp_smoke::SIGNIN_PASSWORD.into(),
                 ),
+                // and one on the site it visits unshared: its key chip must not show there
+                (
+                    format!("http://{}:{port}", mcp_smoke::OTHER_HOST),
+                    "other-user".into(),
+                    "other-pass".into(),
+                ),
             ],
         };
         seed_autofill_logins(&store, logins);
@@ -1663,6 +1697,7 @@ fn run(
         autofill_smoke: None,
         windows_smoke: None,
         media_smoke: None,
+        media_probe: None,
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
@@ -1808,10 +1843,17 @@ fn run(
                 },
             )
         }
-        Mode::Media => (
+        Mode::Media { probe: None } => (
             media_port.map(|port| format!("http://127.0.0.1:{port}/")),
             Checks {
                 media_smoke: Some(media_smoke::MediaSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Media { probe: Some(url) } => (
+            Some(url.clone()),
+            Checks {
+                media_probe: Some(media_smoke::Probe::from_env()),
                 ..none
             },
         ),

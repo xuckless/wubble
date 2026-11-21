@@ -5,7 +5,8 @@
 //! (`crate::clipboard`): a client has one `wl_data_device` per seat, or the
 //! compositor stops offering the selection to the clipboard's. Elsewhere none,
 //! and these come from winit where it has them (macOS pinch, X11, macOS and
-//! Windows file drops).
+//! Windows file drops); on macOS drags out and drops in come from `macos.rs` (not yet run on a
+//! Mac). Windows: none yet (TODO.md).
 
 use wubble_core::gesture::{PinchInput, SwipeInput};
 use wubble_core::window::WindowId;
@@ -14,6 +15,8 @@ use wubble_engine::page::{DragData, DragOps};
 
 #[cfg(target_os = "linux")]
 pub mod drag_file;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod wayland;
 

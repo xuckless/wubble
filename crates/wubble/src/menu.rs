@@ -993,8 +993,8 @@ pub struct MediaRow<'a> {
 }
 
 /// The media menu: per stream a title line, then a row per way to save it (or why it cannot be
-/// saved).
-pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
+/// saved). Without a muxer (`can_join`) a row for separate video and audio says it is two files.
+pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
     use wubble_core::media::detect::Found;
     let info = |label: String| Entry {
         label,
@@ -1005,6 +1005,13 @@ pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
         danger: false,
     };
     let mut out = Vec::new();
+    if rows.is_empty() {
+        // The strip's control was pressed and the downloader has nothing for the page.
+        return vec![
+            info("Nothing to save was found on this page".into()),
+            info("A player that streams in small pieces may not be offered".into()),
+        ];
+    }
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
             out.push(Entry {
@@ -1019,14 +1026,30 @@ pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
         out.push(info(row.title.to_owned()));
         match row.found {
             Found::Resolving => out.push(info("Reading the stream\u{2026}".into())),
-            Found::Refused(refusal) => out.push(info(refusal.message())),
+            Found::Refused(refusal) => {
+                out.push(info(refusal.message()));
+                if *refusal == wubble_core::media::Refusal::LookupOff {
+                    out.push(Entry {
+                        label: "Open Settings".into(),
+                        command: Command::Perform(Action::OpenSettings),
+                        enabled: true,
+                        icon: "",
+                        shortcut: String::new(),
+                        danger: false,
+                    });
+                }
+            }
             Found::Ready(variants) => {
                 out.extend(
                     wubble_core::media::select::choices(variants)
                         .into_iter()
                         .enumerate()
                         .map(|(choice, c)| Entry {
-                            label: format!("Save {}", c.label),
+                            label: if c.pair && !can_join {
+                                format!("Save {} \u{b7} video and audio as two files", c.label)
+                            } else {
+                                format!("Save {}", c.label)
+                            },
                             command: Command::SaveMedia {
                                 item: row.item,
                                 choice,
@@ -1294,7 +1317,7 @@ mod tests {
                 found: &resolving,
             },
         ];
-        let entries = media_entries(&rows);
+        let entries = media_entries(&rows, true);
         let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -1315,6 +1338,74 @@ mod tests {
         );
         assert!(entries[1].enabled && !entries[4].enabled);
         assert_eq!(entries[2].command, Command::Separator);
+    }
+
+    #[test]
+    fn a_youtube_lookup_that_is_off_points_to_settings() {
+        use wubble_core::media::Refusal;
+        use wubble_core::media::detect::Found;
+        let off = Found::Refused(Refusal::LookupOff);
+        let failed = Found::Refused(Refusal::Failed("YouTube: Sign in".into()));
+        let rows = [
+            MediaRow {
+                item: 0,
+                title: "A",
+                found: &off,
+            },
+            MediaRow {
+                item: 1,
+                title: "B",
+                found: &failed,
+            },
+        ];
+        let e = media_entries(&rows, true);
+        let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "A",
+                "YouTube format lookup is off",
+                "Open Settings",
+                "",
+                "B",
+                "Cannot read the stream: YouTube: Sign in"
+            ]
+        );
+        assert_eq!(e[2].command, Command::Perform(Action::OpenSettings));
+        assert!(e[2].enabled);
+    }
+
+    #[test]
+    fn a_pair_without_a_muxer_says_it_is_two_files() {
+        use wubble_core::media::detect::Found;
+        use wubble_core::media::{Container, Track, Variant};
+        let mut video = Variant::file(
+            "https://a.test/v.mp4",
+            Track::Video,
+            Container::Mp4,
+            None,
+            false,
+        );
+        video.height = Some(720);
+        let audio = Variant::file(
+            "https://a.test/a.m4a",
+            Track::Audio,
+            Container::M4a,
+            None,
+            false,
+        );
+        let found = Found::Ready(vec![video, audio]);
+        let rows = [MediaRow {
+            item: 0,
+            title: "Clip",
+            found: &found,
+        }];
+        let label = |join| media_entries(&rows, join)[1].label.clone();
+        assert_eq!(label(true), "Save 720p \u{b7} MP4");
+        assert_eq!(
+            label(false),
+            "Save 720p \u{b7} MP4 \u{b7} video and audio as two files"
+        );
     }
 
     #[test]
@@ -1669,6 +1760,17 @@ mod tests {
         assert_eq!(
             label.chars().filter(|&c| c == 'x').count(),
             SEARCH_LABEL_CHARS
+        );
+    }
+
+    #[test]
+    fn the_save_control_with_nothing_to_save_says_so() {
+        let entries = media_entries(&[], false);
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.command == Command::Info && !e.enabled)
         );
     }
 

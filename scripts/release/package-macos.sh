@@ -13,6 +13,10 @@
 # with `xcrun notarytool store-credentials <name> --apple-id ... --team-id ...`). Nothing edits
 # the bundle after it is signed: the updater and install.sh copy it as is.
 #
+# The app carries wubble-ffmpeg in Contents/MacOS (a stream-copy-only ffmpeg, built here by
+# build-ffmpeg.sh: it needs only Xcode's command line tools), signed with the hardened runtime like
+# every other executable, so notarisation passes.
+#
 # Not run in CI; written without a Mac at hand: check each step on first use.
 set -eu
 
@@ -69,9 +73,17 @@ app=$("$bin/wubble-bundle")
 [ -d "$app" ] || die "wubble-bundle made no app ($app)"
 say "bundled $app"
 
+say "ffmpeg for stream copy (scripts/release/build-ffmpeg.sh; downloads the pinned source once)"
+"$repo/scripts/release/build-ffmpeg.sh" --out "$repo/dist/ffmpeg"
+cp "$repo/dist/ffmpeg/wubble-ffmpeg" "$app/Contents/MacOS/wubble-ffmpeg"
+ffmpeg_version=$(sed -n 's/^ffmpeg \([^ ]*\) .*/\1/p' "$repo/dist/ffmpeg/ffmpeg-build.txt")
+ffmpeg_config=$(sed -n 's/^ffmpeg [^ ]* [^ ]* [^ ]* //p' "$repo/dist/ffmpeg/ffmpeg-build.txt")
+
 res=$app/Contents/Resources
+cp "$repo/dist/ffmpeg/COPYING.LGPLv2.1" "$res/COPYING.LGPLv2.1"
 printf '{"version":"%s","platform":"%s","commit":"%s"}\n' "$version" "$platform" "$commit" >"$res/release.json"
 cp LICENSE THIRD_PARTY_NOTICES.md "$res/"
+cp crates/wubble-engine/assets/dictionaries/README_en_US.txt "$res/DICTIONARY_NOTICE_en_US.txt"
 if [ -f "$cef_dir/CREDITS.html" ]; then cp "$cef_dir/CREDITS.html" "$res/CREDITS.html"; fi
 cef_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$cef_dir/archive.json")
 cat >"$res/SOURCE.md" <<EOF
@@ -83,6 +95,12 @@ The complete corresponding source of this build ($version, commit $commit) is th
 v$version of https://github.com/xuckless/wubble. It embeds the Chromium Embedded Framework
 built from $cef_name with proprietary codecs (docs/research/cef-codec-build.md in that source);
 Chromium's source and licences: https://chromium.googlesource.com/chromium/src and CREDITS.html.
+
+wubble-ffmpeg (Contents/MacOS) is FFmpeg $ffmpeg_version, a separate program under the GNU Lesser
+General Public License 2.1 or later (COPYING.LGPLv2.1), built unmodified from the upstream release
+https://ffmpeg.org/releases/ffmpeg-$ffmpeg_version.tar.xz with scripts/release/build-ffmpeg.sh in
+the wubble source (configured: $ffmpeg_config). It copies a video's streams between containers and
+changes nothing in them. To use another build, set WUBBLE_FFMPEG to its path.
 EOF
 
 entitlements=$repo/scripts/release/macos/entitlements.plist
@@ -91,6 +109,9 @@ sign() {
     codesign --force --timestamp --options runtime --entitlements "$entitlements" \
         --sign "$WUBBLE_SIGN_IDENTITY" "$1"
 }
+# The ffmpeg runs plain: the hardened runtime and a timestamp, none of the browser's entitlements.
+say "signing Contents/MacOS/wubble-ffmpeg"
+codesign --force --timestamp --options runtime --sign "$WUBBLE_SIGN_IDENTITY" "$app/Contents/MacOS/wubble-ffmpeg"
 # Inside out: the framework's libraries, the framework, each helper app, then the app.
 frameworks=$app/Contents/Frameworks
 find "$frameworks" -name '*.dylib' -type f | while read -r lib; do sign "$lib"; done

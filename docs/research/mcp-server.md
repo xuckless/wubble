@@ -216,9 +216,14 @@ credentials, passkeys: not carried.
    field made visible by a show-password toggle, or a page that shows the value, shows it), and a page that echoes
    the value changed (split, reversed, encoded) into its text slips past the redaction. The sheet says this in one
    sentence where a login is bound. The activity page records each `fill_secret` as its name and origin.
-5. A session's tabs get no autofill and never offer to save a password. (Planned: the normal key chip on a shared
-   site, for the owner watching a windowed session. Built and taken out: with the key menu on, the agent's click on
-   the username field left it unfocused for `fill_secret`'s check; open in TODO.md.)
+5. A session's tabs never offer to save a password, and get the key chip only on a site whose sign-ins the owner
+   shared with the session (for the owner watching a windowed session); what the owner fills there is the session's
+   as a `fill_secret`'s is (the tab tainted, the values redacted). It was first built and taken out because the
+   agent's click on the username field then failed `fill_secret`'s focus check every time: the check was a script
+   sent at once after the click, which overtook the click (another pipe to the renderer) and found the focus where
+   it was before; the autofill script's own work on the page widened that window. Every input tool now waits for
+   the page's acknowledgement of its input before it checks or answers (decisions.md "Agent input waits for the
+   page"), and the chip is back.
 
 **(c) Visible and revocable.** The sheet states which sites' sign-ins and which logins are shared; the activity page
 records each copy and each fill; Stop and the dustbin remove the copies (the container goes).

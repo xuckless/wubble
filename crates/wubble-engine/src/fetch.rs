@@ -131,7 +131,9 @@ cef::wrap_urlrequest_client! {
                     accepted(status, self.ranged).map(|()| status)
                 }
                 _ if request.request_status() == cef::UrlrequestStatus::CANCELED => Err("cancelled".into()),
-                _ => Err(format!("network error {}", *request.request_error().as_ref() as i32)),
+                _ => Err(wubble_core::neterror::transfer_failure(
+                    *request.request_error().as_ref() as i32,
+                )),
             };
             self.queue
                 .lock()

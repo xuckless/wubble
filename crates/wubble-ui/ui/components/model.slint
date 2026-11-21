@@ -828,6 +828,8 @@ export struct VideoView {
     rate-index: int,
     speeds: bool,
     can-pip: bool,
+    // an embedded frame's area, not a video: only the save control is offered
+    frame: bool,
     save: VideoSave,
     // while saving: 0..1, below 0 while the size is unknown
     save-fraction: float,
@@ -994,4 +996,14 @@ export struct DropGeometry {
     new-tab-y: length,
     new-tab-w: length,
     new-tab-h: length,
+}
+
+// A drag over the bookmarks page (components/pages.slint): the pointer while `on`, and the
+// folder whose row is lit while `folder-on`.
+export struct BookmarksDrop {
+    on: bool,
+    x: length,
+    y: length,
+    folder-on: bool,
+    folder: int,
 }

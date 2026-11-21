@@ -1387,6 +1387,8 @@ pub struct McpSmoke {
     pub signin_container: Option<wubble_core::space::ContainerId>,
     /// The activity log's copy line was written.
     pub copy_logged: bool,
+    /// The origins a session's tab offered the owner's logins on (the key chip).
+    pub key_chips: std::collections::BTreeSet<String>,
     /// A [`Press::ShareBindAllow`] sheet waits for the vault's list before it is answered.
     pub waiting_vault: bool,
     pub deadline: slint::Timer,

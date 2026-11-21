@@ -170,6 +170,8 @@ pub enum Spot {
     NewTab,
     /// The address pill.
     Bar,
+    /// The open command bar's query field.
+    CommandField,
     /// A point in the `n`-th pane on screen (left to right).
     Pane(usize, Point),
 }
@@ -206,6 +208,11 @@ pub enum HostOp {
     SplitHome,
     /// A second tab on the smoke's page, the first still shown.
     SecondTab,
+    /// The bookmarks page in a second tab, the first still shown.
+    BookmarksTab,
+    /// Text dragged in from another app and dropped here (the platform's drop events, as the
+    /// Wayland worker or macOS's view deliver them).
+    DropTextFromApp(Spot, &'static str),
     /// The window as drawn, to `--shot-dir`'s `NN-<name>.png`.
     Shot(&'static str),
     ZoomReset,
@@ -316,6 +323,8 @@ pub enum HostCheck {
     PageEntered,
     /// The command bar's field holds this text (the start page's capsule is that field too).
     BarQuery(&'static str),
+    /// A bookmark of a URL with this in it.
+    Bookmarked(&'static str),
     /// The start page's capsule holds the keys.
     CapsuleFocused,
     /// The find bar's field holds this text.

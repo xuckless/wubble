@@ -896,6 +896,8 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
         // `--smoke pinch`'s page (`?prevent` read by the page itself).
         "/pinch" => crate::PINCH_PAGE.to_owned(),
+        // `--smoke spell`'s textarea.
+        "/spell" => crate::SPELL_PAGE.to_owned(),
         "/dnd" => crate::DND_PAGE.to_owned(),
         "/dnd/linked" => {
             "<!doctype html><meta charset=utf-8><title>linked</title>linked".to_owned()

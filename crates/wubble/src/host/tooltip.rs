@@ -52,7 +52,9 @@ impl Host {
 
     /// The page in `tab` shows a tooltip under the pointer (`text`), or none (empty).
     pub(super) fn page_tooltip(&mut self, tab: TabId, text: String) {
-        if text.is_empty() {
+        // none while a page drag is on: Chromium's tooltip timer can still fire after the drag
+        // began (from the hover that preceded it), and Chrome shows no tooltip mid-drag
+        if text.is_empty() || self.drag.page_dragging().is_some() {
             self.tips.page = None;
             self.tip_leave(TipKey::Page(tab));
         } else {

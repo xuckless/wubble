@@ -53,6 +53,11 @@ export component CommandBar inherits Rectangle {
 
     out property <duration> exit: Calm.ms(BrowserCss.wb-cmd-out--animation-duration);
     out property <int> shown-rows: list.count;
+    // The query field's box in window coordinates: where a drag drops into the bar.
+    out property <length> head-x: head.absolute-position.x;
+    out property <length> head-y: head.absolute-position.y;
+    out property <length> head-w: head.width;
+    out property <length> head-h: head.height;
     out property <int> selected-row: list.current;
     property <bool> open: root.state == CommandBarState.open;
     out property <string> placeholder: root.mode == CommandMode.split ? "Open beside this page"
