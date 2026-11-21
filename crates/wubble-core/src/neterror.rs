@@ -20,6 +20,7 @@ pub const NAMES: &[(i32, &str)] = &[
     (-10, "ERR_ACCESS_DENIED"),
     (-20, "ERR_BLOCKED_BY_CLIENT"),
     (-21, "ERR_NETWORK_CHANGED"),
+    (-100, "ERR_CONNECTION_CLOSED"),
     (-101, "ERR_CONNECTION_RESET"),
     (-102, "ERR_CONNECTION_REFUSED"),
     (-104, "ERR_CONNECTION_FAILED"),
@@ -50,6 +51,8 @@ pub const NAMES: &[(i32, &str)] = &[
     (-310, "ERR_TOO_MANY_REDIRECTS"),
     (-312, "ERR_UNSAFE_PORT"),
     (-324, "ERR_EMPTY_RESPONSE"),
+    (-354, "ERR_CONTENT_LENGTH_MISMATCH"),
+    (-355, "ERR_INCOMPLETE_CHUNKED_ENCODING"),
 ];
 
 /// "ERR_NAME_NOT_RESOLVED", or "ERR_-123" for a code the table lacks.
@@ -58,6 +61,21 @@ pub fn name(code: i32) -> String {
         .iter()
         .find(|(c, _)| *c == code)
         .map_or_else(|| format!("ERR_{code}"), |(_, n)| (*n).to_string())
+}
+
+/// A transfer that broke off, in a few words: a media download's reason, where the error
+/// panel's page-sized sentences do not fit.
+pub fn transfer_failure(code: i32) -> String {
+    let words = match code {
+        -100 | -101 | -324 | -354 | -355 => "the connection closed before the end of the file",
+        -102 | -104 => "the server refused the connection",
+        -105 => "the server's address could not be found",
+        -106 | -21 => "the network went away",
+        -7 | -118 => "the connection timed out",
+        c if is_cert(c) => "the server's certificate is not valid",
+        _ => "the transfer failed",
+    };
+    format!("{words} ({})", name(code))
 }
 
 /// A certificate error: Chromium's -200 to -219 range (`-220` is the
@@ -168,11 +186,21 @@ mod tests {
         for (code, want) in pinned {
             assert_eq!(name(code), want);
         }
-        assert_eq!(NAMES.len(), 36);
+        assert_eq!(NAMES.len(), 39);
         let mut codes: Vec<i32> = NAMES.iter().map(|(c, _)| *c).collect();
         codes.dedup();
         assert_eq!(codes.len(), NAMES.len(), "duplicate code");
         assert_eq!(name(-999), "ERR_-999");
+    }
+
+    #[test]
+    fn a_broken_transfer_is_said_in_words() {
+        assert_eq!(
+            transfer_failure(-354),
+            "the connection closed before the end of the file (ERR_CONTENT_LENGTH_MISMATCH)"
+        );
+        assert!(transfer_failure(-105).starts_with("the server's address"));
+        assert!(transfer_failure(-999).starts_with("the transfer failed (ERR_-999"));
     }
 
     #[test]

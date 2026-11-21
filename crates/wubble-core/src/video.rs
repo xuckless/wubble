@@ -612,7 +612,7 @@ pub enum Save {
     /// No button: nothing the downloader can save, or protected media (DRM).
     Absent,
     Offered,
-    /// A download from the page runs (or is paused, or interrupted); its fraction, to the
+    /// A download from the page runs (or is paused); its fraction, to the
     /// percent, once the size is known.
     Saving(Option<f32>),
     Saved,
@@ -635,7 +635,9 @@ impl Save {
         }
         match latest.map(|e| (&e.state, e.fraction())) {
             Some((DownloadState::Complete, _)) => Save::Saved,
-            Some((DownloadState::Failed(_), _)) => Save::Failed,
+            // An interrupted download waits for a resume in the downloads list; the strip
+            // does not pretend it is still saving.
+            Some((DownloadState::Failed(_) | DownloadState::Interrupted(_), _)) => Save::Failed,
             Some((state, fraction)) if state.is_active() => {
                 Save::Saving(fraction.map(|f| (f * 100.0).round() / 100.0))
             }
@@ -1182,7 +1184,7 @@ mod tests {
         );
         assert_eq!(
             at(entry(DownloadState::Interrupted("net".into()), 0, Some(2))),
-            Save::Saving(Some(0.0))
+            Save::Failed
         );
         // Size unknown: saving, no fraction.
         assert_eq!(
