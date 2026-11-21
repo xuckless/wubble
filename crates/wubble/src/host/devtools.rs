@@ -245,9 +245,9 @@ impl Host {
                 let opener = self.devtools.dock.tab();
                 self.dispatch(new_tab(request.url, opener));
             }
-            WebEvent::KeyUnhandled(key) => {
+            WebEvent::KeyUnhandled { key, editable } => {
                 if let Some(action) = self.page_first.unhandled(key) {
-                    self.perform(action);
+                    self.perform_unhandled(action, editable);
                 }
             }
             _ => {}

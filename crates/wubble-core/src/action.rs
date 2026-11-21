@@ -11,6 +11,9 @@ pub enum Action {
     CloseTab,
     DuplicateTab,
     ReopenClosedTab,
+    /// Mod+Z: the focused field's undo, else the last tab closed this run back
+    /// (`closed`, Safari's Undo Close Tab).
+    UndoCloseTab,
     NewWindow,
     /// Close the focused window (the last Main window quits).
     CloseWindow,
@@ -112,11 +115,12 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 67] = [
+const FIXED: [(&str, Action); 68] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("duplicate-tab", Action::DuplicateTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
+    ("undo-close-tab", Action::UndoCloseTab),
     ("new-window", Action::NewWindow),
     ("close-window", Action::CloseWindow),
     ("move-tab-to-new-window", Action::MoveTabToNewWindow),
@@ -244,10 +248,12 @@ impl Action {
 
     /// Whether the action is an edit command (undo, cut, copy ...): a shell text field
     /// may have the focus without the shell knowing, so these never run from shell focus.
+    /// Undo close tab is one: its key is a field's undo first.
     pub fn is_edit(self) -> bool {
         matches!(
             self,
             Action::Undo
+                | Action::UndoCloseTab
                 | Action::Redo
                 | Action::Cut
                 | Action::Copy
@@ -274,7 +280,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 30] = [
+pub const PALETTE: [ActionInfo; 31] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -294,6 +300,11 @@ pub const PALETTE: [ActionInfo; 30] = [
         action: Action::ReopenClosedTab,
         title: "Reopen closed tab",
         keywords: "undo restore",
+    },
+    ActionInfo {
+        action: Action::UndoCloseTab,
+        title: "Undo close tab",
+        keywords: "reopen restore closed tab",
     },
     ActionInfo {
         action: Action::Reload,
@@ -435,7 +446,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 85);
+        assert_eq!(all.len(), 86);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -451,6 +462,7 @@ mod tests {
         assert_eq!(
             edits,
             [
+                Action::UndoCloseTab,
                 Action::Undo,
                 Action::Redo,
                 Action::Cut,
@@ -466,7 +478,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 85);
+        assert_eq!(ids.len(), 86);
     }
 
     #[test]

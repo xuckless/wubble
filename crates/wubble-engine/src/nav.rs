@@ -151,8 +151,12 @@ pub enum WebEvent {
     /// itself.
     RendererGone,
     /// The page left this key-down alone (CEF `OnKeyEvent`): a page-first
-    /// shortcut may run now.
-    KeyUnhandled(KeyId),
+    /// shortcut may run now. `editable`: the page's focus was on an editable
+    /// element then (CEF's `focus_on_editable_field`).
+    KeyUnhandled {
+        key: KeyId,
+        editable: bool,
+    },
 }
 
 /// What the view shows, as far as the host cares.

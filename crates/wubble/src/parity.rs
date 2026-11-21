@@ -215,6 +215,9 @@ pub enum HostOp {
     BookmarksTab,
     /// The next tab shown, as Ctrl+Tab shows it.
     NextTab,
+    /// The n-th tab (0-based) of the active Space closed, as its row's close button closes it
+    /// (the keys stay where they are).
+    CloseTab(usize),
     /// Text dragged in from another app and dropped here (the platform's drop events, as the
     /// Wayland worker or macOS's view deliver them).
     DropTextFromApp(Spot, &'static str),
@@ -532,6 +535,118 @@ pub const ITEMS: &[Item] = &[
             Keys("Ctrl+Z Ctrl+Y")
         ],
         [J("eq($('inp').value, 'ab')")]
+    ),
+    // Mod+Z after a close (`wubble_core::closed`): the tab back at its place, shown; again, the
+    // close before. Never while a field has the keys (with or without something to undo), nor
+    // when the page takes the key itself. Pressed on a fresh copy of the page: on one typed in
+    // before, Blink's Undo takes the key for the document's last edit (as in Chrome).
+    item!(
+        "A.undo-close-tab",
+        [
+            Host(HostOp::SecondTab),
+            Host(HostOp::SecondTab),
+            Host(HostOp::BookmarksTab),
+            Until(H(C::Tabs(4))),
+            Until(H(C::TabUrl(1, "bookmarks"))),
+            Host(HostOp::NextTab),
+            Host(HostOp::NextTab),
+            Until(H(C::Visible(2))),
+            Until(H(C::PageEntered)),
+            Host(HostOp::CloseTab(1)),
+            Until(H(C::Tabs(3))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+Z"),
+            Until(H(C::Tabs(4)))
+        ],
+        [H(C::TabUrl(1, "bookmarks")), H(C::Visible(1))]
+    ),
+    item!(
+        "A.undo-close-twice",
+        [
+            Host(HostOp::SecondTab),
+            Host(HostOp::SecondTab),
+            Host(HostOp::BookmarksTab),
+            Until(H(C::Tabs(4))),
+            Host(HostOp::NextTab),
+            Host(HostOp::NextTab),
+            Until(H(C::Visible(2))),
+            Until(H(C::PageEntered)),
+            Host(HostOp::CloseTab(1)),
+            Until(H(C::Tabs(3))),
+            Host(HostOp::CloseTab(2)),
+            Until(H(C::Tabs(2))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+Z"),
+            Until(H(C::Tabs(3))),
+            Until(H(C::Visible(2))),
+            Until(H(C::PageEntered)),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+Z"),
+            Until(H(C::Tabs(4)))
+        ],
+        [
+            H(C::TabUrl(1, "bookmarks")),
+            H(C::TabUrl(2, "/parity")),
+            H(C::TabUrl(3, "/parity")),
+            H(C::Visible(1))
+        ]
+    ),
+    item!(
+        "A.undo-close-not-in-field",
+        [
+            Host(HostOp::SecondTab),
+            Host(HostOp::SecondTab),
+            Until(H(C::Tabs(3))),
+            Host(HostOp::NextTab),
+            Until(H(C::Visible(1))),
+            Until(H(C::PageEntered)),
+            Js("parity.field('inp', '')"),
+            Type("ab"),
+            Until(J("eq($('inp').value, 'ab')")),
+            Host(HostOp::CloseTab(2)),
+            Until(H(C::Tabs(2))),
+            Keys("Ctrl+Z"),
+            Until(J("eq($('inp').value, '')")),
+            Settle(30)
+        ],
+        [J("eq($('inp').value, '')"), H(C::Tabs(2))]
+    ),
+    item!(
+        "A.undo-close-not-in-empty-field",
+        [
+            Host(HostOp::SecondTab),
+            Host(HostOp::SecondTab),
+            Until(H(C::Tabs(3))),
+            Host(HostOp::NextTab),
+            Until(H(C::Visible(1))),
+            Until(H(C::PageEntered)),
+            Js("parity.field('inp', '')"),
+            // the browser hears of the focus on its own channel (CEF `OnFocusChangedInPage`),
+            // not in order with the key's report: give it the moment a person always does
+            Settle(10),
+            Host(HostOp::CloseTab(2)),
+            Until(H(C::Tabs(2))),
+            Keys("Ctrl+Z"),
+            Until(J(
+                "seen.keys.some((k) => k.endsWith('z/KeyZ')) || seen.keys.join()"
+            )),
+            Settle(30)
+        ],
+        [H(C::Tabs(2)), J("eq(document.activeElement.id, 'inp')")]
+    ),
+    item!(
+        "A.undo-close-page-owns-key",
+        [
+            Host(HostOp::SecondTab),
+            Until(H(C::Tabs(2))),
+            Js("seen.ownUndo = true"),
+            Host(HostOp::CloseTab(1)),
+            Until(H(C::Tabs(1))),
+            Keys("Ctrl+Z"),
+            Until(J("seen.keys.includes('undone') || seen.keys.join()")),
+            Settle(30)
+        ],
+        [H(C::Tabs(1))]
     ),
     item!(
         "A.word-moves",
@@ -1278,6 +1393,27 @@ pub const ITEMS: &[Item] = &[
             Keys("Ctrl+Shift+Z")
         ],
         [H(C::BarQuery("ab"))]
+    ),
+    item!(
+        "G.bar-undo-close",
+        [
+            // not a second copy of the page: one opened after E.ctrl-wheel-zoom comes up at the
+            // site's 110 % and leaves the page there
+            Host(HostOp::BookmarksTab),
+            Until(H(C::Tabs(2))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Keys("BackSpace"),
+            Type("ab"),
+            Until(H(C::BarQuery("ab"))),
+            Host(HostOp::CloseTab(1)),
+            Until(H(C::Tabs(1))),
+            Keys("Ctrl+Z"),
+            Until(H(C::BarQuery(""))),
+            Settle(30)
+        ],
+        [H(C::BarQuery("")), H(C::Tabs(1))]
     ),
     // Both ways between a shell field and a page's.
     item!(

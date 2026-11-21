@@ -10,7 +10,7 @@ use wubble_core::space::{ContainerId, SpaceId};
 use crate::*;
 
 /// Most entries kept; older ones are dropped on push.
-pub const RECENTLY_CLOSED_MAX: usize = 25;
+pub use wubble_core::closed::RECENTLY_CLOSED_MAX;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosedTab {

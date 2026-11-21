@@ -693,6 +693,8 @@ impl Host {
     }
 
     fn history_clear(&mut self, what: HistoryClear) {
+        // it deletes recently-closed entries too: this run's closes may be gone from the list
+        self.close_undo(wubble_core::closed::Event::Forget);
         // Reload as many rows as are shown, so "Show more" pages survive a delete.
         let shown = self.pages.history.rows.len().max(HISTORY_PAGE);
         self.store.clear_history(what, move |_| {

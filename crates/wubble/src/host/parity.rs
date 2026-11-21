@@ -599,6 +599,12 @@ impl Host {
                     W::DroppedFile(path)
                 });
             }
+            HostOp::CloseTab(n) => {
+                let order = self.model.order(self.model.active_space());
+                if let Some(&tab) = order.get(n) {
+                    self.dispatch(wubble_core::model::Command::CloseTab(tab));
+                }
+            }
             HostOp::OnlyFirstTab => {
                 if self.model.glance_of(self.w.id).is_some() {
                     self.dispatch(wubble_core::model::Command::CloseGlance(self.w.id));
