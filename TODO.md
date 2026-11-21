@@ -6,13 +6,22 @@ fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/researc
 Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has them.
 
 ## Status (2026-11-20)
-`main` builds, lints and passes 2117 tests; every window smoke passes on the invisible test display
+`main` builds, lints and passes 2196 tests; every window smoke passes on the invisible test display
 (`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.3` for Linux and macOS (preview.3 fixes MCP hosting on macOS; preview.2, with codecs,
 added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
 registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
 (made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
 built but not released: they need the patched engine, which the release engine is not. The npm launcher
 (`packages/wubble-mcp`) is built, not published. Windows is not green in CI.
+
+## Hardening pass (2026-11-21), merged, not yet released
+Four lanes drove every Settings section and the features behind it on throwaway profiles (checklists in
+`~/Dev/wubble-wt/notes/hp/*-checklist.md`): the Settings controls, the built-in pages and clearing data, privacy
+and Spaces, passwords with autofill and sign-ins for agent sessions. What they left open is in the lists below.
+Owner decisions waiting: the spellcheck dictionary (its download was one of Chromium's own requests, now off);
+whether `update.googleapis.com`, `*.gvt1.com` and `*.gvt2.com` stay unresolvable inside the browser; releasing
+this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --workspace` and `--smoke passwords` with
+`WUBBLE_SMOKE_KEYRING=os` there before the release).
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
