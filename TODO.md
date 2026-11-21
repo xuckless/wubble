@@ -7,8 +7,8 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 
 ## Status (2026-11-20)
 `main` builds, lints and passes 2117 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.2` for Linux (with codecs), which
-adds the MCP server (off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
+(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.3` for Linux and macOS (preview.3 fixes MCP hosting on macOS; preview.2, with codecs,
+added the MCP server, off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
 registered on turn-on); the macOS (Apple silicon) build, signed and notarised, is in the same release and in the update manifest
 (made by the owner on the Mac: `sh /Users/Shared/wubble-preview2-mac.sh`, then signed and uploaded from here). Extensions are
 built but not released: they need the patched engine, which the release engine is not. The npm launcher
@@ -169,6 +169,7 @@ Open, to build or check:
 
 ## M7: Ship
 - [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
+- [ ] Before every release: run `cargo test --workspace` on the Mac (preview.2 shipped with MCP hosting broken on macOS; one test there would have caught it), and run the whole suite there once now (never done)
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
       shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
