@@ -92,7 +92,7 @@ impl Hosting {
             (Hosting::Starting { .. }, _) => "Starting…".into(),
             (Hosting::On, Some(port)) => format!(
                 "Hosting, but every session is refused while the debugging port ({port}) is \
-                 set: turn it off under Privacy."
+                 set: turn it off under Privacy and restart wubble."
             ),
             (Hosting::On, None) => {
                 "Hosting: agents on this computer can ask for a session; each needs your approval."

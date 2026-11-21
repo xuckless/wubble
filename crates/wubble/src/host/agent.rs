@@ -644,16 +644,9 @@ impl Host {
     }
 
     fn agent_env(&self) -> Env {
-        use wubble_core::apply::value_of;
-        use wubble_core::settings as defs;
-        let stored = &self.settings.stored;
         Env {
             mcp_enabled: self.mcp_serving(),
-            remote_port: defs::remote_port(
-                value_of(&defs::DEVTOOLS_REMOTE_PORT, stored)
-                    .parse()
-                    .unwrap_or(0),
-            ),
+            remote_port: self.debug_port(),
         }
     }
 
