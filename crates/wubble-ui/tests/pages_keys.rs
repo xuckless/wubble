@@ -29,6 +29,7 @@ fn visit(key: i32, url: &str) -> HistoryLineItem {
         label: Default::default(),
         title: url.into(),
         url: url.into(),
+        time: Default::default(),
         favicon: Default::default(),
     }
 }
@@ -45,6 +46,7 @@ fn page() -> (AppWindow, Rc<RefCell<Vec<String>>>) {
             label: "Today".into(),
             title: Default::default(),
             url: Default::default(),
+            time: Default::default(),
             favicon: Default::default(),
         },
         visit(1, "https://a.test/"),
