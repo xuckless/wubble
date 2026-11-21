@@ -675,6 +675,14 @@ export component SettingsPage inherits Rectangle {
     out property <int> current: root.picked >= 0 ? root.picked : root.at-end ? root.last : root.tracked;
     property <length> pitch: Shell.nav-row + Shell.nav-row-gap;
 
+    // A section's index counts from the table's last section (and Extensions' gap): when the
+    // rows come (the page opens before the host fills it) or Extensions comes or goes, the
+    // indices move, and one reported or picked before means another section now. Start over.
+    property <int> numbering: root.table * 2 + root.ext-gap;
+    changed numbering => {
+        root.tracked = 0;
+        root.picked = -1;
+    }
     // the list scrolls the current section's row into view when the section changes
     changed current => {
         if !root.narrow && root.current >= 0 {
