@@ -330,4 +330,35 @@ mod tests {
             assert_eq!(s.all_logins().await.unwrap().len(), 1);
         });
     }
+
+    /// A login written just before the process ends without closing the database (a quit
+    /// that skips the shutdown, a crash) is there when the database opens again: the child
+    /// inserts and exits with no destructor run; the parent reads.
+    #[test]
+    fn a_login_survives_an_exit_that_skips_the_shutdown() {
+        const DB: &str = "WUBBLE_STORE_ABRUPT_DB";
+        if let Ok(path) = std::env::var(DB) {
+            run(async {
+                let mut s = Store::open(std::path::Path::new(&path)).await.unwrap();
+                s.insert_login(login("id-a", "https://a.test", 7)).await.unwrap();
+                std::process::exit(0);
+            });
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wubble.db");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "logins::tests::a_login_survives_an_exit_that_skips_the_shutdown",
+                "--nocapture",
+            ])
+            .env(DB, &path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        run(async {
+            let s = Store::open(&path).await.unwrap();
+            assert_eq!(s.login("id-a").await.unwrap(), Some(login("id-a", "https://a.test", 7)));
+        });
+    }
 }
