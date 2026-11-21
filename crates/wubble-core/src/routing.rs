@@ -177,6 +177,14 @@ pub struct Routed {
 /// names resolved in `model` ignoring case. A malformed entry, or a rule naming a Space or
 /// container that does not exist, is skipped, so the next most specific rule may apply.
 pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed {
+    // an agent Space and its container are the session's: a link of the user's never lands there,
+    // where the agent could read it (a hand-off makes them the owner's, but still never by rule)
+    let agent_containers: Vec<ContainerId> = model
+        .spaces
+        .iter()
+        .filter(|s| s.agent)
+        .map(|s| s.container)
+        .collect();
     let rules: Vec<(Rule, Routed)> = entries
         .iter()
         .filter_map(|e| Rule::parse(e.as_ref()))
@@ -186,7 +194,7 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .spaces
                         .iter()
-                        .find(|s| s.name.eq_ignore_ascii_case(n))?
+                        .find(|s| !s.agent && s.name.eq_ignore_ascii_case(n))?
                         .id,
                 ),
                 None => None,
@@ -196,7 +204,9 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .containers
                         .iter()
-                        .find(|c| c.name.eq_ignore_ascii_case(n))?
+                        .find(|c| {
+                            !agent_containers.contains(&c.id) && c.name.eq_ignore_ascii_case(n)
+                        })?
                         .id,
                 ),
                 None => None,
@@ -386,6 +396,39 @@ mod tests {
         assert!(!host_in(&sites, "https://notexample.com"));
         assert!(!host_in(&sites, "about:blank"));
         assert!(!host_in::<String>(&[], "https://example.com"));
+    }
+
+    /// A rule must not carry the user's link into a session's Space or container.
+    #[test]
+    fn a_rule_never_names_an_agent_space_or_its_container() {
+        use crate::model::{Command, apply};
+        let m = Model::new(std::time::Instant::now());
+        let (m, _) = apply(
+            m,
+            Command::NewContainer {
+                name: "Agent 1".into(),
+            },
+        );
+        let agent_container = m.containers[1].id;
+        let (m, _) = apply(
+            m,
+            Command::NewSpace {
+                name: "Agent: draft".into(),
+                tint: crate::space::Rgb(1, 2, 3),
+                container: agent_container,
+            },
+        );
+        let agent_space = m.spaces[1].id;
+        let (m, _) = apply(m, Command::MarkAgentSpace(agent_space));
+        let entries = [
+            "a.test -> Agent: draft",
+            "b.test -> , Agent 1",
+            "c.test -> Space 1",
+        ];
+        let at = |url| resolve(&m, &entries, url);
+        assert_eq!(at("https://a.test/"), Routed::default());
+        assert_eq!(at("https://b.test/"), Routed::default());
+        assert_eq!(at("https://c.test/").space, Some(m.spaces[0].id));
     }
 
     #[test]
