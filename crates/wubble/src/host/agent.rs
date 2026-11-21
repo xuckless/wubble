@@ -3318,6 +3318,30 @@ impl Host {
         agent::holder(&self.model, tab, &sessions)
     }
 
+    /// The owner's autofill filled `values` into `tab` on `origin`: in a session's tab they are
+    /// the session's as a `fill_secret`'s are (scripts refused there, the values taken out of
+    /// every reply).
+    pub(super) fn agent_autofilled(
+        &mut self,
+        tab: TabId,
+        origin: &str,
+        values: impl Iterator<Item = Secret>,
+    ) {
+        let Some((session, _)) = self.agent_grant_of(tab) else {
+            return;
+        };
+        if let Some(s) = self.agents.sessions.get_mut(&session) {
+            s.tainted.filled(tab, origin);
+        }
+        // a value under MIN_SECRET would take ordinary text out of replies; the taint holds
+        let values = values.filter(|v| v.expose().chars().count() >= MIN_SECRET);
+        self.agents
+            .filled
+            .entry(session)
+            .or_default()
+            .extend(values);
+    }
+
     /// Each view's navigation rule (`agent::may_go`), derived from the model (`agent::holder`):
     /// a running session's tabs go only where its grant says, every other tab anywhere. Run
     /// after every model change (`Host::dispatch`: a tab dragged into or out of a session's
@@ -4033,11 +4057,26 @@ impl Host {
                     run.copied, run.owner_kept, run.copy_logged
                 ));
             }
+            // the key chip on the shared site only (both have a saved login)
+            let on = |host: &str| {
+                run.key_chips
+                    .iter()
+                    .any(|o| o.contains(&format!("//{host}:")))
+            };
+            if !on(crate::mcp_smoke::SIGNIN_HOST) || on(crate::mcp_smoke::OTHER_HOST) {
+                return self.fail(format!(
+                    "sign-ins: the key chip showed in session tabs on {:?}: want {} only",
+                    run.key_chips,
+                    crate::mcp_smoke::SIGNIN_HOST
+                ));
+            }
             println!(
                 "smoke: mcp sign-ins ok 2 of the owner's cookies copied (not {}), the owner \
                  keeps both, the copy logged, the stopped session's container (and its \
-                 copies) gone",
-                crate::mcp_smoke::OTHER_HOST
+                 copies) gone; the key chip offered the owner's login in the session's tab on \
+                 {} only",
+                crate::mcp_smoke::OTHER_HOST,
+                crate::mcp_smoke::SIGNIN_HOST
             );
         }
         let kept = TabId(done.kept);
