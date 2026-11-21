@@ -746,19 +746,20 @@ fn validate_upload_paths(paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// The activity-log target for `upload_file`: file name(s) only, never full paths.
-fn upload_log_target(paths: &[String]) -> String {
-    paths
+/// The activity log's target for `upload_file`: every path in full (the log is the owner's
+/// private record of what left the machine), and the origin of the page that took them (or
+/// would have). The agent's reply names the files only.
+fn upload_log<P: AsRef<Path>>(paths: &[P], origin: Option<&str>) -> String {
+    let mut line = paths
         .iter()
-        .map(|p| {
-            Path::new(p)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .filter(|n| !n.is_empty())
-                .unwrap_or(p.as_str())
-        })
+        .map(|p| p.as_ref().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    if let Some(origin) = origin {
+        line.push_str(" into ");
+        line.push_str(origin);
+    }
+    line
 }
 
 /// A random 256-bit token, hex.
@@ -3664,7 +3665,8 @@ impl Host {
     /// `upload_file`: validates local file paths, logs only their file names, and clicks `target`
     /// with the upload armed so `Host::run_chooser` answers Chromium directly without an OS dialog.
     fn agent_upload(&mut self, mut reply: Reply, tab: TabId, target: &str, paths: Vec<String>) {
-        reply.target = Some(upload_log_target(&paths));
+        let origin = self.agent_origin(tab);
+        reply.target = Some(upload_log(&paths, origin.as_deref()));
         if upload::upload_in_flight(&self.agent_stages(tab)) {
             return self.agent_refuse(
                 reply,
@@ -3702,15 +3704,24 @@ impl Host {
         else {
             return;
         };
-        let p = self.agents.pending.remove(i);
+        let mut p = self.agents.pending.remove(i);
         self.agent_arm();
         let Wait::Paths { tab, target, .. } = p.wait else {
             return;
         };
         match checked {
-            Ok(paths) => self.agent_upload_to(p.reply, tab, &target, paths),
+            Ok(paths) => {
+                let origin = self.agent_origin(tab);
+                p.reply.target = Some(upload_log(&paths, origin.as_deref()));
+                self.agent_upload_to(p.reply, tab, &target, paths)
+            }
             Err(why) => self.agent_fail(p.reply, &why),
         }
+    }
+
+    /// The origin of `tab`'s page, if it is on the web.
+    fn agent_origin(&self, tab: TabId) -> Option<String> {
+        wubble_core::autofill::web_origin(&self.agent_url(tab))
     }
 
     /// `upload_file`'s files to the element `target` names: an `<input type=file>` of the page's
@@ -3774,6 +3785,7 @@ impl Host {
         else {
             return;
         };
+        let mut reply = p.reply;
         let v = match result {
             Ok(v) => v,
             Err(e) => {
@@ -3782,7 +3794,7 @@ impl Host {
                     Uploading::Setting => format!("the file input did not take the files: {e}"),
                     _ => format!("the element cannot be reached: {e}"),
                 };
-                return self.agent_fail(p.reply, &why);
+                return self.agent_fail(reply, &why);
             }
         };
         let wait = |stage, object| Wait::UploadTo {
@@ -3799,7 +3811,7 @@ impl Host {
             Uploading::Resolving => {
                 let Some(object) = v.pointer("/object/objectId").and_then(Value::as_str) else {
                     self.agent_release_group(tab, &group);
-                    return self.agent_fail(p.reply, "the element could not be resolved to a node");
+                    return self.agent_fail(reply, "the element could not be resolved to a node");
                 };
                 let params = json!({
                     "objectId": object,
@@ -3807,29 +3819,32 @@ impl Host {
                     "returnByValue": true,
                 });
                 let next = wait(Uploading::Reading, Some(object.to_owned()));
-                self.agent_upload_step(p.reply, "Runtime.callFunctionOn", &params, next);
+                self.agent_upload_step(reply, "Runtime.callFunctionOn", &params, next);
             }
             Uploading::Reading => {
                 let Some(found) = upload::parse_target(v) else {
                     self.agent_release_group(tab, &group);
-                    return self.agent_fail(p.reply, "the element could not be read");
+                    return self.agent_fail(reply, "the element could not be read");
                 };
+                if found.file {
+                    reply.target = Some(upload_log(&paths, Some(&found.origin)));
+                }
                 if !found.file {
                     self.agent_release_group(tab, &group);
                     return match fallback {
                         // not a file input: clicked, for the chooser it opens
                         Some(target) => {
-                            self.agent_act(p.reply, tab, &target, None, Act::Upload { paths })
+                            self.agent_act(reply, tab, &target, None, Act::Upload { paths })
                         }
                         None => self.agent_fail(
-                            p.reply,
+                            reply,
                             "the chooser named an element that is no file input",
                         ),
                     };
                 }
                 if let Err(why) = upload::fits(&found, paths.len()) {
                     self.agent_release_group(tab, &group);
-                    return self.agent_refuse(p.reply, why);
+                    return self.agent_refuse(reply, why);
                 }
                 let allowed = self.agent_grant_of(tab).is_some_and(|(_, grant)| {
                     found.origin != "null" && agent::may_go(&grant, &found.origin).is_ok()
@@ -3840,7 +3855,7 @@ impl Host {
                         "the file input is in a document of {}, not one of this session's sites",
                         found.origin
                     );
-                    return self.agent_refuse(p.reply, &why);
+                    return self.agent_refuse(reply, &why);
                 }
                 let files: Vec<String> = paths
                     .iter()
@@ -3848,11 +3863,11 @@ impl Host {
                     .collect();
                 let params = json!({ "files": files, "objectId": object });
                 let next = wait(Uploading::Setting, object.clone());
-                self.agent_upload_step(p.reply, "DOM.setFileInputFiles", &params, next);
+                self.agent_upload_step(reply, "DOM.setFileInputFiles", &params, next);
             }
             Uploading::Setting => {
                 self.agent_release_group(tab, &group);
-                self.agent_uploaded(p.reply, tab, node, &paths);
+                self.agent_uploaded(reply, tab, node, &paths);
             }
         }
     }
@@ -4768,6 +4783,9 @@ impl Host {
                 return self.fail(format!("the activity log holds a filled value: {text}"));
             }
             run.copy_logged |= tool == "share_sign_ins" && text.starts_with("cookies for ");
+            if tool == "upload_file" {
+                run.uploads_logged.push((text.to_owned(), outcome));
+            }
         }
         let entry = Entry {
             session: session.clone(),
@@ -4986,6 +5004,21 @@ impl Host {
                     "sign-ins: copies {:?} (want {want:?}), the owner keeps {:?} of 2, logged {}, \
                      the session's container gone {gone}",
                     run.copied, run.owner_kept, run.copy_logged
+                ));
+            }
+            // the owner's log: each upload's paths whole, and the page's origin they went into
+            let whole = |text: &str| {
+                text.split(" into ")
+                    .next()
+                    .is_some_and(|paths| paths.split(", ").all(|p| Path::new(p).is_absolute()))
+            };
+            let into_page = run.uploads_logged.iter().any(|(text, outcome)| {
+                *outcome == Outcome::Done && whole(text) && text.contains(" into http://127.0.0.1:")
+            });
+            if !into_page {
+                return self.fail(format!(
+                    "upload_file's activity log lines: {:?}: want full paths and the page's origin",
+                    run.uploads_logged
                 ));
             }
             // the key chip on the shared site only (both have a saved login)
@@ -5673,7 +5706,7 @@ mod tests {
     }
 
     #[test]
-    fn upload_helpers_validate_paths_and_keep_log_targets_to_filenames() {
+    fn upload_paths_are_checked_and_logged_whole() {
         let dir = std::env::temp_dir().join(format!("wubble-upload-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("resume.pdf");
@@ -5691,15 +5724,21 @@ mod tests {
         );
         assert!(validate_upload_paths(&[dir.to_string_lossy().into_owned()]).is_err());
 
+        // the owner's log keeps every path whole, and where they went
         assert_eq!(
-            upload_log_target(&["/home/alice/secret-dir/resume.pdf".into()]),
-            "resume.pdf"
+            upload_log(
+                &["/home/alice/secret-dir/resume.pdf"],
+                Some("https://a.test")
+            ),
+            "/home/alice/secret-dir/resume.pdf into https://a.test"
         );
         assert_eq!(
-            upload_log_target(&["/a/b/one.txt".into(), "/c/d/two.pdf".into()]),
-            "one.txt, two.pdf"
+            upload_log(
+                &[PathBuf::from("/a/b/one.txt"), PathBuf::from("/c/two.pdf")],
+                None
+            ),
+            "/a/b/one.txt, /c/two.pdf"
         );
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
