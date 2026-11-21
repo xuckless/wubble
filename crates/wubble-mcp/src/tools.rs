@@ -127,7 +127,9 @@ pub static TOOLS: &[Tool] = &[
                 "sites",
                 Ty::StrList,
                 false,
-                "Sites the session expects to visit.",
+                "Sites the session's tabs may be on (host patterns; empty: any http(s) site). \
+                Every top-level navigation is held to them (links, scripts, forms, redirects, \
+                pop-ups, history); what a page fetches (images, scripts, XHR) is not.",
             ),
             arg(
                 "secrets",
@@ -183,7 +185,12 @@ pub static TOOLS: &[Tool] = &[
             Nothing is granted unless the user presses Allow; on Deny the session runs on as it was.",
         args: &[
             SESSION,
-            arg("sites", Ty::StrList, false, "Sites to add."),
+            arg(
+                "sites",
+                Ty::StrList,
+                false,
+                "Sites to add: where the session's tabs may go, not what pages may fetch.",
+            ),
             arg(
                 "secrets",
                 Ty::StrList,
@@ -204,7 +211,9 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "navigate",
         description: "Load a URL in a tab, or go back, forward or reload; returns once the new \
-            page has loaded.",
+            page has loaded. The tab stays on the session's sites: a navigation elsewhere (this \
+            one, a redirect, or one a click, key or script starts) is refused, the tab stays, and \
+            the call that started it fails naming the site (ask with request_more).",
         args: &[
             SESSION,
             TAB,

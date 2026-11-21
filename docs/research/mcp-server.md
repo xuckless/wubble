@@ -78,7 +78,9 @@ scrolled into view and cropped right at any scroll, or `full_page`), `list_tabs`
 throw with its stack, `timeout_ms`), `fill_secret`. Element actions take their place from the live layout
 (DevTools, by the node), not the accessibility mirror; raw coordinates only inside a `<canvas>` by ref. A closed
 connection still tears the session down: hand-off is explicit (decisions.md "Agent hand-off"); a kept Space stays
-an agent Space, which the owner clears with its dustbin in the Spaces popup (decisions.md "Agent Spaces"). Not done: network
+an agent Space, which the owner clears with its dustbin in the Spaces popup (decisions.md "Agent Spaces"). A session's sites hold for every top-level navigation of its tabs (decisions.md "Agent sites hold for
+the tab"). Known limit: the sites say where a tab may be, not what its pages may fetch: a page on an allowed site
+still loads images, scripts and XHR from anywhere, as it would for the owner. Not done: network
 idle for in-page navigations; the wheel over a nested scroller (TODO.md).
 
 ## 1. Summary and recommendation

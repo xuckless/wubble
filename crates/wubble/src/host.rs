@@ -987,6 +987,7 @@ impl Host {
                         }
                         self.builtins_view_opened(tab, &url);
                         self.ax_view_opened(tab);
+                        self.agent_rules();
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {

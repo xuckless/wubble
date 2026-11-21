@@ -40,12 +40,16 @@ pub const PAGE: &str = r##"<!doctype html><html lang="en"><head><title>mcp</titl
 <a href="/mcp/next?from=link">LONG_LINK</a>
 <form action="/mcp/next" method="get"><label for="q">Query</label> <input id="q" name="q"></form>
 <label for="note">Note</label> <input id="note" value="only in a field">
-<button onclick="setTimeout(()=>{history.pushState({},'','/mcp/pushed');document.getElementById('out').textContent='pushed'},200)">Push</button>
+<button onclick="setTimeout(()=>{history.pushState({},'','/mcp/pushed');document.getElementById('out').textContent='pushed'},800)">Push</button>
 <button onclick="setTimeout(()=>document.getElementById('going').remove(),200)">Hide</button>
 <p id="going">Going away</p>
 <button onclick="window.open('chrome://version')">Open chrome</button>
 <button onclick="window.open('file:///etc/passwd')">Open file</button>
 <button onclick="location.href='file:///etc/passwd'">Go file</button>
+<a href="ELSEWHERE">Elsewhere link</a>
+<button onclick="location.href='ELSEWHERE'">Go elsewhere</button>
+<button onclick="window.open('ELSEWHERE')">Open elsewhere</button>
+<form action="ELSEWHERE" method="get"><label for="far">Far</label> <input id="far" name="q"></form>
 </body></html>"##;
 
 /// A paragraph longer than the first tests saw `read_page` keep (about 120 characters).
@@ -109,13 +113,17 @@ pub enum Route {
 }
 
 /// What `path` answers (`autofill_smoke::serve`); `None`: not found.
-pub fn route(path: &str, _port: u16) -> Option<Route> {
+pub fn route(path: &str, port: u16) -> Option<Route> {
     let page = |p: &str| Some(Route::Page(p.to_owned()));
+    // a loopback host the first session's sites leave out until `request_more` adds it
+    let elsewhere = format!("http://a.localhost:{port}/mcp/next");
     match path.split_once('?').map_or(path, |(p, _)| p) {
         "/mcp" | "/mcp/pushed" => Some(Route::Page(
             PAGE.replace("LONG_TEXT", LONG_TEXT)
-                .replace("LONG_LINK", LONG_LINK),
+                .replace("LONG_LINK", LONG_LINK)
+                .replace("ELSEWHERE", &elsewhere),
         )),
+        "/mcp/to-elsewhere" => Some(Route::Redirect(elsewhere)),
         "/mcp/next" => page(NEXT),
         "/mcp/sticky" => page(STICKY),
         "/mcp/tools" => page(TOOLS),
@@ -519,6 +527,16 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
         return Err(format!("request_more, allowed: {granted}"));
     }
     c.ok("navigate", s(json!({"url": other_site})))?;
+    // the link refused before now goes
+    c.ok("navigate", s(json!({"url": page})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let link = ref_of(&read, "- link \"Elsewhere link\"").ok_or("no Elsewhere link")?;
+    c.ok("click", s(json!({"ref": link})))?;
+    c.ok(
+        "wait_for",
+        s(json!({"url": "a.localhost", "timeout_ms": 5000})),
+    )
+    .map_err(|e| format!("the link once a.localhost is granted: {e}"))?;
     let nothing = text(&c.ok(
         "request_more",
         json!({"session": session, "sites": ["a.localhost"]}),
@@ -528,7 +546,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     }
     c.step(
         "request_more",
-        "denied (the session runs on, the site refused), asked again and allowed (only a.localhost listed), nothing new needs no sheet",
+        "denied (the session runs on, the site refused), asked again and allowed (only a.localhost listed, then its link goes), nothing new needs no sheet",
     );
 
     // The hand-off: the session ends, its tab stays for the owner (checked by the host).
@@ -946,16 +964,26 @@ fn safety(
     };
     c.ok("navigate", s(json!({"url": page})))?;
     let read = text(&c.ok("read_page", s(json!({})))?);
+    // a refused navigation is the error of the call that started it, when it is refused
+    // before it is sent (a pop-up Chromium refuses itself opens nothing and says nothing)
     for name in ["Open chrome", "Open file", "Go file"] {
         let r = ref_of(&read, &format!("- button {name:?}")).ok_or(format!("no {name}"))?;
-        c.ok("click", s(json!({"ref": r})))?;
+        match c.tool("click", s(json!({"ref": r})))? {
+            Ok(_) => {}
+            Err(e) if e.contains("not a web address") => {}
+            Err(e) => return Err(format!("click {name}: {e}")),
+        }
     }
     for script in [
         "location.href = 'file:///etc/passwd'",
         "window.open('chrome://version'); 1",
         "location.href = 'chrome://version'",
     ] {
-        c.ok("evaluate", s(json!({"script": script})))?;
+        match c.tool("evaluate", s(json!({"script": script})))? {
+            Ok(_) => {}
+            Err(e) if e.contains("not a web address") => {}
+            Err(e) => return Err(format!("evaluate {script}: {e}")),
+        }
     }
     // a navigation off the web would show here (the host checks the pop-ups at the end)
     match c.tool(
@@ -989,6 +1017,70 @@ fn safety(
         "safety",
         "location and window.open to file: and chrome: (by click and by script), redirects to file: and chrome:, navigate off the web: the tab stayed on http(s)",
     );
+    sites(c, s, session, page, base)
+}
+
+/// A session's tab stays on its sites: a link, a script's `location`, a form, `window.open`
+/// and a server's redirect to a host left out are each refused, as the error of the call,
+/// naming the host and `request_more`; the tab stays where it was.
+fn sites(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    session: &str,
+    page: &str,
+    base: &str,
+) -> Result<(), String> {
+    let refused = |what: &str, r: Result<Value, String>| -> Result<(), String> {
+        match r {
+            Err(e) if e.contains("a.localhost") && e.contains("request_more") => Ok(()),
+            r => Err(format!("{what} to a.localhost: {r:?}")),
+        }
+    };
+    let tabs = |c: &mut Client| -> Result<Vec<String>, String> {
+        let tabs = json_of(&c.ok("list_tabs", json!({"session": session}))?)?;
+        Ok(tabs
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| t["url"].as_str().unwrap_or_default().to_owned())
+            .collect())
+    };
+    c.ok("navigate", s(json!({"url": page})))?;
+    let before = tabs(c)?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let link = ref_of(&read, "- link \"Elsewhere link\"").ok_or("no Elsewhere link")?;
+    refused("a link", c.tool("click", s(json!({"ref": link})))?)?;
+    for name in ["Go elsewhere", "Open elsewhere"] {
+        let r = ref_of(&read, &format!("- button {name:?}")).ok_or(format!("no {name}"))?;
+        refused(name, c.tool("click", s(json!({"ref": r})))?)?;
+    }
+    let far = ref_of(&read, "- textField \"Far\"").ok_or("no Far field")?;
+    refused(
+        "a form",
+        c.tool("type", s(json!({"ref": far, "text": "x", "submit": true})))?,
+    )?;
+    refused(
+        "location.href",
+        c.tool(
+            "evaluate",
+            s(json!({"script": "location.href = document.querySelector('a[href*=\"a.localhost\"]').href"})),
+        )?,
+    )?;
+    refused(
+        "a redirect",
+        c.tool(
+            "navigate",
+            s(json!({"url": format!("{base}/mcp/to-elsewhere")})),
+        )?,
+    )?;
+    let after = tabs(c)?;
+    if after != before || after.iter().any(|u| u.contains("a.localhost")) {
+        return Err(format!("the tabs were {before:?}, now {after:?}"));
+    }
+    c.step(
+        "sites",
+        "a link, location.href, a form, window.open and a redirect to a.localhost (not on the sites) refused, each the call's error naming the host and request_more; the tab stayed",
+    );
     Ok(())
 }
 
@@ -1004,6 +1096,9 @@ pub struct McpSmoke {
     pub popups_refused: usize,
     /// Session tabs that reached an address off the web anyway and were blanked.
     pub blanked: usize,
+    /// Navigations of session tabs refused for the session's sites (before they were sent,
+    /// pop-ups, or taken back).
+    pub navigations_refused: usize,
     /// The client's step count, kept while the host switches tabs.
     pub steps: usize,
     /// The Space the first session left its tab in (`stop_session` with `keep_tabs`).

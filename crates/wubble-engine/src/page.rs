@@ -608,6 +608,13 @@ pub enum PageEvent {
         url: String,
         gesture: Option<bool>,
     },
+    /// The view's navigation rule ([`crate::view::View::set_navigation_rule`]) refused a
+    /// top-level navigation to `url` (`redirect`: one hop of a redirect) before it was sent:
+    /// the page stays where it is.
+    NavigationRefused {
+        url: String,
+        redirect: bool,
+    },
     /// `View::download_image` finished: the image's pixels as RGBA, or why
     /// there are none.
     ImageDownloaded {

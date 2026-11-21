@@ -223,6 +223,7 @@ impl Host {
             Routed::Status(text) => self.link_status(tab, text),
             Routed::Tooltip(text) => self.page_tooltip(tab, text),
             Routed::External { url, gesture } => self.external_link(tab, url, gesture),
+            Routed::Refused(url) => self.agent_refused(tab, &url),
             Routed::Image(image) => self.copy_image_done(window, image),
             Routed::WheelZoom { .. } | Routed::ImeBounds(_) | Routed::Ignore => {}
         }

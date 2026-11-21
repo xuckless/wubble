@@ -60,6 +60,9 @@ const SUBMIT_GRACE: Duration = Duration::from_secs(1);
 /// Ticks a `scroll` turns the wheel in, and the time between them.
 const WHEEL_TICKS: u32 = 5;
 const WHEEL_TICK: Duration = Duration::from_millis(20);
+/// How long an action that may start a navigation (a click, a key, a script) waits before it
+/// answers, so a navigation its page started and the session's sites refused is its error.
+const SETTLE: Duration = Duration::from_millis(300);
 /// Steps a drag's pointer moves in between its press and its release.
 const DRAG_STEPS: u32 = 8;
 /// How long after a script's own `timeout_ms` the call gives up waiting for the page's answer.
@@ -295,6 +298,12 @@ enum Wait {
         target: String,
         name: String,
     },
+    /// A click, a key or a script done: its answer after [`SETTLE`], unless a navigation it
+    /// started is refused meanwhile (`agent_refused`).
+    Settle {
+        tab: TabId,
+        answer: String,
+    },
     /// `fill_secret` clicked its element: the page's word on where focus went
     /// ([`focus_script`]).
     Focus {
@@ -325,6 +334,9 @@ pub(super) struct Agents {
     sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
+    /// Each session tab's last address its grant allowed: where a tab that got somewhere else
+    /// is taken back to.
+    pub(super) last_at: HashMap<TabId, String>,
     /// The agent Space its dustbin is deleting, while it is (its tabs are not the user's closed
     /// tabs, as in a session's teardown).
     pub(super) clearing: Option<SpaceId>,
@@ -346,6 +358,28 @@ impl Agents {
             .values()
             .filter_map(|s| s.space.map(|(sp, _)| sp))
             .collect()
+    }
+}
+
+/// The tab a call waits on, if it waits on one.
+fn wait_tab(wait: &Wait) -> Option<TabId> {
+    match wait {
+        Wait::Navigated { tab, .. }
+        | Wait::Loaded { tab }
+        | Wait::Opened { tab, .. }
+        | Wait::Text { tab, .. }
+        | Wait::Element { tab, .. }
+        | Wait::Url { tab, .. }
+        | Wait::Moved { tab, .. }
+        | Wait::Tree { tab, .. }
+        | Wait::Eval { tab, .. }
+        | Wait::Scroll { tab, .. }
+        | Wait::Locate { tab, .. }
+        | Wait::Metrics { tab, .. }
+        | Wait::Vault { tab, .. }
+        | Wait::Focus { tab, .. }
+        | Wait::Settle { tab, .. } => Some(*tab),
+        _ => None,
     }
 }
 
@@ -622,6 +656,7 @@ impl Host {
         {
             self.agent_forget(id);
         }
+        self.agent_rules();
     }
 
     fn agent_effect(&mut self, id: &SessionId, effect: Effect) {
@@ -1989,7 +2024,7 @@ impl Host {
             _ => "clicked",
         };
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
-        self.agent_send(reply, ToolResult::text(answer), Outcome::Done);
+        self.agent_settle(reply, tab, answer.into());
     }
 
     /// The page's answer to [`focus_script`]: the secret is typed only into the element that
@@ -2026,7 +2061,7 @@ impl Host {
         let named = |host: &Host, action| host.keymap.tooltip_text(action).0;
         match agent::keys::plan(self.keymap.action_for(chord)) {
             KeyPlan::Page => match self.agent_keys(tab, name) {
-                Ok(()) => self.agent_send(reply, ToolResult::text("pressed"), Outcome::Done),
+                Ok(()) => self.agent_settle(reply, tab, "pressed".into()),
                 Err(e) => self.agent_fail(reply, &e),
             },
             KeyPlan::PageNotBrowser(action) => {
@@ -2036,7 +2071,7 @@ impl Host {
                     named(self, action)
                 );
                 match self.agent_keys(tab, name) {
-                    Ok(()) => self.agent_send(reply, ToolResult::text(text), Outcome::Done),
+                    Ok(()) => self.agent_settle(reply, tab, text),
                     Err(e) => self.agent_fail(reply, &e),
                 }
             }
@@ -2203,11 +2238,7 @@ impl Host {
         if stage == Evaluating::Serialising {
             self.agent_release_values(tab);
             let text = serde_json::to_string(&r["value"]).unwrap_or_else(|_| "null".into());
-            return self.agent_send(
-                p.reply,
-                ToolResult::text(capped(&text, EVAL_CHARS)),
-                Outcome::Done,
-            );
+            return self.agent_settle(p.reply, tab, capped(&text, EVAL_CHARS));
         }
         // a value that is itself a promise (REPL mode awaits only its own): awaited too
         if r["subtype"] == "promise" && stage != Evaluating::Awaiting {
@@ -2254,11 +2285,7 @@ impl Host {
         };
         if let Some(text) = text {
             self.agent_release_values(tab);
-            return self.agent_send(
-                p.reply,
-                ToolResult::text(capped(&text, EVAL_CHARS)),
-                Outcome::Done,
-            );
+            return self.agent_settle(p.reply, tab, capped(&text, EVAL_CHARS));
         }
         // an object: made plain JSON in the page
         let params = json!({
@@ -2408,10 +2435,94 @@ impl Host {
         }
         if let WebEvent::UrlChanged(url) = event
             && self.agent_drives(tab)
-            && !agent::is_web(url)
-            && !url.starts_with("about:")
         {
-            self.agent_backstop(tab, url);
+            match self.agent_grant_of(tab) {
+                // where the rule could not ask (a page from the back-forward cache, a script's
+                // address Chromium let through): taken back, the agent or the log told
+                Some((_, grant))
+                    if agent::may_go(&grant, url).is_err() && !url.starts_with("about:") =>
+                {
+                    eprintln!("wubble: agent: a session tab reached {url}: taken back");
+                    self.agent_refused(tab, url);
+                    self.agent_take_back(tab);
+                }
+                Some(_) => {
+                    self.agents.last_at.insert(tab, url.clone());
+                }
+                None if !agent::is_web(url) && !url.starts_with("about:") => {
+                    self.agent_backstop(tab, url);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// An action's answer once a navigation it started had [`SETTLE`] to be refused.
+    fn agent_settle(&mut self, reply: Reply, tab: TabId, answer: String) {
+        self.agent_wait(reply, Wait::Settle { tab, answer }, SETTLE);
+    }
+
+    /// The grant of the session that drives `tab`.
+    fn agent_grant_of(&self, tab: TabId) -> Option<(SessionId, agent::Grant)> {
+        self.agents.sessions.iter().find_map(|(id, s)| {
+            let (space, container) = s.space?;
+            let grant = s.state.grant()?;
+            self.model
+                .holds(space, container, tab)
+                .then(|| (id.clone(), grant.clone()))
+        })
+    }
+
+    /// Each view's navigation rule (`agent::may_go`): a running session's tabs go only where
+    /// its grant says, every other tab anywhere. Run as a session's state or a tab's view
+    /// changes.
+    pub(super) fn agent_rules(&mut self) {
+        let tabs: Vec<TabId> = self.views.keys().copied().collect();
+        for tab in tabs {
+            let rule = self.agent_grant_of(tab).map(|(_, grant)| {
+                let rule: wubble_engine::view::Rule =
+                    std::sync::Arc::new(move |url: &str| agent::may_go(&grant, url).is_ok());
+                rule
+            });
+            if let Some(view) = self.tab_view(tab) {
+                view.set_navigation_rule(rule);
+            }
+        }
+    }
+
+    /// A session's tab was kept from going to `url` (its rule refused the navigation before it
+    /// was sent, a pop-up there, or it got there and was taken back): the call in flight on the
+    /// tab fails with the reason; with none, the page went on its own and the activity log says
+    /// so.
+    pub(super) fn agent_refused(&mut self, tab: TabId, url: &str) {
+        let Some((session, _)) = self.agent_grant_of(tab) else {
+            return;
+        };
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.navigations_refused += 1;
+        }
+        let note = agent::refused_note(url);
+        let (on_tab, rest): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.agents.pending)
+            .into_iter()
+            .partition(|p| wait_tab(&p.wait) == Some(tab));
+        self.agents.pending = rest;
+        if on_tab.is_empty() {
+            self.agent_log(
+                &session,
+                "navigation_refused",
+                Some(url.to_owned()),
+                Outcome::Refused,
+            );
+        }
+        for p in on_tab {
+            self.agent_fail(p.reply, &note);
+        }
+        self.agent_arm();
+        // the tab's address is still the page it never left (a `navigate` wrote the new one)
+        if let Some(at) = self.agents.last_at.get(&tab).cloned()
+            && self.agent_url(tab) != at
+        {
+            self.dispatch(Command::UrlChanged { tab, url: at });
         }
     }
 
@@ -2433,18 +2544,36 @@ impl Host {
                 Outcome::Refused,
             );
         }
-        self.dispatch(Command::Navigate {
-            tab,
-            url: BLANK.into(),
-        });
+        self.agent_take_back(tab);
+    }
+
+    /// `tab` back to its last address the session's grant allowed (a blank page if none).
+    fn agent_take_back(&mut self, tab: TabId) {
+        let back = self
+            .agents
+            .last_at
+            .get(&tab)
+            .cloned()
+            .unwrap_or(BLANK.into());
+        self.dispatch(Command::Navigate { tab, url: back });
     }
 
     /// A page's pop-up from a session's tab: one off the web (`window.open('file:...')`,
     /// `chrome:`, `mailto:`) opens nothing (wubble would load it as the browser, which a page
     /// itself may not); whether it was refused.
     pub(super) fn agent_popup_refused(&mut self, tab: TabId, url: &str) -> bool {
-        if !self.agent_drives(tab) || agent::is_web(url) || url == BLANK {
+        if !self.agent_drives(tab) || url == BLANK {
             return false;
+        }
+        // a web pop-up goes where the session's sites allow (`agent::may_go`), as the tab
+        if agent::is_web(url) {
+            let allowed = self
+                .agent_grant_of(tab)
+                .is_none_or(|(_, grant)| agent::may_go(&grant, url).is_ok());
+            if !allowed {
+                self.agent_refused(tab, url);
+            }
+            return !allowed;
         }
         let session = self.agents.sessions.iter().find_map(|(id, s)| {
             let (space, container) = s.space?;
@@ -2633,6 +2762,7 @@ impl Host {
             | Wait::Element { tab, .. }
             | Wait::Url { tab, .. }
             | Wait::Moved { tab, .. }
+            | Wait::Settle { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             // answered by the page or the vault; only their deadline is checked here
             _ if late => {
@@ -2672,6 +2802,7 @@ impl Host {
                 }
             }
             Wait::Loaded { .. } => (!loading && document.is_some()).then(|| Ok("loaded".into())),
+            Wait::Settle { answer, .. } => late.then(|| Ok(answer.clone())),
             Wait::Opened { answer, .. } => {
                 (phase == Some(Phase::Loaded)).then(|| Ok(answer.clone()))
             }
@@ -2953,14 +3084,20 @@ impl Host {
             .collect();
         if let Some(run) = &mut self.checks.mcp_smoke {
             run.steps = done.steps;
-            let (refused, blanked) = (run.popups_refused, run.blanked);
+            let (refused, blanked, held) =
+                (run.popups_refused, run.blanked, run.navigations_refused);
             if !off.is_empty() {
                 return self.fail(format!("tabs off the web: {off:?}"));
+            }
+            // `mcp_smoke::sites`: a link, a script, a form, a pop-up and a redirect
+            if held < 5 {
+                return self.fail(format!("{held} navigations held to the sites, not 5"));
             }
             // Chromium refuses most of them itself; these count what reached wubble's own guards
             println!(
                 "smoke: mcp safety ok no tab at file:, chrome: or javascript:; pop-ups refused by \
-                 wubble {refused}, session tabs blanked by wubble {blanked}"
+                 wubble {refused}, session tabs blanked by wubble {blanked}, navigations held to \
+                 the sites {held}"
             );
         }
         self.mcp_smoke_switch(0);

@@ -228,6 +228,7 @@ impl WindowsCefProducer {
                 metrics.clone(),
                 config.surface.request_filter.clone(), // wubble change
                 config.surface.response_observer.clone(), // wubble change 36
+                config.surface.navigation_guard.clone(), // wubble change 53
             );
             let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
             devtools.set_enabled(config.surface.devtools_protocol);

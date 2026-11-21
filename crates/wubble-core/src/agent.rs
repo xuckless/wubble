@@ -88,6 +88,32 @@ pub fn may_visit(grant: &Grant, url: &str) -> Result<String, VisitRefusal> {
     }
 }
 
+/// Whether a session's tab may go to `url` by any top-level navigation (the agent's own, a
+/// link, a script, a form, each hop of a redirect, history): a blank page, or what
+/// [`may_visit`] allows. The grant's sites are where the tab may be, not what its pages may
+/// fetch: sub-resources are never asked.
+pub fn may_go(grant: &Grant, url: &str) -> Result<(), VisitRefusal> {
+    if url == "about:blank" {
+        return Ok(());
+    }
+    may_visit(grant, url).map(|_| ())
+}
+
+/// The agent's error for a navigation [`may_go`] refused: the site named, and the way on.
+pub fn refused_note(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") => format!(
+            "the page tried to go to {}, which is not on this session's sites: the navigation \
+             was refused and the tab stayed where it was (ask for the site with request_more)",
+            u.host_str().unwrap_or_default()
+        ),
+        _ => format!(
+            "the page tried to go to {url}, which is not a web address: the navigation was \
+             refused and the tab stayed where it was"
+        ),
+    }
+}
+
 /// What a running session asks for on top of its grant (`request_more`), reduced to what is
 /// new ([`Grant::missing`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1083,6 +1109,32 @@ mod tests {
             assert_eq!(s, state);
             assert!(e.is_empty());
         }
+    }
+
+    #[test]
+    fn a_session_tab_goes_only_where_its_grant_says() {
+        let some = Grant::new([], &["a.localhost".to_string()], Mode::Headless).unwrap();
+        assert_eq!(may_go(&some, "http://a.localhost:8080/x?y#z"), Ok(()));
+        assert_eq!(may_go(&some, "HTTP://A.localhost/"), Ok(()));
+        assert_eq!(may_go(&some, "about:blank"), Ok(()));
+        assert_eq!(
+            may_go(&some, "http://b.localhost/"),
+            Err(VisitRefusal::NotGranted)
+        );
+        for off in [
+            "file:///etc/passwd",
+            "chrome://version",
+            "data:text/html,x",
+            "about:config",
+        ] {
+            assert_eq!(may_go(&some, off), Err(VisitRefusal::NotWeb), "{off}");
+        }
+        // an empty list is any web site, still nothing off the web
+        let any = Grant::new([], &[], Mode::Headless).unwrap();
+        assert_eq!(may_go(&any, "https://anything.test/"), Ok(()));
+        assert_eq!(may_go(&any, "file:///x"), Err(VisitRefusal::NotWeb));
+        assert!(refused_note("http://b.localhost:9/p").contains("to go to b.localhost,"));
+        assert!(refused_note("http://b.localhost:9/p").contains("request_more"));
     }
 
     #[test]

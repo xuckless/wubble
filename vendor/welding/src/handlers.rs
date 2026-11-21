@@ -577,6 +577,8 @@ impl SharedHandlers {
         request_filter: Option<RequestFilter>,
         // wubble change 36: sees each response's headers.
         response_observer: Option<ResponseObserver>,
+        // wubble change 53: decides each top-level navigation.
+        navigation_guard: Option<crate::surface::NavigationGuard>,
     ) -> Self {
         Self {
             request: WeldRequestHandler::new(
@@ -585,6 +587,7 @@ impl SharedHandlers {
                 scripts,
                 request_filter,
                 response_observer,
+                navigation_guard,
             ),
             download: WeldDownloadHandler::new(events.clone(), requests.clone()),
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
@@ -604,6 +607,7 @@ cef::wrap_request_handler! {
         scripts: Arc<crate::app::PendingScripts>,
         request_filter: Option<RequestFilter>,
         response_observer: Option<ResponseObserver>,
+        navigation_guard: Option<crate::surface::NavigationGuard>,
     }
 
     impl RequestHandler {
@@ -614,13 +618,27 @@ cef::wrap_request_handler! {
         fn on_before_browse(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             request: Option<&mut cef::Request>,
             user_gesture: ::std::os::raw::c_int,
-            _is_redirect: ::std::os::raw::c_int,
+            is_redirect: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let Some(request) = request else { return 0 };
             let url = cef_string(request.url());
+            // wubble change 53: the host's guard decides each top-level
+            // navigation (and each hop of its redirects) before its request
+            // is sent; a refused one is cancelled where it stands.
+            let main = frame.is_some_and(|f| f.is_main() != 0);
+            if main
+                && let Some(guard) = &self.navigation_guard
+                && !guard.allows(&url)
+            {
+                push(&self.events, NavigationEvent::NavigationRefused {
+                    url,
+                    redirect: is_redirect != 0,
+                });
+                return 1;
+            }
             if !chromium_handles(&url) {
                 push(&self.events, NavigationEvent::ProtocolExecution {
                     url,
