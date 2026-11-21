@@ -1325,16 +1325,6 @@ impl Host {
         self.tab_view(self.key_page()?)
     }
 
-    /// The visible tab's view, else any live tab's: for work that needs a view but none in
-    /// particular (a retried download started from an internal page).
-    fn any_view(&mut self) -> Option<&mut View> {
-        let tab = self
-            .shown()
-            .filter(|t| self.views.contains_key(t))
-            .or_else(|| self.views.keys().next().copied())?;
-        self.tab_view(tab)
-    }
-
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
         if self.devtools.view == Some(view) {
             return Some(PANEL_TAB);

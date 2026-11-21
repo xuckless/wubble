@@ -1175,12 +1175,7 @@ impl Host {
                 variant,
             })
             .collect();
-        let from = self
-            .model
-            .tabs
-            .get(&tab)
-            .map_or(wubble_core::space::ContainerId::DEFAULT, |t| t.container);
-        let id = self.add_download_entry(url, &output, size, from);
+        let id = self.add_download_entry(url, &output, size, session);
         let run = Run {
             job: Job::Resolving { paused: false },
             tab,
