@@ -755,6 +755,13 @@ pub static TOOLS: &[Tool] = &[
             if paths.is_empty() || paths.iter().any(|p| p.trim().is_empty()) {
                 return Err("`path` or non-empty `paths` is required".into());
             }
+            // a relative path would resolve against the browser's working directory
+            if let Some(p) = paths
+                .iter()
+                .find(|p| !std::path::Path::new(p).is_absolute())
+            {
+                return Err(format!("{p:?} is not an absolute path"));
+            }
             Ok(AgentCall::UploadFile {
                 session: a.session()?,
                 tab: a.tab()?,
@@ -985,6 +992,14 @@ mod tests {
     #[test]
     fn upload_file_schema_validation_and_parsing() {
         use crate::call::{ElementRef, SessionId, TabId, parse_named};
+        // an absolute path where the tests run
+        let abs = |name: &str| {
+            if cfg!(windows) {
+                format!("C:\\tmp\\{name}")
+            } else {
+                format!("/tmp/{name}")
+            }
+        };
 
         let tool = find("upload_file").unwrap();
         let schema = tool.input_schema();
@@ -1001,7 +1016,7 @@ mod tests {
             "session": "s",
             "tab": "t",
             "ref": "e1.9",
-            "path": "/tmp/resume.pdf"
+            "path": abs("resume.pdf")
         });
         assert_eq!(
             parse_named("upload_file", single.as_object().unwrap()),
@@ -1009,7 +1024,7 @@ mod tests {
                 session: SessionId("s".into()),
                 tab: TabId("t".into()),
                 target: ElementRef("e1.9".into()),
-                paths: vec!["/tmp/resume.pdf".into()],
+                paths: vec![abs("resume.pdf")],
             }))
         );
 
@@ -1017,7 +1032,7 @@ mod tests {
             "session": "s",
             "tab": "t",
             "ref": "e1.9",
-            "paths": ["/tmp/a.pdf", "/tmp/b.pdf"]
+            "paths": [abs("a.pdf"), abs("b.pdf")]
         });
         assert_eq!(
             parse_named("upload_file", multi.as_object().unwrap()),
@@ -1025,7 +1040,7 @@ mod tests {
                 session: SessionId("s".into()),
                 tab: TabId("t".into()),
                 target: ElementRef("e1.9".into()),
-                paths: vec!["/tmp/a.pdf".into(), "/tmp/b.pdf".into()],
+                paths: vec![abs("a.pdf"), abs("b.pdf")],
             }))
         );
 
@@ -1037,6 +1052,9 @@ mod tests {
             json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": ["/a", ""]}),
             json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": [123]}),
             json!({"session": "s", "tab": "t", "path": "/a"}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "path": "resume.pdf"}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "path": "./resume.pdf"}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": [abs("a"), "b/c"]}),
         ] {
             assert!(
                 parse_named("upload_file", bad.as_object().unwrap())

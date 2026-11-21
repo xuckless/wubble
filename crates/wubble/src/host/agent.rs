@@ -70,6 +70,9 @@ const SETTLE: Duration = Duration::from_millis(300);
 /// The DevTools object group `upload_file` holds the node its files go to in, while it does
 /// (each call its own: `-<n>`).
 const UPLOAD_GROUP: &str = "wubble-agent-upload";
+/// How long `upload_file`'s paths may take to be checked (a hung network mount does not hang
+/// the browser: they are checked on a thread of their own, and the call fails at this).
+const UPLOAD_PATHS_WAIT: Duration = Duration::from_secs(5);
 /// How long after the click's input fence `upload_file` waits for the page to open a file chooser.
 const UPLOAD_CHOOSER_WAIT: Duration = Duration::from_millis(1500);
 /// How long after the files are in the input `upload_file` waits for the page's tree to show them.
@@ -434,6 +437,12 @@ enum Wait {
         load: Load,
         answer: String,
     },
+    /// `upload_file`: its paths being checked off the event loop ([`validate_upload_paths`]).
+    Paths {
+        nonce: u64,
+        tab: TabId,
+        target: String,
+    },
     /// `upload_file` with the node its files may go to (`node`, a backend node id): the ref's
     /// own (`fallback`: the ref, clicked instead if the node is no file input), or the file
     /// input that opened the chooser its click opened (`fallback` none). `object`: the node in
@@ -636,6 +645,7 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Locate { tab, .. }
         | Wait::Metrics { tab, .. }
         | Wait::Vault { tab, .. }
+        | Wait::Paths { tab, .. }
         | Wait::Focus { tab, .. }
         | Wait::TypeMark { tab, .. }
         | Wait::TypeFocus { tab, .. }
@@ -688,6 +698,7 @@ fn stage(wait: &Wait) -> Stage {
             act: Act::Upload { .. },
             ..
         }
+        | Wait::Paths { .. }
         | Wait::UploadTo { .. }
         | Wait::Uploaded { .. } => Stage::Upload,
         Wait::Input { .. }
@@ -3654,17 +3665,52 @@ impl Host {
     /// with the upload armed so `Host::run_chooser` answers Chromium directly without an OS dialog.
     fn agent_upload(&mut self, mut reply: Reply, tab: TabId, target: &str, paths: Vec<String>) {
         reply.target = Some(upload_log_target(&paths));
-        let paths = match validate_upload_paths(&paths) {
-            Ok(p) => p,
-            Err(why) => return self.agent_fail(reply, &why),
-        };
         if upload::upload_in_flight(&self.agent_stages(tab)) {
             return self.agent_refuse(
                 reply,
                 "another upload_file is in flight on this tab: wait for its answer",
             );
         }
-        self.agent_upload_to(reply, tab, target, paths);
+        // the file system is asked on a thread of its own, the answer awaited with a deadline
+        let nonce = self.agents.fresh();
+        let checking = std::thread::Builder::new()
+            .name("wubble-upload-paths".into())
+            .spawn(move || {
+                let checked = validate_upload_paths(&paths);
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.agent_paths(nonce, checked));
+                });
+            });
+        if let Err(e) = checking {
+            return self.agent_fail(reply, &format!("the paths cannot be checked now: {e}"));
+        }
+        let wait = Wait::Paths {
+            nonce,
+            tab,
+            target: target.to_owned(),
+        };
+        self.agent_wait(reply, wait, UPLOAD_PATHS_WAIT);
+    }
+
+    /// `upload_file`'s paths, checked: on to its element.
+    fn agent_paths(&mut self, nonce: u64, checked: Result<Vec<PathBuf>, String>) {
+        let Some(i) = self
+            .agents
+            .pending
+            .iter()
+            .position(|p| matches!(p.wait, Wait::Paths { nonce: n, .. } if n == nonce))
+        else {
+            return;
+        };
+        let p = self.agents.pending.remove(i);
+        self.agent_arm();
+        let Wait::Paths { tab, target, .. } = p.wait else {
+            return;
+        };
+        match checked {
+            Ok(paths) => self.agent_upload_to(p.reply, tab, &target, paths),
+            Err(why) => self.agent_fail(p.reply, &why),
+        }
     }
 
     /// `upload_file`'s files to the element `target` names: an `<input type=file>` of the page's
@@ -4543,6 +4589,15 @@ impl Host {
             | Wait::Tree { tab, .. } => *tab,
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
+                return None;
+            }
+            Wait::Paths { .. } if late => {
+                let why = format!(
+                    "the file system did not answer within {} s (a hung network mount?): \
+                     nothing was uploaded",
+                    UPLOAD_PATHS_WAIT.as_secs()
+                );
+                self.agent_fail(p.reply, &why);
                 return None;
             }
             // answered by the page or the vault; only their deadline is checked here
