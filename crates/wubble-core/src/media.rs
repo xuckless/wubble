@@ -272,6 +272,9 @@ pub enum Refusal {
     SiteChanged(String),
     /// Fetching or parsing failed.
     Failed(String),
+    /// A YouTube video, whose formats wubble asks YouTube for only when the user allowed it
+    /// (`media.youtube`, off by default): nothing was asked.
+    LookupOff,
 }
 
 impl Refusal {
@@ -283,6 +286,9 @@ impl Refusal {
             Refusal::Unsupported(what) => format!("Not supported: {what}"),
             Refusal::SiteChanged(what) => format!("This site changed: {what}"),
             Refusal::Failed(why) => format!("Cannot read the stream: {why}"),
+            Refusal::LookupOff => {
+                "Saving a YouTube video asks YouTube for its formats: off in Settings".into()
+            }
         }
     }
 }

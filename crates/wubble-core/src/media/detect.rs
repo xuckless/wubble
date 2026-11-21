@@ -152,6 +152,15 @@ pub struct Detected {
 }
 
 impl Detected {
+    /// Whether the menu lists it (and the glyph shows for it): not a manifest that failed to
+    /// read, unless it is a YouTube lookup, whose failure the user must be told.
+    pub fn is_shown(&self) -> bool {
+        match &self.found {
+            Found::Refused(Refusal::Failed(_)) => self.kind == Kind::YouTube,
+            _ => true,
+        }
+    }
+
     /// The URL is a part of this stream: a segment or a playlist of it.
     fn contains(&self, url: &str) -> bool {
         matches!(&self.found, Found::Ready(variants) if variants.iter().any(|v| match &v.source {
@@ -165,6 +174,9 @@ impl Detected {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaEvent {
     Seen(Candidate),
+    /// A stream that would be looked up but may not be: listed as [`Refusal::LookupOff`], no
+    /// request made (a YouTube page with `media.youtube` off).
+    Declined(Candidate),
     /// A manifest fetched and parsed (or not).
     Resolved {
         id: u32,
@@ -223,6 +235,21 @@ impl TabMedia {
                 }
                 (self, vec![])
             }
+            MediaEvent::Declined(c) => {
+                if self.items.len() >= MAX_ITEMS || self.knows(&c.url) {
+                    return (self, vec![]);
+                }
+                let id = self.next_id;
+                self.next_id += 1;
+                self.items.push(Detected {
+                    id,
+                    url: c.url,
+                    kind: c.kind,
+                    title: None,
+                    found: Found::Refused(Refusal::LookupOff),
+                });
+                (self, vec![])
+            }
             MediaEvent::Seen(c) => {
                 if self.items.len() >= MAX_ITEMS || self.knows(&c.url) {
                     return (self, vec![]);
@@ -268,14 +295,11 @@ impl TabMedia {
             .any(|item| item.url == url || item.contains(url))
     }
 
-    /// Something to show: a stream to save, or one to explain (protected, live).
+    /// Something to show: a stream to save, or one to explain (protected, live, a lookup that
+    /// is off or failed). What the page's own manifest reads as nothing (a failed fetch, a shape
+    /// not known) shows nothing; a YouTube video, which the user asked about, always says why.
     pub fn has_media(&self) -> bool {
-        self.items.iter().any(|i| {
-            !matches!(
-                i.found,
-                Found::Refused(Refusal::Failed(_) | Refusal::Unsupported(_))
-            )
-        })
+        self.items.iter().any(Detected::is_shown)
     }
 
     pub fn get(&self, id: u32) -> Option<&Detected> {
@@ -509,6 +533,25 @@ mod tests {
             result: Err(Refusal::Failed("x".into())),
         });
         assert!(!failed.has_media());
+        // A YouTube lookup that failed says so; one that is off says so, with no request.
+        let (yt, fx) = TabMedia::default().update(seen("https://youtu.be/dQw4w9WgXcQ", Kind::YouTube));
+        assert_eq!(fx.len(), 1);
+        let (yt, _) = yt.update(MediaEvent::Resolved {
+            id: 0,
+            result: Err(Refusal::Failed("Sign in".into())),
+        });
+        assert!(yt.has_media());
+        let declined = MediaEvent::Declined(Candidate {
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".into(),
+            kind: Kind::YouTube,
+            track: Track::Muxed,
+            container: Container::Mp4,
+            size: None,
+            ranges: false,
+        });
+        let (off, fx) = TabMedia::default().update(declined);
+        assert!(fx.is_empty() && off.has_media());
+        assert_eq!(off.items[0].found, Found::Refused(Refusal::LookupOff));
         let (protected, _) = m.update(MediaEvent::Resolved {
             id: 0,
             result: Err(Refusal::Protected),

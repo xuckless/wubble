@@ -1019,7 +1019,19 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
         out.push(info(row.title.to_owned()));
         match row.found {
             Found::Resolving => out.push(info("Reading the stream\u{2026}".into())),
-            Found::Refused(refusal) => out.push(info(refusal.message())),
+            Found::Refused(refusal) => {
+                out.push(info(refusal.message()));
+                if *refusal == wubble_core::media::Refusal::LookupOff {
+                    out.push(Entry {
+                        label: "Open Settings".into(),
+                        command: Command::Perform(Action::OpenSettings),
+                        enabled: true,
+                        icon: "",
+                        shortcut: String::new(),
+                        danger: false,
+                    });
+                }
+            }
             Found::Ready(variants) => {
                 out.extend(
                     wubble_core::media::select::choices(variants)
@@ -1319,6 +1331,33 @@ mod tests {
         );
         assert!(entries[1].enabled && !entries[4].enabled);
         assert_eq!(entries[2].command, Command::Separator);
+    }
+
+    #[test]
+    fn a_youtube_lookup_that_is_off_points_to_settings() {
+        use wubble_core::media::Refusal;
+        use wubble_core::media::detect::Found;
+        let off = Found::Refused(Refusal::LookupOff);
+        let failed = Found::Refused(Refusal::Failed("YouTube: Sign in".into()));
+        let rows = [
+            MediaRow { item: 0, title: "A", found: &off },
+            MediaRow { item: 1, title: "B", found: &failed },
+        ];
+        let e = media_entries(&rows, true);
+        let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "A",
+                "Saving a YouTube video asks YouTube for its formats: off in Settings",
+                "Open Settings",
+                "",
+                "B",
+                "Cannot read the stream: YouTube: Sign in"
+            ]
+        );
+        assert_eq!(e[2].command, Command::Perform(Action::OpenSettings));
+        assert!(e[2].enabled);
     }
 
     #[test]

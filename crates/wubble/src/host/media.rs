@@ -247,18 +247,48 @@ fn page_key(url: &str) -> &str {
 impl Host {
     pub(super) fn apply_media_settings(&mut self, settings: MediaSettings) {
         self.media.observer.set(&settings);
-        let youtube_off = !settings.youtube && self.media.settings.youtube;
+        let lookup_moved = settings.youtube != self.media.settings.youtube
+            || settings.enabled != self.media.settings.enabled;
         let save = self.video_save_now();
         self.media.settings = settings;
-        if youtube_off {
-            for list in self.media.tabs.values_mut() {
-                list.items.retain(|i| i.kind != Kind::YouTube);
+        if lookup_moved {
+            // YouTube pages already open: asked about again (or no longer), per the setting.
+            let tabs: Vec<TabId> = self.media.tabs.keys().copied().collect();
+            for tab in tabs {
+                if let Some(list) = self.media.tabs.get_mut(&tab) {
+                    list.items.retain(|i| i.kind != Kind::YouTube);
+                }
+                if let Some(url) = self.committed.get(&tab).cloned() {
+                    self.media_youtube_page(tab, &url);
+                }
             }
         }
         if let Some(window) = self.w.window.upgrade() {
             self.render_pill(&window);
         }
         self.video_save_redraw(save);
+    }
+
+    /// A YouTube video's page: listed to be looked up (`media.youtube` on), else listed as
+    /// off, with no request.
+    fn media_youtube_page(&mut self, tab: TabId, url: &str) {
+        if !self.media.settings.enabled || youtube::video_id(url).is_none() {
+            return;
+        }
+        let candidate = Candidate {
+            url: page_key(url).to_owned(),
+            kind: Kind::YouTube,
+            track: Track::Muxed,
+            container: Container::Mp4,
+            size: None,
+            ranges: false,
+        };
+        let event = if self.media.settings.youtube {
+            MediaEvent::Seen(candidate)
+        } else {
+            MediaEvent::Declined(candidate)
+        };
+        self.media_update(tab, event);
     }
 
     /// The main frame of `tab` committed `url` (before `committed` moves on): another page
@@ -271,18 +301,7 @@ impl Host {
         if !same {
             self.media_update(tab, MediaEvent::Navigated);
         }
-        let s = &self.media.settings;
-        if s.enabled && s.youtube && youtube::video_id(url).is_some() {
-            let candidate = Candidate {
-                url: page_key(url).to_owned(),
-                kind: Kind::YouTube,
-                track: Track::Muxed,
-                container: Container::Mp4,
-                size: None,
-                ranges: false,
-            };
-            self.media_update(tab, MediaEvent::Seen(candidate));
-        }
+        self.media_youtube_page(tab, url);
     }
 
     /// The tab closed: its list goes (its jobs keep running).
@@ -972,7 +991,7 @@ impl Host {
             .items
             .iter()
             .zip(&titles)
-            .filter(|(i, _)| !matches!(i.found, Found::Refused(Refusal::Failed(_))))
+            .filter(|(i, _)| i.is_shown())
             .map(|(i, title)| MediaRow {
                 item: i.id,
                 title,
