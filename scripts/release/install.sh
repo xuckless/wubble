@@ -156,9 +156,13 @@ uninstall() {
         ;;
     Darwin)
         for d in /Applications "$HOME/Applications"; do
-            if [ -d "$d/wubble.app" ]; then
+            [ -d "$d/wubble.app" ] || continue
+            # one that belongs to another account stays (rm would fail part-way through it)
+            if [ -w "$d/wubble.app" ] && [ -w "$d" ]; then
                 rm -rf "$d/wubble.app"
                 say "removed $d/wubble.app"
+            else
+                say "left $d/wubble.app (not yours to remove: it belongs to another account)"
             fi
         done
         if [ -d "$mac_support/updates" ]; then
