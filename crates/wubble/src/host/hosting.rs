@@ -19,6 +19,9 @@ pub struct McpPlace {
     pub default_profile: bool,
     /// This browser's binary (the relay's command).
     pub exe: PathBuf,
+    /// Where the agent apps' files are looked for: the home directory, or a scratch one in a
+    /// smoke's profile (a check never writes the owner's apps).
+    pub home: PathBuf,
 }
 
 /// The hosting state and what runs it.
@@ -26,9 +29,11 @@ pub struct McpPlace {
 pub(crate) struct McpHosting {
     pub(crate) state: Hosting,
     /// Known once the window is up (`Host::set_mcp`); the setting replayed before waits for it.
-    place: Option<McpPlace>,
+    pub(super) place: Option<McpPlace>,
     wanted: bool,
     hosted: Option<mcp::Hosted>,
+    /// Why an agent app was not written, by its id (shown on its row until the next try).
+    pub(super) notes: std::collections::HashMap<&'static str, String>,
 }
 
 impl Host {
@@ -116,7 +121,8 @@ impl Host {
                 let _ = std::fs::remove_file(&place.manifest);
             }
             // the agent apps' configuration (`host/harness.rs`)
-            Effect::Register | Effect::Unregister => {}
+            Effect::Register => self.mcp_register(),
+            Effect::Unregister => self.mcp_unregister(),
         }
     }
 

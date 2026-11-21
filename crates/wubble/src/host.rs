@@ -31,6 +31,7 @@ mod gallery;
 pub(crate) mod gallery_orbs;
 mod gesture;
 mod gpu;
+mod harness;
 mod hosting;
 mod hover;
 mod layers;

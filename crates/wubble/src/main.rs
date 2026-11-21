@@ -1121,6 +1121,10 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     });
     window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
     window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
+    window.on_agents_toggled(move |on| with_host_in(win, |host| host.agents_toggled(on)));
+    window.on_agents_copy(move |text| with_host_in(win, |host| host.agents_copy(&text)));
+    window.on_agent_app_added(move |id| with_host_in(win, |host| host.agent_app_added(&id)));
+    window.on_agent_app_removed(move |id| with_host_in(win, |host| host.agent_app_removed(&id)));
     window.on_find_edited(move |q| {
         with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
     });
@@ -1769,12 +1773,18 @@ fn run(
             profile: profile.to_owned(),
             default_profile,
             exe: std::env::current_exe().unwrap_or_default(),
+            home: match mode {
+                Mode::Browse { .. } => std::env::home_dir().unwrap_or_default(),
+                _ => profile.join("agent-apps-home"),
+            },
         })
     });
     // `--smoke mcp`: hosting turned on through the setting, as Settings does, then the client
     if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
         with_host(|host| {
-            host.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "1");
+            if let Err(e) = host.mcp_smoke_on() {
+                host.fail(format!("hosting on: {e}"));
+            }
         });
         mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
     }

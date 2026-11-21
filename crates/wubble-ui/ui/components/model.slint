@@ -886,3 +886,26 @@ export struct ExtensionPopup {
     width: length,
     height: length,
 }
+
+// The Settings page's Agents (MCP) group (agents-section.slint), from the host
+// (`host/harness.rs`): the switch, the hosting status, where turning it on adds wubble (or, while
+// on, where it was added), the relay command and the generic server entry to copy.
+export struct AgentsView {
+    on: bool,
+    status: string,
+    adds: string,
+    command: string,
+    entry: string,
+}
+
+// One agent app found on this computer. `added`: wubble's entry is in its file; `writable`:
+// wubble writes that file (else the entry is offered to copy); `opted-out`: the owner took
+// wubble out of it, and turning hosting on leaves it alone.
+export struct AgentAppItem {
+    id: string,
+    name: string,
+    note: string,
+    added: bool,
+    writable: bool,
+    opted-out: bool,
+}

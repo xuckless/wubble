@@ -543,6 +543,7 @@ fn render_page(window: &AppWindow, host: &Host) {
         window.set_settings_about(about());
     }
     host.render_updates(window);
+    host.render_agents(window);
 }
 
 #[cfg(test)]

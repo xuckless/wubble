@@ -3389,6 +3389,59 @@ impl Host {
         });
     }
 
+    /// `--smoke mcp`: agent apps in the smoke's scratch home (Codex without a file yet, opencode
+    /// with comments, VS Code, which wubble does not write), then hosting turned on through its
+    /// setting: wubble is in the first two, a backup beside the one that had a file; Remove and
+    /// Add on Codex take it out (and keep it out) and put it back.
+    pub(crate) fn mcp_smoke_on(&mut self) -> Result<(), String> {
+        use wubble_core::agent::harness;
+        let home = self
+            .hosting
+            .place
+            .as_ref()
+            .map(|p| p.home.clone())
+            .ok_or("no MCP place")?;
+        let io = |e: std::io::Error| e.to_string();
+        std::fs::create_dir_all(home.join(".codex")).map_err(io)?;
+        std::fs::create_dir_all(home.join(".config/opencode")).map_err(io)?;
+        std::fs::create_dir_all(home.join(".config/Code/User")).map_err(io)?;
+        let opencode = home.join(".config/opencode/opencode.jsonc");
+        std::fs::write(&opencode, SMOKE_OPENCODE).map_err(io)?;
+        self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "1");
+        if !self.mcp_serving() {
+            return Err(format!("not hosting: {:?}", self.hosting.state));
+        }
+        let codex = home.join(".codex/config.toml");
+        let has = |id: &str, file: &std::path::Path| {
+            let h = harness::find(id).ok_or("no such app")?;
+            let text = std::fs::read_to_string(file).unwrap_or_default();
+            h.has(&text).map_err(|e| e.to_string())
+        };
+        if !has("codex", &codex)? || !has("opencode", &opencode)? {
+            return Err("not added to Codex and opencode".into());
+        }
+        let backup = harness::backup_of(&opencode);
+        if std::fs::read_to_string(&backup).ok().as_deref() != Some(SMOKE_OPENCODE) {
+            return Err("no backup of opencode's file".into());
+        }
+        if home.join(".config/Code/User/mcp.json").exists() {
+            return Err("VS Code's file was written".into());
+        }
+        self.agent_app_removed("codex");
+        if has("codex", &codex)? {
+            return Err("Remove left Codex's entry".into());
+        }
+        self.agent_app_added("codex");
+        if !has("codex", &codex)? {
+            return Err("Add did not put Codex's entry back".into());
+        }
+        println!(
+            "smoke: mcp apps ok on: added to Codex (a new config.toml) and opencode (comments \
+             kept, backup beside it), VS Code only offered; Remove and Add on Codex"
+        );
+        Ok(())
+    }
+
     /// `--smoke mcp`: hosting turned off through its setting while a session runs: the session
     /// ends and its Space closes, the socket and the manifest go, a new connection is refused.
     fn mcp_smoke_off(&mut self) -> Result<(), String> {
@@ -3422,6 +3475,18 @@ impl Host {
         if socket.exists() || manifest.exists() {
             return Err(format!("left behind: {socket:?} {manifest:?}"));
         }
+        // the agent apps: wubble's entries out, the rest of each file as it was
+        if let Some(home) = self.hosting.place.as_ref().map(|p| p.home.clone()) {
+            let opencode = std::fs::read_to_string(home.join(".config/opencode/opencode.jsonc"))
+                .unwrap_or_default();
+            let codex =
+                std::fs::read_to_string(home.join(".codex/config.toml")).unwrap_or_default();
+            if opencode != SMOKE_OPENCODE || codex.contains("wubble") {
+                return Err(format!(
+                    "the apps' files kept wubble: {opencode:?} {codex:?}"
+                ));
+            }
+        }
         use interprocess::local_socket::prelude::*;
         let name = socket
             .as_path()
@@ -3433,7 +3498,7 @@ impl Host {
         println!(
             "smoke: mcp hosting ok on through its setting at run time, off through it with a \
              session running: the session ended and its Space closed, socket and manifest gone, \
-             a new connection refused"
+             a new connection refused, wubble out of the apps' files (opencode's byte for byte)"
         );
         Ok(())
     }
@@ -3453,3 +3518,7 @@ impl Host {
         });
     }
 }
+
+/// `--smoke mcp`: opencode's file as a person keeps it (a comment, an empty server table).
+const SMOKE_OPENCODE: &str =
+    "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  // mine\n  \"mcp\": {}\n}\n";

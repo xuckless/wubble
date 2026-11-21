@@ -360,6 +360,7 @@ impl Host {
                 self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
+            Overlay::AgentsHosting => self.gallery_agents(),
             Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt => {}
             Overlay::None
             | Overlay::Long(Long::Pill | Long::Crowd)

@@ -115,6 +115,9 @@ pub enum Overlay {
     SettingsSearch(&'static str),
     /// Two extensions installed (in memory only): Settings' Extensions section.
     ExtensionsList,
+    /// Hosting on with three agent apps in the run's scratch home (Claude Code, Codex, VS Code):
+    /// Settings' Agents (MCP) section.
+    AgentsHosting,
     /// The footer's extensions popover over two extensions' actions.
     ExtensionsPopover,
     /// The install prompt over an extension that asks for several things.
@@ -379,6 +382,12 @@ pub const SCENES: &[Scene] = &[
         overlay: Overlay::ExtensionsList,
         ..on("settings-extensions", InternalPage::Settings)
     },
+    // Settings' Agents (MCP) section, hosting, with the apps wubble added itself to
+    Scene {
+        click: Some(NAV_AGENTS),
+        overlay: Overlay::AgentsHosting,
+        ..on("settings-agents", InternalPage::Settings)
+    },
     // a search that names built-in pages: their redirect rows over the settings it leaves
     Scene {
         overlay: Overlay::SettingsSearch("tabs"),
@@ -498,12 +507,13 @@ const AGENT_SPACE_BIN: (u16, u16) = (229, 718);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
 // Settings at the design's 1360x880 (extended sidebar): a routing rule's row in General, the
-// section list's Spaces, Sites and Updates, the Spaces list's second row.
+// section list's Spaces, Sites, Extensions, Agents and Updates, the Spaces list's second row.
 const NAV_GENERAL: (u16, u16) = (420, 197);
 const NAV_SPACES: (u16, u16) = (420, 387);
 const NAV_SITES: (u16, u16) = (420, 425);
 const NAV_EXTENSIONS: (u16, u16) = (420, 501);
-const NAV_UPDATES: (u16, u16) = (420, 539);
+const NAV_AGENTS: (u16, u16) = (420, 539);
+const NAV_UPDATES: (u16, u16) = (420, 577);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);
