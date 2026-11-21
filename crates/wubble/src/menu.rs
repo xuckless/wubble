@@ -1340,8 +1340,16 @@ mod tests {
         let off = Found::Refused(Refusal::LookupOff);
         let failed = Found::Refused(Refusal::Failed("YouTube: Sign in".into()));
         let rows = [
-            MediaRow { item: 0, title: "A", found: &off },
-            MediaRow { item: 1, title: "B", found: &failed },
+            MediaRow {
+                item: 0,
+                title: "A",
+                found: &off,
+            },
+            MediaRow {
+                item: 1,
+                title: "B",
+                found: &failed,
+            },
         ];
         let e = media_entries(&rows, true);
         let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
@@ -1364,9 +1372,21 @@ mod tests {
     fn a_pair_without_a_muxer_says_it_is_two_files() {
         use wubble_core::media::detect::Found;
         use wubble_core::media::{Container, Track, Variant};
-        let mut video = Variant::file("https://a.test/v.mp4", Track::Video, Container::Mp4, None, false);
+        let mut video = Variant::file(
+            "https://a.test/v.mp4",
+            Track::Video,
+            Container::Mp4,
+            None,
+            false,
+        );
         video.height = Some(720);
-        let audio = Variant::file("https://a.test/a.m4a", Track::Audio, Container::M4a, None, false);
+        let audio = Variant::file(
+            "https://a.test/a.m4a",
+            Track::Audio,
+            Container::M4a,
+            None,
+            false,
+        );
         let found = Found::Ready(vec![video, audio]);
         let rows = [MediaRow {
             item: 0,

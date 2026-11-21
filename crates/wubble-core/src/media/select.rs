@@ -205,7 +205,9 @@ fn tell_apart(rows: &mut [Choice], variants: &[Variant]) {
     for pass in 0..3 {
         let labels: Vec<String> = rows.iter().map(|c| c.label.clone()).collect();
         for i in 0..rows.len() {
-            let twins: Vec<usize> = (0..rows.len()).filter(|&j| labels[j] == labels[i]).collect();
+            let twins: Vec<usize> = (0..rows.len())
+                .filter(|&j| labels[j] == labels[i])
+                .collect();
             if twins.len() < 2 {
                 continue;
             }
@@ -217,7 +219,8 @@ fn tell_apart(rows: &mut [Choice], variants: &[Variant]) {
                 }
                 1 => rows[i].bandwidth.filter(|b| *b > 0).map(rate),
                 _ => {
-                    let (Selection::Single(v) | Selection::Pair { video: v, .. }) = rows[i].selection;
+                    let (Selection::Single(v) | Selection::Pair { video: v, .. }) =
+                        rows[i].selection;
                     let named = variants[v].codecs.trim();
                     (!named.is_empty()).then(|| named.to_owned())
                 }
@@ -251,7 +254,9 @@ const LADDER_BITS: [(u32, u64); 5] = [
 pub fn choose(choices: &[Choice], quality: Quality, can_join: bool) -> Option<usize> {
     let whole = choices.iter().any(|c| !c.pair && !c.audio_only);
     let usable = |c: &Choice| (can_join || !whole || !c.pair) && !c.audio_only;
-    let pool: Vec<usize> = (0..choices.len()).filter(|&i| usable(&choices[i])).collect();
+    let pool: Vec<usize> = (0..choices.len())
+        .filter(|&i| usable(&choices[i]))
+        .collect();
     // Only audio on offer: the first of them.
     let first = pool
         .first()
@@ -464,7 +469,10 @@ mod tests {
             .into_iter()
             .map(|c| c.label)
             .collect();
-        assert!(labels.iter().any(|l| l.contains("English 5.1")), "{labels:?}");
+        assert!(
+            labels.iter().any(|l| l.contains("English 5.1")),
+            "{labels:?}"
+        );
         assert_ne!(labels[0], labels[1]);
         assert_eq!(codec_name("vp9"), Some("VP9"));
         assert_eq!(codec_name("mp4a.40.2"), None);

@@ -350,9 +350,14 @@ pub enum ProbePhase {
     /// Not started: the settings go in on the first run.
     Start,
     /// Watching the list until `until`.
-    Watching { until: std::time::Instant, played: bool },
+    Watching {
+        until: std::time::Instant,
+        played: bool,
+    },
     /// Saves started; waiting for every download to end (or `until`).
-    Saving { until: std::time::Instant },
+    Saving {
+        until: std::time::Instant,
+    },
     Done,
 }
 

@@ -498,7 +498,9 @@ impl TryFrom<Cli> for Command {
                     "--smoke media=probe needs --url",
                 ));
             }
-            (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N and the probes"),
+            (Some(_), Some(_), None) => {
+                return conflict("--url only applies to --smoke frames=N and the probes");
+            }
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Update), None, None) => Smoke::Update,
             (Some(SmokeArg::Quit), None, None) => Smoke::Quit,

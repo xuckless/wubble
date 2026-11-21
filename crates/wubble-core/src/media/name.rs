@@ -25,7 +25,8 @@ pub fn page_title(title: &str) -> &str {
 
 /// Extensions a title may carry from a file name (a media page's title is its file's name).
 const MEDIA_EXTS: [&str; 14] = [
-    "mp4", "m4v", "mov", "webm", "mkv", "ogv", "ogg", "opus", "mp3", "m4a", "aac", "ts", "flac", "wav",
+    "mp4", "m4v", "mov", "webm", "mkv", "ogv", "ogg", "opus", "mp3", "m4a", "aac", "ts", "flac",
+    "wav",
 ];
 
 /// The title without a trailing media extension (`clip.mp4` is `clip`): the saved file adds its
@@ -48,7 +49,13 @@ pub fn url_title(url: &str) -> String {
     let last = path.rsplit('/').next().unwrap_or_default();
     let decoded = ::url::form_urlencoded::parse(last.replace('+', "%2B").as_bytes())
         .next()
-        .map(|(k, v)| if v.is_empty() { k.into_owned() } else { format!("{k}={v}") })
+        .map(|(k, v)| {
+            if v.is_empty() {
+                k.into_owned()
+            } else {
+                format!("{k}={v}")
+            }
+        })
         .unwrap_or_default();
     without_media_ext(&decoded).to_owned()
 }
@@ -90,7 +97,10 @@ mod tests {
 
     #[test]
     fn a_title_from_a_url_is_its_file_name_decoded() {
-        assert_eq!(url_title("https://a.test/v/Clip%20One.webm?x=1#t"), "Clip One");
+        assert_eq!(
+            url_title("https://a.test/v/Clip%20One.webm?x=1#t"),
+            "Clip One"
+        );
         assert_eq!(url_title("https://a.test/v/a+b.mp4"), "a+b");
         assert_eq!(url_title("https://a.test/dl?id=5"), "dl");
         assert_eq!(url_title("https://a.test/"), "");

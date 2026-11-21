@@ -112,7 +112,9 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
             // A variant whose codecs name no picture and which has no resolution is sound only
             // (Apple's `gear0`), not "the smallest video".
             let sound_only = v.resolution.is_none()
-                && v.codecs.as_deref().is_some_and(|c| !c.trim().is_empty() && !names_picture(c));
+                && v.codecs
+                    .as_deref()
+                    .is_some_and(|c| !c.trim().is_empty() && !names_picture(c));
             Variant {
                 track: if sound_only {
                     Track::Audio
@@ -314,7 +316,10 @@ gear0/prog_index.m3u8
         };
         assert_eq!((v[0].track, v[1].track), (Track::Muxed, Track::Audio));
         let fmp4 = with_container(v, Container::Mp4);
-        assert_eq!((fmp4[0].container, fmp4[1].container), (Container::Mp4, Container::M4a));
+        assert_eq!(
+            (fmp4[0].container, fmp4[1].container),
+            (Container::Mp4, Container::M4a)
+        );
         assert!(names_picture("mp4a.40.2, hvc1.2.4.L93") && !names_picture("mp4a.40.5,ec-3"));
     }
 

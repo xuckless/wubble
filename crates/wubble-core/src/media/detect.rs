@@ -534,7 +534,8 @@ mod tests {
         });
         assert!(!failed.has_media());
         // A YouTube lookup that failed says so; one that is off says so, with no request.
-        let (yt, fx) = TabMedia::default().update(seen("https://youtu.be/dQw4w9WgXcQ", Kind::YouTube));
+        let (yt, fx) =
+            TabMedia::default().update(seen("https://youtu.be/dQw4w9WgXcQ", Kind::YouTube));
         assert_eq!(fx.len(), 1);
         let (yt, _) = yt.update(MediaEvent::Resolved {
             id: 0,

@@ -455,8 +455,20 @@ mod tests {
             got,
             [
                 (file, Some(ByteRange { start: 0, len: 820 })),
-                (file, Some(ByteRange { start: 820, len: 181 })),
-                (file, Some(ByteRange { start: 1001, len: 1000 })),
+                (
+                    file,
+                    Some(ByteRange {
+                        start: 820,
+                        len: 181
+                    })
+                ),
+                (
+                    file,
+                    Some(ByteRange {
+                        start: 1001,
+                        len: 1000
+                    })
+                ),
             ]
         );
     }

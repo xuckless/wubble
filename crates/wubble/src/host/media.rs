@@ -334,11 +334,12 @@ impl Host {
         if let Some(view) = self.tab_view(tab) {
             return Some(view.browser_id());
         }
-        let same = self
-            .views
-            .keys()
-            .copied()
-            .find(|t| self.model.tabs.get(t).is_some_and(|m| m.container == container))?;
+        let same = self.views.keys().copied().find(|t| {
+            self.model
+                .tabs
+                .get(t)
+                .is_some_and(|m| m.container == container)
+        })?;
         self.tab_view(same).map(|v| v.browser_id())
     }
 
@@ -349,9 +350,9 @@ impl Host {
             .map(|r| r.container)
             .or_else(|| self.model.tabs.get(&tab).map(|t| t.container))
             .unwrap_or(ContainerId::DEFAULT);
-        let browser_id = self.fetch_browser(tab, container).ok_or(
-            "the page it came from is closed: open that site's page again, then resume",
-        )?;
+        let browser_id = self
+            .fetch_browser(tab, container)
+            .ok_or("the page it came from is closed: open that site's page again, then resume")?;
         let id = self
             .media
             .fetcher
@@ -564,7 +565,8 @@ impl Host {
                             for i in &items {
                                 if let Found::Ready(v) = &i.found {
                                     let c = select::choices(v);
-                                    let pick = select::choose(&c, self.media.settings.quality, can_join);
+                                    let pick =
+                                        select::choose(&c, self.media.settings.quality, can_join);
                                     say(format!("default picks {:?}", pick.map(|p| &c[p].label)));
                                     break;
                                 }
@@ -975,7 +977,8 @@ impl Host {
                 Found::Ready(variants) => {
                     let choices = select::choices(variants);
                     let can_join = wubble_engine::save::find_ffmpeg().is_some();
-                    select::choose(&choices, self.media.settings.quality, can_join).map(|c| (i.id, c))
+                    select::choose(&choices, self.media.settings.quality, can_join)
+                        .map(|c| (i.id, c))
                 }
                 _ => None,
             });
@@ -1007,7 +1010,8 @@ impl Host {
                 found: &i.found,
             })
             .collect();
-        let entries = crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
+        let entries =
+            crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
@@ -1376,7 +1380,8 @@ impl Host {
                     [("video", containers[0]), ("audio", containers[1])]
                         .iter()
                         .filter_map(|(what, c)| {
-                            self.media_path(&name::media_file_name(&title, what, *c)).ok()
+                            self.media_path(&name::media_file_name(&title, what, *c))
+                                .ok()
                         })
                         .collect()
                 } else {
@@ -1481,7 +1486,9 @@ impl Host {
         self.media_release(id);
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);
-        self.start_media(tab, container, page, title, note, variants, file, size, &url);
+        self.start_media(
+            tab, container, page, title, note, variants, file, size, &url,
+        );
     }
 }
 
