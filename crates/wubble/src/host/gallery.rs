@@ -415,9 +415,13 @@ impl Host {
         // the page stays, so its jump is short
         let nav_reset =
             scene.page == Some(wubble_core::pages::InternalPage::Settings) && scene.click.is_some();
+        // clearing a search puts the page back at its top: only when there is one
+        let unsearch = nav_reset && !self.settings_query_text().is_empty();
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
-            if nav_reset {
+            if unsearch {
                 window.invoke_settings_type_query("".into());
+            }
+            if nav_reset {
                 window.invoke_settings_nav_to_top();
             }
             window.invoke_dismiss_command_bar();
