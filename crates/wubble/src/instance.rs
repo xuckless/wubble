@@ -96,7 +96,7 @@ pub fn path_of(socket: Socket, profile: &Path, _runtime: &Path) -> PathBuf {
 }
 
 /// The instance's named pipe of `profile`, named by a hash of its path.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(test)]
 pub fn pipe_path(profile: &Path) -> PathBuf {
     pipe_of(Socket::Instance, profile)
 }
