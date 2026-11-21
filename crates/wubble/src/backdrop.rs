@@ -440,6 +440,8 @@ impl Glass {
         // a changed window size is a change like a changed glass list: it wakes a still scene
         s.run
             .frame_done(window, animating, glass.is_some() || resized);
+        // the scene drew into the textures Slint already shows: Slint cannot see that
+        crate::partial::mark_window(window.window());
         true
     }
 

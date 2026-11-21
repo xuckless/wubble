@@ -40,6 +40,7 @@ mod pages_smoke;
 mod pagescripts;
 mod panes;
 mod parity;
+mod partial;
 mod passwords_smoke;
 mod perform;
 mod persist;
@@ -345,6 +346,7 @@ fn main() -> ExitCode {
                 begin_frames: m.begin_frames,
                 out: m.out,
                 load,
+                page: m.page,
             };
             with_smoke_dir(|config, dir| report_run(mode, config, dir))
         }
@@ -917,6 +919,8 @@ enum Mode {
         out: Option<PathBuf>,
         /// `--measure load`: the pages' server and what the engine hooks requests with.
         load: Option<(Arc<load_server::LoadServer>, load_run::Variant)>,
+        /// `--measure-page`: the page instead of the scenario's own.
+        page: Option<String>,
     },
 }
 
@@ -1874,11 +1878,13 @@ fn run(
         Mode::Measure {
             scenario,
             begin_frames,
+            page,
             ..
         } => (
             // `--measure load` navigates from here to its own pages; the memory run starts on
             // an empty window and opens its tabs itself.
-            (*scenario != measure::Scenario::Memory).then(|| page_url(scenario.page())),
+            (*scenario != measure::Scenario::Memory)
+                .then(|| page.clone().unwrap_or_else(|| page_url(scenario.page()))),
             Checks {
                 begin_frames: *begin_frames,
                 ..none

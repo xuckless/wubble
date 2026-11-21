@@ -25,7 +25,7 @@ this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --worksp
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
-in its order. First step: stop redrawing the shell per page frame (the flame graph's 76 % of the main thread).
+in its order. Step 1 (partial rendering of the shell) is done; next: CEF's damage rects through the frame path.
 Measure with [scripts/bench/](scripts/bench/README.md) (`profile.sh`, `breakdown.py`, `runner.py`) so every step has a
 before and an after on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md). Measured by
 hand only: nothing in `cargo test` or CI asserts a timing.
@@ -218,7 +218,9 @@ Open, to build or check:
 
 ## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:
-- [ ] Stop redrawing the shell per page frame: a page frame redraws only its pane; the sidebar and bars are not re-walked or re-recorded (partial rendering in Slint's Skia renderer on wgpu, or the shell cached as a layer)
+- [ ] The shell's items are still walked twice per page frame (Slint's dirty-region pass and render walk, now the largest part of a frame: measurements.md "Shell partial rendering"); skipping them needs i-slint-core changes or a page path around Slint
+- [ ] `SLINT_SKIA_PARTIAL_RENDERING=verify` in `--smoke tabs`: 4 frames drawn whole show the pane empty where a whole redraw right after shows the page (next to the smoke's snapshots; none in `--measure`); and the gallery's `65-settings-search-pages` and `68-downloads` differ from base with partial rendering on only (a row's highlight, the address beam and focus ring): find why
+- [ ] A scene render (ambience, 8 to 10 a second during video and scroll) marks the whole window dirty; mark only what the scene shows through
 - [ ] Partial rendering inside the page: CEF's damage rects through the frame path, so only the video or the moving part redraws
 - [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`
 - [ ] Profile again with kernel time (needs root for `perf`): GPU driver calls and present, about a third of the main process's CPU, unseen so far

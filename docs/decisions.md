@@ -236,6 +236,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Priority under load | The browser asks systemd for its own scope (`CPUWeight=300`) first in `main`, so CEF's processes start inside it. | 2026-11-19 |
 | GPU memory | Skia keeps opacity-layer targets to its 256 MiB budget, so at most four tab rows animate at once; hidden OSR compositors keep a backbuffer until the M6 CEF patch. | 2026-11-19 |
 | Release profile | `release`: thin LTO, one codegen unit, abort on panic, symbols kept; `dist` (fat LTO, stripped) is what ships. | 2026-11-19 |
+| Shell partial rendering | Slint's Skia renderer vendored (`vendor/i-slint-renderer-skia`) with partial rendering on its wgpu surface: Skia draws into a kept frame (only the dirty region when it holds the last one), copied to the swapchain image; a page frame redraws its pane and none of the shell's items; a scene frame marks the window. Rejected for now: caching the shell as a Slint layer (re-renders whole on any change inside, and Slint still walks it), and presenting page frames without a Slint render (redraws the card's rounded corners and the pane's transforms outside Slint; at most the 0.67 ms of the measured 0.9 ms Slint frame); measurements.md 2026-11-21 | 2026-11-21 |
 
 ## Build and release
 

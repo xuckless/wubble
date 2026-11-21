@@ -223,6 +223,45 @@ wubble is about 16 % behind Chromium on Speedometer and within one run's noise o
 
 Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
 
+## Shell partial rendering (pf/perf step 1, 2026-11-21)
+
+Same machine, release builds (`release` profile, symbols kept) of the commit before and after, on the invisible
+display (`scripts/headless.sh`, 1360x880 at 60 Hz). The machine was **not quiet**: other work kept the load
+average between 11 and 40 for the whole session, so CPU shares and frame rates swing by 2x between runs of the
+same binary; the runs alternated base, step, base, step (3 each, `notes`-side script), so both saw the same
+spread. Read the per-sample shares below, not the absolute CPU.
+
+Main thread during the looping 1080p60 VP9 clip (`scripts/bench/profile.sh`, 20 s of `perf` LBR each), share of
+the main thread's user samples; base runs 1 to 3, then step 1's:
+
+| Main thread | base | step 1 |
+|---|---|---|
+| Slint render of the window, total | 63.2, 61.1, 61.5 | 53.2, 60.2, 59.9 |
+| - item tree walk and property evaluation | 18.7, 20.8, 20.8 | 24.3, 29.0, 27.3 |
+| - Skia flush to the GPU | 15.4, 14.2, 14.6 | 8.8, 9.7, 10.0 |
+| - recording paths, text, rectangles, layers | 18.0, 14.2, 14.1 | 7.0, 6.8, 8.4 |
+| - present and surface acquire | 5.7, 5.2, 6.2 | 6.3, 6.3, 7.0 |
+| page frame arrival (import, blit) | 13.2, 15.5, 12.9 | 18.0, 18.4, 14.9 |
+| CEF message pump | 18.4, 17.2, 20.2 | 22.6, 16.7, 19.5 |
+| wubble main process, share of the tree's user samples | 25.7, 20.6, 23.1 | 20.9, 19.0, 20.5 |
+
+`--measure video` and `--measure scroll` (10 s each): Slint render p50 0.51, 0.55, 1.00 ms (base) against 0.56,
+0.26, 0.38 ms (step 1) for video; 0.48, 1.53, 1.54 against 0.35, 0.82, 1.08 for scroll. Step 1's frames: 64 to 75 %
+redraw less than the whole window, 14 to 17 items drawn per frame (the whole shell is several hundred), dirty share
+0.68 to 0.82 of the window (a page frame redraws its pane, 82 % of this window; the scene's 8 to 10 renders a
+second, the ambience, mark the whole window).
+
+What it buys: recording and flushing the shell's items is gone from page frames (about 13 points of the main
+thread); the walk stays. Slint's partial renderer visits every item twice a frame (dirty regions, then the
+render walk, which skips only drawing), so the walk is now the largest part; skipping it needs changes in
+i-slint-core or a page path around Slint (decisions.md "Shell partial rendering"). `SLINT_SKIA_PARTIAL_RENDERING=verify`
+compared every presented frame with a whole redraw: 0 mismatches in `--measure video` and `scroll`; the `tabs`
+smoke shows 4 frames where the pane is drawn empty and filled in the whole redraw right after, frames drawn whole
+(not a partial-region miss), next to its snapshots; unexplained, TODO.md.
+
+Re-measure on a real display: `scripts/bench/profile.sh` against both builds (README there), and
+`SLINT_SKIA_PARTIAL_RENDERING=off` on the same build for an A/B without a rebuild.
+
 ## One thinking orb (xm/orbs)
 
 2026-11-20, Linux release, RTX 5060, headless display (`scripts/headless.sh`, 60 Hz, 1360x880 at 1x), `--measure idle --seconds 8` on the idle page, with `WUBBLE_MEASURE_ORB=<state>` putting one 64 px orb, moving, on the library's stage (`host/gallery_orbs.rs` `measure_one`). Load average 12 to 17 (a build on the box).

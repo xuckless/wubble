@@ -3087,8 +3087,6 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-skia"
 version = "1.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8919b3fa7b4abb002d13648b4d3ad321c133feda0317f8bdeb9fb920a9a59bae"
 dependencies = [
  "bytemuck",
  "cfg_aliases",
@@ -8666,6 +8664,7 @@ dependencies = [
  "i-slint-backend-testing",
  "i-slint-backend-winit",
  "i-slint-core",
+ "i-slint-renderer-skia",
  "interprocess",
  "libc",
  "log",

@@ -1001,6 +1001,9 @@ struct Session {
     /// `nvidia-smi` sampling the GPU over the recording, then what it printed.
     gpu: Option<Child>,
     gpu_text: Option<String>,
+    /// Partial rendering's counts when recording started, then over the recording.
+    partial_start: Option<crate::partial::Totals>,
+    partial: Option<crate::partial::Totals>,
 }
 
 impl Session {
@@ -1023,6 +1026,8 @@ impl Session {
             cpu_end: None,
             gpu: None,
             gpu_text: None,
+            partial_start: None,
+            partial: None,
         }
     }
 
@@ -1076,6 +1081,7 @@ impl Session {
         if self.scenario == Scenario::Startup {
             return;
         }
+        self.partial_start = Some(crate::partial::totals());
         // Long done: the warm-up is seconds, the walk tens of milliseconds.
         self.meter = self.finding.take().and_then(|t| t.join().ok());
         self.cpu_start = self.cpu_times().map(|times| (Instant::now(), times));
@@ -1088,6 +1094,7 @@ impl Session {
             return;
         }
         self.ended = true;
+        self.partial = self.partial_start.map(crate::partial::since);
         self.cpu_end = self.cpu_times().map(|times| (Instant::now(), times));
         if let Some(mut child) = self.gpu.take() {
             let _ = child.kill();
@@ -1391,6 +1398,9 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
         None => "gpu: n/a (no nvidia-smi)".into(),
     };
     let _ = writeln!(report, "{gpu}");
+    if let Some(partial) = session.partial {
+        let _ = writeln!(report, "{}", crate::partial::report(partial));
+    }
     Some((report, csv))
 }
 

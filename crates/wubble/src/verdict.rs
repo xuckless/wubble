@@ -261,6 +261,7 @@ mod tests {
             begin_frames: false,
             out: None,
             load: None,
+            page: None,
         };
         let measured = Outcome {
             measured: Some(Ok(())),
