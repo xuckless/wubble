@@ -397,8 +397,15 @@ impl Host {
         self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
-    /// A new running entry of the list (a media download), stored and shown; its id.
-    pub(super) fn add_download_entry(&mut self, url: &str, path: &Path, total: Option<u64>) -> i64 {
+    /// A new running entry of the list (a media download from a tab of `container`), stored and
+    /// shown; its id.
+    pub(super) fn add_download_entry(
+        &mut self,
+        url: &str,
+        path: &Path,
+        total: Option<u64>,
+        container: ContainerId,
+    ) -> i64 {
         let d = &mut self.downloads;
         let entry = DownloadEntry {
             id: d.next_id,
@@ -409,7 +416,7 @@ impl Host {
             total,
             state: DownloadState::Running,
             started_ms: now_ms(),
-            container: ContainerId::DEFAULT,
+            container,
         };
         d.next_id += 1;
         self.store.add_download(&entry);
