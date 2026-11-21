@@ -7,7 +7,8 @@ import { Palette, Space } from "../gen/tokens.slint";
 import { BrowserCss } from "../gen/css.slint";
 import { Shell } from "../derived.slint";
 import { StatusBubble } from "../../components/status-bubble.slint";
-import { PressableButton } from "../controls/button.slint";
+import { IconButton } from "../controls/icon-button.slint";
+import { Glyph } from "../controls/icon.slint";
 import { SeamStrip, SeamKind } from "../controls/seam.slint";
 
 // @source slint-split-view
@@ -170,14 +171,10 @@ export component SplitView inherits Rectangle {
                 && touch.mouse-x < Shell.status-margin + self.width + Shell.status-dodge
                 && touch.mouse-y > parent.height - Shell.status-margin - self.height - Shell.status-dodge;
         }
-        if p.closable: PressableButton {
+        if p.closable: IconButton {
             x: parent.width - self.width - Space.s2;
             y: Space.s2;
-            width: 28px;
-            // wubble change: its own height; unset, it would take the pane's whole height
-            height: 28px;
-            text: "×";
-            // wubble change: spoken as words, not the sign
+            icon-path: Glyph.close;
             label: "Close pane";
             clicked => { root.pane-close(p.id); }
         }

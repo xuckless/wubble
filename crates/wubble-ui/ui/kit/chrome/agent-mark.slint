@@ -16,6 +16,7 @@ import { Calm } from "../motion/calm.slint";
 
 export component AgentMark inherits Rectangle {
     callback stopped();
+    out property <bool> hovered: touch.has-hover;
     // the slot keeps the row's height, the tile in it is the 22 square
     width: Shell.speaker;
     accessible-role: AccessibleRole.button;

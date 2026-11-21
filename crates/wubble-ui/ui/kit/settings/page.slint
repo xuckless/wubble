@@ -22,6 +22,8 @@ import { PageScroll, NavScroll } from "../../components/page-scroll.slint";
 export global SettingsLayout {
     out property <color> accent: Palette.sky;
     out property <length> narrow: SettingsCss.max-width-759px--query-max-width;
+    out property <length> narrow-top: SettingsCss.max-width-759px-st-grid--padding-top;
+    out property <length> narrow-main-top: SettingsCss.max-width-759px-st-main--padding-top;
     out property <float> slider-range: 500;
     // a fractional setting's slider snaps to hundredths (two decimals shown)
     out property <float> float-step: 0.01;

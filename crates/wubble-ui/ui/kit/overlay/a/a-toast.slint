@@ -39,13 +39,15 @@ export component AToast inherits Rectangle {
     tw := Tween {
         on: root.shown;
     }
-    OverlapLook {
+    look := OverlapLook {
         e: tw.t;
         entering: root.shown;
         pill := GlassPanel {
             key: root.key;
             over-layer: root.layer;
             present: root.visible && tw.t > 0;
+            scene-alpha: tw.t;
+            scene-scale: look.zoom;
             tier: GlassTier.thick;
             radius: min(self.height, Shell.toast-height) / 2;
             over-content: true;

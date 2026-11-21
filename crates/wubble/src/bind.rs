@@ -28,8 +28,19 @@ pub(crate) fn sync<T: Clone + PartialEq + 'static>(
     rows: Vec<T>,
     set: impl FnOnce(ModelRc<T>),
 ) -> bool {
+    sync_by(current, rows, PartialEq::eq, set)
+}
+
+/// [`sync`] with `same` deciding whether a row changed (for structs containing inner `ModelRc`s
+/// or wgpu images whose default `PartialEq` is pointer identity).
+pub(crate) fn sync_by<T: Clone + 'static>(
+    current: ModelRc<T>,
+    rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
+    set: impl FnOnce(ModelRc<T>),
+) -> bool {
     match current.as_any().downcast_ref::<VecModel<T>>() {
-        Some(model) => wubble_ui::sync(model, rows),
+        Some(model) => wubble_ui::sync_by(model, rows, same),
         None => {
             set(ModelRc::from(Rc::new(VecModel::from(rows))));
             true

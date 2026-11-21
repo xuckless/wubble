@@ -48,6 +48,8 @@ export component APopover inherits Rectangle {
             key: root.key;
             over-layer: root.layer;
             present: root.mounted && tween.t > 0;
+            scene-alpha: tween.t;
+            scene-scale: look.zoom;
             tier: root.tier;
             radius: root.radius;
             film: root.film;

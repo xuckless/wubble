@@ -556,11 +556,16 @@ export component AppWindow inherits Window {
     callback bookmark-folder-requested();
     // (accept, remove, name, folder id; -1 is the top level)
     callback bookmark-sheet-answered(bool, bool, string, int);
-    // The downloads page reads `downloads` (the popover's model) and takes `download-action`.
+    // The downloads page: filtered by its search query (the popover keeps `downloads` unfiltered).
+    in property <[DownloadItem]> downloads-page-items;
+    in property <bool> downloads-searching;
+    in property <bool> downloads-has-finished;
+    callback downloads-query-changed(string);
     callback downloads-cleared();
     // The passwords page: nothing is listed until unlocked.
     in property <PasswordsView> passwords-view;
     in property <[LoginItem]> logins;
+    in property <bool> passwords-searching;
     callback passwords-query-changed(string);
     callback passwords-unlock();
     callback login-reveal(string);
@@ -1203,7 +1208,12 @@ export component AppWindow inherits Window {
             }
             downloads-page-ui := DownloadsPage {
                 open: root.page == InternalPageKind.downloads;
-                items: root.downloads;
+                items: root.downloads-page-items;
+                searching: root.downloads-searching;
+                has-finished: root.downloads-has-finished;
+                query-changed(q) => {
+                    root.downloads-query-changed(q);
+                }
                 action(id, a) => {
                     root.download-action(id, a);
                 }
@@ -1227,6 +1237,7 @@ export component AppWindow inherits Window {
                 open: root.page == InternalPageKind.passwords;
                 view: root.passwords-view;
                 logins: root.logins;
+                searching: root.passwords-searching;
                 query-changed(q) => {
                     root.passwords-query-changed(q);
                 }
@@ -1370,6 +1381,16 @@ export component AppWindow inherits Window {
                     root.boost-act(name);
                 }
             }
+            // Over the page and its find bar, under the toast and dialogs: the page's error.
+            error-ui := ErrorPanel {
+                error: root.page-error;
+                primary => {
+                    root.error-primary();
+                }
+                secondary => {
+                    root.error-secondary();
+                }
+            }
             // A brief notice at the page's top; one that waits for an answer (SponsorBlock's
             // question, its Undo) at its bottom, as the reader's controls: a top one sat on the
             // page's own top bar (a site's search field) for as long as it waited.
@@ -1390,14 +1411,36 @@ export component AppWindow inherits Window {
                     root.toast-closed();
                 }
             }
-            // Over the page and its find bar, under the dialog: the page's error.
-            error-ui := ErrorPanel {
-                error: root.page-error;
-                primary => {
-                    root.error-primary();
+            // The peek: over the page, under the sheets and the command bar.
+            GlanceCard {
+                glance: root.glance;
+                cursor: root.cursors[root.web-cursor];
+                closed => {
+                    root.glance-closed();
                 }
-                secondary => {
-                    root.error-secondary();
+                to-tab => {
+                    root.glance-to-tab();
+                }
+                to-split => {
+                    root.glance-to-split();
+                }
+                pointer-pressed(pane, button, x, y) => {
+                    root.web-pointer-pressed(pane, button, x, y);
+                }
+                pointer-released(pane, button, x, y) => {
+                    root.web-pointer-released(pane, button, x, y);
+                }
+                pointer-moved(pane, x, y) => {
+                    root.web-pointer-moved(pane, x, y);
+                }
+                pointer-left(pane, x, y) => {
+                    root.web-pointer-left(pane, x, y);
+                }
+                pointer-cancelled(pane) => {
+                    root.web-pointer-cancelled(pane);
+                }
+                scrolled(pane, x, y, dx, dy) => {
+                    root.web-scrolled(pane, x, y, dx, dy);
                 }
             }
             bookmark-sheet := BookmarkSheet {
@@ -1458,38 +1501,6 @@ export component AppWindow inherits Window {
             if root.swipe-progress != 0: SwipeChip {
                 progress: root.swipe-progress;
                 shift: root.swipe-shift;
-            }
-            // The peek: over the page, under the sheets and the command bar.
-            GlanceCard {
-                glance: root.glance;
-                cursor: root.cursors[root.web-cursor];
-                closed => {
-                    root.glance-closed();
-                }
-                to-tab => {
-                    root.glance-to-tab();
-                }
-                to-split => {
-                    root.glance-to-split();
-                }
-                pointer-pressed(pane, button, x, y) => {
-                    root.web-pointer-pressed(pane, button, x, y);
-                }
-                pointer-released(pane, button, x, y) => {
-                    root.web-pointer-released(pane, button, x, y);
-                }
-                pointer-moved(pane, x, y) => {
-                    root.web-pointer-moved(pane, x, y);
-                }
-                pointer-left(pane, x, y) => {
-                    root.web-pointer-left(pane, x, y);
-                }
-                pointer-cancelled(pane) => {
-                    root.web-pointer-cancelled(pane);
-                }
-                scrolled(pane, x, y, dx, dy) => {
-                    root.web-scrolled(pane, x, y, dx, dy);
-                }
             }
             // Tab-modal: over the page and its find bar, under the command bar.
             sheet := DialogSheet {
@@ -1681,8 +1692,8 @@ export component AppWindow inherits Window {
     }
 
     AutofillMenu {
-        x: permission-ui.x;
-        y: permission-ui.y + (root.permission.open ? permission-ui.height + Shell.prompt-gap : 0px);
+        x: content.x + Space.s3;
+        y: root.permission.open ? max(content.y + Space.s3, permission-ui.y + permission-ui.height + Shell.prompt-gap) : content.y + Space.s3;
         view: root.autofill;
         menu(i) => {
             root.autofill-menu(i);

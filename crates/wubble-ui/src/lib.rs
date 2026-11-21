@@ -18,8 +18,12 @@ pub const ELEMENT_IDS: bool = option_env!("WUBBLE_ELEMENT_IDS").is_some();
 /// Make `model` hold `rows`, in place: changed rows are rewritten, rows past the old end are
 /// added and rows past the new end removed. A Slint `for` keeps an instance per row it did not
 /// see removed, so a row's own state (hover, the press, a TouchArea's grab mid-drag, its tweens)
-/// survives a re-render; replacing the whole model would rebuild every row.
-pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) -> bool {
+/// survives a re-render; replacing the whole model would rebuild every row. `rows` is any
+/// iterator of known length, so a per-frame caller needs no intermediate `Vec`.
+pub fn sync<T: Clone + PartialEq + 'static>(
+    model: &VecModel<T>,
+    rows: impl IntoIterator<Item = T, IntoIter: ExactSizeIterator>,
+) -> bool {
     sync_by(model, rows, PartialEq::eq)
 }
 
@@ -27,15 +31,17 @@ pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) -
 /// [`same_image`]).
 pub fn sync_by<T: Clone + 'static>(
     model: &VecModel<T>,
-    rows: Vec<T>,
+    rows: impl IntoIterator<Item = T, IntoIter: ExactSizeIterator>,
     same: impl Fn(&T, &T) -> bool,
 ) -> bool {
-    let keep = model.row_count().min(rows.len());
-    let mut changed = rows.len() != model.row_count();
-    for _ in rows.len()..model.row_count() {
+    let rows = rows.into_iter();
+    let len = rows.len();
+    let keep = model.row_count().min(len);
+    let mut changed = len != model.row_count();
+    for _ in len..model.row_count() {
         model.remove(model.row_count() - 1);
     }
-    for (i, row) in rows.into_iter().enumerate() {
+    for (i, row) in rows.enumerate() {
         if i >= keep {
             model.push(row);
         } else if !model.row_data(i).is_some_and(|old| same(&old, &row)) {

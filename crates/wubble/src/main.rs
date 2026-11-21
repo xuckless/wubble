@@ -1530,6 +1530,7 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.media_menu_requested(x, y))
     });
     window.on_downloads_cleared(move || with_host_in(win, Host::downloads_cleared));
+    window.on_downloads_query_changed(move |q| with_host_in(win, |host| host.downloads_query(&q)));
     window.on_passwords_query_changed(move |q| with_host_in(win, |host| host.passwords_query(&q)));
     window.on_passwords_unlock(move || with_host_in(win, Host::passwords_unlock));
     window.on_login_reveal(move |id| with_host_in(win, |host| host.login_reveal(&id)));

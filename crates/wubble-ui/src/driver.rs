@@ -217,30 +217,43 @@ impl Driver {
             .map_or(self.clock_ms, |o| o.elapsed().as_secs_f64() * 1000.0)
     }
 
-    /// Re-read the tab ids and the active tab and Space from the models.
-    fn read_model(&mut self, window: &AppWindow) {
+    /// Re-read the tab ids and the active tab and Space from the models. Returns whether layout
+    /// or motion state changed (requiring a redraw).
+    fn read_model(&mut self, window: &AppWindow) -> bool {
         let (ids, row) = model_rows(window);
-        self.tabs.set_ids(&row_ids(&ids), row);
-        // keep what a dropped row showed while it leaves
-        let items: Vec<TabItem> = window.get_tabs().iter().collect();
-        let old = std::mem::replace(&mut self.items, items);
-        for l in &self.tabs.leaving {
-            if !self.gone.iter().any(|g| same(g, l.id))
-                && let Some(item) = old.iter().find(|t| same(t, l.id))
-            {
-                self.gone.push(item.clone());
-            }
-        }
-        self.ids = ids;
-        window.set_selected_row(slint_index(row));
         let space = active_space(window);
+        let active_tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
+        let ids_changed = ids != self.ids;
+        let row_changed = row != self.tabs.active;
+        let space_changed = space.is_some_and(|i| i != self.space);
+        let tab_changed = active_tab != self.page_tab;
+        if ids_changed || row_changed {
+            self.tabs.set_ids(&row_ids(&ids), row);
+            // keep what a dropped row showed while it leaves
+            let items: Vec<TabItem> = window.get_tabs().iter().collect();
+            let old = std::mem::replace(&mut self.items, items);
+            for l in &self.tabs.leaving {
+                if !self.gone.iter().any(|g| same(g, l.id))
+                    && let Some(item) = old.iter().find(|t| same(t, l.id))
+                {
+                    self.gone.push(item.clone());
+                }
+            }
+            self.ids = ids;
+            window.set_selected_row(slint_index(row));
+        }
         if let Some(i) = space {
             if i != self.space {
-                self.space_t = 0.0;
+                self.space_t = if wubble_core::motion::reduced() {
+                    OVERLAP_IN
+                } else {
+                    0.0
+                };
             }
             self.space = i;
         }
         window.set_space_index(slint_index(space));
+        ids_changed || row_changed || space_changed || tab_changed
     }
 
     /// The sidebar's compact look (chrome::compact) from the seam's live width, its mode and the
@@ -290,37 +303,34 @@ impl Driver {
         if pitch != self.tabs.pitch {
             self.tabs.set_pitch(pitch);
         }
-        moving |= self.tabs.step(dt);
-        sync(
-            &self.row_y,
-            self.tabs.rows.iter().map(|r| r.y.x as f32).collect(),
-        );
-        sync(
-            &self.row_scale,
-            self.tabs.rows.iter().map(|r| r.s.x as f32).collect(),
-        );
+        let tabs_moving = self.tabs.step(dt);
+        moving |= tabs_moving;
+        sync(&self.row_y, self.tabs.rows.iter().map(|r| r.y.x as f32));
+        sync(&self.row_scale, self.tabs.rows.iter().map(|r| r.s.x as f32));
         sync(
             &self.row_enter,
-            self.tabs.rows.iter().map(|r| r.entrance() as f32).collect(),
+            self.tabs.rows.iter().map(|r| r.entrance() as f32),
         );
         window.set_list_enter(self.tabs.list_entrance() as f32);
         let tabs = &self.tabs;
         let dragged = tabs.rows.iter().position(|r| tabs.is_dragging(r.id));
         window.set_dragged_row(slint_index(dragged));
-        let leaving = &self.tabs.leaving;
-        self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
-        let rows = leaving
-            .iter()
-            .filter_map(|l| {
-                let tab = self.gone.iter().find(|g| same(g, l.id))?;
-                Some(LeavingRow {
-                    tab: tab.clone(),
-                    y: l.y as f32,
-                    e: l.progress() as f32,
+        if !self.tabs.leaving.is_empty() || self.leaving.row_count() > 0 {
+            let leaving = &self.tabs.leaving;
+            self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
+            let rows: Vec<_> = leaving
+                .iter()
+                .filter_map(|l| {
+                    let tab = self.gone.iter().find(|g| same(g, l.id))?;
+                    Some(LeavingRow {
+                        tab: tab.clone(),
+                        y: l.y as f32,
+                        e: l.progress() as f32,
+                    })
                 })
-            })
-            .collect();
-        sync(&self.leaving, rows);
+                .collect();
+            sync(&self.leaving, rows);
+        }
         let ind = self.tabs.indicator();
         window.set_indicator_y(ind.y as f32);
         window.set_indicator_stretch(ind.stretch as f32);
@@ -383,7 +393,11 @@ impl Driver {
         // page loads, fading once it has loaded (beam.rs)
         moving |= self.step_beam(window, dt);
         moving |= self.step_page(window, wall);
-        self.space_t = (self.space_t + dt).min(OVERLAP_IN);
+        self.space_t = if wubble_core::motion::reduced() {
+            OVERLAP_IN
+        } else {
+            (self.space_t + dt).min(OVERLAP_IN)
+        };
         window.set_space_enter(overlap_in(self.space_t) as f32);
         moving |= self.space_t < OVERLAP_IN;
         moving
@@ -398,12 +412,19 @@ impl Driver {
         window.set_page_enter_tab(active);
         let switched =
             was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1;
-        (self.page_t, self.exit_t) = switch_clock((self.page_t, self.exit_t), switched, dt);
+        let prev_exit_t = self.exit_t;
+        if wubble_core::motion::reduced() {
+            self.page_t = OVERLAP_IN;
+            self.exit_t = PAGE_OUT;
+        } else {
+            (self.page_t, self.exit_t) = switch_clock((self.page_t, self.exit_t), switched, dt);
+        }
         window.set_page_enter(overlap_in(self.page_t) as f32);
         // The outgoing page (the host's copy of its last frame, `exit-page`) leaves under the
-        // incoming one; once gone, or when no switch started it, the copy is dropped.
+        // incoming one; once gone, or when reduced motion skips the exit, the copy is dropped on
+        // the edge without reading `get_exit_page()` inside `BeforeRendering`.
         window.set_exit_t(tween(ease::inOut, self.exit_t, PAGE_OUT) as f32);
-        if self.exit_t >= PAGE_OUT && window.get_exit_page().size().width > 0 {
+        if (prev_exit_t < PAGE_OUT || switched) && self.exit_t >= PAGE_OUT {
             window.set_exit_page(slint::Image::default());
         }
         self.page_t < OVERLAP_IN || self.exit_t < PAGE_OUT
@@ -433,13 +454,18 @@ impl Driver {
         self.beam = beam::transition(self.beam, beam::Event::Tick(dt));
         window.set_address_beam(shape_of(self.beam.shape()));
 
-        // the command bar thinks while you type (command.tsx)
+        // the command bar thinks while you type (command.tsx); skipped under reduced motion
         let query = window.get_command_query();
-        if query != self.query {
-            self.thinking = beam::Thinking::typed(query.trim().is_empty());
+        if wubble_core::motion::reduced() {
+            self.thinking = beam::Thinking::Idle;
             self.query = query;
+        } else {
+            if query != self.query {
+                self.thinking = beam::Thinking::typed(query.trim().is_empty());
+                self.query = query;
+            }
+            self.thinking = self.thinking.tick(dt);
         }
-        self.thinking = self.thinking.tick(dt);
         window.set_command_beam(shape_of(self.thinking.shape()));
         self.beam.running() || self.thinking != beam::Thinking::Idle
     }
@@ -503,8 +529,8 @@ impl Wired {
         let mut moving = self.driver.borrow_mut().frame(window, now);
         let (controls, bump) = self.controls.borrow_mut().frame(now);
         moving |= controls;
-        if bump {
-            crate::controls::bump(window);
+        if let Some(generation) = bump {
+            crate::controls::bump(window, generation);
         }
         // The generation comes from the registry, never read back from Slint: this runs inside
         // the window's redraw tracking (the rendering notifier), where reading the property and
@@ -512,6 +538,7 @@ impl Wired {
         let generation = self.glass.borrow_mut().begin();
         window.global::<GlassLayer>().set_generation(generation);
         slint::private_unstable_api::re_exports::ChangeTracker::run_change_handlers();
+        self.controls.borrow_mut().end_sweep();
         let glass = self.glass.borrow_mut().end();
         (moving, glass)
     }
@@ -797,10 +824,12 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
 
     let (d, w) = hook();
     window.on_shell_model_changed(move || {
-        run(&d, &w, |s, w| {
-            s.read_model(w);
-            None
-        })
+        let Some(window) = w.upgrade() else {
+            return;
+        };
+        if d.borrow_mut().read_model(&window) {
+            window.window().request_redraw();
+        }
     });
 
     // tabs: press → maybe drag (6 px) → release picks or reorders

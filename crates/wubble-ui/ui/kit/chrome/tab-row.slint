@@ -149,6 +149,12 @@ export component TabRow inherits Rectangle {
         if !root.compact && root.tab.sound != TabSound.none: Rectangle {
             width: Shell.speaker;
             speaker-touch := TouchArea {
+                init => {
+                    root.speaker-hovered = self.has-hover;
+                }
+                changed has-hover => {
+                    root.speaker-hovered = self.has-hover;
+                }
                 clicked => {
                     root.mute();
                 }
@@ -162,7 +168,13 @@ export component TabRow inherits Rectangle {
             }
         }
         // wubble change: the agent mark (kit AgentMark, derived), after the speaker.
-        if !root.compact && root.tab.agent: AgentMark {
+        if !root.compact && root.tab.agent: agent-mark := AgentMark {
+            init => {
+                root.agent-hovered = self.hovered;
+            }
+            changed hovered => {
+                root.agent-hovered = self.hovered;
+            }
             stopped => {
                 root.agent-stop();
             }
@@ -225,7 +237,12 @@ export component TabRow inherits Rectangle {
     // muted; on both layouts the agent badge on the bottom-right of an agent's tab, an indicator
     // only (no pointer input: a press on it picks the tab). The rest of the icon picks the tab.
     property <length> icon-top: (root.height - Shell.tab-icon) / 2;
-    property <bool> row-hovered: touch.has-hover || close-touch.has-hover || rail-close.hovered || rail-sound.hovered;
+    property <bool> speaker-hovered: false;
+    property <bool> agent-hovered: false;
+    property <bool> row-hovered: touch.has-hover || close-touch.has-hover
+        || (!root.compact && root.tab.sound != TabSound.none && root.speaker-hovered)
+        || (!root.compact && root.tab.agent && root.agent-hovered)
+        || rail-close.hovered || rail-sound.hovered;
     out property <bool> rail-close-shown: root.compact && root.row-hovered && !root.dragging;
     rail-close := RailBadge {
         visible: root.compact;

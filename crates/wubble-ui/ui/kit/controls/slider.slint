@@ -76,6 +76,7 @@ export component ElasticSlider inherits VerticalLayout {
     property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
     property <int> gen: Controls.generation;
     property <bool> tab-focus;
+    property <bool> was-held;
     property <float> span: Math.max(root.max - root.min, root.step);
     property <length> kx: root.live ? root.v.x * Shell.px : Math.clamp((root.value - root.min) / root.span, 0, 1) * track.width;
     property <length> bx: root.live ? root.v.bubble-x * Shell.px : root.kx;
@@ -309,15 +310,17 @@ export component ElasticSlider inherits VerticalLayout {
                 mouse-cursor: self.pressed ? grabbing : grab;
                 pointer-event(e) => {
                     if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                        root.was-held = true;
                         keys.focus();
                         Controls.press(root.slot, self.mouse-x);
                     }
                     // the values were reported while held; the knob springs to the last one, which
                     // is reported here too (the `changed shown` of the last frame may run after
                     // the release, when `held` is already false)
-                    if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                    if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) && root.was-held {
+                        root.was-held = false;
                         let landed = Controls.release(root.slot);
-                        if landed >= 0 && landed != root.value {
+                        if landed != root.value {
                             root.edited(landed);
                         }
                     }

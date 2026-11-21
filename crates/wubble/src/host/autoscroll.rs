@@ -57,6 +57,7 @@ impl Host {
         };
         if self.autoscroll.state != Autoscroll::Off {
             self.render_autoscroll(window);
+            window.window().request_redraw();
         }
     }
 
@@ -90,7 +91,7 @@ impl Host {
         window.window().request_redraw();
     }
 
-    /// One shell frame: steps the stretch; true while autoscroll runs.
+    /// One shell frame: steps the stretch; true while the stretch spring moves.
     pub(super) fn autoscroll_frame(&mut self, window: &AppWindow, now: Instant) -> bool {
         if self.autoscroll.state == Autoscroll::Off {
             self.autoscroll.last = None;
@@ -103,9 +104,12 @@ impl Host {
             .replace(now)
             .map_or(0.0, |prev| now.duration_since(prev).as_secs_f64().min(0.05));
         let target = autoscroll::stretch_target(autoscroll::scroll_speed(a.state, a.pointer, zoom));
-        step_k(&mut a.stretch, target, K::stretch, dt);
+        let moving = step_k(&mut a.stretch, target, K::stretch, dt);
         self.render_autoscroll(window);
-        true
+        if !moving {
+            self.autoscroll.last = None;
+        }
+        moving
     }
 
     fn render_autoscroll(&mut self, window: &AppWindow) {

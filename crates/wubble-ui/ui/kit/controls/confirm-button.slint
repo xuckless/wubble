@@ -105,16 +105,19 @@ export component ConfirmButton inherits Button {
             busy := HorizontalLayout {
                 alignment: center;
                 spacing: SettingsCss.st-hold-done--gap;
-                Rectangle {
-                    width: SettingsCss.st-spin--width;
-                    height: SettingsCss.st-spin--height;
-                    border-radius: SettingsCss.st-spin--border-radius;
-                    border-width: SettingsCss.st-spin--border-width;
-                    // `border-top-color: var(--tp-accent)`: on a circle the top border is the
-                    // quarter between the corner diagonals, -45deg to 45deg
-                    border-color: @conic-gradient(root.accent 0deg, root.accent 45deg, SettingsCss.st-spin--border-color 45deg, SettingsCss.st-spin--border-color 315deg, root.accent 315deg, root.accent 360deg);
-                    transform-origin: { x: self.width / 2, y: self.height / 2 };
-                    transform-rotation: spin.turn * SettingsCss.st-spin-k-to--transform-rotate * 1deg;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: SettingsCss.st-spin--width;
+                        height: SettingsCss.st-spin--height;
+                        border-radius: SettingsCss.st-spin--border-radius;
+                        border-width: SettingsCss.st-spin--border-width;
+                        // `border-top-color: var(--tp-accent)`: on a circle the top border is the
+                        // quarter between the corner diagonals, -45deg to 45deg
+                        border-color: @conic-gradient(root.accent 0deg, root.accent 45deg, SettingsCss.st-spin--border-color 45deg, SettingsCss.st-spin--border-color 315deg, root.accent 315deg, root.accent 360deg);
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-rotation: spin.turn * SettingsCss.st-spin-k-to--transform-rotate * 1deg;
+                    }
                 }
                 KitText {
                     role: Role.wb-tp-btn-body;
@@ -130,10 +133,13 @@ export component ConfirmButton inherits Button {
             done := HorizontalLayout {
                 alignment: center;
                 spacing: SettingsCss.st-hold-done--gap;
-                Icon {
-                    size: Tsx.confirm-done-icon;
-                    path: Glyph.check;
-                    tint: SettingsCss.st-ok--color;
+                VerticalLayout {
+                    alignment: center;
+                    Icon {
+                        size: Tsx.confirm-done-icon;
+                        path: Glyph.check;
+                        tint: SettingsCss.st-ok--color;
+                    }
                 }
                 KitText {
                     role: Role.wb-tp-btn-body;

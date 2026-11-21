@@ -37,7 +37,7 @@ export component BSidePanel inherits Rectangle {
     tw := BOverlapTween {
         on: root.shown;
     }
-    OverlapLook {
+    look := OverlapLook {
         e: tw.t;
         entering: root.shown;
         along-x: true;
@@ -47,6 +47,8 @@ export component BSidePanel inherits Rectangle {
             key: root.key;
             over-layer: root.layer;
             present: tw.t > 0;
+            scene-alpha: tw.t;
+            scene-scale: look.zoom;
             tier: GlassTier.thick;
             radius: BrowserCss.wb-source--border-radius;
             over-content: true;

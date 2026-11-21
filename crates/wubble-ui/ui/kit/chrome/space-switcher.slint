@@ -20,6 +20,7 @@ import { Icon, Glyph } from "../controls/icon.slint";
 import { Wobble } from "../motion/wobble.slint";
 import { Entering } from "../motion/overlap.slint";
 import { Calm } from "../motion/calm.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { SpaceItem } from "../../components/model.slint";
 import { AgentMark } from "agent-mark.slint";
 
@@ -60,6 +61,12 @@ export component SpaceCurrent inherits Rectangle {
             easing: BrowserCss.wb-spaces-ind--transition-background-color-easing;
         }
     }
+    keys := FocusKeys {
+        activate => {
+            root.hit = !root.hit;
+            root.clicked();
+        }
+    }
     ta := TouchArea {
         clicked => {
             root.hit = !root.hit;
@@ -82,6 +89,10 @@ export component SpaceCurrent inherits Rectangle {
                 easing: ease;
             }
         }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: BrowserCss.wb-spaces-ind--border-radius;
     }
 }
 

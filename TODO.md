@@ -35,9 +35,7 @@ Beside it, small and unordered:
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
-- [ ] Settings at a content width of 759 px or less (a window under about 1010 with the sidebar out): the design's one-column layout (`settings.css` narrow block: no section list, title and search on top) is not built, the controls run off the right edge with no way to reach them; repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
 - [ ] The Settings Select's list is drawn by Slint (no blur): the scene's window-level glass lies over the page; the design's blur needs the page's lists in a window-level layer (owner's call)
-- [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
@@ -96,7 +94,6 @@ Open, for the owner's eye:
 - [ ] Sidebar mid-collapse shows the rail look below 140 wide (the design's own behaviour; QA read it as a reflow)
 - [ ] Rail close badge size; video strip: should a collapse carry over to later pages
 - [ ] Find bar closes on reload (Chromium keeps it)
-- [ ] Compact mode duplicates the hide-sidebar toggle (or make it sidebar <-> rail)
 - [ ] Archive's icon: the stacked trays, shared with the Spaces section (the design's set has no archive glyph);
       Passwords/Sites share the lock, Updates/Downloads the arrow
 - [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
@@ -112,13 +109,10 @@ Open, to build or check:
 - [ ] Page copy buttons carry text only (no image items)
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
 - [ ] Settings against the web: Reset per section; rows folding while searching
-- [ ] List editor: the selected row stays highlighted while a draft is open
-- [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
 - [ ] Spell check in other languages: the English dictionary is bundled; add an opt-in (off by default) download of others, from `redirector.gvt1.com` or a mirror, into `<profile>/Dictionaries`
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
-- [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
 
 ## M0: Frame path
 - [ ] Spring spike: a per-frame spring (k 300 / c 15) with no missed frames while a page scrolls
@@ -148,7 +142,6 @@ Open, to build or check:
 ## M2: Shell
 - [ ] Film rim on the remaining controls (buttons, menu rows)
 - [ ] Touch-kit pieces not yet ported: pin, download button, dock with gliding tooltip, the check box's mask grow
-- [ ] Gallery sweep: the autofill key chip overlaps the Space header
 - [ ] Bookmarks: drag reorder, a bookmarks bar
 
 ## M3: Memory and sleeping

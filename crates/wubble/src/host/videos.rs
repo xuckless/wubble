@@ -754,13 +754,29 @@ impl Host {
         }
     }
 
+    /// Whether the active tab has an open or collapsed video overlay (the only consumer of
+    /// `pointer-in`/`pointer-x`/`pointer-y` on `AppWindow`).
+    pub(super) fn video_overlay_active(&self) -> bool {
+        let Some(tab) = self.model.window_key_tab(self.w.id) else {
+            return false;
+        };
+        self.videos.controls
+            && !self.site_hides_video(tab)
+            && self
+                .videos
+                .overlays
+                .get(&tab)
+                .is_some_and(|o| o.shown() || o.collapsed())
+    }
+
     /// The visible page's controls.
     pub(super) fn render_video(&mut self, window: &AppWindow) {
-        let rates: Vec<slint::SharedString> =
-            video::RATES.iter().map(|&r| rate_label(r).into()).collect();
-        if slint::Model::row_count(&window.get_video_rates()) != rates.len() {
+        if slint::Model::row_count(&window.get_video_rates()) != video::RATES.len() {
+            let rates: Vec<slint::SharedString> =
+                video::RATES.iter().map(|&r| rate_label(r).into()).collect();
             window.set_video_rates(slint::ModelRc::new(slint::VecModel::from(rates)));
         }
+        let prev = window.get_video();
         // a tab in picture-in-picture has its controls there, not under the Main window's card
         let tab = self.model.window_key_tab(self.w.id);
         let on_window = self.video_on_window(window);
@@ -771,6 +787,15 @@ impl Host {
             {
                 o.video().map(|v| {
                     let marks = self.sponsor_marks(tab, v.duration);
+                    let same_marks = slint::Model::row_count(&prev.marks) == marks.len()
+                        && slint::Model::iter(&prev.marks)
+                            .zip(&marks)
+                            .all(|(a, b)| a == *b);
+                    let marks = if same_marks {
+                        prev.marks.clone()
+                    } else {
+                        slint::ModelRc::new(slint::VecModel::from(marks))
+                    };
                     let save = self.video_save_state(tab);
                     let nearest = video::nearest_rate(v.rate);
                     VideoView {
@@ -806,13 +831,19 @@ impl Host {
                             _ => -1.0,
                         },
                         save_label: save.label().into(),
-                        marks: slint::ModelRc::new(slint::VecModel::from(marks)),
+                        marks,
                     }
                 })
             }
             _ => None,
         };
-        window.set_video(view.unwrap_or_default());
+        let next = view.unwrap_or_default();
+        if next != prev {
+            if (next.open || next.collapsed) && !(prev.open || prev.collapsed) {
+                self.sync_pointer(window);
+            }
+            window.set_video(next);
+        }
     }
 
     /// The window's tab's video in the window (logical px), cut to its pane, and the pane's

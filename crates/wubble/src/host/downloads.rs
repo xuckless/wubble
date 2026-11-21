@@ -52,6 +52,8 @@ pub(super) struct Downloads {
     /// Save ... As downloads started from a menu and not yet offered: (tab, URL). Each asks
     /// where to save it.
     save_as: Vec<(TabId, String)>,
+    /// The downloads page's search filter (the popover stays unfiltered).
+    query: String,
 }
 
 impl Downloads {
@@ -371,6 +373,13 @@ impl Host {
         }
     }
 
+    pub(crate) fn downloads_query(&mut self, query: &str) {
+        query.clone_into(&mut self.downloads.query);
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_downloads(&window);
+        }
+    }
+
     /// The tab's view is about to be closed by us (the tab closed, or its
     /// renderer is gone while hidden): CEF would carry on with its downloads
     /// unseen, so they are cancelled, and the user told why. A busy tab is
@@ -591,7 +600,20 @@ impl Host {
 
     pub(super) fn render_downloads(&self, window: &AppWindow) {
         let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
-        window.set_downloads(super::surfaces::model(items));
+        crate::bind::sync(window.get_downloads(), items, |m| window.set_downloads(m));
+        if self.downloads.list.is_empty() {
+            window.set_downloads_open(false);
+        }
+        let filtered: Vec<DownloadItem> =
+            download::filter_entries(&self.downloads.list, &self.downloads.query)
+                .iter()
+                .map(item)
+                .collect();
+        crate::bind::sync(window.get_downloads_page_items(), filtered, |m| {
+            window.set_downloads_page_items(m)
+        });
+        window.set_downloads_searching(!self.downloads.query.trim().is_empty());
+        window.set_downloads_has_finished(!download::finished_ids(&self.downloads.list).is_empty());
     }
 }
 

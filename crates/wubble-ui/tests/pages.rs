@@ -143,9 +143,9 @@ fn page_scenarios() {
     click(&app, "ListRow::ta", PointerEventButton::Left);
     assert_eq!(*toggled.borrow(), [1]);
 
-    // Downloads: one row per item of the shared model, the popover's row.
+    // Downloads: one row per item of the filtered page model.
     app.set_page(InternalPageKind::Downloads);
-    app.set_downloads(model(vec![
+    app.set_downloads_page_items(model(vec![
         download(1, DownloadStatus::Running),
         download(2, DownloadStatus::Complete),
         download(3, DownloadStatus::Failed),

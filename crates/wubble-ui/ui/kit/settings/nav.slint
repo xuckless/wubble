@@ -24,28 +24,42 @@ import { KitText } from "../text.slint";
 import { Calm } from "../motion/calm.slint";
 import { Tween } from "../motion/tween.slint";
 import { Icon } from "../controls/icon.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { Controls, ControlView } from "../../components/controls/registry.slint";
 
-// `.st-nav-ind`, at row `index`. Its slot is acquired as it is made: make it only once the
-// window's `Controls` are wired (inside an `if`, as the page opens), where it starts in place.
+// `.st-nav-ind`, at row `index`. Its slot is acquired once the window's `Controls` are wired,
+// where it starts in place.
 export component NavIndicator inherits Rectangle {
     in property <int> index;
     property <int> slot: -1;
     property <ControlView> v: Controls.view(root.slot);
     property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
+    property <bool> wired: Controls.wired;
     property <int> gen: Controls.generation;
     property <length> pitch: SettingsCss.wb-st-nav-btn--height + SettingsCss.st-nav--gap;
     // the ring's pitch (`SWATCH.pitch`: a swatch target and the gap)
     property <length> ring-pitch: SettingsCss.wb-st-sw--width + SettingsCss.st-swatches--gap;
 
+    function take-slot() {
+        if root.slot < 0 && Controls.wired {
+            root.slot = Controls.acquire(6, Math.max(0, root.index));
+        }
+    }
     init => {
-        root.slot = Controls.acquire(6, Math.max(0, root.index));
+        root.take-slot();
+    }
+    changed wired => {
+        root.take-slot();
     }
     changed index => {
-        Controls.set-value(root.slot, Math.max(0, root.index));
+        if root.slot >= 0 {
+            Controls.set-value(root.slot, Math.max(0, root.index));
+        }
     }
     changed gen => {
-        Controls.alive(root.slot);
+        if root.slot >= 0 {
+            Controls.alive(root.slot);
+        }
     }
 
     height: SettingsCss.st-nav-ind--height;
@@ -73,9 +87,23 @@ export component NavRow inherits Rectangle {
     in property <color> accent: Palette.sky;
     // a link out of Settings: the "leads on" chevron at its end
     in property <bool> leads;
+    // bumped by the parent to move keyboard focus to this row when `focus-me` is true
+    in property <int> focus-serial;
+    in property <bool> focus-me;
     callback picked();
+    // true: Down, false: Up
+    callback step(bool);
 
-    property <bool> lit: root.on || (ta.has-hover && root.enabled);
+    public function take-focus() {
+        keys.focus();
+    }
+    changed focus-serial => {
+        if root.focus-me && root.enabled {
+            keys.focus();
+        }
+    }
+
+    property <bool> lit: root.on || ((ta.has-hover || keys.has-focus) && root.enabled);
     height: SettingsCss.wb-st-nav-btn--height;
     border-radius: SettingsCss.wb-st-nav-btn--border-radius;
     opacity: root.enabled ? 1 : SettingsCss.wb-st-nav-btn-disabled--opacity;
@@ -94,6 +122,23 @@ export component NavRow inherits Rectangle {
     accessible-enabled: root.enabled;
     accessible-action-default => {
         root.picked();
+    }
+    keys := FocusKeys {
+        enabled: root.enabled;
+        activate => {
+            root.picked();
+        }
+        other-key(e) => {
+            if e.text == Key.DownArrow {
+                root.step(true);
+                return accept;
+            }
+            if e.text == Key.UpArrow {
+                root.step(false);
+                return accept;
+            }
+            return reject;
+        }
     }
     ta := TouchArea {
         enabled: root.enabled;
@@ -140,6 +185,10 @@ export component NavRow inherits Rectangle {
                 }
             }
         }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
     }
 }
 

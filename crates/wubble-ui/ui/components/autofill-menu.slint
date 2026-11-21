@@ -10,8 +10,8 @@ import { APrompt } from "../kit/overlay/a/a-prompt.slint";
 // after a sign-in. Derived from the kit (docs/fidelity/wubble-only.md): the chip is a kit
 // IconButton, lit while its menu is open; the menu is the touch menu's rows on the Popover
 // (kit/overlay/a/a-menu-list.slint); the prompt is the Prompt (kit/overlay/a/a-prompt.slint):
-// Never (ghost, coral), Not now (ghost), Save or Update (primary). Placed by the parent under the
-// address pill. Never modal and never focused: no keystroke meant for the page can pick a login
+// Never (ghost, coral), Not now (ghost), Save or Update (primary). Placed by the parent at the
+// content area's top left. Never modal and never focused: no keystroke meant for the page can pick a login
 // or answer the prompt (keyjacking). Intents only; the host fills and saves.
 // The save prompt's buttons (host/autofill.rs `autofill_answer`).
 export enum AutofillAnswer { save, never, not-now }
