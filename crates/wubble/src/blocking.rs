@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,8 +40,6 @@ const CACHE_FILE: &str = "blocker-engine.bin";
 /// How often the update thread looks for lists that are due. The lists'
 /// own intervals are days; this only bounds how late a due list is fetched.
 const UPDATE_CHECK: Duration = Duration::from_secs(6 * 60 * 60);
-/// Bounded wait on cold-start list compilation before letting a request pass.
-const INITIAL_READY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The blocker settings, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,10 +142,6 @@ pub struct Blocking {
     rebuilding: AtomicUsize,
     /// An update from the network is running.
     updating: AtomicBool,
-    /// Fast-path flag: `false` only while the cold-start compile is running.
-    initial_ready_fast: AtomicBool,
-    /// Signalled when the cold-start compile finishes (or a blocker is installed).
-    initial_ready: (Mutex<bool>, Condvar),
     /// Cosmetic data per frame URL, cleared when the blocker is replaced.
     cosmetic: Mutex<HashMap<String, Arc<Cosmetic>>>,
     /// Called (on a worker thread) when the lists' state changed.
@@ -167,8 +161,6 @@ impl Blocking {
             compiling: Mutex::new(()),
             rebuilding: AtomicUsize::new(0),
             updating: AtomicBool::new(false),
-            initial_ready_fast: AtomicBool::new(true),
-            initial_ready: (Mutex::new(true), Condvar::new()),
             cosmetic: Mutex::new(HashMap::new()),
             changed: Mutex::new(None),
         })
@@ -200,10 +192,10 @@ impl Blocking {
         let update = settings.lists_auto_update;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if !compiled {
-            // Counted and marked pending before spawning so `is_busy()` is
-            // immediately true and early requests wait briefly for the lists.
+            // Counted before spawning so `is_busy()` is true at once. Requests
+            // are never held for the lists (CEF's IO thread must not wait):
+            // until they compile, requests pass (TODO.md, start-up race).
             self.begin_rebuild();
-            self.set_initial_ready(false);
         }
         let this = self.clone();
         let work = move || {
@@ -211,7 +203,6 @@ impl Blocking {
                 this.count_rules(&sources, generation);
             } else {
                 this.rebuild(generation);
-                this.set_initial_ready(true);
                 this.end_rebuild();
             }
             if update {
@@ -237,7 +228,6 @@ impl Blocking {
             Ok(thread) => Some(thread),
             Err(e) => {
                 if !compiled {
-                    self.set_initial_ready(true);
                     self.end_rebuild();
                 }
                 eprintln!("wubble: blocker lists not loaded: {e}");
@@ -304,24 +294,6 @@ impl Blocking {
     fn end_rebuild(&self) {
         self.rebuilding.fetch_sub(1, Ordering::SeqCst);
         self.notify();
-    }
-
-    fn set_initial_ready(&self, ready: bool) {
-        let (lock, cvar) = &self.initial_ready;
-        let mut guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        *guard = ready;
-        self.initial_ready_fast.store(ready, Ordering::Release);
-        if ready {
-            cvar.notify_all();
-        }
-    }
-
-    fn wait_initial_ready(&self) {
-        let (lock, cvar) = &self.initial_ready;
-        let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        let _ = cvar
-            .wait_timeout_while(guard, INITIAL_READY_TIMEOUT, |ready| !*ready)
-            .unwrap_or_else(PoisonError::into_inner);
     }
 
     /// Records the rules in each source list, unless a newer rebuild than
@@ -512,7 +484,6 @@ impl Blocking {
             &mut *self.blocker.write().unwrap_or_else(PoisonError::into_inner),
             new,
         );
-        self.set_initial_ready(true);
         drop(old);
         self.cosmetic
             .lock()
@@ -789,9 +760,6 @@ impl ContentFilter for Blocking {
         }
         if !is_web(request.url) {
             return RequestAction::Allow;
-        }
-        if self.is_enabled() && !self.initial_ready_fast.load(Ordering::Acquire) {
-            self.wait_initial_ready();
         }
         // A page without a web URL (a bundled or `file:` page) is judged by
         // the request alone.
@@ -1477,9 +1445,11 @@ example.com#@#.cookie-notice
         assert_eq!((blocked("a.test"), blocked("b.test")), (Allow, Block));
     }
 
+    /// A cold start is busy before its thread runs, and a request meanwhile
+    /// is answered at once (passes) instead of waiting for the lists.
     #[test]
-    fn cold_start_is_immediately_busy_and_blocks_first_request() {
-        let p = Profile::new("cold-wait");
+    fn cold_start_is_busy_at_once_and_never_holds_a_request() {
+        let p = Profile::new("cold-start");
         let (dir, _) = paths(&p.0);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mine.txt"), "||ads.example^\n").unwrap();
@@ -1489,12 +1459,11 @@ example.com#@#.cookie-notice
             .start_with(&p.0, &only_own_lists(), no_network)
             .expect("compiles");
         assert!(b.is_busy());
-        let b2 = b.clone();
-        let req_thread =
-            std::thread::spawn(move || check(&b2, "https://ads.example/x.js", SITE, Script));
+        // The compile is held by `busy`: this answers without it.
+        assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Allow);
         drop(busy);
-        assert_eq!(req_thread.join().unwrap(), Block);
         compile.join().unwrap();
         assert!(!b.is_busy());
+        assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Block);
     }
 }
