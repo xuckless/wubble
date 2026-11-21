@@ -431,7 +431,7 @@ impl Host {
             .unwrap_or_default();
         for event in events {
             match event {
-                WriteEvent::Joined { job, result } => self.media_joined(job, result),
+                WriteEvent::Joined { job, result, note } => self.media_joined(job, result, note),
                 WriteEvent::Failed { job, error } => {
                     self.job_event(job, JobEvent::SegmentFailed(error))
                 }
@@ -1407,6 +1407,19 @@ impl Host {
                 } else {
                     vec![]
                 };
+                // One MPEG-TS (HLS) becomes an MP4 when an ffmpeg is there; it keeps its `.ts`
+                // name if the conversion fails.
+                let remux = parts.len() == 1
+                    && container == Container::Ts
+                    && wubble_engine::save::find_ffmpeg().is_some();
+                let (output, container, fallback) = if remux {
+                    let mp4 = self
+                        .media_path(&name::media_file_name(&title, &note, Container::Mp4))
+                        .unwrap_or_else(|_| output.with_extension("mp4"));
+                    (mp4, Container::Mp4, vec![output])
+                } else {
+                    (output, container, fallback)
+                };
                 if let Some(run) = self.media.runs.get_mut(&job) {
                     run.output = output.clone();
                 }
@@ -1416,6 +1429,7 @@ impl Host {
                     output,
                     container,
                     fallback,
+                    remux,
                 }));
                 None
             }
@@ -1428,7 +1442,12 @@ impl Host {
         }
     }
 
-    fn media_joined(&mut self, job: i64, result: Result<Vec<PathBuf>, String>) {
+    fn media_joined(
+        &mut self,
+        job: i64,
+        result: Result<Vec<PathBuf>, String>,
+        note: Option<String>,
+    ) {
         let Some(run) = self.media.runs.get_mut(&job) else {
             return;
         };
@@ -1439,13 +1458,10 @@ impl Host {
                 self.set_download_path(job, first);
             }
             if kept
-                && paths.len() == 2
+                && let Some(note) = note
                 && let Some(window) = self.w.window.upgrade()
             {
-                self.toast(
-                    &window,
-                    "ffmpeg not found: video and audio saved as two files",
-                );
+                self.toast(&window, &note);
             }
         }
         self.job_event(job, JobEvent::Joined(result.map(|_| ())));

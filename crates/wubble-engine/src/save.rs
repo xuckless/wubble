@@ -6,9 +6,12 @@
 //!
 //! Joining: one track is renamed into place (HLS MPEG-TS stays `.ts`, fragmented MP4 init and
 //! segments are already one playable file). Separate video and audio need a muxer; no small
-//! pure-Rust remuxer exists (`mp4` writes from samples, `mp4-atom` is a box codec), so the
-//! system `ffmpeg`, found on the `PATH` (or a usual install folder) at run time, copies both
-//! streams into one file without re-encoding. Without it the two tracks are kept as two files.
+//! pure-Rust remuxer exists (`mp4` writes from samples, `mp4-atom` is a box codec), so an
+//! `ffmpeg` copies both streams into one file without re-encoding: the one bundled beside the
+//! executable (`wubble-ffmpeg`, a build of only the demuxers, muxers and parsers a stream copy
+//! needs: `scripts/release/build-ffmpeg.sh`), else one on the `PATH` (or a usual install
+//! folder). HLS MPEG-TS is remuxed to MP4 the same way. When joining cannot be done the tracks
+//! are kept as they came (two files, or the `.ts`) and the event says why.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
@@ -76,16 +79,21 @@ pub struct Join {
     pub parts: Vec<PathBuf>,
     pub output: PathBuf,
     pub container: Container,
-    /// Where each part goes when the tracks cannot be joined (two files).
+    /// Where each part goes when the tracks cannot be joined (two files; with `remux`, the one
+    /// part as it came).
     pub fallback: Vec<PathBuf>,
+    /// One MPEG-TS part (HLS) to remux into `output` (an MP4), not rename.
+    pub remux: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WriteEvent {
-    /// The saved files (two when the tracks could not be joined).
+    /// The saved files (two when the tracks could not be joined). `note`: what to tell the
+    /// user when the files are not what was asked for (the reason, and what was kept).
     Joined {
         job: JobId,
         result: Result<Vec<PathBuf>, String>,
+        note: Option<String>,
     },
     /// Writing failed (a full disk, a segment that would not decrypt).
     Failed { job: JobId, error: String },
@@ -230,9 +238,14 @@ impl Files {
             }
             WriteCmd::Join(join) => {
                 self.tracks.retain(|(j, _), _| *j != join.job);
+                let (result, note) = match run_join(&join, find_ffmpeg()) {
+                    Ok((files, note)) => (Ok(files), note),
+                    Err(e) => (Err(e), None),
+                };
                 Some(WriteEvent::Joined {
                     job: join.job,
-                    result: run_join(&join),
+                    result,
+                    note,
                 })
             }
             WriteCmd::Discard { job, paths } => {
@@ -305,10 +318,34 @@ impl std::fmt::Debug for Writer {
 /// Folders searched for `ffmpeg` after the `PATH` (macOS GUI apps get a short `PATH`).
 const FFMPEG_DIRS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 
-/// The system `ffmpeg`, if one is installed. `WUBBLE_FFMPEG` names another one (a Mac app's
-/// `PATH` is short), or, empty, says to use none (a test of the two-file fallback).
+/// The bundled `ffmpeg`'s file name, beside the executable (Contents/MacOS in the Mac app).
+pub const BUNDLED_FFMPEG: &str = if cfg!(windows) {
+    "wubble-ffmpeg.exe"
+} else {
+    "wubble-ffmpeg"
+};
+
+/// The `ffmpeg` to use. `WUBBLE_FFMPEG` first when set (a Mac app's `PATH` is short; empty says
+/// to use none: a test of the fallback), then the one bundled beside the executable, then one
+/// on the `PATH` or in a usual install folder.
 pub fn find_ffmpeg() -> Option<PathBuf> {
-    if let Some(chosen) = std::env::var_os("WUBBLE_FFMPEG") {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf));
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    pick_ffmpeg(
+        std::env::var_os("WUBBLE_FFMPEG"),
+        exe_dir.as_deref(),
+        &std::env::split_paths(&path).collect::<Vec<_>>(),
+    )
+}
+
+fn pick_ffmpeg(
+    chosen: Option<OsString>,
+    exe_dir: Option<&Path>,
+    path: &[PathBuf],
+) -> Option<PathBuf> {
+    if let Some(chosen) = chosen {
         return Some(PathBuf::from(chosen)).filter(|p| p.is_file());
     }
     let name = if cfg!(windows) {
@@ -316,24 +353,27 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
     } else {
         "ffmpeg"
     };
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .chain(FFMPEG_DIRS.iter().map(PathBuf::from))
-        .map(|dir| dir.join(name))
+    exe_dir
+        .map(|d| d.join(BUNDLED_FFMPEG))
+        .into_iter()
+        .chain(
+            path.iter()
+                .cloned()
+                .chain(FFMPEG_DIRS.iter().map(PathBuf::from))
+                .map(|dir| dir.join(name)),
+        )
         .find(|p| p.is_file())
 }
 
-/// `ffmpeg`'s arguments to copy a video and an audio track into `output` without re-encoding.
+/// The arguments to copy a video and an audio track into `output` without re-encoding.
 pub fn ffmpeg_args(
     video: &Path,
     audio: &Path,
     output: &Path,
     container: Container,
 ) -> Vec<OsString> {
-    let mut args: Vec<OsString> = ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
+    let mut args = ffmpeg_base();
+    args.push("-i".into());
     args.push(video.into());
     args.push("-i".into());
     args.push(audio.into());
@@ -347,35 +387,118 @@ pub fn ffmpeg_args(
     args
 }
 
+/// The arguments to copy one MPEG-TS stream's pictures and sound into an MP4 (its timed
+/// metadata streams, which an MP4 cannot hold, are left out).
+pub fn remux_args(input: &Path, output: &Path) -> Vec<OsString> {
+    let mut args = ffmpeg_base();
+    args.push("-i".into());
+    args.push(input.into());
+    for a in [
+        "-map",
+        "0:v?",
+        "-map",
+        "0:a?",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+    ] {
+        args.push(a.into());
+    }
+    args.push(output.into());
+    args
+}
+
+fn ffmpeg_base() -> Vec<OsString> {
+    ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+}
+
+/// Runs `ffmpeg` with `args`: `Ok` when it exits 0, else its last line of complaint.
+fn run_ffmpeg(ffmpeg: &Path, args: &[OsString]) -> Result<(), String> {
+    let out = std::process::Command::new(ffmpeg)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("ffmpeg did not run: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr);
+    let line = said.lines().rev().find(|l| !l.trim().is_empty());
+    let line: String = line.unwrap_or("it failed").chars().take(160).collect();
+    Err(line)
+}
+
 fn rename(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::rename(from, to).map_err(|e| format!("cannot save {}: {e}", to.display()))
 }
 
-fn run_join(join: &Join) -> Result<Vec<PathBuf>, String> {
+/// The saved files and, when they are not what was asked for, what to tell the user.
+type Joined = (Vec<PathBuf>, Option<String>);
+
+fn run_join(join: &Join, ffmpeg: Option<PathBuf>) -> Result<Joined, String> {
     match join.parts.as_slice() {
-        [one] => rename(one, &join.output).map(|()| vec![join.output.clone()]),
-        [video, audio] => {
-            if let Some(ffmpeg) = find_ffmpeg() {
-                let status = std::process::Command::new(ffmpeg)
-                    .args(ffmpeg_args(video, audio, &join.output, join.container))
-                    .stdin(std::process::Stdio::null())
-                    .status()
-                    .map_err(|e| format!("ffmpeg did not run: {e}"))?;
-                if status.success() {
-                    let _ = std::fs::remove_file(video);
-                    let _ = std::fs::remove_file(audio);
-                    return Ok(vec![join.output.clone()]);
-                }
+        [one] if join.remux => {
+            let kept = |why: String| -> Result<Joined, String> {
                 let _ = std::fs::remove_file(&join.output);
+                let to = join.fallback.first().ok_or("nothing to keep")?;
+                rename(one, to)?;
+                Ok((
+                    vec![to.clone()],
+                    why_note(&why, "could not convert to MP4", "saved as it came"),
+                ))
+            };
+            match ffmpeg {
+                // No muxer: the stream as it came, as before.
+                None => kept(String::new()),
+                Some(ffmpeg) => match run_ffmpeg(&ffmpeg, &remux_args(one, &join.output)) {
+                    Ok(()) => {
+                        let _ = std::fs::remove_file(one);
+                        Ok((vec![join.output.clone()], None))
+                    }
+                    Err(why) => kept(why),
+                },
             }
-            // No ffmpeg (or it failed): the two tracks as two files.
+        }
+        [one] => rename(one, &join.output).map(|()| (vec![join.output.clone()], None)),
+        [video, audio] => {
+            let why = match ffmpeg {
+                None => "no ffmpeg to join them".to_owned(),
+                Some(ffmpeg) => {
+                    match run_ffmpeg(
+                        &ffmpeg,
+                        &ffmpeg_args(video, audio, &join.output, join.container),
+                    ) {
+                        Ok(()) => {
+                            let _ = std::fs::remove_file(video);
+                            let _ = std::fs::remove_file(audio);
+                            return Ok((vec![join.output.clone()], None));
+                        }
+                        Err(why) => {
+                            let _ = std::fs::remove_file(&join.output);
+                            format!("joining failed: {why}")
+                        }
+                    }
+                }
+            };
             for (part, to) in join.parts.iter().zip(&join.fallback) {
                 rename(part, to)?;
             }
-            Ok(join.fallback.clone())
+            Ok((
+                join.fallback.clone(),
+                Some(format!("{why}: video and audio saved as two files")),
+            ))
         }
         _ => Err("nothing to join".into()),
     }
+}
+
+/// "`what` (`why`): `kept`", or nothing when there is no reason to say (no ffmpeg at all).
+fn why_note(why: &str, what: &str, kept: &str) -> Option<String> {
+    (!why.is_empty()).then(|| format!("{what} ({why}): {kept}"))
 }
 
 #[cfg(test)]
@@ -465,6 +588,7 @@ mod tests {
                     output: out.clone(),
                     container: Container::Mp4,
                     fallback: vec![],
+                    remux: false,
                 }),
             ],
         );
@@ -472,7 +596,8 @@ mod tests {
             joined,
             vec![WriteEvent::Joined {
                 job: 1,
-                result: Ok(vec![out.clone()])
+                result: Ok(vec![out.clone()]),
+                note: None,
             }]
         );
         assert_eq!(std::fs::read(&out).unwrap(), b"AaBBcc");
@@ -599,6 +724,128 @@ mod tests {
             Container::Webm,
         );
         assert!(!webm.iter().any(|a| a == "-movflags"));
+    }
+
+    #[test]
+    fn the_ffmpeg_comes_from_the_setting_then_the_bundle_then_the_path() {
+        let d = dir().join("pick");
+        let (bin, path) = (d.join("bin"), d.join("path"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        let (bundled, onpath, chosen) = (
+            bin.join(BUNDLED_FFMPEG),
+            path.join("ffmpeg"),
+            d.join("mine"),
+        );
+        for f in [&bundled, &onpath, &chosen] {
+            std::fs::write(f, b"").unwrap();
+        }
+        let dirs = [path.clone()];
+        let pick = |env: Option<&str>| pick_ffmpeg(env.map(OsString::from), Some(&bin), &dirs);
+        assert_eq!(pick(Some(chosen.to_str().unwrap())), Some(chosen));
+        // Named but missing, or empty: none, whatever else is there.
+        assert_eq!(pick(Some("/nowhere/ffmpeg")), None);
+        assert_eq!(pick(Some("")), None);
+        assert_eq!(pick(None), Some(bundled.clone()));
+        std::fs::remove_file(&bundled).unwrap();
+        assert_eq!(pick(None), Some(onpath));
+        assert_eq!(
+            pick_ffmpeg(None, Some(&bin), &[]).is_some_and(|p| p.starts_with(&bin)),
+            false
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn ffmpeg_remuxes_the_pictures_and_sound_only() {
+        let args = remux_args(Path::new("/t/s.part0"), Path::new("/t/T.mp4"));
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            &args[5..],
+            [
+                "-i",
+                "/t/s.part0",
+                "-map",
+                "0:v?",
+                "-map",
+                "0:a?",
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                "/t/T.mp4",
+            ]
+        );
+    }
+
+    /// A stand-in `ffmpeg`: a script that writes its last argument, or says why it cannot.
+    #[cfg(unix)]
+    fn fake_ffmpeg(d: &Path, ok: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = d.join(if ok { "fake-ok" } else { "fake-bad" });
+        let body = if ok {
+            "#!/bin/sh\nfor a; do last=$a; done\necho joined > \"$last\"\n"
+        } else {
+            "#!/bin/sh\necho 'Invalid data found when processing input' >&2\nexit 1\n"
+        };
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_join_that_fails_keeps_the_tracks_and_says_why() {
+        let d = dir().join("join");
+        std::fs::create_dir_all(&d).unwrap();
+        let join = |remux: bool, parts: &[&str], fallback: &[&str]| {
+            let path = |n: &str| d.join(n);
+            for p in parts {
+                std::fs::write(path(p), b"track").unwrap();
+            }
+            Join {
+                job: 1,
+                parts: parts.iter().map(|p| path(p)).collect(),
+                output: path(if remux { "o.mp4" } else { "o2.mp4" }),
+                container: Container::Mp4,
+                fallback: fallback.iter().map(|p| path(p)).collect(),
+                remux,
+            }
+        };
+        let (ok, bad) = (fake_ffmpeg(&d, true), fake_ffmpeg(&d, false));
+        // A pair joined: one file, no note, the parts gone.
+        let pair = join(false, &["v0", "a0"], &["v.mp4", "a.m4a"]);
+        let (files, note) = run_join(&pair, Some(ok.clone())).unwrap();
+        assert_eq!((files, note), (vec![pair.output.clone()], None));
+        assert!(!d.join("v0").exists());
+        // A pair that ffmpeg refuses: two files, and the reason.
+        let pair = join(false, &["v1", "a1"], &["v1.mp4", "a1.m4a"]);
+        let (files, note) = run_join(&pair, Some(bad.clone())).unwrap();
+        assert_eq!(files, pair.fallback);
+        let note = note.unwrap();
+        assert!(note.contains("Invalid data found") && note.ends_with("saved as two files"));
+        assert!(!pair.output.exists());
+        // No ffmpeg at all.
+        let pair = join(false, &["v2", "a2"], &["v2.mp4", "a2.m4a"]);
+        let (files, note) = run_join(&pair, None).unwrap();
+        assert_eq!(files, pair.fallback);
+        assert!(note.unwrap().starts_with("no ffmpeg"));
+        // One TS remuxed; refused, it stays a `.ts` with the reason; with no ffmpeg, silently.
+        let one = join(true, &["s0"], &["s0.ts"]);
+        assert_eq!(
+            run_join(&one, Some(ok)).unwrap(),
+            (vec![one.output.clone()], None)
+        );
+        let one = join(true, &["s1"], &["s1.ts"]);
+        let (files, note) = run_join(&one, Some(bad)).unwrap();
+        assert_eq!(files, one.fallback);
+        assert!(
+            note.unwrap()
+                .starts_with("could not convert to MP4 (Invalid")
+        );
+        let one = join(true, &["s2"], &["s2.ts"]);
+        assert_eq!(run_join(&one, None).unwrap(), (one.fallback.clone(), None));
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]

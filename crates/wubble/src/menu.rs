@@ -1767,7 +1767,11 @@ mod tests {
     fn the_save_control_with_nothing_to_save_says_so() {
         let entries = media_entries(&[], false);
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|e| e.command == Command::Info && !e.enabled));
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.command == Command::Info && !e.enabled)
+        );
     }
 
     #[test]
