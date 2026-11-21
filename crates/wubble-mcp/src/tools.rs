@@ -444,8 +444,8 @@ pub static TOOLS: &[Tool] = &[
     Tool {
         name: "type",
         description: "Type text into a text field by ref (replacing what it holds). Only for text \
-            fields (use select for dropdowns, upload_file for file inputs). With submit, press \
-            Enter and wait as navigate does when a page load follows.",
+            fields (use select for a native dropdown). With submit, press Enter and wait as \
+            navigate does when a page load follows.",
         args: &[
             SESSION,
             TAB,
@@ -473,12 +473,7 @@ pub static TOOLS: &[Tool] = &[
         args: &[
             SESSION,
             TAB,
-            arg(
-                "ref",
-                Ty::Str,
-                true,
-                "Element ref of a <select> dropdown from read_page.",
-            ),
+            REF,
             arg(
                 "option",
                 Ty::Str,
@@ -945,6 +940,5 @@ mod tests {
         }
         let ty = find("type").unwrap();
         assert!(ty.description.contains("select"));
-        assert!(ty.description.contains("upload_file"));
     }
 }
