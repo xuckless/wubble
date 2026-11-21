@@ -91,13 +91,9 @@ impl Store {
             return Ok(boost.id);
         }
         let tx = self.conn.transaction().await?;
-        let position = scalar(
-            &tx,
-            "SELECT coalesce(max(position) + 1, 0) FROM boosts",
-            (),
-        )
-        .await?
-        .unwrap_or(0);
+        let position = scalar(&tx, "SELECT coalesce(max(position) + 1, 0) FROM boosts", ())
+            .await?
+            .unwrap_or(0);
         tx.execute(
             "INSERT INTO boosts(name, site, css, js, js_at, tint, tint_strength, font, \
              enabled, updated_at, position) \

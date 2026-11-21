@@ -1234,7 +1234,11 @@ mod tests {
         let km = Keymap::defaults(p).with_overrides(&ov);
         assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
         assert_eq!(km.action_for(ch("Ctrl+B")).unwrap().0, Action::Find);
-        assert_eq!(km.action_for(ch("Ctrl+F")), None, "Find's old default stays unbound");
+        assert_eq!(
+            km.action_for(ch("Ctrl+F")),
+            None,
+            "Find's old default stays unbound"
+        );
     }
 
     #[test]

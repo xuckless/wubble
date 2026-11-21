@@ -1160,8 +1160,14 @@ mod tests {
         assert_eq!(format_local_time(NOW, 330), "17:30");
         assert_eq!(format_local_time(NOW, -300), "07:00");
         // Midnight wrap across positive and negative offsets.
-        assert_eq!(format_local_time(NOW + 11 * HOUR + 30 * MIN_MS, 60), "00:30");
-        assert_eq!(format_local_time(NOW - 11 * HOUR - 30 * MIN_MS, -60), "23:30");
+        assert_eq!(
+            format_local_time(NOW + 11 * HOUR + 30 * MIN_MS, 60),
+            "00:30"
+        );
+        assert_eq!(
+            format_local_time(NOW - 11 * HOUR - 30 * MIN_MS, -60),
+            "23:30"
+        );
         // Extreme timestamps saturate instead of panicking.
         let _ = format_local_time(i64::MAX, 60);
         let _ = format_local_time(i64::MIN, -60);
