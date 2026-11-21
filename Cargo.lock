@@ -8653,7 +8653,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "wubble"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "aes 0.9.4",
  "arboard",
@@ -8705,7 +8705,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-ax"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "accesskit",
  "serde_json",
@@ -8713,7 +8713,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-blocker"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "adblock",
  "serde_json",
@@ -8725,7 +8725,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-bundle"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "cef",
  "plist",
@@ -8734,7 +8734,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-core"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "aes 0.9.4",
  "base64 0.22.1",
@@ -8755,7 +8755,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-engine"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "aes 0.9.4",
  "base64 0.22.1",
@@ -8777,7 +8777,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-gfx"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "naga",
  "pollster 0.4.0",
@@ -8790,7 +8790,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-helper"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "cef",
  "welding",
@@ -8798,7 +8798,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-import"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "lz4_flex",
  "rusqlite",
@@ -8810,14 +8810,14 @@ dependencies = [
 
 [[package]]
 name = "wubble-mcp"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "wubble-release"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "chrono",
  "clap",
@@ -8828,7 +8828,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-store"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "pollster 0.4.0",
  "serde_json",
@@ -8840,7 +8840,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-sysmem"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "libc",
  "sysinfo",
@@ -8850,7 +8850,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-ui"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "i-slint-backend-testing",
  "i-slint-renderer-skia",
@@ -8865,7 +8865,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-vault"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "aes-gcm",
  "csv",
