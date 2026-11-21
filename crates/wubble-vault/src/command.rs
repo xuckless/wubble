@@ -154,7 +154,13 @@ fn typed_site(site: &str) -> Result<Origin, String> {
 }
 
 impl<K: KeyRing, S: LoginStore> Vault<K, S> {
-    /// A login changed by hand ([`VaultCommand::Edit`]).
+    /// A login changed by hand ([`VaultCommand::Edit`]). Every check runs before anything is
+    /// written: a row that does not open with this key is refused (its username would be the
+    /// page's placeholder), and so is an edit onto another login's site and username.
+    ///
+    /// A move to another site is a save and then a delete (the id and origin seal the blobs, so
+    /// the row cannot be rewritten in place). The `logins` API has no transaction, so a failed
+    /// delete takes the new row back out: either way one row remains.
     fn edit(
         &mut self,
         id: &RecordId,
@@ -163,16 +169,28 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         password: Zeroizing<String>,
         now_ms: i64,
     ) -> Result<(), VaultError> {
+        let unreadable = |e| match e {
+            VaultError::Crypto(_) => VaultError::UnreadableLogin,
+            e => e,
+        };
+        let row = self.store().get(id)?.ok_or(crate::StoreError::NotFound)?;
+        self.username(id).map_err(unreadable)?;
         let password = if password.is_empty() {
-            self.reveal(id)?
+            self.reveal(id).map_err(unreadable)?
         } else {
             password
         };
-        let row = self.store().get(id)?.ok_or(crate::StoreError::NotFound)?;
+        if self
+            .find_for_origin(&origin)?
+            .iter()
+            .any(|c| c.id != *id && c.username == username)
+        {
+            return Err(VaultError::Taken);
+        }
         if row.origin == origin {
             return self.update(id, &username, &password);
         }
-        self.save(
+        let moved = self.save(
             NewLogin {
                 origin,
                 form_action_origin: None,
@@ -181,7 +199,11 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
             },
             now_ms,
         )?;
-        self.delete(id).map(|_| ())
+        if let Err(e) = self.delete(id) {
+            let _ = self.delete(&moved);
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Runs one command. Nothing is listed or revealed unless the vault is unlocked.
@@ -439,6 +461,113 @@ mod tests {
         assert!(matches!(
             edit(&mut v, &rows[0].id, "a.test", "x", "y"),
             VaultAnswer::Failed(_)
+        ));
+    }
+
+    fn edit(v: &mut V, id: &str, site: &str, user: &str, pw: &str) -> VaultAnswer {
+        v.run(
+            VaultCommand::Edit {
+                id: RecordId(id.into()),
+                site: site.into(),
+                username: user.into(),
+                password: Zeroizing::new(pw.into()),
+            },
+            7,
+        )
+    }
+
+    /// The rows as (origin, username, password), sorted, to show nothing changed.
+    fn snapshot(v: &mut V) -> Vec<(String, Option<String>, String)> {
+        let mut rows: Vec<_> = entries(v)
+            .into_iter()
+            .map(|r| {
+                let pw = match v.run(VaultCommand::Reveal(RecordId(r.id.clone())), 8) {
+                    VaultAnswer::Revealed(pw) => pw.to_string(),
+                    _ => String::new(),
+                };
+                (r.origin, r.username, pw)
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    fn id_of(v: &mut V, origin: &str, user: &str) -> String {
+        entries(v)
+            .into_iter()
+            .find(|r| r.origin == origin && r.username.as_deref() == Some(user))
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn an_edit_onto_another_logins_site_and_username_is_refused() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw-me");
+        add(&mut v, "a.test", "you", "pw-you");
+        let you = id_of(&mut v, "https://a.test", "you");
+        let before = snapshot(&mut v);
+        let VaultAnswer::Failed(why) = edit(&mut v, &you, "a.test", "me", "new") else {
+            panic!("accepted")
+        };
+        assert_eq!(
+            why,
+            "Another saved login already has this site and username"
+        );
+        assert_eq!(snapshot(&mut v), before);
+        // Its own site and username is no collision.
+        assert!(matches!(
+            edit(&mut v, &you, "a.test", "you", "new"),
+            VaultAnswer::Done
+        ));
+    }
+
+    #[test]
+    fn a_move_onto_a_site_that_has_the_username_is_refused() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw-a");
+        add(&mut v, "b.test", "me", "pw-b");
+        let a = id_of(&mut v, "https://a.test", "me");
+        let before = snapshot(&mut v);
+        let VaultAnswer::Failed(why) = edit(&mut v, &a, "b.test", "me", "") else {
+            panic!("accepted")
+        };
+        assert_eq!(
+            why,
+            "Another saved login already has this site and username"
+        );
+        assert_eq!(snapshot(&mut v), before);
+    }
+
+    #[test]
+    fn an_unreadable_login_cannot_be_edited_only_deleted() {
+        let mut v = vault(&FakeKeyRing::default());
+        v.run(VaultCommand::Unlock, 0);
+        add(&mut v, "a.test", "me", "pw");
+        // Another key over the same rows: the row lists but does not open.
+        let rows = v.store().all().unwrap();
+        let mut other = vault(&FakeKeyRing::default());
+        for r in rows.iter().cloned() {
+            other.store_mut().insert(r).unwrap();
+        }
+        other.run(VaultCommand::Unlock, 0);
+        let id = rows[0].id.0.clone();
+        for (site, pw) in [("a.test", "new"), ("a.test", ""), ("b.test", "new")] {
+            let VaultAnswer::Failed(why) = edit(&mut other, &id, site, "(cannot be read)", pw)
+            else {
+                panic!("accepted")
+            };
+            assert_eq!(
+                why,
+                "This login cannot be read with this key; it can only be deleted"
+            );
+        }
+        assert_eq!(other.store().all().unwrap(), rows);
+        assert!(matches!(
+            other.run(VaultCommand::Delete(RecordId(id)), 9),
+            VaultAnswer::Done
         ));
     }
 

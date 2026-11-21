@@ -393,7 +393,7 @@ export component PasswordsPage inherits Rectangle {
                 tappable: false;
                 shown: root.open;
                 index: i + 1;
-                RowTextAction {
+                if login.readable: RowTextAction {
                     text: "Edit";
                     reveal: login-row.reveal;
                     clicked => {

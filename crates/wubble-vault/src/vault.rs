@@ -19,6 +19,12 @@ pub enum VaultError {
     Crypto(#[from] CryptoError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// An edit would leave two logins with one site and username.
+    #[error("Another saved login already has this site and username")]
+    Taken,
+    /// An edit of a row that does not open with the current key.
+    #[error("This login cannot be read with this key; it can only be deleted")]
+    UnreadableLogin,
 }
 
 /// What an unlock found. The UI says "saved passwords cannot be read" for `NewKey` with
@@ -232,6 +238,13 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 (Meta::from(r), username.map(|u| u.to_string()))
             })
             .collect())
+    }
+
+    /// A login's username, decrypted.
+    pub fn username(&self, id: &RecordId) -> Result<Zeroizing<String>, VaultError> {
+        let key = self.key()?;
+        let row = self.store.get(id)?.ok_or(StoreError::NotFound)?;
+        open_string(key, &row, Field::Username, &row.username_enc)
     }
 
     pub fn reveal(&self, id: &RecordId) -> Result<Zeroizing<String>, VaultError> {

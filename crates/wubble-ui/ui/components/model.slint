@@ -746,6 +746,8 @@ export struct LoginItem {
     // the origin in full (`http://` kept), what an edit starts from
     origin: string,
     username: string,
+    // the username opened with this key; an unreadable row can only be deleted, not edited
+    readable: bool,
     revealed: string,
     has-revealed: bool,
 }
