@@ -43,12 +43,11 @@ impl Store {
             ),
         )
         .await?;
+        let keep = i64::try_from(keep).unwrap_or(i64::MAX);
         tx.execute(
-            format!(
-                "DELETE FROM agent_log WHERE id NOT IN \
-                 (SELECT id FROM agent_log ORDER BY id DESC LIMIT {keep})"
-            ),
-            (),
+            "DELETE FROM agent_log WHERE id NOT IN \
+             (SELECT id FROM agent_log ORDER BY id DESC LIMIT ?1)",
+            (keep,),
         )
         .await?;
         tx.commit().await?;
@@ -57,11 +56,15 @@ impl Store {
 
     /// The newest `limit` entries, oldest first.
     pub async fn agent_log(&self, limit: usize) -> Result<Vec<Entry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut rows = self
             .conn
             .query(
-                format!("SELECT {COLUMNS} FROM agent_log ORDER BY id DESC LIMIT {limit}"),
-                (),
+                format!("SELECT {COLUMNS} FROM agent_log ORDER BY id DESC LIMIT ?1"),
+                (limit,),
             )
             .await?;
         let mut out = vec![];

@@ -7,9 +7,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use slint::ComponentHandle;
+use wubble_core::agent::{SessionId, log::Outcome};
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
+use wubble_core::space::ContainerId;
 use wubble_core::tab::TabId;
 use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
+use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
 
 use super::{Host, now_ms};
@@ -151,6 +154,14 @@ impl Host {
                 suggested_name,
                 ..
             } => {
+                if self.agent_drives(tab) {
+                    self.download_path_chosen(tab, id, download, None);
+                    let session = self
+                        .agent_grant_of(tab)
+                        .map_or_else(|| SessionId("-".into()), |(s, _)| s);
+                    self.agent_log(&session, "download", Some(url), Outcome::Refused);
+                    return;
+                }
                 let save_as = self.downloads.take_save_as(tab, &url, &original_url);
                 if download::asks_where(self.downloads.ask_where, save_as) {
                     return self.ask_download_path(window, tab, id, download, &suggested_name);
@@ -168,6 +179,11 @@ impl Host {
                 total,
                 ..
             } => {
+                let container = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .map_or(ContainerId::DEFAULT, |t| t.container);
                 let d = &mut self.downloads;
                 let entry = DownloadEntry {
                     id: d.next_id,
@@ -180,6 +196,7 @@ impl Host {
                     total,
                     state: DownloadState::Running,
                     started_ms: now_ms(),
+                    container,
                 };
                 d.next_id += 1;
                 d.inflight
@@ -276,16 +293,17 @@ impl Host {
         download: DownloadId,
         path: Option<PathBuf>,
     ) {
-        if let Some(path) = &path {
+        let Some(view) = self.tab_view(tab) else {
+            return;
+        };
+        view.answer_download_path(id, path.as_deref());
+        if let Some(path) = path {
             let reserved = Inflight {
                 tab,
-                path: path.clone(),
+                path,
                 entry: None,
             };
             self.downloads.inflight.insert(download, reserved);
-        }
-        if let Some(view) = self.tab_view(tab) {
-            view.answer_download_path(id, path.as_deref());
         }
     }
 
@@ -355,6 +373,7 @@ impl Host {
     /// unseen, so they are cancelled, and the user told why. A busy tab is
     /// never discarded by the sleep policy (`report_busy`).
     pub(super) fn downloads_closing(&mut self, tab: TabId) {
+        self.downloads.save_as.retain(|(t, _)| *t != tab);
         let ids = self.downloads.running_in(tab);
         for &id in &ids {
             self.apply_download(id, DownloadEvent::Cancel);
@@ -368,6 +387,7 @@ impl Host {
 
     /// The tab's view closed by itself: its downloads report nothing more.
     pub(super) fn downloads_lost(&mut self, tab: TabId) {
+        self.downloads.save_as.retain(|(t, _)| *t != tab);
         for id in self.downloads.running_in(tab) {
             self.apply_download(id, DownloadEvent::Lost);
         }
@@ -386,6 +406,7 @@ impl Host {
             total,
             state: DownloadState::Running,
             started_ms: now_ms(),
+            container: ContainerId::DEFAULT,
         };
         d.next_id += 1;
         self.store.add_download(&entry);
@@ -411,6 +432,7 @@ impl Host {
             total: Some(size),
             state: DownloadState::Complete,
             started_ms: now_ms(),
+            container: ContainerId::DEFAULT,
         };
         d.next_id += 1;
         self.store.add_download(&entry);
@@ -495,14 +517,18 @@ impl Host {
                     }
                 }
                 DownloadEffect::StartAgain => {
-                    // Any live view can start it (the downloads page's own tab has none, so
-                    // the visible tab's, else another's). The new download replaces this
-                    // entry; without a view the entry stays for a later retry.
-                    if let Some(view) = self.any_view() {
+                    // Retry in a non-agent live view belonging to the download's container so
+                    // cookies never cross containers and agent sessions are never used.
+                    if let Some(view) = self.view_for_download(entry.container) {
                         view.start_download(&entry.url);
                         self.forget_download(id);
                     } else if let Some(window) = self.w.window.upgrade() {
-                        self.toast(&window, "Open a page to retry the download");
+                        let msg = if entry.container == ContainerId::DEFAULT {
+                            "Open a page to retry the download"
+                        } else {
+                            "Open a page in this container to retry the download"
+                        };
+                        self.toast(&window, msg);
                     }
                 }
                 DownloadEffect::Forget => self.forget_download(id),
@@ -518,6 +544,24 @@ impl Host {
         if let Some(window) = self.w.window.upgrade() {
             self.render_downloads(&window);
         }
+    }
+
+    /// A non-agent live view in `container`, preferring the visible tab.
+    fn view_for_download(&mut self, container: ContainerId) -> Option<&mut View> {
+        let eligible = |t: TabId| {
+            self.views.contains_key(&t)
+                && !self.agent_drives(t)
+                && self
+                    .model
+                    .tabs
+                    .get(&t)
+                    .is_some_and(|tab| tab.container == container)
+        };
+        let tab = self
+            .shown()
+            .filter(|&t| eligible(t))
+            .or_else(|| self.views.keys().copied().find(|&t| eligible(t)))?;
+        self.tab_view(tab)
     }
 
     pub(super) fn forget_download(&mut self, id: i64) {
@@ -591,6 +635,7 @@ mod tests {
             total: Some(4),
             state,
             started_ms: 0,
+            container: ContainerId::DEFAULT,
         }
     }
 

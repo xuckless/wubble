@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use crate::catalog::{ListDef, Selection};
 
@@ -158,12 +161,21 @@ pub fn refresh(
             }
         };
         let path = dir.join(list.file_name());
-        let tmp = dir.join(format!("{}.tmp", list.file_name()));
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(
+            "{}.{}.{}.tmp",
+            list.file_name(),
+            std::process::id(),
+            seq
+        ));
         // The source is named after the list is in place: a crash between
         // the two leaves a list that is not trusted yet, never a list
         // trusted under another URL.
         let written_ok = std::fs::write(&tmp, text)
             .and_then(|()| std::fs::rename(&tmp, &path))
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
             .and_then(|()| std::fs::write(dir.join(list.source_name()), &list.url));
         match written_ok {
             Ok(()) => written.push(list.id.clone()),
@@ -349,5 +361,28 @@ mod tests {
             std::fs::read_to_string(d.0.join("a.txt")).unwrap(),
             "||old.test^\n"
         );
+    }
+
+    #[test]
+    fn concurrent_refreshes_leave_no_temp_files_and_valid_output() {
+        let d = dir("concurrent");
+        let path = d.0.clone();
+        std::thread::scope(|s| {
+            for i in 0..4 {
+                let path = path.clone();
+                s.spawn(move || {
+                    let fetch = |_: &str| Ok(format!("||host-{i}.test^\n"));
+                    assert_eq!(refresh(&path, &[a()], Due::All, &fetch), ["a"]);
+                });
+            }
+        });
+        let content = std::fs::read_to_string(d.0.join("a.txt")).unwrap();
+        assert!(content.starts_with("||host-") && content.ends_with(".test^\n"));
+        let leftovers: Vec<_> = std::fs::read_dir(&d.0)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover tmp files: {leftovers:?}");
     }
 }

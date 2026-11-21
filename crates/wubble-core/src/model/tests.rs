@@ -3644,3 +3644,57 @@ fn a_little_window_opens_in_the_container_it_is_given() {
     let tab = m3.window(m3.focused()).unwrap().tab().unwrap();
     assert_eq!(m3.tabs[&tab].container, ContainerId::DEFAULT);
 }
+
+#[test]
+fn open_beside_does_not_inject_windowed_tab_into_space_split() {
+    let m = Model::new(Instant::now());
+    let (m, _) = apply(
+        m,
+        Command::NewTab {
+            url: "https://a.test".into(),
+            opener: None,
+            container: None,
+        },
+    );
+    let (m, _) = apply(
+        m,
+        Command::OpenLittle {
+            url: "https://little.test".into(),
+            space: None,
+            container: None,
+        },
+    );
+    let little_tab = m.window(m.focused()).unwrap().tab().unwrap();
+    assert!(m.windowed(little_tab).is_some());
+    let (m, _) = apply(
+        m,
+        Command::OpenBeside {
+            url: "https://b.test".into(),
+        },
+    );
+    assert!(m.check().is_ok(), "{:?}", m.check());
+    let split = m.spaces[0].split.as_ref().expect("split in active space");
+    assert!(!split.tabs.contains(&little_tab));
+}
+
+#[test]
+fn discard_now_refuses_internal_pages() {
+    let m = Model::new(Instant::now());
+    let (m, _) = apply(m, Command::OpenInternal(InternalPage::Settings));
+    let settings_tab = m.visible_tab().unwrap();
+    let (m, _) = apply(
+        m,
+        Command::NewTab {
+            url: "https://a.test".into(),
+            opener: None,
+            container: None,
+        },
+    );
+    let (m, fx) = apply(m, Command::DiscardNow(settings_tab));
+    assert!(fx.is_empty());
+    assert_ne!(
+        m.tabs[&settings_tab].lifecycle.liveness,
+        Liveness::Discarded
+    );
+    assert!(m.check().is_ok(), "{:?}", m.check());
+}
