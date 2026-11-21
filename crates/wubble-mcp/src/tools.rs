@@ -730,6 +730,46 @@ pub static TOOLS: &[Tool] = &[
             })
         },
     },
+    Tool {
+        name: "upload_file",
+        description: "Attach one or more local files to a file input or upload button by ref: \
+            clicks the element and answers the page's file chooser directly without opening an OS \
+            file dialog.",
+        args: &[
+            SESSION,
+            TAB,
+            REF,
+            arg(
+                "path",
+                Ty::Str,
+                false,
+                "Absolute path to a local file to upload.",
+            ),
+            arg(
+                "paths",
+                Ty::StrList,
+                false,
+                "Absolute paths to local files (for <input multiple>).",
+            ),
+        ],
+        annotations: ACT,
+        one_of: &["path", "paths"],
+        build: |a| {
+            let paths = match a.str("path") {
+                Some(p) => vec![p],
+                None => a.list("paths"),
+            };
+            if paths.is_empty() || paths.iter().any(|p| p.trim().is_empty()) {
+                return Err("`path` or non-empty `paths` is required".into());
+            }
+            Ok(AgentCall::UploadFile {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                paths,
+            })
+        },
+    },
 ];
 
 pub fn find(name: &str) -> Option<&'static Tool> {
@@ -870,6 +910,8 @@ mod tests {
             "wait_for",
             "evaluate",
             "fill_secret",
+            "select",
+            "upload_file",
             "request_more",
             "read_text",
             "focus_tab",
@@ -879,7 +921,7 @@ mod tests {
         ] {
             assert!(find(n).is_some(), "{n}");
         }
-        assert_eq!(TOOLS.len(), 21);
+        assert_eq!(TOOLS.len(), 22);
     }
 
     #[test]
@@ -946,5 +988,70 @@ mod tests {
         let ty = find("type").unwrap();
         assert!(ty.description.contains("select"));
         assert!(ty.description.contains("upload_file"));
+    }
+
+    #[test]
+    fn upload_file_schema_validation_and_parsing() {
+        use crate::call::{ElementRef, SessionId, TabId, parse_named};
+
+        let tool = find("upload_file").unwrap();
+        let schema = tool.input_schema();
+        assert_eq!(schema["required"], json!(["session", "tab", "ref"]));
+        assert_eq!(
+            schema["oneOf"],
+            json!([{"required": ["path"]}, {"required": ["paths"]}])
+        );
+        assert_eq!(schema["properties"]["path"]["type"], "string");
+        assert_eq!(schema["properties"]["paths"]["type"], "array");
+        assert_eq!(schema["properties"]["paths"]["items"]["type"], "string");
+
+        let single = json!({
+            "session": "s",
+            "tab": "t",
+            "ref": "e1.9",
+            "path": "/tmp/resume.pdf"
+        });
+        assert_eq!(
+            parse_named("upload_file", single.as_object().unwrap()),
+            Some(Ok(AgentCall::UploadFile {
+                session: SessionId("s".into()),
+                tab: TabId("t".into()),
+                target: ElementRef("e1.9".into()),
+                paths: vec!["/tmp/resume.pdf".into()],
+            }))
+        );
+
+        let multi = json!({
+            "session": "s",
+            "tab": "t",
+            "ref": "e1.9",
+            "paths": ["/tmp/a.pdf", "/tmp/b.pdf"]
+        });
+        assert_eq!(
+            parse_named("upload_file", multi.as_object().unwrap()),
+            Some(Ok(AgentCall::UploadFile {
+                session: SessionId("s".into()),
+                tab: TabId("t".into()),
+                target: ElementRef("e1.9".into()),
+                paths: vec!["/tmp/a.pdf".into(), "/tmp/b.pdf".into()],
+            }))
+        );
+
+        for bad in [
+            json!({"session": "s", "tab": "t", "ref": "e1.9"}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "path": "/a", "paths": ["/b"]}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": []}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "path": ""}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": ["/a", ""]}),
+            json!({"session": "s", "tab": "t", "ref": "e1.9", "paths": [123]}),
+            json!({"session": "s", "tab": "t", "path": "/a"}),
+        ] {
+            assert!(
+                parse_named("upload_file", bad.as_object().unwrap())
+                    .unwrap()
+                    .is_err(),
+                "{bad}"
+            );
+        }
     }
 }

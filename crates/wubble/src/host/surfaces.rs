@@ -349,6 +349,9 @@ impl Host {
 
     /// Shows the OS file dialog; its answer comes back on the event loop.
     fn run_chooser(&mut self, window: &AppWindow, tab: TabId, id: RequestId, spec: DialogSpec) {
+        if self.agent_chooser(tab, id, &spec) {
+            return;
+        }
         let dialog = chooser::dialog(&spec, Some(window.window()));
         let task = slint::spawn_local(async move {
             let picked = chooser::pick(spec, dialog).await;

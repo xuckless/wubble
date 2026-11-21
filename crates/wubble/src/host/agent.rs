@@ -16,6 +16,7 @@
 //! the page's events, or with an error at its deadline.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
@@ -35,7 +36,7 @@ use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
-use wubble_engine::page::{EditCommand, PageEvent};
+use wubble_engine::page::{EditCommand, PageEvent, RequestId};
 use wubble_mcp::{
     AgentCall, ButtonKind, CallId, Direction, DragTo, NavTarget, Offset, ToolResult, WaitCondition,
 };
@@ -64,6 +65,13 @@ const BEAT: Duration = Duration::from_secs(5);
 /// How long an action that may start a navigation (a click, a key, a script) waits before it
 /// answers, so a navigation its page started and the session's sites refused is its error.
 const SETTLE: Duration = Duration::from_millis(300);
+/// How long after the click's input fence `upload_file` waits for the page to open a file chooser.
+const UPLOAD_CHOOSER_WAIT: Duration = Duration::from_millis(1500);
+/// How long after answering a file chooser `upload_file` waits for the accessibility tree to refresh.
+const UPLOAD_AX_WAIT: Duration = Duration::from_millis(1000);
+/// Minimum settle after answering a file chooser when an `AxTree` update arrived (e.g. a focus
+/// change) that does not yet show the uploaded filename(s) in the flattened tree.
+const UPLOAD_AX_SETTLE: Duration = Duration::from_millis(250);
 /// Steps a drag's pointer moves in between its press and its release.
 const DRAG_STEPS: u32 = 8;
 /// How long after a script's own `timeout_ms` the call gives up waiting for the page's answer.
@@ -200,6 +208,10 @@ enum Act {
     Fill {
         text: Secret,
         name: String,
+    },
+    /// `upload_file`: click the element with these validated local files armed for the chooser.
+    Upload {
+        paths: Vec<PathBuf>,
     },
     Hover,
     /// Press here, then release at `to`.
@@ -609,6 +621,21 @@ enum Wait {
         load: Load,
         answer: String,
     },
+    /// `upload_file`: the click ran, waiting for the page to open a file chooser.
+    Chooser {
+        tab: TabId,
+        paths: Vec<PathBuf>,
+    },
+    /// `upload_file`: the file chooser was answered, waiting for the accessibility tree to refresh.
+    Uploaded {
+        tab: TabId,
+        rev: u64,
+        /// Substrings that confirm the attached file(s) reached the AX tree (filename or `"N files"`).
+        markers: Vec<String>,
+        /// Earliest time an unrelated `AxTree` update (e.g. focus) may finish the wait.
+        settle_at: Instant,
+        answer: String,
+    },
 }
 
 /// The DevTools input event sent after an action's own input, through the same widget's input
@@ -666,6 +693,10 @@ enum Then {
         text: Secret,
         submit: bool,
         before: Option<String>,
+    },
+    /// `upload_file`'s click: wait briefly for the page to open a file chooser.
+    Upload {
+        paths: Vec<PathBuf>,
     },
     /// A drag let go.
     Dragged,
@@ -762,6 +793,8 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Input { tab, .. }
         | Wait::Shown { tab }
         | Wait::Started { tab, .. }
+        | Wait::Chooser { tab, .. }
+        | Wait::Uploaded { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
     }
@@ -772,6 +805,84 @@ fn mouse(button: ButtonKind) -> MouseButton {
         ButtonKind::Left => MouseButton::Left,
         ButtonKind::Right => MouseButton::Right,
         ButtonKind::Middle => MouseButton::Middle,
+    }
+}
+
+/// Validates and canonicalizes local file paths for `upload_file`: rejects empty lists,
+/// missing paths and directories cleanly.
+fn validate_upload_paths(paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    if paths.is_empty() {
+        return Err("at least one file path is required".into());
+    }
+    let mut out = Vec::with_capacity(paths.len());
+    for raw in paths {
+        if raw.trim().is_empty() {
+            return Err("file path must not be empty".into());
+        }
+        let path = Path::new(raw);
+        let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => format!("file not found: {raw}"),
+            _ => format!("cannot read {raw:?}: {e}"),
+        })?;
+        if !meta.is_file() {
+            return Err(format!("not a file: {raw}"));
+        }
+        let canon = std::fs::canonicalize(path)
+            .map_err(|e| format!("cannot resolve {raw:?}: {e}"))?;
+        out.push(canon);
+    }
+    Ok(out)
+}
+
+/// The activity-log target for `upload_file`: file name(s) only, never full paths.
+fn upload_log_target(paths: &[String]) -> String {
+    paths
+        .iter()
+        .map(|p| {
+            Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(p.as_str())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Substrings expected in the accessibility tree once Chromium reflects `paths` on a file input
+/// (the filename for one file, or `"N files"` / any filename for multiple files).
+fn upload_ax_markers(paths: &[PathBuf]) -> Vec<String> {
+    let mut markers: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
+        .filter(|n| !n.is_empty())
+        .collect();
+    if paths.len() > 1 {
+        markers.push(format!("{} files", paths.len()));
+    }
+    markers
+}
+
+/// Whether `items` already contains any of `markers` in an item's name or value.
+fn ax_shows_upload(items: &[AxItem], markers: &[String]) -> bool {
+    items.iter().any(|item| {
+        markers
+            .iter()
+            .any(|m| item.name.contains(m.as_str()) || item.value.contains(m.as_str()))
+    })
+}
+
+/// Whether a file chooser of `pick` accepts `count` uploaded files.
+fn chooser_allows(pick: crate::chooser::Pick, count: usize) -> Result<(), &'static str> {
+    use crate::chooser::Pick;
+    if count == 0 {
+        return Err("at least one file path is required");
+    }
+    match pick {
+        Pick::File if count > 1 => Err("this file input accepts only one file"),
+        Pick::File | Pick::Files => Ok(()),
+        Pick::Folder => Err("this chooser expects a folder, not files"),
+        Pick::Save => Err("this dialog is a save prompt, not a file upload"),
     }
 }
 
@@ -2324,6 +2435,9 @@ impl Host {
             AgentCall::FillSecret { target, secret, .. } => {
                 self.agent_fill(reply, &session, tab, target.0, &secret)
             }
+            AgentCall::UploadFile { target, paths, .. } => {
+                self.agent_upload(reply, tab, &target.0, paths)
+            }
         }
     }
 
@@ -2769,7 +2883,7 @@ impl Host {
             return self.agent_unpress(reply, tab, &act, "the tab has no page");
         };
         match act {
-            Act::Click { .. } | Act::Type { .. } | Act::Fill { .. } => {
+            Act::Click { .. } | Act::Type { .. } | Act::Fill { .. } | Act::Upload { .. } => {
                 self.agent_input(reply, tab, x, y, act)
             }
             Act::Hover => {
@@ -2929,6 +3043,7 @@ impl Host {
                 text,
                 name,
             },
+            Act::Upload { paths } => Then::Upload { paths },
             _ => Then::Settle("clicked".into()),
         };
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
@@ -3020,6 +3135,9 @@ impl Host {
                     before,
                 };
                 self.agent_wait(reply, wait, WAIT);
+            }
+            Then::Upload { paths } => {
+                self.agent_wait(reply, Wait::Chooser { tab, paths }, UPLOAD_CHOOSER_WAIT);
             }
             Then::Dragged => self.agent_dragged(reply),
             Then::Answer(answer) => self.agent_send(reply, ToolResult::text(answer), Outcome::Done),
@@ -3625,6 +3743,141 @@ impl Host {
         }
     }
 
+    /// `upload_file`: validates local file paths, logs only their file names, and clicks `target`
+    /// with the upload armed so `Host::run_chooser` answers Chromium directly without an OS dialog.
+    fn agent_upload(&mut self, mut reply: Reply, tab: TabId, target: &str, paths: Vec<String>) {
+        reply.target = Some(upload_log_target(&paths));
+        let paths = match validate_upload_paths(&paths) {
+            Ok(p) => p,
+            Err(why) => return self.agent_fail(reply, &why),
+        };
+        let busy = self.agents.pending.iter().any(|p| match &p.wait {
+            Wait::Chooser { tab: t, .. } => *t == tab,
+            Wait::Input {
+                tab: t,
+                then: Then::Upload { .. },
+                ..
+            } => *t == tab,
+            _ => false,
+        });
+        if busy {
+            return self.agent_fail(reply, "another file upload is already in progress on this tab");
+        }
+        self.agent_act(reply, tab, target, None, Act::Upload { paths });
+    }
+
+    /// Intercepts `Routed::Chooser` for agent-driven tabs: never opens an OS file dialog.
+    /// If `upload_file` is armed on `tab`, answers Chromium directly and waits for the AX tree
+    /// to refresh; otherwise cancels the chooser, logs it, and fails any in-flight click/settle.
+    pub(super) fn agent_chooser(
+        &mut self,
+        tab: TabId,
+        id: RequestId,
+        spec: &crate::chooser::DialogSpec,
+    ) -> bool {
+        if !self.agent_drives(tab) {
+            return false;
+        }
+        let armed = self.agents.pending.iter().position(|p| match &p.wait {
+            Wait::Chooser { tab: t, .. } => *t == tab,
+            Wait::Input {
+                tab: t,
+                then: Then::Upload { .. },
+                ..
+            } => *t == tab,
+            _ => false,
+        });
+        if let Some(i) = armed {
+            let p = self.agents.pending.remove(i);
+            let paths = match p.wait {
+                Wait::Chooser { paths, .. } => paths,
+                Wait::Input {
+                    id: fence_id,
+                    then: Then::Upload { paths },
+                    ..
+                } => {
+                    self.agents.ignored.push(fence_id);
+                    paths
+                }
+                _ => unreachable!(),
+            };
+            if let Err(why) = chooser_allows(spec.pick, paths.len()) {
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_file_chooser(id, None);
+                }
+                self.agent_fail(p.reply, why);
+                self.agent_arm();
+                return true;
+            }
+            let rev = self.ax_rev(tab);
+            let names = p.reply.target.clone().unwrap_or_default();
+            let answered = self
+                .tab_view(tab)
+                .is_some_and(|v| v.answer_file_chooser(id, Some(&paths)));
+            if !answered {
+                self.agent_fail(p.reply, "the tab has no page");
+                self.agent_arm();
+                return true;
+            }
+            let answer = if names.is_empty() {
+                "uploaded".into()
+            } else {
+                format!("uploaded {names}")
+            };
+            let markers = upload_ax_markers(&paths);
+            let settle_at = Instant::now() + UPLOAD_AX_SETTLE;
+            self.agent_wait(
+                p.reply,
+                Wait::Uploaded {
+                    tab,
+                    rev,
+                    markers,
+                    settle_at,
+                    answer,
+                },
+                UPLOAD_AX_WAIT,
+            );
+            return true;
+        }
+        // Unasked file chooser in an agent-driven tab: always cancel, never show rfd.
+        if let Some(view) = self.tab_view(tab) {
+            view.answer_file_chooser(id, None);
+        }
+        if let Some((session, _)) = self.agent_grant_of(tab) {
+            self.agent_log(&session, "file_chooser_blocked", None, Outcome::Refused);
+        }
+        let mut kept = Vec::with_capacity(self.agents.pending.len());
+        let mut blocked = Vec::new();
+        for p in std::mem::take(&mut self.agents.pending) {
+            let hit = match &p.wait {
+                Wait::Input {
+                    tab: t,
+                    id: fence_id,
+                    ..
+                } if *t == tab => {
+                    self.agents.ignored.push(*fence_id);
+                    true
+                }
+                Wait::Settle { tab: t, .. } | Wait::Started { tab: t, .. } if *t == tab => true,
+                _ => false,
+            };
+            if hit {
+                blocked.push(p.reply);
+            } else {
+                kept.push(p);
+            }
+        }
+        self.agents.pending = kept;
+        for reply in blocked {
+            self.agent_fail(
+                reply,
+                "this action opened a file chooser, which is blocked in agent sessions: use upload_file instead",
+            );
+        }
+        self.agent_arm();
+        true
+    }
+
     // ----- waiting
 
     fn agent_wait(&mut self, reply: Reply, wait: Wait, within: Duration) {
@@ -3638,7 +3891,21 @@ impl Host {
 
     /// The deadline timer, at the first call's deadline.
     fn agent_arm(&mut self) {
-        let Some(first) = self.agents.pending.iter().map(|p| p.deadline).min() else {
+        let Some(first) = self
+            .agents
+            .pending
+            .iter()
+            .map(|p| match &p.wait {
+                Wait::Uploaded {
+                    tab,
+                    rev,
+                    settle_at,
+                    ..
+                } if self.ax_rev(*tab) > *rev => p.deadline.min(*settle_at),
+                _ => p.deadline,
+            })
+            .min()
+        else {
             self.agents.timer.stop();
             return;
         };
@@ -4158,6 +4425,8 @@ impl Host {
             | Wait::Settle { tab, .. }
             | Wait::Shown { tab }
             | Wait::Started { tab, .. }
+            | Wait::Chooser { tab, .. }
+            | Wait::Uploaded { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
@@ -4247,6 +4516,23 @@ impl Host {
             Wait::Tree { tab, within, max } => {
                 let (tab, within, max) = (*tab, within.clone(), *max);
                 self.agent_read(tab, within.as_deref(), max)
+            }
+            Wait::Chooser { .. } => {
+                late.then_some(Err("clicking the element did not open a file chooser"))
+            }
+            Wait::Uploaded {
+                rev,
+                markers,
+                settle_at,
+                answer,
+                ..
+            } => {
+                let updated = self.ax_rev(tab) > *rev;
+                let reflected = updated
+                    && page
+                        .map(|t| ax_shows_upload(&t.flatten(ALL_ITEMS), markers))
+                        .unwrap_or(false);
+                (reflected || (updated && now >= *settle_at) || late).then(|| Ok(answer.clone()))
             }
             _ => None,
         };
@@ -5203,5 +5489,73 @@ mod tests {
                 .unwrap_err()
                 .contains("not a native <select>")
         );
+    }
+
+    #[test]
+    fn upload_helpers_validate_paths_and_keep_log_targets_to_filenames() {
+        use crate::chooser::Pick;
+
+        let dir = std::env::temp_dir().join(format!("wubble-upload-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("resume.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+
+        let ok = validate_upload_paths(&[file.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(ok.len(), 1);
+        assert_eq!(ok[0], std::fs::canonicalize(&file).unwrap());
+
+        assert!(validate_upload_paths(&[]).is_err());
+        assert!(validate_upload_paths(&["".into()]).is_err());
+        assert!(
+            validate_upload_paths(&[dir.join("missing.pdf").to_string_lossy().into_owned()])
+                .is_err()
+        );
+        assert!(validate_upload_paths(&[dir.to_string_lossy().into_owned()]).is_err());
+
+        assert_eq!(
+            upload_log_target(&["/home/alice/secret-dir/resume.pdf".into()]),
+            "resume.pdf"
+        );
+        assert_eq!(
+            upload_log_target(&["/a/b/one.txt".into(), "/c/d/two.pdf".into()]),
+            "one.txt, two.pdf"
+        );
+
+        assert!(chooser_allows(Pick::File, 1).is_ok());
+        assert!(chooser_allows(Pick::File, 2).is_err());
+        assert!(chooser_allows(Pick::Files, 1).is_ok());
+        assert!(chooser_allows(Pick::Files, 3).is_ok());
+        assert!(chooser_allows(Pick::Files, 0).is_err());
+        assert!(chooser_allows(Pick::Folder, 1).is_err());
+        assert!(chooser_allows(Pick::Save, 1).is_err());
+
+        assert_eq!(
+            upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]),
+            vec!["resume.pdf"]
+        );
+        assert_eq!(
+            upload_ax_markers(&[PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b.pdf")]),
+            vec!["a.pdf", "b.pdf", "2 files"]
+        );
+        let item = |name: &str, value: &str| AxItem {
+            tree: "t".into(),
+            id: 1,
+            kind: wubble_ax::Kind::Button,
+            role: "button".into(),
+            name: name.into(),
+            value: value.into(),
+            url: String::new(),
+            level: 0,
+            checked: None,
+            focused: false,
+            bounds: Bounds::default(),
+        };
+        let one = upload_ax_markers(&[PathBuf::from("/tmp/resume.pdf")]);
+        assert!(!ax_shows_upload(&[item("Resume: No file chosen", "No file chosen")], &one));
+        assert!(ax_shows_upload(&[item("Resume: resume.pdf", "resume.pdf")], &one));
+        let two = upload_ax_markers(&[PathBuf::from("/tmp/a.pdf"), PathBuf::from("/tmp/b.pdf")]);
+        assert!(ax_shows_upload(&[item("Cover: 2 files", "2 files")], &two));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -50,6 +50,8 @@ pub(super) struct WebAx {
     /// What the views were last told.
     on: bool,
     trees: BTreeMap<TabId, PageTree>,
+    /// Monotonic count of `AxTree` updates applied to each tab.
+    revs: BTreeMap<TabId, u64>,
     waiting: Option<Waiting>,
 }
 
@@ -60,6 +62,7 @@ impl Default for WebAx {
             reader: screen_reader::source(),
             on: false,
             trees: BTreeMap::new(),
+            revs: BTreeMap::new(),
             waiting: None,
         }
     }
@@ -125,6 +128,11 @@ impl Host {
         self.ax.trees.get(&tab)
     }
 
+    /// Monotonic count of `AxTree` updates applied to `tab`.
+    pub(super) fn ax_rev(&self, tab: TabId) -> u64 {
+        self.ax.revs.get(&tab).copied().unwrap_or(0)
+    }
+
     pub(super) fn set_web_ax(&mut self, setting: Calm) {
         self.ax.setting = setting;
         self.ax_follow();
@@ -148,6 +156,7 @@ impl Host {
             let wanted = on || self.agent_drives(tab);
             if !wanted {
                 self.ax.trees.remove(&tab);
+                self.ax.revs.remove(&tab);
             }
             if let Some(view) = self.engine.view(id) {
                 view.set_accessibility(wanted);
@@ -167,6 +176,7 @@ impl Host {
 
     pub(super) fn ax_view_gone(&mut self, tab: TabId) {
         self.ax.trees.remove(&tab);
+        self.ax.revs.remove(&tab);
     }
 
     /// A tree or location change of `tab`'s page; its window shows it again.
@@ -182,6 +192,7 @@ impl Host {
             tree.move_nodes(&value::parse_locations(&v));
         } else {
             tree.apply(&value::parse_updates(&v));
+            *self.ax.revs.entry(tab).or_insert(0) += 1;
         }
         let here = self.w.id;
         if self.ax.on

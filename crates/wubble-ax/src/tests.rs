@@ -643,3 +643,53 @@ fn a_link_item_carries_its_target() {
             .all(|i| i.url.is_empty())
     );
 }
+
+#[test]
+fn file_input_name_and_value_update_when_files_are_attached() {
+    // Shape from CEF 156 on `<label for="f1">Resume</label><input id="f1" type="file">`.
+    let initial = json!({
+        "ax_tree_id": "tree-file",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "tree-file", "focus_id": 11 },
+            "root_id": 11,
+            "nodes": [
+                { "id": 11, "role": "rootWebArea", "offset_container_id": 0,
+                  "location": { "x": 0.0, "y": 0.0, "width": 800.0, "height": 600.0 },
+                  "child_ids": [17] },
+                { "id": 17, "role": "button", "state": ["focusable"], "offset_container_id": 11,
+                  "location": { "x": 64.0, "y": 8.0, "width": 253.0, "height": 21.0 },
+                  "attributes": {
+                      "htmlId": "f1", "htmlTag": "input", "inputType": "file",
+                      "name": "Resume: No file chosen", "value": "No file chosen"
+                  } }
+            ]
+        }]
+    });
+    let mut tree = PageTree::default();
+    first(&mut tree, initial);
+    let items = tree.flatten(usize::MAX);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "Resume: No file chosen");
+    assert_eq!(items[0].value, "No file chosen");
+
+    // Blink's incremental update after `answer_file_chooser` (or `input.files = ...`).
+    let attached = json!({
+        "ax_tree_id": "tree-file",
+        "updates": [{
+            "nodes": [
+                { "id": 17, "role": "button", "state": ["focusable"], "offset_container_id": 11,
+                  "location": { "x": 64.0, "y": 8.0, "width": 253.0, "height": 21.0 },
+                  "attributes": {
+                      "htmlId": "f1", "htmlTag": "input", "inputType": "file",
+                      "name": "Resume: resume.pdf", "value": "resume.pdf"
+                  } }
+            ]
+        }]
+    });
+    first(&mut tree, attached);
+    let items = tree.flatten(usize::MAX);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "Resume: resume.pdf");
+    assert_eq!(items[0].value, "resume.pdf");
+}
