@@ -22,15 +22,18 @@ fn color(Rgb(r, g, b): Rgb) -> Color {
 }
 
 /// `rows` into the model `current` already is, when it is one of ours;
-/// otherwise (the first render) a new one through `set`.
+/// otherwise (the first render) a new one through `set`. Returns whether anything changed.
 pub(crate) fn sync<T: Clone + PartialEq + 'static>(
     current: ModelRc<T>,
     rows: Vec<T>,
     set: impl FnOnce(ModelRc<T>),
-) {
+) -> bool {
     match current.as_any().downcast_ref::<VecModel<T>>() {
         Some(model) => wubble_ui::sync(model, rows),
-        None => set(ModelRc::from(Rc::new(VecModel::from(rows)))),
+        None => {
+            set(ModelRc::from(Rc::new(VecModel::from(rows))));
+            true
+        }
     }
 }
 
@@ -85,12 +88,12 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
 }
 
 pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slint::Image>) {
-    sync(
+    let mut changed = sync(
         window.get_pinned_tabs(),
         tab_items(&v.pinned, favicons),
         |m| window.set_pinned_tabs(m),
     );
-    sync(window.get_tabs(), tab_items(&v.tabs, favicons), |m| {
+    changed |= sync(window.get_tabs(), tab_items(&v.tabs, favicons), |m| {
         window.set_tabs(m)
     });
     let spaces = v
@@ -104,15 +107,20 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             agent: s.agent,
         })
         .collect();
-    sync(window.get_spaces(), spaces, |m| window.set_spaces(m));
+    changed |= sync(window.get_spaces(), spaces, |m| window.set_spaces(m));
+    changed |= window.get_active_tab_id() != v.active_tab
+        || window.get_active_space_id() != v.active_space;
     window.set_active_tab_id(v.active_tab);
     window.set_active_space_id(v.active_space);
     window.set_address_host(v.host.as_str().into());
     window.set_address_path(v.path.as_str().into());
     window.set_address_secure(v.secure);
     // Rows synced in place change no property, so no `changed` handler tells
-    // the driver: tell it here.
-    window.invoke_shell_model_changed();
+    // the driver: tell it here, when they changed (it asks for a frame: a render with nothing
+    // changed, as the 5 s lifecycle tick's, would draw a frame for nothing).
+    if changed {
+        window.invoke_shell_model_changed();
+    }
 }
 
 /// The Spaces popup's lines (`wubble_core::spacemenu`) and the keys' rows: the lines, a

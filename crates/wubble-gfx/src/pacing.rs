@@ -24,6 +24,21 @@ pub fn frame_rate_for(refresh_mhz: Option<u32>) -> u32 {
     }
 }
 
+/// The frame-rate ceiling of a page no window shows but that must keep painting (an agent
+/// session's: its layout, accessibility tree and screenshots), so it is not drawn at the
+/// display's rate for nobody.
+pub const UNSHOWN_FRAME_RATE: u32 = 15;
+
+/// CEF's frame-rate ceiling for one view: the display's rate where a window shows it, else
+/// [`UNSHOWN_FRAME_RATE`] (never above the display's).
+pub fn view_frame_rate(display: u32, shown: bool) -> u32 {
+    if shown {
+        display
+    } else {
+        display.min(UNSHOWN_FRAME_RATE)
+    }
+}
+
 /// Unanswered begin frames after which the driver idles.
 pub const IDLE_AFTER: u8 = 4;
 
@@ -154,6 +169,16 @@ impl FrameStats {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_page_no_window_shows_paints_slowly() {
+        assert_eq!(super::view_frame_rate(120, true), 120);
+        assert_eq!(
+            super::view_frame_rate(120, false),
+            super::UNSHOWN_FRAME_RATE
+        );
+        assert_eq!(super::view_frame_rate(10, false), 10);
+    }
+
     use super::*;
 
     #[test]

@@ -270,7 +270,9 @@ fn drag_survives_an_in_place_rerender(app: &AppWindow, driver: &Shared) {
     pump();
     settle(app, driver);
     let m = model.clone();
-    let kept = drag_across_rerender(app, driver, move |items| wubble_ui::sync(&m, items));
+    let kept = drag_across_rerender(app, driver, move |items| {
+        wubble_ui::sync(&m, items);
+    });
     let replaced = drag_across_rerender(app, driver, |items| {
         app.set_tabs(ModelRc::from(items.as_slice()))
     });

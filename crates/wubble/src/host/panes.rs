@@ -88,7 +88,9 @@ pub(super) fn sync_rows<T: Clone + PartialEq + 'static>(
     set: impl FnOnce(slint::ModelRc<T>),
 ) {
     match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
-        Some(model) => wubble_ui::sync_by(model, rows, same),
+        Some(model) => {
+            wubble_ui::sync_by(model, rows, same);
+        }
         None => set(super::surfaces::model(rows)),
     }
 }

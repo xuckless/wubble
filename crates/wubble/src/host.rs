@@ -100,6 +100,7 @@ use wubble_engine::input::{KeyId, KeyInput, Point};
 use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
+use wubble_gfx::scene::run::RunEvent;
 use wubble_store::{ArchivedTab, ClosedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, FocusRegion, GlassKeys, SidebarMode};
 
@@ -1056,6 +1057,10 @@ impl Host {
                         view.repaint();
                     }
                     view.set_visible(visible || driven);
+                    // an agent's page in no window keeps painting, slowly
+                    if driven {
+                        view.set_frame_rate(pacing::view_frame_rate(frame_rate, visible));
+                    }
                 }
                 self.pace(PaceEvent::Wake);
             }
@@ -3207,6 +3212,44 @@ impl Host {
         }
     }
 
+    /// This window was hidden (occluded, minimised, sized to nothing) or shown again: its pages
+    /// stop painting while nobody can see them. CEF paints windowless pages, so Chromium never
+    /// learns that the window is covered; only this tells it. A page playing sound (its video
+    /// would be suspended) and an agent's (screenshots) keep painting.
+    fn occlusion(&mut self, hidden: bool) {
+        self.w.hidden = hidden;
+        if hidden {
+            for tab in self.shown_tabs() {
+                let audible = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .is_some_and(|t| t.busy.contains(Reason::Audible));
+                let pip = self.model.pip_tab() == Some(tab);
+                if self.w.occluded.contains(&tab)
+                    || !hidden_window_stops(audible, self.agent_drives(tab), pip)
+                {
+                    continue;
+                }
+                if let Some(view) = self.tab_view(tab)
+                    && view.is_visible()
+                {
+                    view.set_visible(false);
+                    self.w.occluded.push(tab);
+                }
+            }
+        } else {
+            let shown = self.shown_tabs();
+            for tab in std::mem::take(&mut self.w.occluded) {
+                if shown.contains(&tab)
+                    && let Some(view) = self.tab_view(tab)
+                {
+                    view.set_visible(true);
+                }
+            }
+        }
+    }
+
     /// Raw winit events, before Slint sees them: keys for the page,
     /// modifiers and window focus.
     pub fn window_event(&mut self, event: &WindowEvent) -> EventResult {
@@ -3222,6 +3265,11 @@ impl Host {
                 .flatten()
         }) {
             self.w.glass.borrow_mut().run_event(e, &window);
+            match e {
+                RunEvent::Hidden => self.occlusion(true),
+                RunEvent::Shown => self.occlusion(false),
+                _ => {}
+            }
         }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
@@ -3455,9 +3503,11 @@ impl Host {
             && rate != current
         {
             self.frame_rate = Some(rate);
-            for id in self.views.values().copied().collect::<Vec<_>>() {
+            let shown = self.shown_tabs();
+            for (tab, id) in self.views.iter().map(|(t, v)| (*t, *v)).collect::<Vec<_>>() {
+                let shown = shown.contains(&tab) || !self.agent_drives(tab);
                 if let Some(view) = self.engine.view(id) {
-                    view.set_frame_rate(rate);
+                    view.set_frame_rate(pacing::view_frame_rate(rate, shown));
                 }
             }
         }
@@ -3730,8 +3780,23 @@ fn new_tab(url: String, opener: Option<TabId>) -> Command {
     }
 }
 
+/// Whether a shown page stops painting while its window is hidden: not one playing sound (its
+/// media would be suspended), an agent session's (its screenshots) or the one in picture in
+/// picture (shown in its own window).
+fn hidden_window_stops(audible: bool, agent: bool, pip: bool) -> bool {
+    !(audible || agent || pip)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hidden_window_stops_its_pages_but_sound_agents_and_pip() {
+        assert!(super::hidden_window_stops(false, false, false));
+        assert!(!super::hidden_window_stops(true, false, false));
+        assert!(!super::hidden_window_stops(false, true, false));
+        assert!(!super::hidden_window_stops(false, false, true));
+    }
+
     use super::*;
     use wubble_core::sleep::Pressure;
     use wubble_core::space::{ContainerId, SpaceId};

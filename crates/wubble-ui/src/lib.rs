@@ -19,8 +19,8 @@ pub const ELEMENT_IDS: bool = option_env!("WUBBLE_ELEMENT_IDS").is_some();
 /// added and rows past the new end removed. A Slint `for` keeps an instance per row it did not
 /// see removed, so a row's own state (hover, the press, a TouchArea's grab mid-drag, its tweens)
 /// survives a re-render; replacing the whole model would rebuild every row.
-pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
-    sync_by(model, rows, PartialEq::eq);
+pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) -> bool {
+    sync_by(model, rows, PartialEq::eq)
 }
 
 /// [`sync`] with `same` deciding whether a row changed (rows holding wgpu images: see
@@ -29,8 +29,9 @@ pub fn sync_by<T: Clone + 'static>(
     model: &VecModel<T>,
     rows: Vec<T>,
     same: impl Fn(&T, &T) -> bool,
-) {
+) -> bool {
     let keep = model.row_count().min(rows.len());
+    let mut changed = rows.len() != model.row_count();
     for _ in rows.len()..model.row_count() {
         model.remove(model.row_count() - 1);
     }
@@ -39,8 +40,10 @@ pub fn sync_by<T: Clone + 'static>(
             model.push(row);
         } else if !model.row_data(i).is_some_and(|old| same(&old, &row)) {
             model.set_row_data(i, row);
+            changed = true;
         }
     }
+    changed
 }
 
 /// Whether two images are the same: Slint 1.19's `Image` equality has no case for wgpu
@@ -100,9 +103,13 @@ mod tests {
     #[test]
     fn sync_by_keeps_rows_its_test_calls_the_same() {
         let m = VecModel::from(vec![(1, 'a'), (2, 'b')]);
-        sync_by(&m, vec![(1, 'x'), (3, 'y')], |a, b| a.0 == b.0);
+        assert!(sync_by(&m, vec![(1, 'x'), (3, 'y')], |a, b| a.0 == b.0));
         // row 0 is "the same" and keeps its old data; row 1 changed
         assert_eq!(m.iter().collect::<Vec<_>>(), [(1, 'a'), (3, 'y')]);
+        // nothing changed: says so (the shell then asks for no frame)
+        assert!(!sync_by(&m, vec![(1, 'z'), (3, 'y')], |a, b| a.0 == b.0));
+        assert!(sync(&VecModel::from(vec![1]), vec![1, 2]));
+        assert!(sync(&VecModel::from(vec![1, 2]), vec![1]));
     }
 
     #[test]

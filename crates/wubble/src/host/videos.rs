@@ -306,12 +306,16 @@ impl Host {
     /// in picture-in-picture, the ones playing sound. Also the overlay's clock.
     pub fn poll_media(&mut self) {
         let now = now_ms() as u64;
-        // The docked DevTools panel is a pane but no page of the user's.
-        let mut tabs: BTreeSet<TabId> = self
-            .shown_tabs()
-            .into_iter()
-            .filter(|t| *t != super::PANEL_TAB)
-            .collect();
+        // The docked DevTools panel is a pane but no page of the user's; a hidden window's
+        // pages show no controls, so they are not asked (each ask wakes their renderer).
+        let mut tabs: BTreeSet<TabId> = if self.w.hidden {
+            BTreeSet::new()
+        } else {
+            self.shown_tabs()
+                .into_iter()
+                .filter(|t| *t != super::PANEL_TAB)
+                .collect()
+        };
         tabs.extend(self.videos.pip.tab());
         tabs.extend(self.audible_tabs());
         self.videos.round += 1;
