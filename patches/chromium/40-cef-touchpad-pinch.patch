@@ -1,0 +1,63 @@
+What: Windowless (OSR) views apply a touchpad pinch the page left alone, and say so.
+Why: Chromium's touchpad pinch (GesturePinch*, kTouchpad) reaches the page first as a cancelable
+  Ctrl+wheel (input::TouchpadPinchEventQueue); the platform view then forwards the pinch itself
+  when that wheel is not consumed (RenderWidgetHostViewInput::ForwardTouchpadZoomEventIfNecessary,
+  called from the Aura, Mac and Android views' GestureEventAck). CEF's OSR view never calls it, so
+  in a windowless browser a pinch reaches pages as Ctrl+wheel and never changes the visual
+  viewport's scale. wubble's trackpad pinch (DevTools Input.synthesizePinchGesture) needs it. The
+  exported marker cef_wubble_touchpad_pinch_v1 lets wubble tell this engine from a stock one,
+  apart from the extension patches' table (cef_wubble_ext_v1), which may ship without it.
+Applies in: chromium/src/cef
+Status: not yet built into any engine (2026-11-21).
+--- a/libcef/browser/osr/render_widget_host_view_osr.cc
++++ b/libcef/browser/osr/render_widget_host_view_osr.cc
+@@ -10,6 +10,9 @@
+ #include <memory>
+ #include <utility>
+ 
++// wubble change: CEF_EXPORT for the marker below.
++#include "include/internal/cef_export.h"
++
+ #include "base/command_line.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/ptr_util.h"
+@@ -1011,6 +1014,26 @@
+   return std::make_unique<CefSyntheticGestureTargetOSR>(host());
+ }
+ 
++// wubble change: as RenderWidgetHostViewAura::GestureEventAck does. A
++// touchpad pinch (WebGestureDevice::kTouchpad, from a synthetic gesture such
++// as DevTools' Input.synthesizePinchGesture) first goes to the page as a
++// Ctrl+wheel (input::TouchpadPinchEventQueue); once that wheel comes back
++// unconsumed this sends the pinch itself, which changes the page scale.
++// Without it the page sees the wheel and its scale never changes.
++void CefRenderWidgetHostViewOSR::GestureEventAck(
++    const blink::WebGestureEvent& event,
++    blink::mojom::InputEventResultSource ack_source,
++    blink::mojom::InputEventResultState ack_result) {
++  ForwardTouchpadZoomEventIfNecessary(event, ack_result);
++}
++
++// wubble change: the marker wubble looks up at run time to tell an engine with
++// this change (it then pinches through Input.synthesizePinchGesture) from a stock
++// one (wubble-engine/src/pinch.rs, `touchpad_available`).
++extern "C" CEF_EXPORT int cef_wubble_touchpad_pinch_v1(void) {
++  return 1;
++}
++
+ bool CefRenderWidgetHostViewOSR::TransformPointToCoordSpaceForView(
+     const gfx::PointF& point,
+     input::RenderWidgetHostViewInput* target_view,
+--- a/libcef/browser/osr/render_widget_host_view_osr.h
++++ b/libcef/browser/osr/render_widget_host_view_osr.h
+@@ -195,6 +195,10 @@
+       const std::optional<std::vector<gfx::Rect>>& character_bounds) override;
+   std::unique_ptr<content::SyntheticGestureTarget>
+   CreateSyntheticGestureTarget() override;
++  // wubble change: a touchpad pinch the page left alone scales it.
++  void GestureEventAck(const blink::WebGestureEvent& event,
++                       blink::mojom::InputEventResultSource ack_source,
++                       blink::mojom::InputEventResultState ack_result) override;
+   bool TransformPointToCoordSpaceForView(
+       const gfx::PointF& point,
+       input::RenderWidgetHostViewInput* target_view,

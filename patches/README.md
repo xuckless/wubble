@@ -20,9 +20,11 @@ CEF module in `BUILD.gn`.
 | `20-cef-opened-tabs.patch` | Open requests to wubble and their answers; `clients.openWindow` (P2, CEF side) |
 | `21-src-opened-tabs.patch` | `tabs.create` and `runtime.openOptionsPage` through wubble; `windows.create` refused (P2, Chromium side) |
 | `30-cef-action.patch` | `chrome.action`: click, state, change notifications (P3) |
+| `40-cef-touchpad-pinch.patch` | Windowless views apply a touchpad pinch the page left alone (the OSR view's missing `ForwardTouchpadZoomEventIfNecessary`), and export the marker `cef_wubble_touchpad_pinch_v1`; wubble pinches through DevTools `Input.synthesizePinchGesture` when it finds it (`crates/wubble-engine/src/pinch.rs`), with two synthetic fingers otherwise. **Not yet built into any engine** (2026-11-21): its road is unit-tested only |
 
 wubble finds the table at run time (`crates/wubble-engine/src/ext_api.rs`); a stock CEF lacks it
-and wubble runs without these APIs. Build a patched CEF beside the one in use (never over it):
+and wubble runs without these APIs. Patch 40 has its own marker, so the pinch does not depend on
+the extension patches being there, nor they on it. Build a patched CEF beside the one in use (never over it):
 
     CEF_INSTALL=DIR nice timeout 4h scripts/build-cef.sh WORK patch build distrib install
     CEF_PATH=DIR cargo build --workspace
