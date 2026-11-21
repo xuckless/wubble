@@ -472,6 +472,7 @@ export component AppWindow inherits Window {
     in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
     in property <[ExtensionItem]> settings-extensions <=> settings-ui.extensions;
     in property <bool> settings-extensions-restart <=> settings-ui.extensions-restart;
+    in property <bool> settings-extensions-available <=> settings-ui.extensions-available;
     in property <AgentsView> settings-agents <=> settings-ui.agents;
     in property <[AgentAppItem]> settings-agent-apps <=> settings-ui.agent-apps;
     in property <AboutView> settings-about <=> settings-ui.about;
@@ -675,10 +676,10 @@ export component AppWindow inherits Window {
     public function settings-type-query(q: string) {
         settings-ui.type-query(q);
     }
-    // the settings page and its section list back at the top (the gallery, before it clicks a
+    // the settings page's section list back at its top (the gallery, before it clicks a
     // section by its place)
-    public function settings-scroll-to-top() {
-        settings-ui.scroll-to-top();
+    public function settings-nav-to-top() {
+        settings-ui.nav-to-top();
     }
 
     // Puts `text` on the clipboard through Slint's own (no clipboard crate): a hidden field

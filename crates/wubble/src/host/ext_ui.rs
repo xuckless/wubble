@@ -153,11 +153,17 @@ impl Host {
 
     /// "Install from file": a .crx file.
     pub(crate) fn extension_install_file(&mut self) {
+        if !self.engine.ext_apis() {
+            return;
+        }
         self.extension_pick(crate::chooser::Pick::File, "Add an extension", &["crx"]);
     }
 
     /// "Install from folder": an unpacked extension.
     pub(crate) fn extension_install_folder(&mut self) {
+        if !self.engine.ext_apis() {
+            return;
+        }
         self.extension_pick(
             crate::chooser::Pick::Folder,
             "Add an unpacked extension",
@@ -200,6 +206,10 @@ impl Host {
 
     /// The user picked `path`: read it, and ask what it may do before anything is installed.
     fn extension_picked(&mut self, path: PathBuf) {
+        // an engine without the extension patches offers no extensions (`ext_api::available`)
+        if !self.engine.ext_apis() {
+            return;
+        }
         match crate::extensions::read(&path, &self.ext_ui.root) {
             Ok(ext) => {
                 // its unpacked copy, if any, is the next start's sweep
@@ -296,6 +306,9 @@ impl Host {
     /// The footer's puzzle button: the popover opens when the overlays let it, or closes.
     pub fn extensions_requested(&mut self) {
         self.hover_dismiss();
+        if !self.engine.ext_apis() {
+            return;
+        }
         if self.ext_ui.panel == Panel::Closed && !self.overlay_open(Kind::Extensions, None) {
             return;
         }
@@ -588,7 +601,10 @@ impl Host {
             })
             .collect();
         let restart = restart_needed(&ui.at_start, &ui.list);
-        window.set_has_extensions(!items.is_empty());
+        // the engine's fact (`ext_api::available`): without its patches no extension is offered
+        let available = self.engine.ext_apis();
+        window.set_has_extensions(wubble_core::extensions::footer_button(available, &ui.list));
+        window.set_settings_extensions_available(available);
         crate::bind::sync(window.get_settings_extensions(), items, |m| {
             window.set_settings_extensions(m)
         });

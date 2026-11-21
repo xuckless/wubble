@@ -102,7 +102,7 @@ impl Host {
             }
             Some(Action::Scroll(i)) => {
                 self.gallery_wait(SETTLE);
-                if let Some(at) = SCENES[i].click {
+                if let Some(at) = SCENES[i].click_at(self.engine.ext_apis()) {
                     click(&window, at);
                 }
                 if SCENES[i].wheel > 0 {
@@ -137,6 +137,13 @@ impl Host {
                     .start(slint::TimerMode::SingleShot, Duration::ZERO, || {
                         with_host(|host| host.gallery_step(Event::Shot))
                     });
+            }
+            Some(Action::Shoot(i)) if SCENES[i].needs_extensions() && !self.engine.ext_apis() => {
+                println!(
+                    "smoke: gallery skip {}: extensions are not available in this engine",
+                    SCENES[i].name
+                );
+                self.gallery_step(Event::Shot);
             }
             Some(Action::Shoot(i)) => {
                 match shot::take_scene(&window, i, SCENES[i].name) {
@@ -192,13 +199,15 @@ impl Host {
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
         }
-        // a scene that clicks a section by its place starts with the list at the top (an
-        // earlier scene's wheel may have scrolled it)
+        // a scene that clicks a section by its place starts with the full list at its top (an
+        // earlier scene's wheel scrolled it); the page stays, so its jump is short
         if scene.page == Some(wubble_core::pages::InternalPage::Settings)
             && scene.click.is_some()
             && let Some(window) = self.w.window.upgrade()
         {
-            window.invoke_settings_scroll_to_top();
+            // and no search left from an earlier scene (its list has other rows)
+            window.invoke_settings_type_query("".into());
+            window.invoke_settings_nav_to_top();
         }
         // a plain page under the scene: loaded once, kept for the scenes after it on the same
         if let (Some(tab), Some(url)) = (self.shown(), ground_url(scene.ground))

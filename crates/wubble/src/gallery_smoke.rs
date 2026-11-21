@@ -527,6 +527,32 @@ const NAV_GENERAL: (u16, u16) = (420, 197);
 const NAV_SPACES: (u16, u16) = (420, 387);
 const NAV_SITES: (u16, u16) = (420, 425);
 const NAV_EXTENSIONS: (u16, u16) = (420, 501);
+/// The section list's row pitch, logical px.
+const NAV_PITCH: u16 = 38;
+
+impl Scene {
+    /// It shows extensions: without the engine's extension patches there are none to show.
+    pub fn needs_extensions(&self) -> bool {
+        matches!(
+            self.overlay,
+            Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt
+        )
+    }
+
+    /// Where its click lands: a Settings section row below Extensions is one row higher when
+    /// the engine has no extension patches (the Extensions row is gone).
+    pub fn click_at(&self, extensions: bool) -> Option<(u16, u16)> {
+        let (x, y) = self.click?;
+        let settings = self.page == Some(InternalPage::Settings);
+        Some(
+            if settings && !extensions && x == NAV_EXTENSIONS.0 && y > NAV_EXTENSIONS.1 {
+                (x, y - NAV_PITCH)
+            } else {
+                (x, y)
+            },
+        )
+    }
+}
 const NAV_AGENTS: (u16, u16) = (420, 539);
 const NAV_UPDATES: (u16, u16) = (420, 577);
 const ROUTING_RULE: (u16, u16) = (900, 560);

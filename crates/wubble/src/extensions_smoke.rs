@@ -160,7 +160,8 @@ pub fn run(
             return Err(format!("the sweep left {left:?}, the list names {named:?}").into());
         }
     }
-    let paths = wubble_core::extensions::load_paths(&stored);
+    let available = wubble_engine::ext_api::available();
+    let paths = wubble_core::extensions::load_paths(available, &stored);
     println!(
         "extensions: {} installed, loading {:?}",
         stored.extensions().len(),
@@ -174,13 +175,39 @@ pub fn run(
     // zygote's children keep its command line, so `--extension-process` is not to be seen there.
     let port = crate::page_smoke::free_port()?;
     let mut engine = Engine::start(EngineConfig {
-        extensions: paths,
+        extensions: paths.clone(),
         features: wubble_engine::app::PageFeatures {
             remote_debugging_port: Some(port),
             ..config.features
         },
         ..config
     })?;
+    // An engine without wubble's extension patches offers no extensions: none loaded (the
+    // list kept as it was), no extension process, no footer button.
+    if !available {
+        let targets = extension_targets(&mut engine, port);
+        crate::drain(&mut engine);
+        let targets = targets?;
+        if !paths.is_empty() || !targets.is_empty() {
+            return Err(format!(
+                "no extension may run without the patches: loading {paths:?}, targets {targets:?}"
+            )
+            .into());
+        }
+        if engine.ext_apis() {
+            return Err("the engine and the start disagree on the extension patches".into());
+        }
+        // the footer button is drawn from this rule (`host/ext_ui.rs`)
+        if wubble_core::extensions::footer_button(available, &stored) {
+            return Err("the footer button would show".into());
+        }
+        println!(
+            "smoke: extensions not available in this engine (no cef_wubble_ext_v1): none of the \
+             {} installed loaded, their records kept, no extension process, no footer button",
+            stored.extensions().len()
+        );
+        return Ok(());
+    }
     // The directory copy drives the tab APIs, on a CEF that has them.
     let patched = engine.ext_apis();
     let apis = patched.then(|| want.first().cloned()).flatten();

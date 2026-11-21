@@ -674,13 +674,24 @@ pub fn unused_copies(list: &Installed, found: impl IntoIterator<Item = PathBuf>)
         .collect()
 }
 
-/// The directories Chromium loads: the enabled extensions', in id order.
-pub fn load_paths(list: &Installed) -> Vec<PathBuf> {
+/// The directories Chromium loads: the enabled extensions', in id order; none when the engine
+/// lacks the extension patches (`available`, `wubble_engine::ext_api::available`): the extension
+/// system stays off, and the list is kept as it is for an engine that has them.
+pub fn load_paths(available: bool, list: &Installed) -> Vec<PathBuf> {
+    if !available {
+        return vec![];
+    }
     list.0
         .iter()
         .filter(|e| e.enabled)
         .map(|e| e.dir().to_path_buf())
         .collect()
+}
+
+/// Whether the sidebar footer shows the Extensions button: an engine with the extension
+/// patches (`available`) and something installed.
+pub fn footer_button(available: bool, list: &Installed) -> bool {
+    available && !list.extensions().is_empty()
 }
 
 /// Whether the list differs from what this run loaded (`at_start`, the list when CEF started):
@@ -1007,7 +1018,7 @@ mod tests {
             .collect();
         want.sort();
         let all: Vec<PathBuf> = want.iter().map(|(_, d)| d.clone()).collect();
-        assert_eq!(load_paths(&list), all);
+        assert_eq!(load_paths(true, &list), all);
         let at_start = list.clone();
         assert!(!restart_needed(&at_start, &list));
         let (list, _) = transition(list, Event::Disable(id_from_key(b"y")));
@@ -1016,7 +1027,7 @@ mod tests {
             .filter(|d| *d != Path::new("/src/y"))
             .cloned()
             .collect();
-        assert_eq!(load_paths(&list), without);
+        assert_eq!(load_paths(true, &list), without);
         assert!(restart_needed(&at_start, &list));
         assert!(restart_needed(&Installed::default(), &list));
         assert!(!restart_needed(
@@ -1032,8 +1043,14 @@ mod tests {
         edited.version = "9".into();
         edited.permissions.push("tabs".into());
         let (list, _) = transition(list, Event::Install(edited));
-        assert_eq!(load_paths(&list), all);
+        assert_eq!(load_paths(true, &list), all);
         assert!(restart_needed(&at_start, &list));
+        // an engine without the extension patches loads none and shows no button; the list
+        // stays as it is
+        assert!(load_paths(false, &list).is_empty());
+        assert!(!footer_button(false, &list) && footer_button(true, &list));
+        assert!(!footer_button(true, &Installed::default()));
+        assert_eq!(list.extensions().len(), 3);
     }
 
     #[test]

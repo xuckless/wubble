@@ -1673,7 +1673,10 @@ fn run(
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
-        extensions: wubble_core::extensions::load_paths(&installed),
+        extensions: wubble_core::extensions::load_paths(
+            wubble_engine::ext_api::available(),
+            &installed,
+        ),
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);

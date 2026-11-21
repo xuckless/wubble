@@ -241,10 +241,28 @@ fn lookup() -> Option<&'static ffi::cef_wubble_ext_t> {
     None
 }
 
+/// The table, looked up once per process: the one owner of whether this engine has the
+/// extension patches.
+fn table() -> Option<&'static ffi::cef_wubble_ext_t> {
+    static TABLE: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let at = TABLE.get_or_init(|| lookup().map(|t| std::ptr::from_ref(t) as usize));
+    // SAFETY: the address is of the static table `lookup` found and checked.
+    at.map(|a| unsafe { &*(a as *const ffi::cef_wubble_ext_t) })
+}
+
+/// Whether this engine carries wubble's extension patches (`cef_wubble_ext_v1`). Without them an
+/// extension would load but could not see wubble's tabs, so the browser offers no extensions:
+/// none is loaded, the footer button, the Settings section and installing are gone, and the
+/// installed list is kept as it is for an engine that has them. Known before CEF starts (libcef
+/// is linked into the binary); [`crate::app::Engine::ext_apis`] gives the same answer.
+pub fn available() -> bool {
+    table().is_some()
+}
+
 impl ExtApi {
     /// The table of the running CEF, with wubble's delegate set. Call after CEF initialised.
     pub(crate) fn find() -> Self {
-        let api = Self::with(lookup());
+        let api = Self::with(table());
         if let Some(table) = api.table {
             let delegate = ffi::cef_wubble_ext_delegate_t {
                 ctx: std::ptr::from_ref(api.queue).cast_mut().cast(),
