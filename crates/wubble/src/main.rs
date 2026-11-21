@@ -12,6 +12,7 @@ mod cli;
 mod clipboard;
 mod codecs_smoke;
 mod data_smoke;
+mod dnd_smoke;
 mod extensions;
 mod extensions_smoke;
 mod gallery_smoke;
@@ -33,7 +34,6 @@ mod orbs;
 mod os_motion;
 mod os_scope;
 mod overlay_smoke;
-mod page_drag;
 mod page_error;
 mod page_smoke;
 mod pages_smoke;
@@ -130,6 +130,7 @@ pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 pub const PINCH_PAGE: &str = include_str!("../assets/pinch.html");
 /// `--smoke spell`'s fixture, served on loopback.
 pub const SPELL_PAGE: &str = include_str!("../assets/spell.html");
+pub const DND_PAGE: &str = include_str!("../assets/dnd.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 /// `--smoke builtins`' pages: an article (reader, dark mode, link hints), a page 3000 CSS px
@@ -377,6 +378,12 @@ fn main() -> ExitCode {
                 Smoke::Pinch => Mode::Pinch,
                 Smoke::Page => Mode::Page,
                 Smoke::Parity => Mode::Parity,
+                Smoke::Dnd { dir } => {
+                    if let Some(dir) = dir {
+                        shot::request_dir(dir);
+                    }
+                    Mode::Dnd
+                }
                 Smoke::Block => Mode::Block,
                 Smoke::Settings => Mode::Settings,
                 Smoke::Start { dir } => {
@@ -898,6 +905,8 @@ enum Mode {
     Page,
     /// `--smoke parity`.
     Parity,
+    /// `--smoke dnd`.
+    Dnd,
     /// `--smoke block`.
     Block,
     /// `--smoke settings`.
@@ -1566,7 +1575,7 @@ fn run(
     );
     let autofill_port = (matches!(
         mode,
-        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Mcp | Mode::Pinch
+        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Dnd | Mode::Mcp | Mode::Pinch
     ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
@@ -1621,7 +1630,7 @@ fn run(
     // The database loads, and the GPU device is made (about 150 ms on the Linux box, as long
     // as CEF's start), while CEF starts.
     let (store, loaded) = StoreClient::spawn(db, keyring);
-    if let Some(port) = autofill_port.filter(|_| !matches!(mode, Mode::Parity)) {
+    if let Some(port) = autofill_port.filter(|_| !matches!(mode, Mode::Parity | Mode::Dnd)) {
         let logins = match &autofill_plan {
             Some(plan) => plan.iter().flat_map(|f| f.logins.clone()).collect(),
             None => vec![
@@ -1747,6 +1756,15 @@ fn run(
             Some(page_url(PAGE_PAGE)),
             Checks {
                 page_smoke: Some(page_smoke::PageSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Dnd => (
+            autofill_port.map(dnd_smoke::home),
+            Checks {
+                parity: autofill_port.map(|port| {
+                    host::ParityRun::suite("dnd", dnd_smoke::home(port), dnd_smoke::ITEMS.to_vec())
+                }),
                 ..none
             },
         ),

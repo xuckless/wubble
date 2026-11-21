@@ -128,7 +128,10 @@ Open, to build or check:
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
-- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps; picture drag-out on macOS and Windows
+- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
+- [ ] Drag out on macOS (`Aux` impl: NSDraggingSource, pasteboard items with the link, text, HTML and a promised file for a picture) and Windows (the stub: `wl::Null`); written for neither yet
+- [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
+- [ ] A page drag dropped on the bookmarks page or a folder row makes a bookmark (the built-in pages take no drop yet); text or a link onto an open command bar's field (the pill only)
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)

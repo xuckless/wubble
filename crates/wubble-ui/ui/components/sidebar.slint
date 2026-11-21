@@ -32,7 +32,7 @@ import { Wobble } from "../kit/motion/wobble.slint";
 import { Raised } from "raised.slint";
 import { Entering } from "../kit/motion/overlap.slint";
 import { FolderRow } from "folder-row.slint";
-import { SideEdges } from "model.slint";
+import { SideEdges, DropGeometry } from "model.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
@@ -152,6 +152,24 @@ export component Sidebar inherits Rectangle {
         downloads-y: switcher.downloads-y,
         settings: switcher.settings-x,
         settings-end: switcher.settings-x + switcher.settings-w,
+    };
+    out property <DropGeometry> drop-geometry: {
+        list-x: list.absolute-position.x,
+        list-y: list.absolute-position.y,
+        list-w: list.width,
+        list-h: list.height,
+        rows-top: list.absolute-position.y + root.scroll-y,
+        pitch: root.pitch,
+        row-h: Shell.row,
+        line: Shell.drag-zone-border,
+        pill-x: pill.absolute-position.x,
+        pill-y: pill.absolute-position.y,
+        pill-w: pill.width,
+        pill-h: pill.height,
+        new-tab-x: new-tab.absolute-position.x,
+        new-tab-y: new-tab.absolute-position.y,
+        new-tab-w: new-tab.width,
+        new-tab-h: new-tab.height,
     };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Tsx.new-tab-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.

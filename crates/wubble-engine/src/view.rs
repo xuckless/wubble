@@ -270,6 +270,10 @@ pub struct PopupLayer {
     pub rect: Rect,
 }
 
+/// A page drag's data as CEF holds it: opaque, equal only to itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldDrag(welding::HeldDrag);
+
 /// Where a drag over the view is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DragPhase {
@@ -278,6 +282,9 @@ pub enum DragPhase {
     /// The view's own page drag entered it again: CEF gets the data the page
     /// gave, with the types [`DragData`] does not carry.
     EnterSource,
+    /// Another view's page drag entered this view, with that page's data as
+    /// it gave it ([`View::held_drag`]).
+    EnterFrom(HeldDrag),
     Over,
     Leave,
     Drop,
@@ -1549,17 +1556,19 @@ impl View {
         if !self.is_open() {
             return;
         }
-        let (kind, payload) = match phase {
-            DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into())),
-            DragPhase::EnterSource => (welding::DragEventKind::Enter, None),
-            DragPhase::Over => (welding::DragEventKind::Over, None),
-            DragPhase::Leave => (welding::DragEventKind::Leave, None),
-            DragPhase::Drop => (welding::DragEventKind::Drop, None),
+        let (kind, payload, from) = match phase {
+            DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into()), None),
+            DragPhase::EnterSource => (welding::DragEventKind::Enter, None, None),
+            DragPhase::EnterFrom(held) => (welding::DragEventKind::Enter, None, Some(held.0)),
+            DragPhase::Over => (welding::DragEventKind::Over, None, None),
+            DragPhase::Leave => (welding::DragEventKind::Leave, None, None),
+            DragPhase::Drop => (welding::DragEventKind::Drop, None, None),
         };
         let (x, y) = self.physical(point);
         let event = welding::DragInput {
             kind,
             payload,
+            from,
             x,
             y,
             modifiers: weld_modifiers(modifiers),
@@ -1568,6 +1577,12 @@ impl View {
         if let Err(e) = self.producer.send_drag_input(event) {
             eprintln!("wubble-engine: view {}: drag: {e}", self.browser_id);
         }
+    }
+
+    /// The page drag this view's page runs, as CEF holds it, for another
+    /// view's [`DragPhase::EnterFrom`]; `None` when none runs.
+    pub fn held_drag(&self) -> Option<HeldDrag> {
+        self.producer.held_drag().map(HeldDrag)
     }
 
     /// Lets pages start drags out of the view ([`PageEvent::DragStarted`]).

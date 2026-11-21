@@ -378,3 +378,12 @@ In the design the pinned column (`.st-pin`) rides the one scroll view, so a colu
 | Piece | derived | rule it follows | shot |
 |---|---|---|---|
 | Section list scroller (`NavScroller` in `kit/settings/page.slint`, `NavScroll` global) | The title, the search and its count stay pinned (`.st-pin`: 24 below the top once the page scrolls, as before); the section list and the Pages group under them scroll on the kit scroller (`WubbleScroller`: the same wheel physics, rubber band and `.wb-thumb`) on their own offset, when the window is shorter than the list. The column ends 24 above the window's foot (`Shell.settings-pin`). The wheel goes to the column under the pointer; over the list when it fits, or over the title and search, it scrolls the page as before. Hovering moves no focus and picks nothing. When the current section changes (the page scrolled, or a pick) its row is brought into view with the least travel. | `.st-pin`, `.st-nav`, `.wb-thumb` | gallery settings-nav-end |
+
+## Page drag and drop (pf/dnd)
+
+Chrome draws a page's drag with the image Blink made for it (a grey label for a link, the picture or the selection at 75 %, the page's own `setDragImage`); wubble draws that image as it is. These pieces are wubble's: the design repo has no drag image and no drop target.
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Drag ghost (`kit/chrome/drag-ghost.slint`) | Chromium's drag image at the pointer, its hotspot under it, untouched; without one, the tab drag's ghost row (shell fill, radius sm, `.wb-tab-drag`'s shadow) holding the title in `wb-tab` and under it the URL in `wb-cmd-hint` mist, as Chromium's label orders them; a dragged tab's ghost is the same piece with the title alone (moved out of app.slint) | `.wb-tab-drag`, the tab row's text | gallery drag-ghost-label, drag-ghost-image; `--smoke dnd --shot-dir` (Chromium's own images) |
+| Drop mark (`kit/chrome/drop-mark.slint`) | the split drop zone's box (ink .12 fill, ink .35 rim of 2, radius md; moved out of app.slint) over the address pill and the New tab row; its rim alone as a 2 px line in the tab list's gap; a Space row is lit as the tab drag lights it | the split drop zone | gallery drag-ghost-tab-list, drag-ghost-bar |
