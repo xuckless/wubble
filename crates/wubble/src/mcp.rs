@@ -67,14 +67,49 @@ pub enum Event {
 /// browser, so a file found here is a crash's and goes.
 pub fn bind(path: &Path) -> io::Result<Listener> {
     crate::instance::remove_stale(path)?;
-    let options = ListenerOptions::new().name(path.to_fs_name::<GenericFilePath>()?);
+    let options = || {
+        path.to_fs_name::<GenericFilePath>()
+            .map(|name| ListenerOptions::new().name(name))
+    };
     // Only this user may connect (set before `listen`, so no umask race).
     #[cfg(unix)]
-    let options = {
+    {
         use interprocess::os::unix::local_socket::ListenerOptionsExt;
-        options.mode(0o600)
-    };
-    options.create_sync()
+        match options()?.mode(0o600).create_sync() {
+            Err(e) if e.kind() == io::ErrorKind::Unsupported => private_by_dir(path),
+            other => other,
+        }
+    }
+    #[cfg(not(unix))]
+    options()?.create_sync()
+}
+
+/// Binds where a socket's mode cannot be set before `bind` (macOS: `fchmod` on a socket fails,
+/// which interprocess reports as `Unsupported`): the socket is bound inside a new directory
+/// only this user may enter, given its mode there, then renamed into place (a bound socket
+/// keeps listening under its new name). It is never reachable by another user, and the
+/// process's umask is left alone (other threads make files meanwhile).
+#[cfg(unix)]
+fn private_by_dir(path: &Path) -> io::Result<Listener> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    // short names: a socket path has a small limit, and `path` already fits it
+    let dir = parent.join(".m");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    let inside = dir.join("s");
+    let made = (|| {
+        let listener = ListenerOptions::new()
+            .name(inside.as_path().to_fs_name::<GenericFilePath>()?)
+            // the file is renamed away: nothing of this name is left to reclaim
+            .reclaim_name(false)
+            .create_sync()?;
+        std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&inside, path)?;
+        Ok(listener)
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    made
 }
 
 /// Connection ids, process-wide: a connection left from an earlier hosting run never shares
@@ -435,6 +470,25 @@ mod tests {
         let reply: Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(reply["id"], 1);
         assert_eq!(reply["error"]["message"], NOT_RUNNING);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_bound_in_a_private_directory_is_private_and_listens_under_its_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.sock");
+        let listener = private_by_dir(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            !dir.path().join(".m").exists(),
+            "the directory it was made in is gone"
+        );
+        Stream::connect(path.as_path().to_fs_name::<GenericFilePath>().unwrap()).unwrap();
+        drop(listener);
     }
 
     #[test]
