@@ -14,6 +14,7 @@
 
 use std::path::Path;
 
+#[cfg(any(not(target_os = "macos"), test))]
 use wubble_core::spell::{self, Found};
 
 /// The versioned name Chromium looks for.

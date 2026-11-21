@@ -1498,6 +1498,7 @@ mod tests {
     }
 
     /// The plain switches every run carries (`CHROMIUM_SWITCHES`).
+    #[cfg(target_os = "linux")]
     fn quiet_switches() -> Vec<(String, Option<String>)> {
         CHROMIUM_SWITCHES
             .iter()
