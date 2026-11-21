@@ -22,6 +22,16 @@ pub fn mark_window(window: &slint::Window) {
         .mark_dirty_region(rect.into());
 }
 
+/// The next frame of `window` redraws the logical rectangle `x, y, width, height` (a pane's
+/// texture written in place there: `Host::present_panes`).
+pub fn mark_rect(window: &slint::Window, x: f32, y: f32, width: f32, height: f32) {
+    let rect = LogicalRect::new(LogicalPoint::new(x, y), LogicalSize::new(width, height));
+    WindowInner::from_pub(window)
+        .window_adapter()
+        .renderer()
+        .mark_dirty_region(rect.into());
+}
+
 /// `--measure`'s line: frames drawn, how many redrew part of the window, the mean share redrawn
 /// and the items drawn per frame (Slint's draw calls reaching Skia).
 pub fn report(totals: Totals) -> String {

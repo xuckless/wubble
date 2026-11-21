@@ -214,6 +214,7 @@ pub(crate) fn copy_metal_to_owned(
         arrived,
         copy: done - started,
         copy_wait: done - waiting,
+        damage: None,
     })
 }
 

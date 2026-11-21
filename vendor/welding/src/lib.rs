@@ -140,7 +140,7 @@ pub use held::RequestId;
 #[cfg(target_os = "linux")]
 pub use native_frame::build_dmabuf_capable_device;
 pub use native_frame::{
-    CopiedFrame, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
+    CopiedFrame, Damage, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
     NativeFrameKind, NativeFramePixelFormat, WgpuTextureImporter,
 };
 pub use permissions::{PermissionId, PermissionKind};

@@ -285,6 +285,23 @@ and bubble); a 16 px spinner makes CEF paint the whole page at the display's rat
 with it. Occluded, minimised and another-workspace windows are not measurable on the headless compositor (it
 reports no occlusion); their pages stop by state since 239edd1.
 
+## Page damage in place (pf/perf step 2, 2026-11-21)
+
+`--measure` on the invisible display, the build with step 2 before its page-blur fix (load average 20 to 28,
+so CPU columns are not comparable with the table above; the frame shapes are): the share of the window each
+Slint frame redrew, the items drawn per frame, and the page frames written in place (CEF's
+`capture_update_rect` smaller than the frame).
+
+| page | step 1: dirty share, items | step 2: dirty share, items | frames in place |
+|---|---|---|---|
+| 16 px CSS spinner | about 0.8, 14 | 0.05, 9.2 | all but the first |
+| caret | | 0.000, 8.0 | all |
+| 854x480 VP9 clip in a page | 0.78, 15.6 | 0.39, 10.3 | 92 % |
+| `--measure scroll`, `--measure video` (whole-page change) | 0.8, 14 to 17 | the same | 0 |
+
+`SLINT_SKIA_PARTIAL_RENDERING=verify` over the spinner and the clip: 0 mismatches. The scene's ambience still
+redraws the whole window at 8 Hz while a page changes (TODO.md).
+
 ## One thinking orb (xm/orbs)
 
 2026-11-20, Linux release, RTX 5060, headless display (`scripts/headless.sh`, 60 Hz, 1360x880 at 1x), `--measure idle --seconds 8` on the idle page, with `WUBBLE_MEASURE_ORB=<state>` putting one 64 px orb, moving, on the library's stage (`host/gallery_orbs.rs` `measure_one`). Load average 12 to 17 (a build on the box).

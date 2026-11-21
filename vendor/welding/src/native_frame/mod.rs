@@ -553,6 +553,60 @@ pub struct CopiedFrame {
     pub copy: std::time::Duration,
     /// The part of `copy` spent blocked in `device.poll(Wait)`.
     pub copy_wait: std::time::Duration,
+    /// wubble change: the part of the frame that changed since the view's
+    /// previous frame (CEF's `capture_update_rect`), in the frame's pixels;
+    /// `None` when CEF gave none (all of it may have changed).
+    pub damage: Option<Damage>,
+}
+
+/// wubble change: a rectangle of a frame that changed, in its pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Damage {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Damage {
+    /// CEF's update rectangle (`has` its flag) clamped to a `width` x
+    /// `height` frame; `None` without one. An empty one is kept: nothing
+    /// changed.
+    pub fn of_update_rect(has: bool, x: i32, y: i32, w: i32, h: i32, width: u32, height: u32) -> Option<Self> {
+        if !has {
+            return None;
+        }
+        let clamp = |v: i32, max: u32| (v.max(0) as u32).min(max);
+        let (x0, y0) = (clamp(x, width), clamp(y, height));
+        let (x1, y1) = (clamp(x.saturating_add(w), width), clamp(y.saturating_add(h), height));
+        Some(Self {
+            x: x0,
+            y: y0,
+            width: x1.saturating_sub(x0),
+            height: y1.saturating_sub(y0),
+        })
+    }
+
+    /// Whether it covers the whole `width` x `height` frame.
+    pub fn is_whole(&self, width: u32, height: u32) -> bool {
+        self.x == 0 && self.y == 0 && self.width >= width && self.height >= height
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::Damage;
+
+    #[test]
+    fn an_update_rect_is_clamped_to_the_frame() {
+        assert_eq!(Damage::of_update_rect(false, 0, 0, 5, 5, 10, 10), None);
+        let d = Damage::of_update_rect(true, -2, 3, 8, 20, 10, 10).unwrap();
+        assert_eq!(d, Damage { x: 0, y: 3, width: 6, height: 7 });
+        assert!(!d.is_whole(10, 10));
+        assert!(Damage::of_update_rect(true, 0, 0, 10, 10, 10, 10).unwrap().is_whole(10, 10));
+        let empty = Damage::of_update_rect(true, 4, 4, 0, 0, 10, 10).unwrap();
+        assert_eq!((empty.width, empty.height), (0, 0));
+    }
 }
 
 // ── Importer ─────────────────────────────────────────────────────────────────
@@ -669,6 +723,7 @@ fn copy_to_owned(
         arrived,
         copy: done - started,
         copy_wait: done - waiting,
+        damage: None,
     })
 }
 

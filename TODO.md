@@ -25,7 +25,7 @@ this as `0.1.0-preview.4`. Not run on macOS: any of it (run `cargo test --worksp
 
 ## Now: the optimization pass
 The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
-in its order. Step 1 (partial rendering of the shell) is done; next: CEF's damage rects through the frame path.
+in its order. Steps 1 and 2 (partial rendering of the shell, CEF's damage through the frame path) are done.
 Measure with [scripts/bench/](scripts/bench/README.md) (`profile.sh`, `breakdown.py`, `runner.py`) so every step has a
 before and an after on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md). Measured by
 hand only: nothing in `cargo test` or CI asserts a timing.
@@ -221,10 +221,11 @@ Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchma
 - [ ] The shell's items are still walked twice per page frame (Slint's dirty-region pass and render walk, now the largest part of a frame: measurements.md "Shell partial rendering"); skipping them needs i-slint-core changes or a page path around Slint
 - [ ] `SLINT_SKIA_PARTIAL_RENDERING=verify` in `--smoke tabs`: 4 frames drawn whole show the pane empty where a whole redraw right after shows the page (next to the smoke's snapshots; none in `--measure`); and the gallery's `65-settings-search-pages` and `68-downloads` differ from base with partial rendering on only (a row's highlight, the address beam and focus ring): find why
 - [ ] A scene render (ambience, 8 to 10 a second during video and scroll) marks the whole window dirty; mark only what the scene shows through
+- [ ] Gallery after step 2 against step 1: `38-toast-question` shows the address beam mid-lap and `89-agent-sheet` a page-light tint (max 30 levels) where base shows neither; shell animations are at another point when the shot is taken (fewer frames are drawn): owner's eye, then find what the shot waits for
+- [ ] A page's damage far from the glass (a spinner mid-page) still rebuilds the page blur for the ambience at 8 Hz, a whole-window frame: build it only when the damage is within the ambience's reach (about 130 px of a pane edge) or under overlay glass
 - [ ] The start page renders the scene and the window at the display's rate for as long as it shows (57/s here, 120 on the owner's Mac): a lower rate for its liquid and bubble is the owner's call (measurements.md "Energy per scenario")
 - [ ] The CEF pump wakes 30 times a second on a still page (its 33 ms ceiling, a recorded decision): report the energy case to the owner before changing it
 - [ ] macOS: the window is transparent (`background: transparent`, so the Metal layer is not opaque) and WindowServer blends the whole window on every present; an opaque window where the shell covers it all, after a look on the Mac
-- [ ] Partial rendering inside the page: CEF's damage rects through the frame path, so only the video or the moving part redraws
 - [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`
 - [ ] Profile again with kernel time (needs root for `perf`): GPU driver calls and present, about a third of the main process's CPU, unseen so far
 - [ ] The CEF message pump on the main thread (14 % during video): what runs there per frame

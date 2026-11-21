@@ -457,6 +457,17 @@ impl Glass {
         }
     }
 
+    /// A pane's texture was written in place (`Host::present_panes`): the page blur follows it
+    /// as it follows a new frame.
+    pub fn pages_written(&mut self, window: &AppWindow) {
+        if let Glass::Scene(s) = self {
+            s.renderer.pages_written();
+            if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
+                window.window().request_redraw();
+            }
+        }
+    }
+
     /// How many times the page blur has been built (the overlay smoke's count).
     pub fn pages_built(&self) -> Option<u64> {
         match self {

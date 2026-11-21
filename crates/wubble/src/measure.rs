@@ -166,6 +166,8 @@ impl Scenario {
 pub enum Count {
     /// A frame the host took from CEF, any view.
     CefFrame,
+    /// ... of which only CEF's damage was written, in place (`FramePresenter::present_damaged`).
+    CefFrameDamaged,
     SlintRender,
     /// A frame of the wgpu scene (the glass backdrop).
     SceneRender,
@@ -185,8 +187,9 @@ pub enum Count {
 }
 
 impl Count {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::CefFrame,
+        Self::CefFrameDamaged,
         Self::SlintRender,
         Self::SceneRender,
         Self::Pump,
@@ -212,6 +215,7 @@ impl Count {
             Self::Lifecycle => "lifecycle_ticks",
             Self::MeasureTick => "measure_ticks",
             Self::RunChange => "run_state_changes",
+            Self::CefFrameDamaged => "cef_frames_damaged",
         }
     }
 

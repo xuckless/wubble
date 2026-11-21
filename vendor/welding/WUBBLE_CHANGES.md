@@ -492,6 +492,12 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     `NavigationEvent::NavigationRefused { url, redirect }`. A panicking guard
     refuses (fails closed). wubble keeps an agent session's tab on the sites its grant allows.
 
+54. **A copied frame's damage.** `native_frame/mod.rs`: `CopiedFrame` gains
+    `damage: Option<Damage>`, CEF's `capture_update_rect` clamped to the frame
+    (`Damage::of_update_rect`), set by `OnAcceleratedPaint` on Linux and macOS
+    (`linux_cef/cef_backed.rs`, `macos_cef/cef_backed.rs`), so wubble writes and
+    redraws only what changed. `Damage` is re-exported from `lib.rs`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
