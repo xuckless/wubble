@@ -252,6 +252,8 @@ pub enum Step {
     PressAt(Spot),
     /// Space-separated chords as `wubble_core::keys::Chord` parses them.
     Keys(&'static str),
+    /// One chord held: its key pressed, then this many auto-repeats, then released.
+    Hold(&'static str, u8),
     /// Text typed key by key (US layout).
     Type(&'static str),
     Wheel(Mods, Point, f32, f32),
@@ -467,6 +469,31 @@ pub const ITEMS: &[Item] = &[
         "A.space-scrolls",
         [Click(Left, NONE, at::BLANK), Keys("Space")],
         [J("scrollY > 100 || 'scrollY ' + scrollY")]
+    ),
+    // A video site's player keys (YouTube): Space toggles play on its keyup and, held, runs
+    // at 2x until its keyup. The page sees a keydown " "/Space, its repeats, and a keyup; its
+    // `preventDefault` on keydown leaves no keypress (and no scroll).
+    item!(
+        "A.space-tap-hold",
+        [
+            Click(Left, NONE, at::BLANK),
+            Js("parity.grabSpace()"),
+            Keys("Space"),
+            Hold("Space", 3)
+        ],
+        [J(
+            "eq(seen.space.join(), 'down \" \" Space,up \" \" Space,down \" \" Space,\
+             down \" \" Space,down \" \" Space,down \" \" Space,up \" \" Space')"
+        )]
+    ),
+    item!(
+        "A.space-repeat",
+        [
+            Click(Left, NONE, at::BLANK),
+            Js("parity.grabSpace()"),
+            Hold("Space", 2)
+        ],
+        [J("eq(seen.spaceRepeat.join(), 'false,true,true')")]
     ),
     item!(
         "A.select-all",
@@ -1448,7 +1475,8 @@ fn us_key(key: Key) -> Option<UsKey> {
                 (code, ch(plain), Some((plain, shifted)))
             }
         },
-        Key::Space => (K::Space, ch(' '), Some((' ', ' '))),
+        // winit names Space on every platform (`key_without_modifiers` is not " ").
+        Key::Space => (K::Space, named(NamedKey::Space), Some((' ', ' '))),
         Key::Enter => (K::Enter, named(NamedKey::Enter), Some(('\r', '\r'))),
         Key::Tab => (K::Tab, named(NamedKey::Tab), Some(('\t', '\t'))),
         Key::Escape => (K::Escape, named(NamedKey::Escape), None),
@@ -1593,6 +1621,19 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
     Some(out)
 }
 
+/// The key events of `chord` held through `repeats` auto-repeats of its key, as winit reports a
+/// held key: the key's press again with `repeat` set, before its release.
+pub fn held_inputs(chord: Chord, repeats: u8) -> Option<Vec<KeyInput>> {
+    let mut keys = key_inputs(chord)?;
+    let release = keys.iter().position(|k| !k.pressed)?;
+    let again = KeyInput {
+        repeat: true,
+        ..keys[release - 1].clone()
+    };
+    keys.splice(release..release, std::iter::repeat_n(again, repeats.into()));
+    Some(keys)
+}
+
 /// The chords that type `text` on a US layout.
 pub fn typed(text: &str) -> Option<Vec<Chord>> {
     text.chars()
@@ -1656,6 +1697,9 @@ pub const PLATFORM_GAPS: &[(Platform, &str)] = &[
     (Platform::Windows, "B.middle-click-paste"),
     // macOS picks a Space with Ctrl+digit, which no item presses there
     (Platform::Mac, "E.alt-digit-space"),
+    // CEF 156's macOS key events drop the repeat flag: `TranslateWebKeyEvent` builds its
+    // NSEvent with `isARepeat:NO` (`browser_platform_delegate_native_mac.mm`)
+    (Platform::Mac, "A.space-repeat"),
 ];
 
 /// `item` is expected to fail on `platform`.
@@ -2080,6 +2124,12 @@ mod tests {
                     Step::Type(text) => {
                         assert!(typed(text).is_some(), "{}: {text}", item.name)
                     }
+                    Step::Hold(spec, n) => {
+                        let held = chords(spec)
+                            .and_then(|c| c.into_iter().next())
+                            .and_then(|c| held_inputs(c, *n));
+                        assert!(held.is_some(), "{}: {spec}", item.name);
+                    }
                     _ => {}
                 }
             }
@@ -2093,6 +2143,30 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), n);
+    }
+
+    /// Space as winit reports it: a named key typing " "; held, its press repeats before
+    /// the one release.
+    #[test]
+    fn space_is_named_and_a_hold_repeats_its_press() {
+        let keys = held_inputs(Chord::parse("Space").unwrap(), 2).unwrap();
+        let shape: Vec<_> = keys
+            .iter()
+            .map(|k| (k.pressed, k.repeat, k.text.as_deref()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (true, false, Some(" ")),
+                (true, true, Some(" ")),
+                (true, true, Some(" ")),
+                (false, false, None),
+            ]
+        );
+        assert!(
+            keys.iter()
+                .all(|k| k.unmodified == WinitKey::Named(NamedKey::Space))
+        );
     }
 
     #[test]
