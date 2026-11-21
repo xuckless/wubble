@@ -189,6 +189,12 @@ pub enum AgentCall {
         target: ElementRef,
         secret: String,
     },
+    UploadFile {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        paths: Vec<String>,
+    },
 }
 
 impl AgentCall {
@@ -216,6 +222,7 @@ impl AgentCall {
             AgentCall::WaitFor { .. } => "wait_for",
             AgentCall::Evaluate { .. } => "evaluate",
             AgentCall::FillSecret { .. } => "fill_secret",
+            AgentCall::UploadFile { .. } => "upload_file",
         }
     }
 
@@ -242,7 +249,8 @@ impl AgentCall {
             | AgentCall::CloseTab { session, .. }
             | AgentCall::WaitFor { session, .. }
             | AgentCall::Evaluate { session, .. }
-            | AgentCall::FillSecret { session, .. } => Some(session),
+            | AgentCall::FillSecret { session, .. }
+            | AgentCall::UploadFile { session, .. } => Some(session),
         }
     }
 
@@ -264,7 +272,8 @@ impl AgentCall {
             | AgentCall::CloseTab { tab, .. }
             | AgentCall::WaitFor { tab, .. }
             | AgentCall::Evaluate { tab, .. }
-            | AgentCall::FillSecret { tab, .. } => Some(tab),
+            | AgentCall::FillSecret { tab, .. }
+            | AgentCall::UploadFile { tab, .. } => Some(tab),
             AgentCall::StartSession { .. }
             | AgentCall::StopSession { .. }
             | AgentCall::RequestMore { .. }
