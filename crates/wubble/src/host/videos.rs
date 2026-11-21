@@ -598,6 +598,14 @@ impl Host {
         }
     }
 
+    /// `--smoke media=probe`: what the strip knows of the tab's video.
+    pub(super) fn video_overlay_debug(&self, tab: TabId) -> String {
+        match self.videos.overlays.get(&tab).and_then(Overlay::video) {
+            Some(v) => format!("{v:?}"),
+            None => "no video seen by the page kit".into(),
+        }
+    }
+
     /// The tab's save button, from the downloader's state (`video::Save::of`).
     pub(super) fn video_save_state(&self, tab: TabId) -> video::Save {
         let Some(v) = self.videos.overlays.get(&tab).and_then(Overlay::video) else {

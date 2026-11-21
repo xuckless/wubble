@@ -40,12 +40,16 @@ pub struct MediaObserver {
     enabled: AtomicBool,
     min_bytes: AtomicU64,
     seen: Mutex<Vec<(i32, Candidate)>>,
+    trace: bool,
 }
 
 impl MediaObserver {
     pub fn new() -> Arc<Self> {
         let defaults = MediaSettings::default();
-        let o = Self::default();
+        let o = Self {
+            trace: std::env::var_os("WUBBLE_PROBE_TRACE").is_some(),
+            ..Self::default()
+        };
         o.enabled.store(defaults.enabled, Ordering::Relaxed);
         o.min_bytes.store(defaults.min_bytes, Ordering::Relaxed);
         Arc::new(o)
@@ -74,6 +78,13 @@ impl ResponseObserver for MediaObserver {
             content_range: r.content_range,
             accepts_ranges: r.accepts_ranges,
         };
+        if self.trace {
+            // `--smoke media=probe` with `WUBBLE_PROBE_TRACE=1`: every response the hook sees.
+            println!(
+                "probe: response {} {} {:?} {} range={:?} accepts={}",
+                r.status, r.mime, r.content_length, r.url, r.content_range, r.accepts_ranges
+            );
+        }
         if let Some(c) = detect::classify(&response, self.min_bytes.load(Ordering::Relaxed)) {
             self.seen
                 .lock()
@@ -151,6 +162,8 @@ struct Run {
     job: Job,
     /// The tab it was started from: its session fetches, while it lives.
     tab: TabId,
+    /// That tab's container: the session a fetch keeps once the tab is gone.
+    container: ContainerId,
     /// The page the stream plays on (the fetches' referrer).
     page: String,
     title: String,
@@ -162,8 +175,6 @@ struct Run {
     /// Bytes fetched per segment (the list's progress).
     fetched: BTreeMap<(usize, usize), u64>,
     /// The known size of the whole download.
-    /// That tab's container: the session a fetch keeps once the tab is gone.
-    container: ContainerId,
     size: Option<u64>,
     /// What the join saved (deleted again when the job was cancelled while joining).
     saved: Vec<PathBuf>,
@@ -407,6 +418,7 @@ impl Host {
             }
         }
         self.media_smoke_step();
+        self.media_probe_step();
     }
 
     /// Shutdown, before CEF goes: every request of the downloader is stopped and released;
@@ -428,6 +440,198 @@ impl Host {
         if let Some(writer) = self.media.writer.take() {
             writer.finish();
         }
+    }
+
+    // ----- `--smoke media=probe`
+
+    /// One look of the probe: the settings on the first run, the list printed once it settles,
+    /// the saves (as the strip or the menu starts them), and each download's end.
+    fn media_probe_step(&mut self) {
+        use crate::media_smoke::{ProbePhase as P, ProbeSave};
+        use std::time::Instant;
+        let Some(mut probe) = self.checks.media_probe.take() else {
+            return;
+        };
+        let now = Instant::now();
+        let tab = self.model.visible_tab();
+        let say = |line: String| println!("probe: {line}");
+        // The smoke's host has no timers: the page kit's poll (the strip's eyes) runs here.
+        self.poll_media();
+        match probe.phase.clone() {
+            P::Start => {
+                let mut s = self.media.settings.clone();
+                s.youtube = probe.youtube;
+                s.ask_each_time = probe.ask;
+                if let Some(q) = &probe.quality {
+                    s.quality = select::Quality::from_word(q);
+                }
+                if let Some(d) = &probe.dir {
+                    s.save_dir.clone_from(d);
+                }
+                if let Some(b) = probe.min_bytes {
+                    s.min_bytes = b;
+                }
+                say(format!(
+                    "settings youtube={} quality={:?} ask={} dir={:?} min_bytes={}",
+                    s.youtube, s.quality, s.ask_each_time, s.save_dir, s.min_bytes
+                ));
+                self.apply_media_settings(s);
+                probe.phase = P::Watching {
+                    until: now + probe.settle,
+                    played: false,
+                };
+            }
+            P::Watching { until, played } => {
+                let mut played = played;
+                if probe.play
+                    && !played
+                    && now + probe.settle / 2 > until
+                    && let Some(view) = self.view()
+                {
+                    view.eval(
+                        "(()=>{const v=document.querySelector('video,audio');if(v){v.muted=true;v.play()}return 1})()",
+                    );
+                    played = true;
+                    say("played the page's first video".into());
+                }
+                let items: Vec<Detected> = tab
+                    .and_then(|t| self.media.tabs.get(&t))
+                    .map(|l| l.items.clone())
+                    .unwrap_or_default();
+                let resolving = items.iter().any(|i| i.found == Found::Resolving);
+                let ready = items.iter().any(|i| matches!(i.found, Found::Ready(_)));
+                // A stream's choices are in once nothing resolves; the strip follows.
+                let strip_seen = tab.is_some_and(|t| self.video_save_state(t).offered());
+                if now >= until || (!probe.full && ready && !resolving && strip_seen) {
+                    if resolving {
+                        say("a stream still resolving at the end of the watch".into());
+                    }
+                    for i in &items {
+                        match &i.found {
+                            Found::Ready(v) => {
+                                let choices = select::choices(v);
+                                let labels: Vec<String> =
+                                    choices.iter().map(|c| c.label.clone()).collect();
+                                say(format!("offered {:?} {} {labels:?}", i.kind, i.url));
+                            }
+                            other => say(format!("listed {:?} {} {other:?}", i.kind, i.url)),
+                        }
+                    }
+                    if items.is_empty() {
+                        say("the downloader listed nothing".into());
+                    }
+                    if let Some(t) = tab {
+                        say(format!("strip {:?}", self.video_save_state(t)));
+                        say(format!("video overlay {:?}", self.video_overlay_debug(t)));
+                        say(format!("pill glyph {}", self.media.has_media(t)));
+                    }
+                    let saves: Vec<(u32, usize)> = items
+                        .iter()
+                        .filter_map(|i| match &i.found {
+                            Found::Ready(v) => Some((i.id, select::choices(v).len())),
+                            _ => None,
+                        })
+                        .flat_map(|(id, n)| (0..n).map(move |c| (id, c)))
+                        .collect();
+                    match (probe.save, tab) {
+                        (ProbeSave::All, Some(t)) => {
+                            for (item, choice) in saves {
+                                self.save_media(t, item, choice);
+                            }
+                        }
+                        (ProbeSave::Default, Some(t)) => {
+                            let before = self.media.runs.len();
+                            self.media_entry(t, 100.0, 100.0);
+                            if self.media.runs.len() == before {
+                                say("the button saved nothing (it would open the menu)".into());
+                            }
+                        }
+                        _ => {}
+                    }
+                    probe.phase = if self.media.runs.is_empty() {
+                        P::Done
+                    } else {
+                        P::Saving {
+                            until: now + std::time::Duration::from_secs(120),
+                        }
+                    };
+                    self.checks.media_probe = Some(probe);
+                    return self.media_probe_step();
+                }
+                probe.phase = P::Watching { until, played };
+            }
+            P::Saving { until } => {
+                if let Some(cap) = probe.stop_bytes {
+                    let over: Vec<i64> = self
+                        .media
+                        .runs
+                        .iter()
+                        .filter(|(_, r)| r.job.is_live() && r.received() >= cap)
+                        .map(|(&id, _)| id)
+                        .collect();
+                    for id in over {
+                        if let Some(r) = self.media.runs.get(&id) {
+                            for (i, t) in r.tracks.iter().enumerate() {
+                                let copy = r.output.with_extension(format!("partial{i}"));
+                                let _ = std::fs::copy(&t.part, &copy);
+                            }
+                            say(format!("stopped {} at {} bytes", r.title, r.received()));
+                        }
+                        self.job_event(id, JobEvent::Cancel);
+                    }
+                }
+                if let (Some(how), false, Some(t)) = (probe.close.clone(), probe.closed, tab)
+                    && self.media.runs.values().any(|r| r.job.is_live())
+                {
+                    probe.closed = true;
+                    let container = (how == "other").then(|| {
+                        self.dispatch(wubble_core::model::Command::NewContainer {
+                            name: "Probe".into(),
+                        });
+                        self.model.containers.last().map(|c| c.id)
+                    });
+                    self.dispatch(wubble_core::model::Command::NewTab {
+                        url: "about:blank".into(),
+                        container: container.flatten(),
+                        opener: None,
+                    });
+                    self.dispatch(wubble_core::model::Command::CloseTab(t));
+                    say(format!("closed the page's tab ({how} container)"));
+                }
+                let live = self.media.runs.values().filter(|r| r.job.is_live()).count();
+                let joining = self
+                    .media
+                    .runs
+                    .values()
+                    .any(|r| matches!(r.job, Job::Joining { .. }));
+                if (live == 0 && !joining) || now >= until {
+                    for (id, r) in &self.media.runs {
+                        let len = std::fs::metadata(&r.output).map(|m| m.len()).ok();
+                        let entry = self.downloads.get(*id).map(|e| format!("{:?}", e.state));
+                        say(format!(
+                            "job {} -> {:?} file {} ({:?} bytes) list {:?} received {}",
+                            r.title,
+                            r.job,
+                            r.output.display(),
+                            len,
+                            entry,
+                            r.received(),
+                        ));
+                    }
+                    if let Some(t) = tab {
+                        say(format!("strip after {:?}", self.video_save_state(t)));
+                    }
+                    probe.phase = P::Done;
+                }
+            }
+            P::Done => {
+                say("end".into());
+                self.media_passed = true;
+                crate::quit();
+                return;
+            }
+        }
+        self.checks.media_probe = Some(probe);
     }
 
     // ----- `--smoke media`
@@ -835,8 +1039,14 @@ impl Host {
             .map(|i| variants[i].clone())
             .collect();
         let pair = matches!(chosen.selection, Selection::Pair { .. });
+        let container = self
+            .model
+            .tabs
+            .get(&tab)
+            .map_or(ContainerId::DEFAULT, |t| t.container);
         self.start_media(
             tab,
+            container,
             page,
             title,
             note,
@@ -871,6 +1081,7 @@ impl Host {
     fn start_media(
         &mut self,
         tab: TabId,
+        session: ContainerId,
         page: String,
         title: String,
         note: String,
@@ -898,6 +1109,7 @@ impl Host {
         let run = Run {
             job: Job::Resolving { paused: false },
             tab,
+            container: session,
             page,
             title,
             note,
@@ -1039,14 +1251,8 @@ impl Host {
 
     /// Executes one job effect; a failure to start a fetch comes back as an event.
     fn job_effect(&mut self, job: i64, effect: JobEffect) -> Option<JobEvent> {
-        let container = self
-            .model
-            .tabs
-            .get(&tab)
-            .map_or(ContainerId::DEFAULT, |t| t.container);
         let run = self.media.runs.get_mut(&job)?;
         match effect {
-            container,
             JobEffect::Fetch { track, index } => {
                 let t = run.tracks.get(track)?;
                 let segment = t.plan.as_ref()?.segments.get(index)?.clone();
@@ -1081,7 +1287,6 @@ impl Host {
                     .fetches
                     .iter()
                     .filter(|(_, p)| p.job() == Some(job))
-        session: ContainerId,
                     .map(|(&id, _)| id)
                     .collect();
                 for id in ids {
@@ -1109,7 +1314,6 @@ impl Host {
                 let parts: Vec<PathBuf> = run.tracks.iter().map(|t| t.part.clone()).collect();
                 let containers: Vec<Container> = run
                     .tracks
-            container: session,
                     .iter()
                     .map(|t| t.plan.as_ref().map_or(t.variant.container, |p| p.container))
                     .collect();
@@ -1222,6 +1426,7 @@ impl Host {
         let variants: Vec<Variant> = run.tracks.iter().map(|t| t.variant.clone()).collect();
         let (tab, container, page, title, note, size) = (
             run.tab,
+            run.container,
             run.page.clone(),
             run.title.clone(),
             run.note.clone(),
@@ -1294,4 +1499,3 @@ mod tests {
         assert_eq!(item_title(&item(Some(" ")), ""), "clip");
     }
 }
-            run.container,
