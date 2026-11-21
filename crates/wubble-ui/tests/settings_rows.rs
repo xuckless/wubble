@@ -249,7 +249,7 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
                             for (typed, wanted) in [
                                 ("", None),
                                 ("abc", None),
-                                ("0", Some(min.max(0))),
+                                ("0", Some(min)),
                                 ("99999999", Some(max)),
                                 ("12.6", Some(13u32.clamp(min, max))),
                                 (&format!("{}", min + 1), Some(min + 1)),
