@@ -42,12 +42,24 @@ this.dispatchEvent(new Event('change',{bubbles:true}));\
 return{ok:true,label:hit.label,value:hit.value};\
 }";
 
-/// Refuses `type` before clicking when the accessibility role already identifies a dropdown.
+/// Refuses `type` before clicking when the element's accessibility role (Chromium's name) says
+/// it takes no text, with the tool that does: a native `<select>` (`comboBoxSelect`, its popup
+/// or an option) takes `select`; a button that opens a menu or list (`popUpButton`: a
+/// `<button aria-haspopup>`, which `select` refuses) is clicked and its choice clicked; a list
+/// box may be either.
 pub fn type_role_refusal(role: &str) -> Option<&'static str> {
     match role {
-        "popUpButton" | "comboBoxSelect" | "menuListPopup" | "listBox" => {
-            Some("this element is a dropdown: use the select tool instead of type")
+        "comboBoxSelect" | "menuListPopup" | "menuListOption" => {
+            Some("this element is a <select> dropdown: use the select tool instead of type")
         }
+        "popUpButton" => Some(
+            "this element is a button that opens a menu or list: click it, then click the \
+             choice you want (type takes text fields only)",
+        ),
+        "listBox" | "listBoxOption" => Some(
+            "this element is a list box: use the select tool for a native <select>, or click \
+             the option for a custom list (type takes text fields only)",
+        ),
         _ => None,
     }
 }
@@ -263,10 +275,23 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn type_refuses_dropdown_roles_up_front() {
-        for role in ["popUpButton", "comboBoxSelect", "menuListPopup", "listBox"] {
+    fn type_refuses_dropdown_roles_up_front_with_the_tool_that_fits() {
+        for role in ["comboBoxSelect", "menuListPopup", "menuListOption"] {
             let msg = type_role_refusal(role).expect(role);
-            assert!(msg.contains("select"), "{role}: {msg}");
+            assert!(msg.contains("use the select tool"), "{role}: {msg}");
+        }
+        // a <button aria-haspopup>: select refuses it, so the advice is a click
+        let msg = type_role_refusal("popUpButton").unwrap();
+        assert!(
+            msg.contains("click it") && !msg.contains("select tool"),
+            "{msg}"
+        );
+        for role in ["listBox", "listBoxOption"] {
+            let msg = type_role_refusal(role).expect(role);
+            assert!(
+                msg.contains("select tool") && msg.contains("click"),
+                "{role}: {msg}"
+            );
         }
         for role in [
             "textField",
