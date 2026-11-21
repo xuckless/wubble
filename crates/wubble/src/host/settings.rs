@@ -194,6 +194,12 @@ impl Host {
         true
     }
 
+    /// The shell's sidebar mode changed: the page's Sidebar row shows it (`render_page` reads it
+    /// from the window, the one owner).
+    pub(crate) fn settings_sidebar_seen(&mut self) {
+        self.render_settings();
+    }
+
     pub(crate) fn setting_reset(&mut self, key: &str) {
         if let Some(default) = apply::default_of(key) {
             self.write_setting(key, default);

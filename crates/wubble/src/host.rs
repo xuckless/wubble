@@ -2737,6 +2737,16 @@ impl Host {
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
             scroll: window.global::<wubble_ui::PageScroll>().get_y(),
+            sidebar_row: settings_smoke::drive::sidebar_row(&window),
+            sidebar_shell: wubble_core::seam::SidebarMode::from(window.get_sidebar_mode())
+                .id()
+                .to_owned(),
+            sidebar_stored: self
+                .settings
+                .stored
+                .get(wubble_core::settings::SIDEBAR_MODE.key)
+                .cloned()
+                .unwrap_or_default(),
             select_found: found.is_some(),
             select_open: look.0,
             select_shown: look.1,

@@ -811,10 +811,14 @@ export component AppWindow inherits Window {
     in property <bool> peek: false;
     callback peek-cue(PeekCue);
     callback sidebar-mode-changed(SidebarMode);
+    // the mode changed, however (the button, the shortcut, the seam, the Settings row): the host
+    // draws the Settings page's Sidebar row again from it
+    callback sidebar-mode-seen();
     out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
     out property <SideEdges> side-edges <=> sidebar.edges;
     changed sidebar-mode => {
         root.sidebar-mode-changed(root.sidebar-mode);
+        root.sidebar-mode-seen();
     }
     // The pointer is in the strip a hidden sidebar peeks from: `.wb-peek-edge` (shows at once),
     // or the window's west resize strip over its first pixels (the design's `onMove` strip: 60 ms).

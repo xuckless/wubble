@@ -52,6 +52,12 @@ pub struct Seen {
     pub select_shown: String,
     /// The stored search engine (`""` until one is picked).
     pub engine_stored: String,
+    /// The word of the Sidebar row's selected tab, lower-cased (`""` while the row is off
+    /// screen), and the shell's own sidebar mode.
+    pub sidebar_row: String,
+    pub sidebar_shell: String,
+    /// The stored `ui.sidebar_mode`.
+    pub sidebar_stored: String,
     /// The engine the address bar searches with now (`""` until one is picked).
     pub engine_applied: String,
     /// Script actions the host has run, counted after the event loop turn that follows each.
@@ -73,6 +79,12 @@ pub enum Do {
     Press(Keys),
     /// The wheel up, far: back to the page's top.
     ScrollTop,
+    /// The section list's row of this title, by its action.
+    Goto(&'static str),
+    /// The sidebar button (the shell's toggle).
+    ToggleSidebar,
+    /// The Sidebar row's tab of this label, by its action.
+    SidebarTab(&'static str),
     /// After the animations have run, the window as a PNG named so in `WUBBLE_SETTINGS_SHOTS`
     /// (nothing without it).
     Shoot(&'static str),
@@ -81,13 +93,17 @@ pub enum Do {
 /// What the page must show after a [`Do`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expect {
-    /// The dropdown is on screen.
+    /// The page is at its top, the dropdown on screen.
     Found,
     Open(bool),
     /// The trigger's label.
     Shows(&'static str),
     /// The stored and the applied engine are this id.
     Engine(&'static str),
+    /// The Sidebar row shows this mode and so does the shell.
+    Sidebar(&'static str),
+    /// `ui.sidebar_mode` is stored as this.
+    SidebarStored(&'static str),
 }
 
 /// The keys the script presses.
@@ -145,6 +161,17 @@ pub const SCRIPT: &[Step] = &[
     Then(Engine("google")),
     Then(Open(false)),
     Then(Shows("Google")),
+    // the Sidebar row follows the shell, and drives it
+    Act(Goto("Appearance")),
+    Then(Sidebar("extended")),
+    Act(ToggleSidebar),
+    Then(Sidebar("hidden")),
+    Act(SidebarTab("Rail")),
+    Then(Sidebar("rail")),
+    Then(SidebarStored("rail")),
+    Act(SidebarTab("Extended")),
+    Then(Sidebar("extended")),
+    Then(SidebarStored("extended")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,10 +329,12 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
 /// Whether the page shows what `want` says.
 fn met(want: Expect, seen: &Seen) -> bool {
     match want {
-        Found => seen.select_found,
+        Found => seen.select_found && seen.scroll < 1.0,
         Open(open) => seen.select_found && seen.select_open == open,
         Shows(label) => seen.select_shown == label,
         Engine(id) => seen.engine_stored == id && seen.engine_applied == id,
+        Sidebar(mode) => seen.sidebar_row == mode && seen.sidebar_shell == mode,
+        SidebarStored(mode) => seen.sidebar_stored == mode,
     }
 }
 
@@ -327,6 +356,27 @@ pub mod drive {
     fn centre(e: &ElementHandle) -> LogicalPosition {
         let (p, s) = (e.absolute_position(), e.size());
         LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+    }
+
+    fn sidebar_tabs(window: &AppWindow) -> Vec<ElementHandle> {
+        ElementHandle::find_by_accessible_label(window, "Sidebar")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .map(|l| {
+                l.query_descendants()
+                    .match_accessible_role(AccessibleRole::Tab)
+                    .find_all()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The Sidebar row's selected tab, lower-cased; `""` while the row is not on screen.
+    pub fn sidebar_row(window: &AppWindow) -> String {
+        sidebar_tabs(window)
+            .into_iter()
+            .find(|t| t.accessible_item_selected() == Some(true))
+            .and_then(|t| t.accessible_label())
+            .map(|l| l.to_lowercase())
+            .unwrap_or_default()
     }
 
     /// Whether the dropdown's list is open and the label its trigger shows; `None` until the
@@ -383,6 +433,16 @@ pub mod drive {
                     delta_y: 5000.0,
                 });
             }
+            Do::Goto(title) => ElementHandle::find_by_accessible_label(window, title)
+                .find(|e| e.type_name().as_deref() == Some("NavRow"))
+                .ok_or_else(|| format!("no {title:?} in the section list"))?
+                .invoke_accessible_default_action(),
+            Do::ToggleSidebar => window.invoke_toggle_sidebar(),
+            Do::SidebarTab(label) => sidebar_tabs(window)
+                .into_iter()
+                .find(|t| t.accessible_label().as_deref() == Some(label))
+                .ok_or_else(|| format!("no {label:?} tab in the Sidebar row"))?
+                .invoke_accessible_default_action(),
             Do::Shoot(name) => {
                 // later: the list's grow and its rows' stagger take a quarter of a second
                 let weak = slint::ComponentHandle::as_weak(window);
@@ -505,7 +565,7 @@ mod tests {
                     pick(id, s);
                 }
                 Do::ScrollTop => s.select_found = true,
-                Do::Shoot(_) => {}
+                Do::Shoot(_) | Do::Goto(_) | Do::ToggleSidebar | Do::SidebarTab(_) => {}
                 Do::PressOutside | Do::Press(Keys::Escape) => s.select_open = false,
                 Do::Press(Keys::Down) => self.row = (self.row + 1) % NAMES.len(),
                 Do::Press(Keys::Enter) => pick(NAMES[self.row].0, s),
