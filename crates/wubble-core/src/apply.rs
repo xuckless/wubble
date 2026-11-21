@@ -394,6 +394,8 @@ pub enum Refusal {
     NotARule,
     /// A site list: no host in it (`routing::site_host`).
     NotASite,
+    /// `blocker.custom_lists`: not an `https://` address (the only kind fetched).
+    NotAnAddress,
     Duplicate,
 }
 
@@ -404,6 +406,7 @@ impl Refusal {
             Refusal::Blank => "Type something to add",
             Refusal::NotARule => "Needs a site and a Space, a container or both",
             Refusal::NotASite => "Needs a site, such as example.com",
+            Refusal::NotAnAddress => "Needs an address that starts with https://",
             Refusal::Duplicate => "Already in the list",
         }
     }
@@ -428,6 +431,12 @@ pub fn put_entry(
     // a malformed rule is refused rather than stored and silently ignored
     if key == settings::ROUTING_RULES.key && Rule::parse(entry).is_none() {
         return Err(Refusal::NotARule);
+    }
+    // a filter list that is not an HTTPS address would sit in the list and never be fetched
+    if key == settings::BLOCKER_CUSTOM_LISTS.key
+        && !url::Url::parse(entry).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some())
+    {
+        return Err(Refusal::NotAnAddress);
     }
     // a site is kept as its host, the way the matchers read a URL's: a scheme, a port or a path
     // typed with it would never match anything
@@ -725,6 +734,34 @@ mod tests {
             Err(Refusal::NotAList)
         );
         assert!(!Refusal::NotARule.note().is_empty());
+    }
+
+    #[test]
+    fn a_filter_list_must_be_an_https_address() {
+        let key = "blocker.custom_lists";
+        let s = stored(&[(key, r#"["https://l.test/a.txt"]"#)]);
+        assert_eq!(
+            put_entry(key, &s, None, " https://m.test/b.txt ").unwrap(),
+            r#"["https://l.test/a.txt","https://m.test/b.txt"]"#
+        );
+        for bad in [
+            "http://m.test/b.txt",
+            "m.test/b.txt",
+            "file:///x.txt",
+            "https://",
+            "ftp://a",
+        ] {
+            assert_eq!(
+                put_entry(key, &s, None, bad),
+                Err(Refusal::NotAnAddress),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            put_entry(key, &s, None, "https://l.test/a.txt"),
+            Err(Refusal::Duplicate)
+        );
+        assert!(!Refusal::NotAnAddress.note().is_empty());
     }
 
     #[test]
