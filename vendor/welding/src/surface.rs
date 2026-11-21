@@ -1585,6 +1585,12 @@ pub trait CefSurfaceProducer {
         ))
     }
 
+    /// wubble change 54: this producer's page drag, held since its
+    /// `StartDragging`, for another producer's [`DragInput::from`].
+    fn held_drag(&self) -> Option<HeldDrag> {
+        None
+    }
+
     /// Tell CEF that the native system drag started by
     /// [`NavigationEvent::DragStarted`] finished.
     ///
@@ -1902,11 +1908,39 @@ pub struct DragInput {
     /// page set itself (`dataTransfer.setData("application/x-...")`, which
     /// [`DragPayload`] cannot carry) survive a drag within the window.
     pub payload: Option<DragPayload>,
+    /// wubble change 54: on an enter without a payload, another producer's
+    /// page drag ([`CefSurfaceProducer::held_drag`]) instead of this one's,
+    /// so a drag from one view drops into another with its custom types and
+    /// picture bytes.
+    pub from: Option<HeldDrag>,
     pub x: i32,
     pub y: i32,
     pub modifiers: EventModifiers,
     pub allowed_operations: DragOperations,
 }
+
+/// wubble change 54: a page drag's data as CEF holds it, from its
+/// `StartDragging` until `finish_drag_source`; opaque to the host.
+#[derive(Clone)]
+pub struct HeldDrag {
+    #[cfg(feature = "cef-runtime")]
+    pub(crate) data: cef::DragData,
+}
+
+impl std::fmt::Debug for HeldDrag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HeldDrag")
+    }
+}
+
+/// Two handles are equal only as the same handle: CEF data has no equality.
+impl PartialEq for HeldDrag {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Eq for HeldDrag {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DragEventKind {

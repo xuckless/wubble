@@ -784,6 +784,7 @@ fn offered(data: &DragData, folder: impl FnOnce() -> PathBuf) -> Vec<(&'static s
     let text = data.text.as_ref().or(data.link_url.as_ref());
     let out = dnd::Outgoing {
         uris: file.is_some() || !uris.is_empty(),
+        link: data.link_url.is_some(),
         picture: picture.as_ref().and_then(|p| p.mime),
         html: data.html.is_some(),
         text: text.is_some(),
@@ -797,6 +798,11 @@ fn offered(data: &DragData, folder: impl FnOnce() -> PathBuf) -> Vec<(&'static s
                     Some(file) => Body::File(file.clone()),
                     None => bytes(&(uris.join("\r\n") + "\r\n")),
                 },
+                Part::MozUrl => {
+                    let url = data.link_url.as_ref()?;
+                    let title = data.link_title.as_deref().unwrap_or(url);
+                    bytes(&format!("{url}\n{title}"))
+                }
                 Part::Picture => Body::Bytes(picture.as_ref()?.bytes.clone()),
                 Part::Html => bytes(data.html.as_ref()?),
                 Part::Text => bytes(text?),
@@ -1496,18 +1502,25 @@ mod tests {
         let none = std::path::Path::new("/nowhere");
         let link = DragData {
             link_url: Some("https://a.test/".into()),
+            link_title: Some("A test".into()),
             ..DragData::default()
         };
-        let types: Vec<_> = sent(&link, none).into_iter().map(|(m, _)| m).collect();
+        let out = sent(&link, none);
+        let types: Vec<_> = out.iter().map(|(m, _)| *m).collect();
         assert_eq!(
             types,
             [
                 "text/uri-list",
+                "text/x-moz-url",
                 "text/plain;charset=utf-8",
                 "UTF8_STRING",
                 "text/plain"
             ]
         );
+        // the link, then its title (Chromium's Wayland `text/x-moz-url`), and the URL as text
+        assert_eq!(out[0].1, b"https://a.test/\r\n");
+        assert_eq!(out[1].1, b"https://a.test/\nA test");
+        assert_eq!(out[2].1, b"https://a.test/");
         let file = DragData {
             files: vec!["/tmp/a b.txt".into()],
             html: Some("<b>x</b>".into()),
@@ -1560,6 +1573,7 @@ mod tests {
             types,
             [
                 "text/uri-list",
+                "text/x-moz-url",
                 "image/jpeg",
                 "text/html",
                 "text/plain;charset=utf-8",
@@ -1571,8 +1585,8 @@ mod tests {
         let path = tmp.path().join("cat.jpg");
         assert_eq!(out[0].1, (dnd::file_uri(&path) + "\r\n").into_bytes());
         assert!(!path.exists());
-        assert_eq!(out[1].1, jpeg);
-        assert_eq!(out[5].1, b"https://a.test/cat.jpg");
+        assert_eq!(out[2].1, jpeg);
+        assert_eq!(out[6].1, b"https://a.test/cat.jpg");
         // Without the page's bytes there is no file and no picture: the drag
         // image is a faded thumbnail, so the link, HTML and URL go out alone.
         let out = sent(&picture_drag(None), tmp.path());

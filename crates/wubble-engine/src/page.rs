@@ -216,15 +216,7 @@ impl LogLevel {
 }
 
 /// A set of drag effects (CEF's `cef_drag_operations_mask_t`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DragOps(pub u32);
-
-impl DragOps {
-    pub const NONE: Self = Self(0);
-    pub const COPY: Self = Self(1 << 0);
-    pub const LINK: Self = Self(1 << 1);
-    pub const MOVE: Self = Self(1 << 4);
-}
+pub use wubble_core::pagedrag::DragOps;
 
 /// What is being dragged, in either direction.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -243,6 +235,16 @@ pub struct DragData {
 }
 
 pub use welding::{DragFileContents, DragImage};
+
+impl wubble_core::pagedrag::Payload for DragData {
+    fn link(&self) -> Option<&str> {
+        self.link_url.as_deref().filter(|u| !u.is_empty())
+    }
+
+    fn text(&self) -> Option<&str> {
+        self.text.as_deref().filter(|t| !t.is_empty())
+    }
+}
 
 impl From<welding::DragPayload> for DragData {
     fn from(p: welding::DragPayload) -> Self {
