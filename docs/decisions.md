@@ -73,6 +73,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Copy Image | `View::download_image` gives RGBA, which the screenshot worker puts on the clipboard as PNG. | 2026-11-18 |
 | Printing | wubble's own print sheet over CEF `PrintToPDF`; printers through the CUPS command line, not libcups. | 2026-11-18 |
 | Page fullscreen | Hides sidebar, frame and seam, fills the window (making it full screen if needed), Esc or F11 asks the page to leave. | 2026-11-18 |
+| Escape and the page's prompts (owner to confirm) | Escape dismisses the SponsorBlock notice or denies a permission prompt (not remembered) only while the shell has the keys; the page's Escape (leaving fullscreen, the site's own dialogs) never answers either (`overlay::Event::PageEscape`), so a key meant for the page cannot answer a prompt (no keyjacking). | 2026-11-21 |
 | Per-site zoom | One `zoom.sites` setting owned by `wubble_core::zoom`; every commit sets the stored zoom, CEF's per-host level is only a cache. | 2026-11-18 |
 | Audible | No CEF signal, so a 2 s script probe per live view; misses WebAudio and iframes (a CEF patch in M6). | 2026-11-18 |
 | Native pages | History, bookmarks, downloads, passwords (and settings, start, tasks) are `InternalPage` variants drawn in the content area with no CEF view. | 2026-11-18 |

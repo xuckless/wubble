@@ -3404,7 +3404,8 @@ impl Host {
             return EventResult::Propagate;
         }
         // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
-        // a menu): wubble_core::overlay.
+        // a menu), but the page's Esc never answers a notice or a permission prompt:
+        // wubble_core::overlay.
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
             && key.modifiers.keys.is_empty()

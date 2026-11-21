@@ -143,10 +143,16 @@ impl Host {
         )
     }
 
-    /// Escape: closes the topmost overlay; whether there was one to close.
+    /// Escape: closes the topmost overlay that takes it from whoever has the keys (the page's
+    /// Escape never answers a notice or a permission prompt); whether one closed.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
         let shown = self.shown();
-        let closed = !self.overlay_event(window, shown, Event::Escape).is_empty();
+        let event = if window.get_web_focused() {
+            Event::PageEscape
+        } else {
+            Event::Escape
+        };
+        let closed = !self.overlay_event(window, shown, event).is_empty();
         if closed {
             self.render_surfaces(window);
         }

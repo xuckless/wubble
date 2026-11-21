@@ -17,10 +17,13 @@
 //!   bookmark, Print): it is refused under one, and opening it closes a menu, the command bar,
 //!   link hints or the screenshot picker.
 //! - A **notice** (SponsorBlock's question) sits under everything, takes Escape only when nothing
-//!   above it is open, and one shows at a time.
-//! - A **permission prompt** belongs to its tab, coexists under other overlays, and takes Escape
-//!   (dismissing the prompt as denied without remembering).
-//! - **Escape** closes the topmost visible overlay that takes it; a second Escape the next.
+//!   above it is open and the shell has the keys, and one shows at a time.
+//! - A **permission prompt** belongs to its tab and coexists under other overlays; Escape
+//!   dismisses it (denied, not remembered) only when the shell has the keys.
+//! - **Escape** closes the topmost visible overlay that takes it; a second Escape the next. A
+//!   notice and a permission prompt never take the page's Escape ([`Event::PageEscape`]): a key
+//!   meant for the page (leaving fullscreen, the site's own dialog) must not answer them
+//!   (no keyjacking, docs/research/mcp-server.md).
 //! - **Tab switch**: menus, sheets, link hints and the screenshot picker close; the find bar, a
 //!   page's dialog and a notice stay with their tab, hidden, and are revealed only on it. The
 //!   window's command bar and downloads popover stay.
@@ -116,8 +119,9 @@ impl Kind {
         matches!(self, Kind::Dialog | Kind::AgentSheet)
     }
 
-    fn takes_escape(self) -> bool {
-        true
+    /// Whether Escape closes it; `from_page`: the page has the keys.
+    fn takes_escape(self, from_page: bool) -> bool {
+        !(from_page && matches!(self, Kind::Notice | Kind::Permission))
     }
 
     /// Closes when its tab stops being the visible one (a window menu: on any switch); the rest
@@ -197,7 +201,10 @@ impl Stack {
 pub enum Event {
     /// The user, a key or the page asks for an overlay.
     Open(Layer),
+    /// Escape while the shell has the keys.
     Escape,
+    /// Escape while the page has the keys.
+    PageEscape,
     /// This tab is now the visible one (none: the window shows no tab).
     Switched(Option<TabId>),
     /// The tab's main frame committed a new document.
@@ -220,8 +227,10 @@ pub enum Effect {
 pub fn transition(stack: Stack, event: Event) -> (Stack, Vec<Effect>) {
     match event {
         Event::Open(layer) => open(stack, layer),
-        Event::Escape => match stack.top() {
-            Some(top) if top.kind.takes_escape() => close(stack, vec![top], vec![]),
+        Event::Escape | Event::PageEscape => match stack.top() {
+            Some(top) if top.kind.takes_escape(event == Event::PageEscape) => {
+                close(stack, vec![top], vec![])
+            }
             _ => (stack, vec![]),
         },
         Event::Switched(to) => switched(stack, to),
@@ -613,6 +622,26 @@ mod tests {
         let (layers, fx) = step(&layers, Event::Escape);
         assert!(fx.is_empty());
         assert!(layers.is_empty());
+    }
+
+    /// The page's Escape closes a shell overlay above, but never answers a notice or a
+    /// permission prompt: it goes on to the page (fullscreen, the site's dialog).
+    #[test]
+    fn the_pages_escape_never_answers_a_notice_or_a_prompt() {
+        let layers = [on(Notice, A), on(Permission, A), win(Menu)];
+        let (layers, fx) = step(&layers, Event::PageEscape);
+        assert_eq!(fx, [Effect::Close(win(Menu))]);
+        let (layers, fx) = step(&layers, Event::PageEscape);
+        assert!(fx.is_empty());
+        assert_eq!(layers, [on(Notice, A), on(Permission, A)]);
+        let (layers, fx) = step(&[on(Notice, A)], Event::PageEscape);
+        assert!(fx.is_empty());
+        assert_eq!(layers, [on(Notice, A)]);
+        // with the shell's keys, each closes
+        let (_, fx) = step(&[on(Permission, A)], Event::Escape);
+        assert_eq!(fx, [Effect::Close(on(Permission, A))]);
+        let (_, fx) = step(&[on(Notice, A)], Event::Escape);
+        assert_eq!(fx, [Effect::Close(on(Notice, A))]);
     }
 
     #[test]
