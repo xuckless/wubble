@@ -71,7 +71,8 @@ const DRAG_STEPS: u32 = 8;
 const EVAL_GRACE: Duration = Duration::from_millis(1000);
 /// The DevTools object group `evaluate`'s values are held in until answered.
 const EVAL_GROUP: &str = "wubble-agent";
-/// The DevTools object group `select`'s resolved node is held in until answered.
+/// The start of the DevTools object group each `select` holds its resolved node in until
+/// answered (one per call: calls on one tab may overlap).
 const SELECT_GROUP: &str = "wubble-agent-select";
 /// Turns `evaluate`'s value into plain JSON (called on it with `returnByValue`): nodes and
 /// functions named, cycles and depth cut, maps and sets as objects and arrays.
@@ -376,14 +377,15 @@ enum Wait {
         submit: bool,
         before: Option<String>,
     },
-    /// `select`: scrolling the `<select>` into view, resolving its DOM node, and choosing
-    /// `option`.
+    /// `select`: scrolling the `<select>` into view, resolving its DOM node (held in the
+    /// object group `group` from then on: [`held_group`]), and choosing `option`.
     Select {
         id: u64,
         tab: TabId,
         node: i32,
         option: String,
         stage: Selecting,
+        group: String,
     },
     /// `focus_tab`: the tab shows in its pane a frame of its own at its pane's size
     /// ([`Host::agent_shows`]).
@@ -537,6 +539,21 @@ impl Agents {
             .values()
             .filter_map(|s| s.space.map(|(sp, _)| sp))
             .collect()
+    }
+}
+
+/// The DevTools object group a waiting call holds in `tab`'s page, which is released however
+/// the call ends (answered, failed, timed out, or dropped with its session or connection):
+/// `select` from the moment it asks for its node, until its answer.
+fn held_group(wait: &Wait) -> Option<(TabId, &str)> {
+    match wait {
+        Wait::Select {
+            tab,
+            group,
+            stage: Selecting::Resolving | Selecting::Applying,
+            ..
+        } => Some((*tab, group)),
+        _ => None,
     }
 }
 
@@ -994,7 +1011,13 @@ impl Host {
             McpEvent::Call { conn, id, call } => self.agent_call(conn, id, call),
             McpEvent::Gone(conn) => {
                 self.agents.conns.remove(&conn);
-                self.agents.pending.retain(|p| p.reply.conn != conn);
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.agents.pending)
+                    .into_iter()
+                    .partition(|p| p.reply.conn == conn);
+                self.agents.pending = kept;
+                for p in gone {
+                    self.agent_let_go(&p.wait);
+                }
                 let gone: Vec<SessionId> = self
                     .agents
                     .sessions
@@ -1919,6 +1942,7 @@ impl Host {
             .partition(|p| p.reply.session.as_ref() == Some(id));
         self.agents.pending = kept;
         for p in gone {
+            self.agent_let_go(&p.wait);
             self.agent_send(p.reply, ToolResult::error(why.clone()), Outcome::Failed);
         }
         let tabs = &self.model.tabs;
@@ -2975,6 +2999,7 @@ impl Host {
                     node: item.id,
                     option,
                     stage: Selecting::Revealing,
+                    group: format!("{SELECT_GROUP}-{}", self.agents.fresh()),
                 };
                 self.agent_wait(reply, wait, WAIT);
             }
@@ -2989,6 +3014,7 @@ impl Host {
             node,
             option,
             stage,
+            group,
             ..
         } = p.wait
         else {
@@ -3000,7 +3026,7 @@ impl Host {
                     return self
                         .agent_fail(p.reply, &format!("the element cannot be reached: {e}"));
                 }
-                let params = json!({ "backendNodeId": node, "objectGroup": SELECT_GROUP });
+                let params = json!({ "backendNodeId": node, "objectGroup": group });
                 match self
                     .tab_view(tab)
                     .and_then(|v| v.cdp("DOM.resolveNode", &params))
@@ -3012,6 +3038,7 @@ impl Host {
                             node,
                             option,
                             stage: Selecting::Resolving,
+                            group,
                         };
                         self.agent_wait(p.reply, wait, WAIT);
                     }
@@ -3022,13 +3049,13 @@ impl Host {
                 let v = match result {
                     Ok(v) => v,
                     Err(e) => {
-                        self.agent_release_group(tab, SELECT_GROUP);
+                        self.agent_release_group(tab, &group);
                         return self
                             .agent_fail(p.reply, &format!("the element cannot be resolved: {e}"));
                     }
                 };
                 let Some(object_id) = v.pointer("/object/objectId").and_then(Value::as_str) else {
-                    self.agent_release_group(tab, SELECT_GROUP);
+                    self.agent_release_group(tab, &group);
                     return self.agent_fail(p.reply, "the element could not be resolved to a node");
                 };
                 let params = json!({
@@ -3048,17 +3075,18 @@ impl Host {
                             node,
                             option,
                             stage: Selecting::Applying,
+                            group,
                         };
                         self.agent_wait(p.reply, wait, WAIT);
                     }
                     None => {
-                        self.agent_release_group(tab, SELECT_GROUP);
+                        self.agent_release_group(tab, &group);
                         self.agent_fail(p.reply, "the page cannot run scripts now");
                     }
                 }
             }
             Selecting::Applying => {
-                self.agent_release_group(tab, SELECT_GROUP);
+                self.agent_release_group(tab, &group);
                 let v = match result {
                     Ok(v) => v,
                     Err(e) => {
@@ -3341,6 +3369,15 @@ impl Host {
     /// nothing.
     fn agent_release_values(&mut self, tab: TabId) {
         self.agent_release_group(tab, EVAL_GROUP);
+    }
+
+    /// A waiting call that ends without its answer (timed out, or dropped with its session, its
+    /// connection or a refused navigation): the object group it holds, if any, released.
+    fn agent_let_go(&mut self, wait: &Wait) {
+        if let Some((tab, group)) = held_group(wait) {
+            let group = group.to_owned();
+            self.agent_release_group(tab, &group);
+        }
     }
 
     /// Lets the page drop a DevTools object group; the answer means nothing.
@@ -3667,6 +3704,7 @@ impl Host {
             );
         }
         for p in on_tab {
+            self.agent_let_go(&p.wait);
             self.agent_fail(p.reply, &note);
         }
         self.agent_arm();
@@ -3989,6 +4027,7 @@ impl Host {
             }
             // answered by the page or the vault; only their deadline is checked here
             _ if late => {
+                self.agent_let_go(&p.wait);
                 self.agent_fail(p.reply, "the page did not answer in time");
                 return None;
             }
@@ -4937,5 +4976,26 @@ mod tests {
             ]
         );
         assert_eq!(parts("GH_ID")[0], ("a".into(), Password));
+    }
+
+    #[test]
+    fn a_select_holds_its_own_group_from_resolving_to_its_answer() {
+        let at = |stage| Wait::Select {
+            id: 1,
+            tab: TabId(3),
+            node: 9,
+            option: "x".into(),
+            stage,
+            group: "wubble-agent-select-7".into(),
+        };
+        // nothing is held while the element is only scrolled into view
+        assert_eq!(held_group(&at(Selecting::Revealing)), None);
+        for stage in [Selecting::Resolving, Selecting::Applying] {
+            assert_eq!(
+                held_group(&at(stage)),
+                Some((TabId(3), "wubble-agent-select-7"))
+            );
+        }
+        assert_eq!(held_group(&Wait::Shot { id: 1 }), None);
     }
 }
