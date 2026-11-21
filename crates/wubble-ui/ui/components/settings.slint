@@ -553,6 +553,8 @@ export component SettingsPage inherits Rectangle {
     // the Filter lists section: every list, and whether one is rebuilding or downloading
     in property <[FilterListItem]> filter-lists;
     in property <bool> filter-busy;
+    // why the Filter lists field's last address was refused, or empty
+    in property <string> filter-note;
     // the Extensions section: the installed list, and whether it differs from what this run loaded
     in property <[ExtensionItem]> extensions;
     in property <bool> extensions-restart;
@@ -1107,18 +1109,32 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
-                        HorizontalLayout {
+                        VerticalLayout {
                             padding-left: Shell.row-pad-x;
                             padding-right: Shell.row-pad-x;
                             padding-top: Shell.row-pad-y;
                             padding-bottom: Shell.row-pad-y;
-                            Field {
+                            list-field := Field {
                                 placeholder: "Add a list by its https:// address";
                                 accepted(t) => {
                                     if t != "" {
+                                        // the host answers at once: a refused address stays
+                                        // in the field to be fixed, its note below it
                                         root.entry-added("blocker.custom_lists", t);
+                                        if root.filter-note == "" {
+                                            self.text = "";
+                                        }
                                     }
-                                    self.text = "";
+                                }
+                            }
+                            // why the address still in the field was refused (the list editor's
+                            // coral note)
+                            Fold {
+                                open: root.filter-note != "" && list-field.text != "";
+                                content-height: refusal.preferred-height;
+                                refusal := RowNote {
+                                    text: root.filter-note;
+                                    tone: NoteTone.conflict;
                                 }
                             }
                         }

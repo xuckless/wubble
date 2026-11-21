@@ -588,6 +588,14 @@ fn render_page(window: &AppWindow, host: &Host) {
         |m| window.set_settings_filter_lists(m),
     );
     window.set_settings_filter_busy(host.blocking.is_busy());
+    // the Filter lists field's refusal: its setting has no row of its own (Section::Hidden)
+    window.set_settings_filter_note(
+        if answered == wubble_core::settings::BLOCKER_CUSTOM_LISTS.key {
+            (*note).into()
+        } else {
+            "".into()
+        },
+    );
     if window.get_settings_about().version.is_empty() {
         window.set_settings_about(about());
     }
