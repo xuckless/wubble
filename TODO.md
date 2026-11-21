@@ -6,17 +6,24 @@ fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/researc
 Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has them.
 
 ## Status (2026-11-20)
-`main` (bcada3e) builds, lints and passes 2046 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. M0 to M5 and the built-ins work on Linux; the first Linux
-previews are released (`0.1.0-preview.2`, 2026-11-20: the MCP server; Linux, with codecs; the macOS build follows from the same tag). The design-fidelity phase ended with the owner's sign-off: what
-reviews raise is fixed as it comes up ("Review findings"). Merged today: the MCP server's basic version (off by
-default) and extensions on our own Chromium (install from a file; `chrome.tabs`, `windows` and actions need the patched
-engine in `~/Dev/wubble-wt/cef-ext`, which the released build does not have). macOS is driven only from the owner's
-own session and has not been run since batch eight; Windows is not green in CI.
+`main` builds, lints and passes 2117 tests; every window smoke passes on the invisible test display
+(`scripts/headless.sh`), and an idle window draws nothing. Released: `0.1.0-preview.2` for Linux (with codecs), which
+adds the MCP server (off by default: live hosting from Settings, 20 tools, sessions held to their sites, agent apps
+registered on turn-on); its macOS build is made by the owner on the Mac from the same tag
+(`sh /Users/Shared/wubble-preview2-mac.sh`), then signed, added to the manifest and uploaded from here. Extensions are
+built but not released: they need the patched engine, which the release engine is not. The npm launcher
+(`packages/wubble-mcp`) is built, not published. Windows is not green in CI.
 
-## Now (2026-11-20)
-In flight, each in its own worktree, not yet on `main`:
-Next, in order:
+## Now: the optimization pass
+The build-out through M5, extensions and the MCP server is done; the next work is the "Optimization roadmap" below,
+in its order. First step: stop redrawing the shell per page frame (the flame graph's 76 % of the main thread).
+How to start it: measure first with the kept harness (`~/Dev/wubble-wt/notes/bench-2026-11-20/`: `runner.py`,
+`profile-lbr.sh`, `fold.py`; move them into `scripts/` as the first commit) so every step has a before and an after
+on the same build; the numbers to beat are in [docs/measurements.md](docs/measurements.md) (2026-11-20). Measured by
+hand only: nothing in `cargo test` or CI asserts a timing.
+
+Beside it, small and unordered:
+- [ ] Finish preview.2: the Mac files into the release and the manifest (then the README's install line says both platforms)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
@@ -25,11 +32,10 @@ Next, in order:
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
-- [ ] The "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
 ## MCP server
-Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools (20 after `xm/sheet-fix`), sessions in their own Space and container, the approval sheet, off by default.
+Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). Released in `0.1.0-preview.2`: 20 tools, sessions in their own Space and container held to their sites, the approval sheet, live hosting and agent-app registration from Settings, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
 - [ ] An element inside a frame is still placed from the accessibility mirror's boxes, which a scrolled page leaves behind (the top document uses the live layout); the mirror's coordinates are wrong after a scroll for the screen-reader pane too (Chromium sends no root scroll offset)
 - [ ] a tab moved into an agent session's Space keeps its back-forward cache and any prerender made before: activating either runs no navigation throttle, so the guard is not asked and only the commit backstop takes the tab back (after the page showed); drop those for a tab that joins a session (or disable the cache and prerender for session tabs) and add a smoke probe
@@ -163,10 +169,8 @@ Open, to build or check:
 - [~] HDR output: researched and spiked; needs the own build (F16 capture) and a Slint renderer patch
 
 ## M7: Ship
-- [ ] At the next version: confirm by hand that an installed build's update check reads the live manifest (Settings → Updates → Check now)
-- [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
-      usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
-- [ ] At the next version: release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
+- [ ] macOS: a codec CEF for the Mac (preview builds there use the prebuilt engine: no H.264 or AAC); the Mac archive was never in the manifest before preview.2, so Macs on preview.1 need one manual install
+- [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
       shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
 - [ ] Import: Zen legacy tables, Arc history, Little Arc, Helium/Chromium; verify Zen macOS and Arc Windows paths
@@ -176,7 +180,7 @@ Open, to build or check:
 - [ ] Default-browser registration, URL handlers
 - [ ] Hardening: vault unlock off the store thread; clear the clipboard after a password copy
 
-## Optimization roadmap (after extensions and the MCP server)
+## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:
 - [ ] Stop redrawing the shell per page frame: a page frame redraws only its pane; the sidebar and bars are not re-walked or re-recorded (partial rendering in Slint's Skia renderer on wgpu, or the shell cached as a layer)
 - [ ] Partial rendering inside the page: CEF's damage rects through the frame path, so only the video or the moving part redraws
@@ -196,7 +200,6 @@ Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchma
 - Start page liquid: stirring per second or per frame
 - Ship codecs by default or opt-in (AVC/AAC patent exposure)
 - Delete the 38 GB Chromium checkout used for the codec build
-- Signed and notarised macOS bundle (needs the owner's signing details)
 - Apple Passwords / passkeys entitlement request (the owner files it)
 - Video strip: does a collapse carry over to later pages; Pip: a cropped video or the page's own element fullscreen
 - Sidebar day labels ("Today": the design draws none); whether `cpu_fallback > 0` fails `--smoke frames`
