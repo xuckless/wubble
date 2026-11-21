@@ -2752,6 +2752,7 @@ impl Host {
                 .get(wubble_core::settings::SIDEBAR_MODE.key)
                 .cloned()
                 .unwrap_or_default(),
+            shortcuts_found: settings_smoke::drive::shortcuts_found(&window),
             capture: match self.settings.capture() {
                 wubble_core::keys::Capture::Idle => "idle",
                 wubble_core::keys::Capture::Armed(_) => "armed",

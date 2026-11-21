@@ -59,6 +59,8 @@ pub struct Seen {
     /// screen), and the shell's own sidebar mode.
     pub sidebar_row: String,
     pub sidebar_shell: String,
+    /// The shortcut editor's first row is on screen.
+    pub shortcuts_found: bool,
     /// The shortcut recorder: `idle`, `armed` or `conflict`.
     pub capture: &'static str,
     /// For each chord of [`PROBED`], the id of the action it runs now (`None`: none).
@@ -110,8 +112,8 @@ pub enum Do {
 pub enum Expect {
     /// The page is at its top, the dropdown on screen.
     Found,
-    /// The page has come to rest.
-    Still,
+    /// The first shortcut row is on screen and the page at rest.
+    Shortcuts,
     Open(bool),
     /// The trigger's label.
     Shows(&'static str),
@@ -184,7 +186,6 @@ pub const SCRIPT: &[Step] = &[
     Then(Shows("Google")),
     // the Sidebar row follows the shell, and drives it
     Act(Goto("Appearance")),
-    Then(Still),
     Then(Sidebar("extended")),
     Act(ToggleSidebar),
     Then(Sidebar("hidden")),
@@ -196,7 +197,7 @@ pub const SCRIPT: &[Step] = &[
     Then(SidebarStored("extended")),
     // the shortcut editor
     Act(Goto("Keyboard shortcuts")),
-    Then(Still),
+    Then(Shortcuts),
     Then(Runs("Ctrl+T", Some("new-tab"))),
     Then(Runs("Ctrl+Shift+Y", None)),
     // a chord with no modifier is refused; Escape stops the recording
@@ -418,7 +419,7 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
 fn met(want: Expect, seen: &Seen) -> bool {
     match want {
         Found => seen.select_found && seen.scroll < 1.0 && seen.still,
-        Still => seen.still,
+        Shortcuts => seen.shortcuts_found && seen.still,
         Open(open) => seen.select_found && seen.select_open == open,
         Shows(label) => seen.select_shown == label,
         Engine(id) => seen.engine_stored == id && seen.engine_applied == id,
@@ -461,6 +462,11 @@ pub mod drive {
                     .find_all()
             })
             .unwrap_or_default()
+    }
+
+    /// Whether the first shortcut row ("New tab") is on screen.
+    pub fn shortcuts_found(window: &AppWindow) -> bool {
+        chord(window, "New tab").is_ok()
     }
 
     /// The chord of the shortcut row `label`.
@@ -678,6 +684,7 @@ mod tests {
             let mut page = Page {
                 seen: Seen {
                     still: true,
+                    shortcuts_found: true,
                     sidebar_row: "extended".into(),
                     sidebar_shell: "extended".into(),
                     ..Seen::default()
