@@ -174,6 +174,9 @@ pub enum Spot {
     CommandField,
     /// A point in the `n`-th pane on screen (left to right).
     Pane(usize, Point),
+    /// A point of the shown page where it is drawn now: during its entrance, shifted and
+    /// scaled as the scene draws it (where a person sees it).
+    Drawn(Point),
 }
 
 /// Which pointer button.
@@ -210,6 +213,8 @@ pub enum HostOp {
     SecondTab,
     /// The bookmarks page in a second tab, the first still shown.
     BookmarksTab,
+    /// The next tab shown, as Ctrl+Tab shows it.
+    NextTab,
     /// Text dragged in from another app and dropped here (the platform's drop events, as the
     /// Wayland worker or macOS's view deliver them).
     DropTextFromApp(Spot, &'static str),
@@ -243,6 +248,8 @@ pub enum Step {
     MoveToSpot(Spot),
     /// The left button let go there.
     ReleaseAt(Spot),
+    /// The left button pressed there (and held).
+    PressAt(Spot),
     /// Space-separated chords as `wubble_core::keys::Chord` parses them.
     Keys(&'static str),
     /// Text typed key by key (US layout).
@@ -265,6 +272,10 @@ pub enum Step {
     /// Runs the host op, then polls the check as `Until` does, running the op again
     /// every [`RETRY_EVERY`] asks (input sent before the window takes it is lost).
     Retry(HostOp, Expect),
+    /// As `Retry`, but asked after every run of CEF work, for a state that lasts only moments
+    /// (a page's entrance): the op runs again every [`RETRY_EVERY`] × [`POLL_GAP`] asks, and
+    /// it gives up after as many runs as a `Retry` does.
+    Watch(HostOp, Expect),
 }
 
 /// What the host can tell about itself.
@@ -318,9 +329,14 @@ pub enum HostCheck {
     Peek(bool),
     /// The active Space is the n-th (0-based).
     Space(usize),
-    /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
-    /// shifted and scaled, and a click lands where it is drawn, not at its point.
+    /// The entrance of this showing of the shown tab has ended: while it runs the pane is
+    /// drawn shifted and scaled, and a click lands where it is drawn, not at its point. A
+    /// switch the shell's driver has not taken in yet (its entrance still to come) is not
+    /// entered.
     PageEntered,
+    /// That entrance is running now, past its first frame and not yet halfway (the page drawn,
+    /// still well off its place).
+    PageEntering,
     /// The command bar's field holds this text (the start page's capsule is that field too).
     BarQuery(&'static str),
     /// A bookmark of a URL with this in it.
@@ -1897,9 +1913,14 @@ fn checked(
     polls: u32,
     result: Result<(), String>,
 ) -> (Parity, Vec<Action>) {
+    // a `Watch` asks after every run, as many times over
+    let (gap, setup_polls) = match items[item].steps.get(step) {
+        Some(Step::Watch(..)) => (1, MAX_SETUP_POLLS * POLL_GAP),
+        _ => (POLL_GAP, MAX_SETUP_POLLS),
+    };
     match result {
         Ok(()) => advance(items, item, step + 1, vec![]),
-        Err(why) if step < items[item].steps.len() && polls + 1 >= MAX_SETUP_POLLS => {
+        Err(why) if step < items[item].steps.len() && polls + 1 >= setup_polls => {
             finish_item(items, item, Err(format!("setup never held: {why}")))
         }
         Err(why) if step >= items[item].steps.len() && polls + 1 >= MAX_POLLS => {
@@ -1909,7 +1930,7 @@ fn checked(
             Parity::At {
                 item,
                 step,
-                wait: Some(Wait::Gap(POLL_GAP)),
+                wait: Some(Wait::Gap(gap)),
                 runs: 0,
                 polls,
                 last: why,
@@ -1923,13 +1944,13 @@ fn checked(
 fn checks_at(item: &Item, step: usize) -> bool {
     item.steps
         .get(step)
-        .is_none_or(|s| matches!(s, Step::Until(_) | Step::Retry(..)))
+        .is_none_or(|s| matches!(s, Step::Until(_) | Step::Retry(..) | Step::Watch(..)))
 }
 
 /// The check at `step`: an `Until`'s, or expect `step - steps`.
 fn check_at(item: &Item, step: usize) -> Expect {
     match item.steps.get(step) {
-        Some(Step::Until(check) | Step::Retry(_, check)) => *check,
+        Some(Step::Until(check) | Step::Retry(_, check) | Step::Watch(_, check)) => *check,
         _ => item.expect[step - item.steps.len()],
     }
 }
@@ -1940,6 +1961,10 @@ fn ask(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Act
     let (state, actions) = ask_check(items, item, step, polls);
     match items[item].steps.get(step) {
         Some(&Step::Retry(op, _)) if polls.is_multiple_of(RETRY_EVERY) => (
+            state,
+            [vec![Action::Step(Step::Host(op))], actions].concat(),
+        ),
+        Some(&Step::Watch(op, _)) if polls.is_multiple_of(RETRY_EVERY * POLL_GAP) => (
             state,
             [vec![Action::Step(Step::Host(op))], actions].concat(),
         ),
@@ -2001,7 +2026,7 @@ fn advance(
             }
             Step::Choose(_) | Step::MenuHas(_) => return (at(step, Wait::Menu), actions),
             Step::Settle(n) => return (at(step, Wait::Runs(n.max(1))), actions),
-            Step::Until(_) | Step::Retry(..) => {
+            Step::Until(_) | Step::Retry(..) | Step::Watch(..) => {
                 let (state, more) = ask(items, item, step, 0);
                 actions.extend(more);
                 return (state, actions);
@@ -2306,6 +2331,49 @@ mod tests {
             .filter(|a| **a == Action::Step(Step::Host(HostOp::Neutral)))
             .count();
         assert_eq!(ops, 2);
+        let (s, _) = next_in(ONE, s, Input::Checked(Ok(())));
+        assert_eq!(s, Parity::Done);
+    }
+
+    #[test]
+    fn a_watch_asks_after_every_run_and_gives_up_after_as_many_runs() {
+        const ONE: &[Item] = &[Item {
+            name: "w",
+            steps: &[Step::Watch(
+                HostOp::NextTab,
+                Expect::Host(HostCheck::PageEntering),
+            )],
+            expect: &[],
+            gap: false,
+        }];
+        let op = Action::Step(Step::Host(HostOp::NextTab));
+        let check = Action::Check(HostCheck::PageEntering);
+        let (mut s, a) = next_in(ONE, Parity::Load, Input::Loaded);
+        assert_eq!(a, [op.clone(), check.clone()]);
+        let (mut ops, mut runs) = (1, 0);
+        let failed = loop {
+            let (n, a) = next_in(ONE, s, Input::Checked(Err("at rest".into())));
+            if a.iter()
+                .any(|a| matches!(a, Action::Report { result: Err(_), .. }))
+            {
+                break true;
+            }
+            assert!(a.is_empty());
+            // the next ask after one run
+            let (n, a) = next_in(ONE, n, Input::Worked);
+            runs += 1;
+            assert_eq!(a.last(), Some(&check));
+            ops += a.iter().filter(|a| **a == op).count();
+            s = n;
+        };
+        assert!(failed);
+        assert_eq!(runs + 1, MAX_SETUP_POLLS * POLL_GAP);
+        assert_eq!(ops as u32, MAX_SETUP_POLLS / RETRY_EVERY);
+        // it goes on the moment the check holds
+        let (s, _) = next_in(ONE, Parity::Load, Input::Loaded);
+        let (s, a) = next_in(ONE, s, Input::Checked(Err("at rest".into())));
+        assert!(a.is_empty());
+        let (s, _) = next_in(ONE, s, Input::Worked);
         let (s, _) = next_in(ONE, s, Input::Checked(Ok(())));
         assert_eq!(s, Parity::Done);
     }

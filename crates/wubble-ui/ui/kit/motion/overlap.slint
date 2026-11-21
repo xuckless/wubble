@@ -85,7 +85,10 @@ export component Entering inherits Rectangle {
     in property <float> e: 1;
     // the opacity part alone (OverlapLook `fade`)
     in property <float> fade: root.e;
-    OverlapLook {
+    // the look at `e`: the shift down and the scale about the centre (read by `--smoke dnd`)
+    out property <length> offset: look.offset;
+    out property <float> zoom: look.zoom;
+    look := OverlapLook {
         e: root.e;
         fade: root.fade;
         @children

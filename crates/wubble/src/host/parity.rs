@@ -238,6 +238,7 @@ impl Host {
             }
             Action::Check(check) => {
                 let result = self.parity_check(&window, check);
+                trace(&format!("check {check:?}: {result:?}"));
                 self.parity_step(Input::Checked(result));
             }
             Action::Report { name, result, gap } => {
@@ -337,7 +338,9 @@ impl Host {
         }
         // A left button a `Press` holds until its `Release` (or a left click).
         let held = match step {
-            Step::Press(p) => Some(Some(p)),
+            Step::Press(p) | Step::PressAt(parity::Spot::Pane(0, p) | parity::Spot::Drawn(p)) => {
+                Some(Some(p))
+            }
             Step::Release(_) | Step::Click(Button::Left, ..) => Some(None),
             _ => None,
         };
@@ -392,6 +395,13 @@ impl Host {
             Step::ReleaseAt(spot) => {
                 if let Some(p) = self.parity_spot(window, spot) {
                     self.parity_pointer(parity::NONE, vec![moved(p), release(p, Button::Left)]);
+                }
+            }
+            Step::PressAt(spot) => {
+                if let Some(p) = self.parity_spot(window, spot) {
+                    let e = window.get_page_enter();
+                    trace(&format!("press {spot:?} at {:?}, entrance {e}", (p.x, p.y)));
+                    self.parity_pointer(parity::NONE, vec![moved(p), press(p, Button::Left)]);
                 }
             }
             Step::Keys(spec) => {
@@ -456,7 +466,8 @@ impl Host {
             | Step::MenuHas(_)
             | Step::Settle(_)
             | Step::Until(_)
-            | Step::Retry(..) => {}
+            | Step::Retry(..)
+            | Step::Watch(..) => {}
         }
     }
 
@@ -491,6 +502,19 @@ impl Host {
                 let tab = *self.shown_tabs().get(n)?;
                 let (x, y) = self.view_origin(window, tab);
                 (x + p.x, y + p.y)
+            }
+            // as `Entering` draws the content: its shift down, then its scale about the centre
+            Spot::Drawn(p) => {
+                let tab = *self.shown_tabs().first()?;
+                let (x, y) = self.view_origin(window, tab);
+                let (cx, cy) = (window.get_content_x(), window.get_content_y());
+                let (w, h) = (window.get_content_width(), window.get_content_height());
+                let (zoom, shift) = (window.get_page_enter_zoom(), window.get_page_enter_offset());
+                let (lx, ly) = (x - cx + p.x, y - cy + p.y + shift);
+                (
+                    cx + w / 2.0 + (lx - w / 2.0) * zoom,
+                    cy + h / 2.0 + (ly - h / 2.0) * zoom,
+                )
             }
         };
         Some(slint::LogicalPosition::new(x, y))
@@ -621,6 +645,7 @@ impl Host {
             }
             HostOp::AnswerPrint => self.print_answered(true),
             HostOp::NewSpace => self.perform(wubble_core::action::Action::NewSpace),
+            HostOp::NextTab => self.perform(wubble_core::action::Action::NextTab),
             HostOp::OnlyFirstSpace => {
                 let spaces: Vec<_> = self.model.spaces.iter().map(|s| s.id).collect();
                 if let Some(&first) = spaces.first() {
@@ -752,9 +777,20 @@ impl Host {
                 let open = self.print_open();
                 is(open == want, format!("print sheet open: {open}"))
             }
-            HostCheck::PageEntered => {
+            HostCheck::PageEntered | HostCheck::PageEntering => {
                 let e = window.get_page_enter();
-                is(e >= 1.0, format!("page entrance at {e}"))
+                // the driver has taken in the tab the window shows, and that is the model's
+                let active = window.get_active_tab_id();
+                let seen = window.get_page_enter_tab() == active
+                    && crate::shell::tab_id(active) == self.model.visible_tab();
+                let now = match check {
+                    HostCheck::PageEntered => e >= 1.0,
+                    _ => e > 0.0 && e < 0.5,
+                };
+                is(
+                    seen && now,
+                    format!("page entrance at {e}, its showing taken in: {seen}"),
+                )
             }
             HostCheck::Ghost(image) => {
                 let got = self.drag_ghost_shown();

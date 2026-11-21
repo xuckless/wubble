@@ -242,6 +242,13 @@ export component AppWindow inherits Window {
     in property <float> space-enter <=> sidebar.space-enter;
     // The shown page's entrance after a tab switch, 0..1 (the driver; 1 at rest).
     in property <float> page-enter: 1;
+    // The tab whose showing `page-enter` times (the driver's `active-tab-id` as it last took it
+    // in): while it differs from `active-tab-id`, a switch is not yet seen and its entrance is
+    // still to come.
+    in property <int> page-enter-tab: -1;
+    // How the entrance draws the pages now: shifted down, then scaled about the content's centre.
+    out property <length> page-enter-offset: entering.offset;
+    out property <float> page-enter-zoom: entering.zoom;
     // The page a tab switch hid, leaving under the shown one (the design's `wb-out`, webview.tsx:
     // 190 ms in-out, clearing and rising 5 px): the host's copy of its last frame, and the
     // driver's progress, 0..1 (1 at rest).
@@ -987,7 +994,7 @@ export component AppWindow inherits Window {
                 }
                 // A newly shown page arrives with the Overlap entrance (webview.tsx: the shown
                 // view gets `wb-in`), timed by the driver on a tab switch.
-                Entering {
+                entering := Entering {
                     e: root.page-enter;
                     SplitView {
                         panes: root.panes;
