@@ -199,16 +199,6 @@ impl Host {
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
         }
-        // a scene that clicks a section by its place starts with the full list at its top (an
-        // earlier scene's wheel scrolled it); the page stays, so its jump is short
-        if scene.page == Some(wubble_core::pages::InternalPage::Settings)
-            && scene.click.is_some()
-            && let Some(window) = self.w.window.upgrade()
-        {
-            // and no search left from an earlier scene (its list has other rows)
-            window.invoke_settings_type_query("".into());
-            window.invoke_settings_nav_to_top();
-        }
         // a plain page under the scene: loaded once, kept for the scenes after it on the same
         if let (Some(tab), Some(url)) = (self.shown(), ground_url(scene.ground))
             && self.model.tabs.get(&tab).is_some_and(|t| t.url != url)
@@ -420,7 +410,16 @@ impl Host {
         gallery_point(window, scene);
         // The shell's own callbacks call back into the host: later, outside it.
         let (sidebar, overlay) = (scene.sidebar, scene.overlay);
+        // a scene that clicks a Settings section by its place starts with the full list (no
+        // search left from an earlier scene) at its top (an earlier scene's wheel scrolled it);
+        // the page stays, so its jump is short
+        let nav_reset =
+            scene.page == Some(wubble_core::pages::InternalPage::Settings) && scene.click.is_some();
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
+            if nav_reset {
+                window.invoke_settings_type_query("".into());
+                window.invoke_settings_nav_to_top();
+            }
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
             window.set_spaces_open(matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces));
