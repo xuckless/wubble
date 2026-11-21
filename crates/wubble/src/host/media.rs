@@ -560,6 +560,15 @@ impl Host {
                         }
                         (ProbeSave::Default, Some(t)) => {
                             let before = self.media.runs.len();
+                            let can_join = wubble_engine::save::find_ffmpeg().is_some();
+                            for i in &items {
+                                if let Found::Ready(v) = &i.found {
+                                    let c = select::choices(v);
+                                    let pick = select::choose(&c, self.media.settings.quality, can_join);
+                                    say(format!("default picks {:?}", pick.map(|p| &c[p].label)));
+                                    break;
+                                }
+                            }
                             self.media_entry(t, 100.0, 100.0);
                             if self.media.runs.len() == before {
                                 say("the button saved nothing (it would open the menu)".into());

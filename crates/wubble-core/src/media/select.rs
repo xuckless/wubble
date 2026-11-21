@@ -201,19 +201,26 @@ fn tell_apart(rows: &mut [Choice], variants: &[Variant]) {
         let (Selection::Single(v) | Selection::Pair { video: v, .. }) = c.selection;
         codec_name(&variants[v].codecs)
     };
-    for by_codec in [true, false] {
+    // The codec family, the bit rate, then what the manifest calls it (an HLS rendition's name).
+    for pass in 0..3 {
         let labels: Vec<String> = rows.iter().map(|c| c.label.clone()).collect();
         for i in 0..rows.len() {
             let twins: Vec<usize> = (0..rows.len()).filter(|&j| labels[j] == labels[i]).collect();
             if twins.len() < 2 {
                 continue;
             }
-            let extra = if by_codec {
-                let families: Vec<_> = twins.iter().map(|&j| family(&rows[j])).collect();
-                let differ = families.iter().any(|f| *f != families[0]);
-                family(&rows[i]).filter(|_| differ).map(str::to_owned)
-            } else {
-                rows[i].bandwidth.filter(|b| *b > 0).map(rate)
+            let extra = match pass {
+                0 => {
+                    let families: Vec<_> = twins.iter().map(|&j| family(&rows[j])).collect();
+                    let differ = families.iter().any(|f| *f != families[0]);
+                    family(&rows[i]).filter(|_| differ).map(str::to_owned)
+                }
+                1 => rows[i].bandwidth.filter(|b| *b > 0).map(rate),
+                _ => {
+                    let (Selection::Single(v) | Selection::Pair { video: v, .. }) = rows[i].selection;
+                    let named = variants[v].codecs.trim();
+                    (!named.is_empty()).then(|| named.to_owned())
+                }
             };
             if let Some(extra) = extra {
                 rows[i].label = match rows[i].label.split_once(" \u{b7} ") {
@@ -451,6 +458,14 @@ mod tests {
             ]
         );
         assert_eq!(rate(41_457), "42 kbit/s");
+        // Renditions that differ only by name (an HLS audio group's `NAME`, kept in `codecs`).
+        let named = |name: &str| rated(Track::Audio, None, 0, name);
+        let labels: Vec<String> = choices(&[named("English"), named("English 5.1")])
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert!(labels.iter().any(|l| l.contains("English 5.1")), "{labels:?}");
+        assert_ne!(labels[0], labels[1]);
         assert_eq!(codec_name("vp9"), Some("VP9"));
         assert_eq!(codec_name("mp4a.40.2"), None);
     }
