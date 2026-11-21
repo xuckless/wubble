@@ -102,7 +102,7 @@ impl Host {
             }
             Some(Action::Scroll(i)) => {
                 self.gallery_wait(SETTLE);
-                if let Some(at) = SCENES[i].click {
+                if let Some(at) = SCENES[i].click_at(self.engine.ext_apis()) {
                     click(&window, at);
                 }
                 if SCENES[i].wheel > 0 {
@@ -137,6 +137,13 @@ impl Host {
                     .start(slint::TimerMode::SingleShot, Duration::ZERO, || {
                         with_host(|host| host.gallery_step(Event::Shot))
                     });
+            }
+            Some(Action::Shoot(i)) if SCENES[i].needs_extensions() && !self.engine.ext_apis() => {
+                println!(
+                    "smoke: gallery skip {}: extensions are not available in this engine",
+                    SCENES[i].name
+                );
+                self.gallery_step(Event::Shot);
             }
             Some(Action::Shoot(i)) => {
                 match shot::take_scene(&window, i, SCENES[i].name) {
@@ -313,7 +320,12 @@ impl Host {
                 }
             }
             Overlay::AgentSheet => self.gallery_agent(false),
-            Overlay::AgentTabs | Overlay::AgentSpaces => self.gallery_agent(true),
+            Overlay::AgentTabs => self.gallery_agent(true),
+            Overlay::AgentSpaces => {
+                self.gallery_agent(true);
+                self.gallery_agent_kept();
+            }
+            Overlay::AgentMore => self.gallery_agent_more(),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -358,6 +370,7 @@ impl Host {
                 self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
+            Overlay::AgentsHosting => self.gallery_agents(),
             Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt => {}
             Overlay::None
             | Overlay::Long(Long::Pill | Long::Crowd)
@@ -397,7 +410,20 @@ impl Host {
         gallery_point(window, scene);
         // The shell's own callbacks call back into the host: later, outside it.
         let (sidebar, overlay) = (scene.sidebar, scene.overlay);
+        // a scene that clicks a Settings section by its place starts with the full list (no
+        // search left from an earlier scene) at its top (an earlier scene's wheel scrolled it);
+        // the page stays, so its jump is short
+        let nav_reset =
+            scene.page == Some(wubble_core::pages::InternalPage::Settings) && scene.click.is_some();
+        // clearing a search puts the page back at its top: only when there is one
+        let unsearch = nav_reset && !self.settings_query_text().is_empty();
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
+            if unsearch {
+                window.invoke_settings_type_query("".into());
+            }
+            if nav_reset {
+                window.invoke_settings_nav_to_top();
+            }
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
             window.set_spaces_open(matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces));

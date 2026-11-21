@@ -845,6 +845,31 @@ impl RequestFilter {
     }
 }
 
+/// wubble change 53: decides each top-level navigation (every hop of a
+/// redirect included) before its request is sent; `false` cancels it and
+/// [`NavigationEvent::NavigationRefused`] says so. Called on CEF's UI thread
+/// from `OnBeforeBrowse`; it should not panic (a panic allows).
+#[derive(Clone)]
+pub struct NavigationGuard(pub(crate) Arc<dyn Fn(&str) -> bool + Send + Sync>);
+
+impl NavigationGuard {
+    pub fn new(guard: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(guard))
+    }
+
+    /// Whether the main frame may go to `url`. A guard that panics refuses (wubble change:
+    /// fail closed, the guard holds an agent session's tab to its sites).
+    pub fn allows(&self, url: &str) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(url))).unwrap_or(false)
+    }
+}
+
+impl std::fmt::Debug for NavigationGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NavigationGuard")
+    }
+}
+
 impl std::fmt::Debug for RequestFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("RequestFilter")
@@ -1027,6 +1052,9 @@ pub struct CefSurfaceConfig {
     /// Sees the headers of every response. `None`, the default, observes
     /// nothing. wubble change 36, see `WUBBLE_CHANGES.md`.
     pub response_observer: Option<ResponseObserver>,
+    /// Decides each top-level navigation before it starts. `None`, the
+    /// default, allows all. wubble change 53, see `WUBBLE_CHANGES.md`.
+    pub navigation_guard: Option<NavigationGuard>,
 }
 
 impl Default for CefSurfaceConfig {
@@ -1049,6 +1077,7 @@ impl Default for CefSurfaceConfig {
             external_begin_frame: false,
             request_filter: None,
             response_observer: None,
+            navigation_guard: None,
         }
     }
 }
@@ -2323,6 +2352,10 @@ pub enum NavigationEvent {
     /// `user_gesture` is what `OnBeforeBrowse` said for the same URL, when
     /// it ran for it. wubble change 40.
     ProtocolExecution { url: String, user_gesture: Option<bool> },
+    /// The [`NavigationGuard`] cancelled a top-level navigation to `url`
+    /// (`redirect`: a hop of a redirect) before its request was sent.
+    /// wubble change 53.
+    NavigationRefused { url: String, redirect: bool },
 }
 
 /// Which JS dialog a page opened. wubble change.
@@ -2732,5 +2765,21 @@ mod context_menu_tests {
         let effects = DragOperations::COPY | DragOperations::MOVE;
         assert_eq!(effects.0, 0b1_0001);
         assert_eq!(DragOperations::NONE.0, 0);
+    }
+}
+
+// wubble change: the navigation guard fails closed.
+#[cfg(test)]
+mod navigation_guard_tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_guard_refuses() {
+        let guard = NavigationGuard::new(|url| {
+            assert!(!url.contains("boom"), "the rule broke");
+            true
+        });
+        assert!(guard.allows("https://a.test/"));
+        assert!(!guard.allows("https://boom.test/"));
     }
 }

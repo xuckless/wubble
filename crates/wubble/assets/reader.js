@@ -109,6 +109,38 @@ var wubbleReader = (function () {
     }
   }
 
+  // The article's text for an agent (`read_text`), the page left as it is: the title, the
+  // byline and the passages (the innermost blocks, one per paragraph); the page's own text when
+  // Readability finds no article.
+  function text() {
+    var article = null;
+    try {
+      article = new Readability(document.cloneNode(true), {
+        serializer: function (node) {
+          return node;
+        },
+      }).parse();
+    } catch (e) {}
+    if (!article || !article.content) {
+      var body = document.body ? document.body.innerText : "";
+      return { article: false, title: document.title, byline: "", text: body };
+    }
+    var parts = [];
+    var blocks = article.content.querySelectorAll(BLOCKS + ",h1");
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].querySelector(BLOCKS)) continue;
+      var t = words(blocks[i]);
+      if (t) parts.push(t);
+    }
+    var all = parts.length ? parts.join("\n\n") : words(article.content);
+    return {
+      article: true,
+      title: article.title || document.title,
+      byline: article.byline || "",
+      text: all,
+    };
+  }
+
   function leave() {
     try {
       history.scrollRestoration = "manual";
@@ -172,5 +204,5 @@ var wubbleReader = (function () {
     return { title: title, length: article.length, x: at.x, y: at.y };
   }
 
-  return { probe: probe, open: open, set: set, leave: leave, restore: restore };
+  return { probe: probe, open: open, set: set, leave: leave, restore: restore, text: text };
 })();

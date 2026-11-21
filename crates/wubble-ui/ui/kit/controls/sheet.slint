@@ -1,4 +1,4 @@
-// derived: GlassPanel(material/glass.slint) thick + OverlapLayer(motion/overlap.slint) + SheetButton(components/sheet-button.slint), kit-plan 2.4 `Sheet`
+// derived: GlassPanel(material/glass.slint) thick + OverlapLayer(motion/overlap.slint) + SheetButton(components/sheet-button.slint) + Flickable and Thumb (controls/scroller.slint, as overlay/b/b-panel.slint's BSidePanel), kit-plan 2.4 `Sheet`
 // The sheet every modal question shares (JS dialog, sign-in, the pages' clear / bookmark /
 // password sheets, print): the design has no sheet, so it is composed of the design's parts and
 // listed for the owner (docs/fidelity/derived-review.md). A scrim that blocks the page under
@@ -7,7 +7,9 @@
 // 190 ms out), the title as a settings section heading (`.st-sec-head h2`, 19 / 600), the message
 // in body mist, the sheet's own fields in `@children` and right-aligned buttons. Its geometry
 // stays the existing derived `Shell.sheet-*` values. Enter accepts, Escape cancels: `accepted`
-// and `cancelled` are intents, the owner acts. The buttons are today's `SheetButton`: swap them
+// and `cancelled` are intents, the owner acts. A sheet taller than the window leaves its
+// `Shell.sheet-margin` below it: its fields scroll (the side panel's Flickable and thumb) between
+// the message and the buttons, which stay in reach. The buttons are today's `SheetButton`: swap them
 // for lane c1's `Button { kind: pri / ghost }` when it lands.
 
 import { Palette, Space } from "../gen/tokens.slint";
@@ -17,6 +19,7 @@ import { KitText } from "../text.slint";
 import { GlassPanel } from "../material/glass.slint";
 import { OverlapLayer } from "../motion/overlap.slint";
 import { Tween } from "../motion/tween.slint";
+import { Thumb } from "scroller.slint";
 import { GlassTier } from "../../components/model.slint";
 import { SheetButton } from "../../components/sheet-button.slint";
 
@@ -87,7 +90,8 @@ export component Sheet inherits Rectangle {
     layer := OverlapLayer {
         shown: root.open;
         width: min(Shell.sheet-width, root.width - 2 * Shell.sheet-margin);
-        height: body.preferred-height;
+        // the whole sheet, or what the window leaves under its top
+        height: min(body.preferred-height, root.height - self.y - Shell.sheet-margin);
         x: (root.width - self.width) / 2;
         y: Shell.command-bar-top;
         GlassPanel {
@@ -118,24 +122,48 @@ export component Sheet inherits Rectangle {
                     color: Palette.mist;
                     wrap: word-wrap;
                 }
-                @children
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: Space.s2;
-                    if root.cancel-text != "": SheetButton {
-                        text: root.cancel-text;
-                        clicked => {
-                            if root.open {
-                                root.cancelled();
+                // the sheet's own fields (none: no gap for them), then the buttons; the fields
+                // scroll when the window is too short for them
+                VerticalLayout {
+                    spacing: column.preferred-height > 0 ? Space.s2 : 0px;
+                    fields := Rectangle {
+                        preferred-height: column.preferred-height;
+                        min-height: 0px;
+                        vertical-stretch: 1;
+                        hover := TouchArea {
+                            flick := Flickable {
+                                content-height: column.preferred-height;
+                                column := VerticalLayout {
+                                    width: flick.width;
+                                    spacing: Space.s2;
+                                    @children
+                                }
                             }
                         }
+                        Thumb {
+                            shown: hover.has-hover && flick.content-height > flick.height;
+                            top: flick.content-height > 0 ? -flick.content-y * flick.height / flick.content-height : 0px;
+                            length: flick.content-height > 0 ? flick.height * min(1, flick.height / flick.content-height) : 0px;
+                        }
                     }
-                    SheetButton {
-                        text: root.accept-text;
-                        primary: true;
-                        clicked => {
-                            if root.open {
-                                root.accepted();
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Space.s2;
+                        if root.cancel-text != "": SheetButton {
+                            text: root.cancel-text;
+                            clicked => {
+                                if root.open {
+                                    root.cancelled();
+                                }
+                            }
+                        }
+                        SheetButton {
+                            text: root.accept-text;
+                            primary: true;
+                            clicked => {
+                                if root.open {
+                                    root.accepted();
+                                }
                             }
                         }
                     }

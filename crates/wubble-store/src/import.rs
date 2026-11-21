@@ -186,6 +186,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             active: None,
             split: None,
             never_sleep: false,
+            agent: false,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));

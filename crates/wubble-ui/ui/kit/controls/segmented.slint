@@ -135,8 +135,21 @@ export component Segmented inherits Rectangle {
     property <color> accent: root.selected >= 0 && root.selected < root.items.length ? root.items[root.selected].accent : transparent;
     property <color> on: root.accent == transparent ? Palette.ink : root.accent;
 
-    init => {
+    // made before the registry was wired (a surface built with the window): the slot is
+    // taken once it is (`Controls.wired`), with the value then
+    property <bool> wired: Controls.wired;
+    function take() {
         root.slot = Controls.acquire(2, Math.max(0, root.selected));
+    }
+    init => {
+        if root.wired {
+            root.take();
+        }
+    }
+    changed wired => {
+        if root.wired && root.slot < 0 {
+            root.take();
+        }
     }
     changed selected => {
         Controls.set-value(root.slot, Math.max(0, root.selected));

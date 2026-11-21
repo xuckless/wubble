@@ -572,6 +572,8 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
             *a = true;
         }
     });
+    // last: the controls made before now take their slots
+    g.set_wired(true);
     reg
 }
 

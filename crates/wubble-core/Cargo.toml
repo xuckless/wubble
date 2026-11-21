@@ -32,6 +32,9 @@ minisign-verify = "0.3"
 # Extensions (`extensions`): the manifest key of an unpacked .crx copy; already in Cargo.lock
 # (MIT OR Apache-2.0).
 base64 = "0.22"
+# Codex's config.toml edited in place, comments and order kept (`agent::harness`); already in
+# Cargo.lock (MIT OR Apache-2.0).
+toml_edit = "0.25"
 
 [dev-dependencies]
 # Signs the updater's test manifests and archives with a key pair made in the test (MIT,

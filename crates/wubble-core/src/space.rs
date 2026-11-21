@@ -59,9 +59,8 @@ impl SpaceIcon {
 }
 
 /// What a Space's tile draws (the footer, the Spaces popup, Settings): the Space's own icon,
-/// or the agent glyph while an agent session owns the Space. Derived from that state on every
-/// render and never stored, so it is not a choice of the user's; `agent` is whether a running
-/// session owns the Space. The id is what the shell's `Glyph.space` takes.
+/// or the agent glyph for an agent Space ([`Space::agent`]: one an agent session made, running
+/// or ended). Not a choice of the user's; the id is what the shell's `Glyph.space` takes.
 pub fn glyph_id(icon: SpaceIcon, agent: bool) -> &'static str {
     if agent { AGENT_GLYPH } else { icon.id() }
 }
@@ -101,6 +100,11 @@ pub struct Space {
     pub split: Option<SplitGroup>,
     /// Tabs of this Space are never put to sleep.
     pub never_sleep: bool,
+    /// An agent session made the Space: it stays an agent Space for its life (its tile draws
+    /// the agent glyph, its row in the Spaces popup has the dustbin), also after the session
+    /// ended and left its tabs to the owner ([`crate::agent::clear`]). Set once
+    /// (`Command::MarkAgentSpace`), never cleared, saved with the session.
+    pub agent: bool,
 }
 
 /// Most pages side by side (the design's `SPLIT.maxPanes`).

@@ -166,6 +166,9 @@ pub fn serve() -> std::io::Result<u16> {
     Ok(port)
 }
 
+const NOT_FOUND: &[u8] =
+    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
 /// One request, one answer, then the connection closes.
 fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -196,13 +199,19 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         // a `data:` page is not), and the copy button it frames from another origin.
         "/parity" => crate::PARITY_PAGE.to_owned(),
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
-        // `--smoke mcp`'s page: an agent session navigates to it on loopback.
-        "/mcp" => crate::mcp_smoke::PAGE.to_owned(),
-        _ => {
-            return stream.write_all(
-                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
-        }
+        // `--smoke mcp`'s pages and redirects: an agent session navigates to them on loopback.
+        p if p.starts_with("/mcp") => match crate::mcp_smoke::route(p, port) {
+            Some(crate::mcp_smoke::Route::Page(page)) => page,
+            Some(crate::mcp_smoke::Route::Redirect(to)) => {
+                return write!(
+                    stream,
+                    "HTTP/1.1 302 Found\r\nLocation: {to}\r\nContent-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                );
+            }
+            None => return stream.write_all(NOT_FOUND),
+        },
+        _ => return stream.write_all(NOT_FOUND),
     };
     write!(
         stream,

@@ -100,7 +100,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             id: s.id,
             name: s.name.as_str().into(),
             tint: color(s.tint),
-            icon: wubble_core::space::glyph_id(s.icon, s.agent).into(),
+            icon: wubble_core::space::glyph_id(s.icon, s.agent_space).into(),
             agent: s.agent,
         })
         .collect();
@@ -137,6 +137,7 @@ pub fn render_spaces_menu(window: &AppWindow, popup: &spacemenu::Popup, new_spac
                     tint: color(r.tint),
                     icon: r.glyph().into(),
                     current: r.current,
+                    clear: r.agent,
                 })
             }
         })

@@ -72,6 +72,8 @@ export struct SpacesMenuRow {
     // what the row's tile draws (wubble_core::space::glyph_id): "personal" | "work" | "study" | "agent"
     icon: string,
     current: bool,
+    // an agent Space (wubble_core::space::Space::agent): the row has the dustbin
+    clear: bool,
 }
 
 // A built-in page Settings links to (wubble_core::pages::PAGE_LINKS): its title, address (which
@@ -676,12 +678,19 @@ export struct AgentSheetView {
     serial: int,
     // The calling program's name.
     client: string,
-    // The secrets it asks for, by name (never a value).
-    secrets: [string],
-    // The sites it limits itself to; none: any site.
-    sites: [string],
+    // The secrets it asks for, by name (never a value), as the owner left them (one column).
+    secrets: [EntryItem],
+    // The sites it is limited to, as the owner left them (one column); none: any site.
+    sites: [EntryItem],
+    // The host's answer to the Sites editor's last draft: a new serial each time, `note` empty
+    // to accept it (kit ListEditor `answer` / `note`).
+    answer: int,
+    note: string,
     // The client asks to run without showing its window.
     headless: bool,
+    // A running session asks for more (`request_more`): the lists hold only what is new, and
+    // there is no window choice.
+    more: bool,
 }
 
 // One line of the agent activity log page (`wubble_core::agent::log::Row`).
@@ -876,4 +885,30 @@ export struct ExtensionPopup {
     clip-height: int,
     width: length,
     height: length,
+}
+
+// The Settings page's Agents (MCP) group (agents-section.slint), from the host
+// (`host/harness.rs`): the switch, the hosting status, where turning it on adds wubble (or, while
+// on, where it was added), the relay command and the generic server entry to copy.
+export struct AgentsView {
+    on: bool,
+    status: string,
+    adds: string,
+    command: string,
+    entry: string,
+}
+
+// One agent app found on this computer. `added`: wubble's entry is in its file; `writable`:
+// wubble writes that file (else the entry is offered to copy); `foreign`: an entry wubble did
+// not write is there (left alone); `opted-out`: the owner took
+// wubble out of it, and turning hosting on leaves it alone.
+export struct AgentAppItem {
+    id: string,
+    name: string,
+    note: string,
+    added: bool,
+    // an entry named wubble that wubble did not write: not touched, no button
+    foreign: bool,
+    writable: bool,
+    opted-out: bool,
 }

@@ -1,4 +1,4 @@
-// derived: Menu (controls/menu.slint: the touch kit's thick-glass body, MenuRow with the Select's check column, MenuHighlight, MenuRule, its keys and machine `wubble_core::controls::menu`), APopover (overlay/a/a-popover.slint), `.st-menu.up` (pages/settings.css:79: a menu opening above its trigger, `bottom: calc(100% + gap)`), Flickable + Thumb (controls/scroller.slint, as overlay/b/b-panel.slint), CMD.rows (browser/command.tsx:20: the most rows a list shows)
+// derived: Menu (controls/menu.slint: the touch kit's thick-glass body, MenuRow with the Select's check column, MenuHighlight, MenuRule, its keys and machine `wubble_core::controls::menu`), APopover (overlay/a/a-popover.slint), `.st-menu.up` (pages/settings.css:79: a menu opening above its trigger, `bottom: calc(100% + gap)`), Flickable + Thumb (controls/scroller.slint, as overlay/b/b-panel.slint), CMD.rows (browser/command.tsx:20: the most rows a list shows), IconButton (controls/icon-button.slint, `.wb-ib`) with Glyph.trash in the menu's danger ink on hover (`.tp-mrow.danger`), as the download row's remove button
 // The sidebar footer's Spaces popup (owner, 2026-11-19: the "^" "opens up popup with all the
 // saved spaces ... and a sticky new session inside that popup. That's how we use space!"; the
 // sticky row is "New Space" for now). The design has no Spaces menu: it is the touch kit's menu
@@ -11,14 +11,19 @@
 // sticky row: New Space (plus icon, its shortcut). One highlight per part (the scrolled rows',
 // the sticky row's) follows the pointer and the keys; the keys are the kit menu's (Up/Down with
 // wrap over both parts, Enter/Space, Escape, Tab) and the focused row scrolls into view.
+// An agent Space's row (`clear`) ends in a dustbin, the icon button the download row removes
+// with, its glyph turning the menu's danger colour on hover: a press clears that Space
+// (`cleared(id)`), the popup stays. Only a pointer press or a screen reader's action reaches it:
+// the keys move over the rows and Enter switches, never clears.
 // Fills its parent (the window): a press outside the panel dismisses it. `picked(id)`,
-// `new-space()` and `dismissed()` are intents; the owner closes it.
+// `new-space()`, `cleared(id)` and `dismissed()` are intents; the owner closes it.
 
 import { Space, TouchMenu, Tsx } from "../gen/tokens.slint";
 import { TouchCss } from "../gen/css.slint";
 import { Glyph } from "../controls/icon.slint";
 import { MenuRow, MenuHighlight, MenuRule, Scrim } from "../controls/menu.slint";
 import { Thumb } from "../controls/scroller.slint";
+import { IconButton } from "../controls/icon-button.slint";
 import { APopover } from "../overlay/a/a-popover.slint";
 import { SpacesMenuRow, MenuEntry, GlassKeys } from "../../components/model.slint";
 import { Controls, ControlView } from "../../components/controls/registry.slint";
@@ -44,6 +49,7 @@ export component SpacesMenu inherits Rectangle {
     in property <bool> drop-sticky;
     callback picked(int);
     callback new-space();
+    callback cleared(int);
     callback dismissed();
 
     property <int> slot: -1;
@@ -213,33 +219,52 @@ export component SpacesMenu inherits Rectangle {
                             shown: root.open;
                             index: i;
                         }
-                        if !line.rule: MenuRow {
-                            shown: root.open;
-                            index: i;
-                            icon: Glyph.space(line.icon);
-                            label: line.name;
-                            check-column: true;
-                            checked: line.current;
-                            accent: line.tint;
-                            accessible-role: AccessibleRole.list-item;
-                            accessible-label: line.name;
-                            accessible-checkable: true;
-                            accessible-checked: line.current;
-                            accessible-item-index: i;
-                            accessible-item-count: root.rows.length;
-                            accessible-item-selected: i == root.v.focus;
-                            accessible-action-default => {
-                                root.send(6, i);
-                            }
-                            TouchArea {
-                                enabled: root.open;
-                                changed has-hover => {
-                                    if self.has-hover {
-                                        root.send(3, i);
+                        if !line.rule: Rectangle {
+                            row := MenuRow {
+                                x: 0px;
+                                width: parent.width - (line.clear ? bin.width : 0px);
+                                shown: root.open;
+                                index: i;
+                                icon: Glyph.space(line.icon);
+                                label: line.name;
+                                check-column: true;
+                                checked: line.current;
+                                accent: line.tint;
+                                accessible-role: AccessibleRole.list-item;
+                                accessible-label: line.name;
+                                accessible-checkable: true;
+                                accessible-checked: line.current;
+                                accessible-item-index: i;
+                                accessible-item-count: root.rows.length;
+                                accessible-item-selected: i == root.v.focus;
+                                accessible-action-default => {
+                                    root.send(6, i);
+                                }
+                                TouchArea {
+                                    enabled: root.open;
+                                    changed has-hover => {
+                                        if self.has-hover {
+                                            root.send(3, i);
+                                        }
+                                    }
+                                    clicked => {
+                                        root.send(6, i);
                                     }
                                 }
+                            }
+                            bin := IconButton {
+                                visible: line.clear;
+                                enabled: root.open && line.clear;
+                                x: parent.width - self.width;
+                                y: (parent.height - self.height) / 2 + row.offset;
+                                opacity: row.e;
+                                icon-path: Glyph.trash;
+                                label: "Clear " + line.name;
+                                rest-ink: TouchCss.tp-mrow-svg--color;
+                                hover-ink: TouchCss.tp-mrow-danger--color;
                                 clicked => {
-                                    root.send(6, i);
+                                    root.cleared(line.id);
+                                    keys.focus();
                                 }
                             }
                         }

@@ -16,36 +16,33 @@ own session and has not been run since batch eight; Windows is not green in CI.
 
 ## Now (2026-11-20)
 In flight, each in its own worktree, not yet on `main`:
-- [~] `xm/sheet-fix`: the agent approval sheet (owner's review: its Window choice shows no selection and cannot be changed; Secrets and Sites are not editable): the multi-option control as Settings uses it, Secrets and Sites as the kit list editor whose result is the grant, the smoke answering by real pointer presses
-- [~] `xm/sheet-fix`: an agent tab the owner switches to shows a blurred page (suspected: the 384 px tab snapshot is never replaced, since agent views stay visible to CEF and a still page paints no frame)
 Next, in order:
-- [ ] MCP after the first tests: the list under "MCP server" below, started on `xm/sheet-fix` once it lands (same host file)
 - [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
 - [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
+- [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
-- [ ] Extensions: the gaps under M6 (Bitwarden's popup width first: one more patch and an engine rebuild)
+- [ ] Releasing extensions (the next release ships without them: on an engine without the patch queue wubble offers none): the patch queue in the release engine on Linux, macOS and Windows, then the gaps under M6 (Bitwarden's popup width first)
 - [ ] The "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
 ## MCP server
-Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools, sessions in their own Space and container, the approval sheet, off by default.
+Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools (20 after `xm/sheet-fix`), sessions in their own Space and container, the approval sheet, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
-- [ ] Bug: `screenshot` cropped to a ref ignores the scroll position (right only at scroll 0) and does not scroll an off-screen element into view; no full-page option
-- [ ] Bug: `click` fails on some visible links ("the element stays out of view": GitHub's Overview and Repositories tabs at scroll 0)
-- [ ] Bug: `evaluate` takes one expression only (its description says statements) and returns `{}` for a promise or a DOM node with no error: accept statements, await promises, say when a value cannot be serialised
-- [ ] Waiting: `wait_for` gets a navigation / URL-change condition and a "text gone" one, its text match ignores form field values, `wait_for load` waits through in-page navigation, `type` with `submit` and `open_tab` wait for the load as `navigate` does
-- [ ] Hand-off: `list_tabs` says which tab is active; `focus_tab`; a session can end and keep its tabs (today closing the connection closes them)
-- [ ] New tool (owner approved): `request_more` for sites and secrets mid-session; it raises the approval sheet listing only what is new, every time; nothing is granted without the owner's press
-- [ ] New tool (owner approved): `read_text` for a page's prose (article body), so reading needs no script
-- [ ] New tools (owner approved): `scroll`, `hover`, `drag` by element ref; coordinates only inside a `<canvas>` the agent holds a ref for
-- [ ] Polish: `read_page` gives link targets, does not cut text at about 120 characters, and reports truncation and its default cap; `press_key` says when a chord did nothing (Control+L, Alt+Left, Control+Shift+T do nothing today); a stale ref is an error in `read_page` as in `click`; `list_tabs` returns a URL where its description says origin; scheme matching is case-sensitive (`HTTPS://` refused)
+- [ ] An element inside a frame is still placed from the accessibility mirror's boxes, which a scrolled page leaves behind (the top document uses the live layout); the mirror's coordinates are wrong after a scroll for the screen-reader pane too (Chromium sends no root scroll offset)
+- [ ] a tab moved into an agent session's Space keeps its back-forward cache and any prerender made before: activating either runs no navigation throttle, so the guard is not asked and only the commit backstop takes the tab back (after the page showed); drop those for a tab that joins a session (or disable the cache and prerender for session tabs) and add a smoke probe
+- [ ] publish wubble-mcp to npm (owner go, owner's npm account; steps in docs/release.md)
+- [ ] agent apps wubble does not write yet (VS Code, Copilot CLI, Goose; Windsurf on macOS): verify each file's name and entry shape, then make them `Format`s in `agent::harness`
+- [ ] Windows: the agent apps' paths (`agent::harness` lists Linux and macOS only) and the manifest's runtime dir
+- [ ] `scroll` with a direction over a nested scroller (an `overflow: auto` pane): the wheel event reaches the pane but in most `--smoke mcp` runs the document takes the scroll; a user's wheel goes the same path (`View::wheel`): check by hand, then fix (the smoke checks the page only)
+- [ ] `wait_for load` does not follow an in-page (history API) navigation's fetches (documented in the tool; `url` and `navigation` cover the address change): network idle would need DevTools' network events through the engine
+- [ ] `drag` drives pointer events only: an HTML `draggable` drag runs in the window's own drag loop (dropped with nothing, the reply says so)
+- [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Later (owner, 2026-11-20): "Move tab to" in a tab's right-click menu, a two-level menu: hovering the row (with its ">") opens the list of user-created Spaces; moving a tab out of an agent Space makes it an ordinary tab of that Space
 - [ ] Later (owner, 2026-11-20): clearing an agent Space that still has tabs asks first: "Close anyway", or "Move tabs", which opens the list of user-created Spaces downward and moves them before the Space is cleared (until then the dustbin clears at once)
 - [ ] Bind a requested secret name to a vault login on the sheet (a grant holds no secret until then; `fill_secret` is refused cleanly)
-- [ ] Not yet tested: a script or redirect getting past the http(s)-only rule; `stop_session` then the old handle; a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, redaction of filled values, the airlocks
 
@@ -159,7 +156,6 @@ Open, to build or check:
 - [ ] Extensions (acceptance gap): `chrome.tabs.getCurrent()` in an action popup returns a tab (Chrome: undefined), so Bitwarden's popup lays out 57 px wide; patch `TabsGetCurrentFunction` and `getViews` for views that are not wubble tabs (gap 2)
 - [ ] Extensions (acceptance gap): `chrome.permissions.request` rejects with "Could not find an active window." (P4: answer it in wubble's UI), which Bitwarden's first-run "default password manager" step calls (gap 3)
 - [ ] Extensions (acceptance gap): Bitwarden's inline menu and autofill icon need an account: hand check with a test vault on a loopback login form (gap 4)
-- [ ] Extensions: the patch queue on macOS and Windows builds, and in the release's CEF (owner go)
 - [ ] Extensions: `tabs.onReplaced` when a sleeping tab wakes, `onMoved`/`onAttached`/`onDetached`, window bounds; `windows.create` is refused for now
 - [ ] Swap in behind `wubble-engine`, shell unchanged
 - [ ] CEF OSR patch: hide a view's compositor on `Hide()` (frees each hidden tab's backbuffer)

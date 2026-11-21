@@ -1,0 +1,129 @@
+import { AgentsView, AgentAppItem } from "model.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { Button, ButtonKind } from "../kit/controls/button.slint";
+import { Card, Row, RowText, RowControls, NoteTone } from "../kit/settings/section.slint";
+
+// The Settings page's Agents (MCP) group (its body: the page draws the heading and the section's
+// place in its nav): the hosting switch and its status, the activity page, the relay command and
+// the generic entry to copy, every agent app found here (Remove, or Add again; an app wubble does
+// not write gets its entry to copy), and what being findable means. Composition only (kit Card,
+// Row, RowText, Toggle, Button), as the Extensions group. `toggled`, `activity`, `copy`, `add`
+// and `remove` are intents; the host acts.
+export component AgentsCard inherits Card {
+    in property <AgentsView> view;
+    in property <[AgentAppItem]> apps;
+    // the Space colour: the switch
+    in property <color> accent;
+    callback toggled(bool);
+    callback activity();
+    callback copy(string);
+    callback add(string);
+    callback remove(string);
+
+    Row {
+        tap: true;
+        tapped => {
+            root.toggled(!root.view.on);
+        }
+        RowText {
+            title: "Host wubble's MCP server";
+            note: root.view.status;
+        }
+        RowControls {
+            Toggle {
+                size: ToggleSize.sm;
+                on: root.view.on;
+                accent: root.accent;
+                label: "Host wubble's MCP server";
+                toggled => {
+                    root.toggled(!root.view.on);
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: "Agent apps";
+            note: root.view.adds;
+        }
+    }
+    for app in root.apps: Row {
+        RowText {
+            title: app.name;
+            note: app.note;
+            tone: app.opted-out ? NoteTone.restart : NoteTone.plain;
+        }
+        RowControls {
+            if app.writable && app.added: Button {
+                kind: ButtonKind.ghost;
+                text: "Remove";
+                clicked => {
+                    root.remove(app.id);
+                }
+            }
+            if app.writable && !app.added && !app.foreign: Button {
+                kind: ButtonKind.ghost;
+                text: "Add";
+                clicked => {
+                    root.add(app.id);
+                }
+            }
+            if !app.writable: Button {
+                kind: ButtonKind.ghost;
+                text: "Copy entry";
+                clicked => {
+                    root.copy(root.view.entry);
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: "Relay command";
+            note: root.view.command;
+        }
+        RowControls {
+            Button {
+                text: "Copy";
+                clicked => {
+                    root.copy(root.view.command);
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: "Server entry (any app)";
+            note: root.view.entry;
+        }
+        RowControls {
+            Button {
+                text: "Copy";
+                clicked => {
+                    root.copy(root.view.entry);
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: "Agent activity";
+            note: "What agent sessions did in wubble";
+        }
+        RowControls {
+            Button {
+                kind: ButtonKind.ghost;
+                text: "Open";
+                clicked => {
+                    root.activity();
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: "Being findable is not access";
+            note: "Nothing is hosted while the switch is off. While it is on, wubble listens only on a socket private to your user (never a network port), and every session needs your approval on screen before an agent can touch a tab.";
+        }
+    }
+}

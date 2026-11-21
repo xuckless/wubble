@@ -178,7 +178,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Mcp { profile } => match mcp_relay(profile) {
+        Command::Mcp { profile, list } => match mcp_relay(profile, list) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("wubble mcp: {e}");
@@ -444,6 +444,8 @@ fn browse(
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     // One browser per profile, decided before anything opens the store or starts CEF.
     std::fs::create_dir_all(&profile.dir)?;
+    // sockets and manifests that dead browsers left behind
+    instance::sweep(&instance::runtime_dir());
     let socket = instance::socket_path(&profile.dir, &instance::runtime_dir());
     let message = url
         .clone()
@@ -469,20 +471,57 @@ fn browse(
         downloads,
         listener,
     };
+    let primary = matches!(
+        mode,
+        Mode::Browse {
+            listener: Some(_),
+            ..
+        }
+    );
     let code = report_run(mode, config, &profile.dir);
+    // a clean exit leaves no socket of ours behind (the MCP one went with hosting)
+    if primary {
+        let _ = instance::remove_stale(&socket);
+    }
     updater::relaunch_if_requested();
     Ok(code)
 }
 
-/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile` (`mcp.rs`). It
-/// opens nothing else: no store, GPU or CEF.
-fn mcp_relay(profile: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
-    let socket = instance::path_of(
-        instance::Socket::Mcp,
-        &profile.dir,
-        &instance::runtime_dir(),
-    );
+/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile`, or of the one
+/// hosting browser the manifests name (`mcp.rs`); `--list` prints them. It opens nothing else:
+/// no store, GPU or CEF.
+fn mcp_relay(profile: Option<PathBuf>, list: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let live = mcp::hosting_browsers();
+    if list {
+        for m in &live {
+            println!("{}\t{}\t{}\tpid {}", m.profile, m.socket, m.version, m.pid);
+        }
+        if live.is_empty() {
+            eprintln!("wubble mcp: no browser hosts MCP (Settings > Agents (MCP))");
+        }
+        return Ok(());
+    }
+    let socket = match profile {
+        Some(dir) => {
+            let profile = Profile::resolve(Some(dir)).ok_or(EngineError::CacheDir)?;
+            instance::path_of(
+                instance::Socket::Mcp,
+                &profile.dir,
+                &instance::runtime_dir(),
+            )
+        }
+        None => {
+            use wubble_core::agent::manifest::{Pick, pick, pick_error};
+            match pick(live) {
+                Pick::One(m) => PathBuf::from(m.socket),
+                other => {
+                    let why = pick_error(&other).unwrap_or_default();
+                    eprintln!("wubble mcp: {why}");
+                    return Ok(mcp::answer_offline_with(&why)?);
+                }
+            }
+        }
+    };
     Ok(mcp::relay(&socket)?)
 }
 
@@ -983,6 +1022,11 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
             command(Cmd::SwitchSpace(s));
         }
     });
+    window.on_space_cleared(move |id| {
+        if let Some(s) = shell::space_id(id) {
+            with_host_in(win, |host| host.space_cleared(s));
+        }
+    });
     // The start page (host/start.rs): its stage's pointer and the front's intents.
     {
         use crate::host::start::StagePointer;
@@ -1077,6 +1121,10 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     });
     window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
     window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
+    window.on_agents_toggled(move |on| with_host_in(win, |host| host.agents_toggled(on)));
+    window.on_agents_copy(move |text| with_host_in(win, |host| host.agents_copy(&text)));
+    window.on_agent_app_added(move |id| with_host_in(win, |host| host.agent_app_added(&id)));
+    window.on_agent_app_removed(move |id| with_host_in(win, |host| host.agent_app_removed(&id)));
     window.on_find_edited(move |q| {
         with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
     });
@@ -1192,6 +1240,12 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     );
     window.on_agent_sheet_answered(move |allow, headless| {
         with_host_in(win, |host| host.agent_sheet_answered(allow, headless))
+    });
+    window.on_agent_sheet_removed(move |site, key| {
+        with_host_in(win, |host| host.agent_sheet_removed(site, &key))
+    });
+    window.on_agent_sheet_site_submitted(move |text| {
+        with_host_in(win, |host| host.agent_sheet_site_submitted(&text))
     });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
@@ -1341,7 +1395,7 @@ fn run(
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
-        mcp_smoke: false,
+        mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
@@ -1497,7 +1551,7 @@ fn run(
         Mode::Mcp => (
             Some(bundled()),
             Checks {
-                mcp_smoke: true,
+                mcp_smoke: Some(Default::default()),
                 ..none
             },
         ),
@@ -1572,17 +1626,6 @@ fn run(
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.
     let mut loaded = loaded;
-    // `--smoke mcp` runs the MCP server, off by default.
-    if matches!(mode, Mode::Mcp) {
-        loaded.settings.stored.insert(
-            wubble_core::settings::AGENT_MCP_ENABLED.key.into(),
-            "1".into(),
-        );
-    }
-    let mcp_on = wubble_core::apply::value_of(
-        &wubble_core::settings::AGENT_MCP_ENABLED,
-        &loaded.settings.stored,
-    ) == "1";
     if smoke_page {
         loaded.settings.stored.insert(
             wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
@@ -1630,7 +1673,10 @@ fn run(
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
-        extensions: wubble_core::extensions::load_paths(&installed),
+        extensions: wubble_core::extensions::load_paths(
+            wubble_engine::ext_api::available(),
+            &installed,
+        ),
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);
@@ -1688,6 +1734,12 @@ fn run(
     measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);
+    // `--smoke mcp` presses the approval sheet's buttons: the window at the gallery's size, a
+    // person's (a headless compositor opens it at its least size, which the sheet overflows).
+    if matches!(mode, Mode::Mcp) {
+        let (w, h) = shot::SIZE;
+        window.window().set_size(slint::LogicalSize::new(w, h));
+    }
     let mut host = Host::new(
         engine,
         first,
@@ -1713,27 +1765,31 @@ fn run(
             || with_host(Host::updates_healthy),
         );
     }
-    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, only when on.
-    if mcp_on {
-        let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
-        match mcp::bind(&socket) {
-            Ok(mcp) => {
-                mcp::listen(mcp, |event| {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.mcp_event(event))
-                    });
-                });
-                if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
-                    mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
-                }
+    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, hosted while the
+    // setting is on (`host/hosting.rs`, switched live from Settings).
+    let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
+    let default_profile = app::user_data_dir().is_some_and(|d| d == profile);
+    with_host(|host| {
+        host.set_mcp(host::McpPlace {
+            socket: socket.clone(),
+            manifest: mcp::manifest_path(profile),
+            profile: profile.to_owned(),
+            default_profile,
+            exe: std::env::current_exe().unwrap_or_default(),
+            home: match mode {
+                Mode::Browse { .. } => std::env::home_dir(),
+                _ => Some(profile.join("agent-apps-home")),
+            },
+        })
+    });
+    // `--smoke mcp`: hosting turned on through the setting, as Settings does, then the client
+    if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
+        with_host(|host| {
+            if let Err(e) = host.mcp_smoke_on() {
+                host.fail(format!("hosting on: {e}"));
             }
-            Err(e) => {
-                eprintln!("wubble: no MCP server: {}: {e}", socket.display());
-                if matches!(mode, Mode::Mcp) {
-                    with_host(|host| host.fail(format!("the MCP socket: {e}")));
-                }
-            }
-        }
+        });
+        mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
     }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {

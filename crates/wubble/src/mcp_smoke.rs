@@ -10,8 +10,12 @@
 //! left running: the browser's quit must close its Space. The host then checks that the user's
 //! recently-closed list and history hold nothing of the agent's.
 //! The sheet is the real one: the host reads what its window shows (the client, the secret names,
-//! the sites, the window choice) and answers through the window's callback, as its buttons do
-//! (`Host::mcp_smoke_answer`).
+//! the sites, the window choice) and answers it with the pointer, through the window's event
+//! path (`Host::mcp_smoke_answer`): Deny for the first, Allow for the second (headless, as asked),
+//! and for the third a press on Windowed, then Allow; the Space each approval opens must be in
+//! the mode the sheet showed. Last the host switches between that windowed session's two tabs
+//! in the window, and hides the sidebar while the second shows (its pane widens): the first must
+//! come back at its pane's new size, not its hidden-tab snapshot nor its old size.
 //! Every step waits for its answer: the browser bounds each call by its deadline. Run by hand
 //! (it opens a window), under `scripts/headless.sh` and `timeout`.
 
@@ -32,7 +36,172 @@ pub const PAGE: &str = r##"<!doctype html><html lang="en"><head><title>mcp</titl
 <input id="name" oninput="document.getElementById('out').textContent='typed '+this.value">
 <button onclick="window.clicks=(window.clicks||'')+event.detail;document.getElementById('out').textContent='pressed';document.title='pressed'">Press</button>
 <p id="out">idle</p>
+<p>LONG_TEXT</p>
+<a href="/mcp/next?from=link">LONG_LINK</a>
+<form action="/mcp/next" method="get"><label for="q">Query</label> <input id="q" name="q"></form>
+<label for="note">Note</label> <input id="note" value="only in a field">
+<button onclick="setTimeout(()=>{history.pushState({},'','/mcp/pushed');document.getElementById('out').textContent='pushed'},800)">Push</button>
+<button onclick="setTimeout(()=>document.getElementById('going').remove(),200)">Hide</button>
+<p id="going">Going away</p>
+<button onclick="window.open('chrome://version')">Open chrome</button>
+<button onclick="window.open('file:///etc/passwd')">Open file</button>
+<button onclick="location.href='file:///etc/passwd'">Go file</button>
+<a href="ELSEWHERE">Elsewhere link</a>
+<button onclick="location.href='ELSEWHERE'">Go elsewhere</button>
+<button onclick="window.open('ELSEWHERE')">Open elsewhere</button>
+<form action="ELSEWHERE" method="get"><label for="far">Far</label> <input id="far" name="q"></form>
 </body></html>"##;
+
+/// A paragraph longer than the first tests saw `read_page` keep (about 120 characters).
+const LONG_TEXT: &str = "A paragraph of plain prose that runs on well past one hundred and twenty \
+     characters, so that a reader of the accessibility tree can tell whether its text arrives \
+     whole or cut short somewhere along the way: the end is here.";
+const LONG_LINK: &str = "A link whose name also runs past one hundred and twenty characters, \
+     to show that a link's text and its target both come through whole: link end";
+
+/// Where the form and the link lead.
+const NEXT: &str = r##"<!doctype html><html lang="en"><head><title>next</title></head>
+<body style="font:16px sans-serif"><h1>Next page</h1></body></html>"##;
+
+/// GitHub's profile tabs as the first tests found them: a sticky bar under the header, its
+/// links in a navigation strip that scrolls sideways (`overflow-x: auto`), each link an icon,
+/// a label and a counter; a tall page below with two plain-coloured boxes, one far down.
+const STICKY: &str = r##"<!doctype html><html lang="en"><head><title>sticky</title></head>
+<body style="margin:0;font:16px sans-serif">
+<header style="height:64px;background:#222;color:#fff">Header</header>
+<div style="position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #ccc">
+<nav aria-label="User" style="overflow-x:auto;overflow-y:hidden;white-space:nowrap;padding:0 16px">
+<ul style="display:inline-flex;list-style:none;margin:0;padding:0;min-width:max-content">
+<li><a href="#overview" onclick="document.getElementById('tab').textContent='at overview'" style="display:inline-flex;gap:8px;padding:8px 16px;align-items:center"><svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6"/></svg><span>Overview</span></a></li>
+<li><a href="#repositories" onclick="document.getElementById('tab').textContent='at repositories'" style="display:inline-flex;gap:8px;padding:8px 16px;align-items:center"><svg width="16" height="16" aria-hidden="true"><rect width="12" height="12"/></svg><span>Repositories</span><span style="border-radius:8px;background:#ddd;padding:0 6px">12</span></a></li>
+</ul></nav></div>
+<main style="padding:16px">
+<p id="tab">at start</p>
+<button style="display:block;width:200px;height:120px;border:0;padding:0;background:rgb(0,128,255);color:rgb(0,128,255)">Box</button>
+<button style="display:block;margin-top:2400px;width:200px;height:60px;border:0;padding:0;background:rgb(255,64,0);color:rgb(255,64,0)">Far</button>
+</main></body></html>"##;
+
+/// The pointer tools' page: a hover target, a canvas that logs its pointer, a drag between two
+/// buttons, and, far down, a scrolling pane.
+const TOOLS: &str = r##"<!doctype html><html lang="en"><head><title>tools</title></head>
+<body style="margin:0;font:16px sans-serif">
+<p id="log">nothing yet</p>
+<button onmouseenter="document.getElementById('log').textContent='hovered'">Hover me</button>
+<canvas id="c" width="300" height="200" aria-label="Sketch" style="display:block;border:1px solid #000"></canvas>
+<button id="src">Source</button> <button id="dst" style="margin-left:200px">Target</button>
+<div style="height:2000px"></div>
+<div id="pane" style="height:100px;overflow:auto;border:1px solid #000"><p style="height:600px;margin:0">Inside the pane</p><p>Pane end</p></div>
+<p>Bottom</p>
+<script>
+const log = t => document.getElementById('log').textContent = t;
+const c = document.getElementById('c');
+let path = [];
+// from the canvas's box, as a drawing app reads the pointer
+const at = e => { const r = c.getBoundingClientRect(); return Math.round(e.clientX - r.left) + ',' + Math.round(e.clientY - r.top); };
+c.addEventListener('pointerdown', e => { path = [at(e)]; });
+c.addEventListener('pointermove', e => { if (e.buttons) path.push('m'); });
+c.addEventListener('pointerup', e => log('canvas from ' + path[0] + ' to ' + at(e) + ' moved ' + (path.length > 1)));
+let from = null;
+document.getElementById('src').addEventListener('mousedown', () => { from = 'Source'; });
+document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' on ' + (e.target.id || e.target.tagName)); from = null; });
+</script></body></html>"##;
+
+/// The pages and redirects the smoke's server answers under `/mcp`.
+pub enum Route {
+    Page(String),
+    Redirect(String),
+}
+
+/// What `path` answers (`autofill_smoke::serve`); `None`: not found.
+pub fn route(path: &str, port: u16) -> Option<Route> {
+    let page = |p: &str| Some(Route::Page(p.to_owned()));
+    // a loopback host the first session's sites leave out until `request_more` adds it
+    let elsewhere = format!("http://a.localhost:{port}/mcp/next");
+    match path.split_once('?').map_or(path, |(p, _)| p) {
+        "/mcp" | "/mcp/pushed" => Some(Route::Page(
+            PAGE.replace("LONG_TEXT", LONG_TEXT)
+                .replace("LONG_LINK", LONG_LINK)
+                .replace("ELSEWHERE", &elsewhere),
+        )),
+        "/mcp/to-elsewhere" => Some(Route::Redirect(elsewhere)),
+        "/mcp/next" => page(NEXT),
+        "/mcp/sticky" => page(STICKY),
+        "/mcp/tools" => page(TOOLS),
+        // a server's redirect off the web: Chromium must not follow it for a session
+        "/mcp/to-file" => Some(Route::Redirect("file:///etc/passwd".into())),
+        "/mcp/to-chrome" => Some(Route::Redirect("chrome://version".into())),
+        _ => None,
+    }
+}
+
+/// How the host answers each approval sheet, in the order they come (`Host::mcp_smoke_answer`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    Deny,
+    /// Allow, in the window mode the client asked for.
+    Allow,
+    /// Windowed pressed first (the client asked for headless), then Allow.
+    WindowedAllow,
+    /// A site typed into the Sites editor's draft, Escape (through the host's own key path:
+    /// it must drop the draft, not deny), then Allow.
+    EscapeDraftThenAllow,
+}
+
+/// One sheet: what it must show, and the press that answers it.
+pub struct Sheet {
+    pub more: bool,
+    pub secrets: &'static [&'static str],
+    pub sites: &'static [&'static str],
+    pub headless: bool,
+    pub press: Press,
+}
+
+pub const SHEETS: &[Sheet] = &[
+    Sheet {
+        more: false,
+        secrets: &["GITHUB_PASSWORD"],
+        sites: &["example.com"],
+        headless: false,
+        press: Press::Deny,
+    },
+    Sheet {
+        more: false,
+        secrets: &[],
+        sites: &["127.0.0.1"],
+        headless: true,
+        press: Press::Allow,
+    },
+    // `request_more`: only what is new (127.0.0.1 is granted already)
+    Sheet {
+        more: true,
+        secrets: &["NPM_TOKEN"],
+        sites: &["a.localhost"],
+        headless: true,
+        press: Press::Deny,
+    },
+    Sheet {
+        more: true,
+        secrets: &["NPM_TOKEN"],
+        sites: &["a.localhost"],
+        headless: true,
+        press: Press::EscapeDraftThenAllow,
+    },
+    Sheet {
+        more: false,
+        secrets: &[],
+        sites: &[],
+        headless: true,
+        press: Press::WindowedAllow,
+    },
+    // the session the Spaces popup's dustbin stops
+    Sheet {
+        more: false,
+        secrets: &[],
+        sites: &[],
+        headless: true,
+        press: Press::Allow,
+    },
+];
 
 /// What the smoke types.
 const TYPED: &str = "wubble";
@@ -44,9 +213,9 @@ pub fn start(socket: PathBuf, page: String) {
         .spawn(move || {
             // The connection stays open to the end, so the quit, not a disconnect, ends the
             // second session.
-            let result = run(&socket, &page).map(|(steps, client)| {
+            let result = run(&socket, &page).map(|(done, client)| {
                 std::mem::forget(client);
-                steps
+                done
             });
             let _ = slint::invoke_from_event_loop(move || {
                 crate::with_host(|host| host.mcp_smoke_done(result));
@@ -129,6 +298,54 @@ fn text(result: &Value) -> String {
         .to_owned()
 }
 
+/// A client of an earlier revision (the TypeScript SDK's, 2025-11-25): `initialize`, then
+/// `notifications/initialized`, the list, a call, on its own connection.
+fn legacy(socket: &Path, c: &mut Client) -> Result<(), String> {
+    let name = socket
+        .to_fs_name::<GenericFilePath>()
+        .map_err(|e| e.to_string())?;
+    let mut old = Client {
+        stream: Stream::connect(name).map_err(|e| format!("connect: {e}"))?,
+        framer: wubble_mcp::LineFramer::default(),
+        lines: VecDeque::new(),
+        next: 0,
+        steps: 0,
+    };
+    let init = old.request(
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "an earlier client", "version": "1"}}),
+    )?;
+    if init["protocolVersion"] != "2025-11-25"
+        || init["serverInfo"]["name"] != "wubble"
+        || !init["instructions"]
+            .as_str()
+            .is_some_and(|i| i.contains("start_session"))
+    {
+        return Err(format!("initialize: {init}"));
+    }
+    old.stream
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+        .map_err(|e| e.to_string())?;
+    let l = old.request("tools/list", json!({}))?;
+    let tools = l["tools"].as_array().map_or(0, Vec::len);
+    if tools != wubble_mcp::tools::TOOLS.len() || l.get("ttlMs").is_some() {
+        return Err(format!("tools/list after initialize: {l}"));
+    }
+    let r = old.request(
+        "tools/call",
+        json!({"name": "list_tabs", "arguments": {"session": "none"}}),
+    )?;
+    if r["isError"] != true || r.get("resultType").is_some() {
+        return Err(format!("a call after initialize: {r}"));
+    }
+    c.step(
+        "initialize",
+        format!("an earlier client (2025-11-25) served its revision: {tools} tools, calls answered in its shape"),
+    );
+    Ok(())
+}
+
 /// The ref on the `read_page` line that starts with `prefix`.
 fn ref_of(page: &str, prefix: &str) -> Option<String> {
     let line = page.lines().find(|l| l.starts_with(prefix))?;
@@ -136,7 +353,47 @@ fn ref_of(page: &str, prefix: &str) -> Option<String> {
     Some(r.to_owned())
 }
 
-fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
+/// The JSON a tool answered with.
+fn json_of(result: &Value) -> Result<Value, String> {
+    serde_json::from_str(&text(result)).map_err(|e| format!("{e}: {}", text(result)))
+}
+
+/// A PNG tool result's size and its centre pixel.
+fn picture(result: &Value) -> Result<(u32, u32, [u8; 3]), String> {
+    let png = result["content"][0]["data"]
+        .as_str()
+        .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+        .ok_or("no image")?;
+    let (w, h, rgba) = crate::shot_io::rgba(&png)?;
+    let i = ((h / 2 * w + w / 2) * 4) as usize;
+    let px = rgba.get(i..i + 3).ok_or("an empty picture")?;
+    Ok((w, h, [px[0], px[1], px[2]]))
+}
+
+/// Whether two colours are near each other (the capture's colour handling may move a channel).
+fn near(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 12)
+}
+
+/// A session's handle and first tab from `start_session`'s answer.
+fn started(result: &Value) -> Result<(String, String), String> {
+    let v = json_of(result)?;
+    let session = v["session"].as_str().unwrap_or_default().to_owned();
+    let tab = v["tab"].as_str().unwrap_or_default().to_owned();
+    if session.len() != 64 || tab.is_empty() {
+        return Err(format!("start_session: {v}"));
+    }
+    Ok((session, tab))
+}
+
+/// What the client hands the host at its end: its step count and the tab the first session
+/// left to the owner.
+pub struct Done {
+    pub steps: usize,
+    pub kept: u64,
+}
+
+fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     let name = socket
         .to_fs_name::<GenericFilePath>()
         .map_err(|e| e.to_string())?;
@@ -148,6 +405,7 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
         next: 0,
         steps: 0,
     };
+    let base = page.trim_end_matches("/mcp").to_owned();
     let d = c.request("server/discover", json!({}))?;
     let version = d["supportedVersions"][0]
         .as_str()
@@ -163,6 +421,7 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
         return Err(format!("tools/list: {tools} tools"));
     }
     c.step("tools/list", format!("{tools} tools"));
+    legacy(socket, &mut c)?;
 
     // The sheet's Deny: the host's answer to the one that asks for a secret (the sheet shows it
     // by name; no value exists to ask for).
@@ -174,110 +433,857 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
         Err(why) if why.contains("denied") => c.step("start_session", &why),
         other => return Err(format!("the denied session: {other:?}")),
     }
-    let started = c.ok(
+    let (session, tab) = started(&c.ok(
         "start_session",
-        json!({"purpose": "the mcp smoke", "headless": true}),
-    )?;
-    let started: Value = serde_json::from_str(&text(&started)).map_err(|e| e.to_string())?;
-    let session = started["session"].as_str().unwrap_or_default().to_owned();
-    let tab = started["tab"].as_str().unwrap_or_default().to_owned();
-    if session.len() != 64 || tab.is_empty() {
-        return Err(format!("start_session: {started}"));
-    }
+        json!({"purpose": "the mcp smoke", "headless": true, "sites": ["127.0.0.1"]}),
+    )?)?;
     c.step(
         "start_session",
-        format!("tab {tab}, headless, allowed on the sheet"),
+        format!("tab {tab}, headless, on 127.0.0.1, allowed on the sheet"),
+    );
+    let s = |extra: Value| {
+        let mut m = json!({"session": session, "tab": tab});
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            m[k] = v.clone();
+        }
+        m
+    };
+
+    // The scheme is read without case.
+    c.ok(
+        "navigate",
+        s(json!({"url": page.replacen("http://", "HTTP://", 1)})),
+    )?;
+    c.step("navigate", format!("{page}, spelt HTTP://"));
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let button = ref_of(&read, "- button \"Press\"").ok_or(format!("read_page: {read}"))?;
+    let field = ref_of(&read, "- textField \"Name\"").ok_or(format!("read_page: {read}"))?;
+    if !read.contains(&format!("{LONG_TEXT:?}")) {
+        return Err(format!("read_page cut the long paragraph: {read}"));
+    }
+    let link = format!("- link {LONG_LINK:?} url=\"{base}/mcp/next?from=link\"");
+    if !read.lines().any(|l| l.starts_with(&link)) {
+        return Err(format!(
+            "read_page has no whole link with its target: {read}"
+        ));
+    }
+    let cut = text(&c.ok("read_page", s(json!({"max_items": 2})))?);
+    if cut.lines().count() != 3 || !cut.contains("[2 of ") || !cut.contains("default 500") {
+        return Err(format!("read_page cut at 2: {cut}"));
+    }
+    match c.tool("read_page", s(json!({"ref": "e99.1"})))? {
+        Err(e) if e.contains("stale ref") => {}
+        other => return Err(format!("read_page with a stale ref: {other:?}")),
+    }
+    c.step(
+        "read_page",
+        format!(
+            "{} items, text and link whole with its target, a cut list noted, a stale ref an error",
+            read.lines().count()
+        ),
     );
 
+    let tabs = json_of(&c.ok("list_tabs", json!({"session": session}))?)?;
+    if tabs.as_array().map(Vec::len) != Some(1)
+        || tabs[0]["tab"] != tab.as_str()
+        || tabs[0]["active"] != true
+        || tabs[0]["shown"] != false
+    {
+        return Err(format!("list_tabs: {tabs}"));
+    }
+    c.step("list_tabs", "1 tab, active, not shown (headless)");
+    // Every other tab handle, the user's own tab among them, is unknown to the session.
+    let own: u64 = tab.parse().map_err(|_| format!("tab handle {tab}"))?;
+    for other in (0..=own + 1).filter(|&t| t != own) {
+        let other = json!({"session": session, "tab": other.to_string()});
+        for (tool, extra) in [
+            ("navigate", json!({"url": page})),
+            ("read_page", json!({})),
+            ("focus_tab", json!({})),
+            ("close_tab", json!({})),
+            ("evaluate", json!({"script": "1"})),
+        ] {
+            let mut args = other.clone();
+            for (k, v) in extra.as_object().into_iter().flatten() {
+                args[k] = v.clone();
+            }
+            match c.tool(tool, args)? {
+                Err(e) if e.contains("no such tab") => {}
+                r => return Err(format!("{tool} on tab {other} outside the session: {r:?}")),
+            }
+        }
+    }
+    c.step(
+        "isolation",
+        format!(
+            "tabs 0..={} refused to navigate, read_page, focus_tab, close_tab, evaluate",
+            own + 1
+        ),
+    );
+
+    // twice, as fast as the calls go: each is a click of its own (`event.detail` 1)
+    for _ in 0..2 {
+        c.ok("click", s(json!({"ref": button})))?;
+    }
+    c.ok("wait_for", s(json!({"text": "pressed"})))?;
+    c.step("click", &button);
+    c.ok("type", s(json!({"ref": field, "text": TYPED})))?;
+    c.ok("wait_for", s(json!({"text": format!("typed {TYPED}")})))?;
+    c.step("type", &field);
+
+    evaluate(&mut c, &s)?;
+    waiting(&mut c, &s, &read, &base)?;
+    keys(&mut c, &s, page)?;
+    shots(&mut c, &s, &base)?;
+    pointer(&mut c, &s, &base)?;
+    reading(&mut c, &s, &base)?;
+    safety(&mut c, &s, &session, page, &base)?;
+
+    let shot = c.ok("screenshot", s(json!({})))?;
+    let (w, h, _) = picture(&shot)?;
+    c.step("screenshot", format!("{w}x{h} PNG"));
+
+    let opened = json_of(&c.ok("open_tab", json!({"session": session, "url": page}))?)?;
+    let second = opened["tab"].as_str().unwrap_or_default().to_owned();
+    // it answered once its page had loaded, as navigate does
+    let state = text(&c.ok(
+        "evaluate",
+        json!({"session": session, "tab": second, "script": "document.readyState + ' ' + document.title"}),
+    )?);
+    if state != "\"complete mcp\"" {
+        return Err(format!("open_tab answered before its load: {state}"));
+    }
+    c.ok("close_tab", json!({"session": session, "tab": second}))?;
+    c.step(
+        "open_tab",
+        format!("tab {second} loaded when answered, then closed"),
+    );
+
+    // request_more: Deny keeps the session as it was; asked again, the sheet comes again;
+    // Allow widens the grant. 127.0.0.1 is granted already: only a.localhost is new.
+    let more = json!({"session": session, "sites": ["a.localhost", "127.0.0.1"], "secrets": ["NPM_TOKEN"]});
+    match c.tool("request_more", more.clone())? {
+        Err(e) if e.contains("denied") => {}
+        r => return Err(format!("request_more, denied: {r:?}")),
+    }
+    let other_site = format!("{}/mcp", base.replace("127.0.0.1", "a.localhost"));
+    match c.tool("navigate", s(json!({"url": other_site})))? {
+        Err(e) if e.contains("not a site this session may visit") => {}
+        r => return Err(format!("a site denied on the sheet: {r:?}")),
+    }
+    let granted = json_of(&c.ok("request_more", more.clone())?)?;
+    if granted["granted"]["sites"] != json!(["a.localhost"]) {
+        return Err(format!("request_more, allowed: {granted}"));
+    }
+    c.ok("navigate", s(json!({"url": other_site})))?;
+    // the link refused before now goes
+    c.ok("navigate", s(json!({"url": page})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let link = ref_of(&read, "- link \"Elsewhere link\"").ok_or("no Elsewhere link")?;
+    c.ok("click", s(json!({"ref": link})))?;
+    c.ok(
+        "wait_for",
+        s(json!({"url": "a.localhost", "timeout_ms": 5000})),
+    )
+    .map_err(|e| format!("the link once a.localhost is granted: {e}"))?;
+    let nothing = text(&c.ok(
+        "request_more",
+        json!({"session": session, "sites": ["a.localhost"]}),
+    )?);
+    if !nothing.contains("nothing new") {
+        return Err(format!("request_more for what is granted: {nothing}"));
+    }
+    c.step(
+        "request_more",
+        "denied (the session runs on, the site refused), asked again and allowed (only a.localhost listed, then its link goes), nothing new needs no sheet",
+    );
+
+    // The hand-off: the session ends, its tab stays for the owner (checked by the host).
+    let stopped = text(&c.ok(
+        "stop_session",
+        json!({"session": session, "keep_tabs": true}),
+    )?);
+    if !stopped.contains("the user's now") {
+        return Err(format!("stop_session keep_tabs: {stopped}"));
+    }
+    for (tool, args) in [
+        ("list_tabs", json!({"session": session})),
+        ("read_page", json!({"session": session, "tab": tab})),
+        ("stop_session", json!({"session": session})),
+    ] {
+        if c.tool(tool, args)?.is_ok() {
+            return Err(format!("the stopped session still answers {tool}"));
+        }
+    }
+    c.step(
+        "stop_session",
+        "keep_tabs: the tab stays, the handle is dead (list_tabs, read_page, stop_session refused)",
+    );
+    // Left running: the browser's quit must end it and close its Space (checked by the host).
+    // The sheet makes it windowed; two tabs on the still page, which the host switches between
+    // in the window (`Host::mcp_smoke_switch`).
+    let (session, tab) = started(&c.ok(
+        "start_session",
+        json!({"purpose": "ended by the quit", "headless": true}),
+    )?)?;
     c.ok(
         "navigate",
         json!({"session": session, "tab": tab, "url": page}),
     )?;
-    c.step("navigate", page);
-    let read = c.ok("read_page", json!({"session": session, "tab": tab}))?;
-    let read = text(&read);
-    let button = ref_of(&read, "- button \"Press\"").ok_or(format!("read_page: {read}"))?;
-    let field = ref_of(&read, "- textField \"Name\"").ok_or(format!("read_page: {read}"))?;
-    c.step("read_page", format!("{} items", read.lines().count()));
+    let opened = json_of(&c.ok("open_tab", json!({"session": session, "url": page}))?)?;
+    let second = opened["tab"].as_str().unwrap_or_default().to_owned();
+    let shown = |c: &mut Client, which: &str| -> Result<bool, String> {
+        let tabs = json_of(&c.ok("list_tabs", json!({"session": session}))?)?;
+        let row = tabs
+            .as_array()
+            .and_then(|a| a.iter().find(|t| t["tab"] == which))
+            .ok_or(format!("list_tabs: {tabs}"))?;
+        Ok(row["active"] == true && row["shown"] == true)
+    };
+    c.ok("focus_tab", json!({"session": session, "tab": tab}))?;
+    if !shown(&mut c, &tab)? || shown(&mut c, &second)? {
+        return Err("focus_tab did not bring the first tab forward".into());
+    }
+    c.step(
+        "focus_tab",
+        format!("tab {tab} active and shown, tab {second} not"),
+    );
+    c.step(
+        "start_session",
+        "a second one, windowed on the sheet, two tabs, left for the quit",
+    );
+    // a third, headless, whose Space the host clears with the Spaces popup's dustbin
+    let (third, its_tab) = started(&c.ok(
+        "start_session",
+        json!({"purpose": "cleared by its dustbin", "headless": true}),
+    )?)?;
+    c.ok(
+        "navigate",
+        json!({"session": third, "tab": its_tab, "url": page}),
+    )?;
+    c.step("start_session", "a third one, headless, for the dustbin");
+    let kept = own;
+    let steps = c.steps;
+    Ok((Done { steps, kept }, c))
+}
 
-    let tabs = c.ok("list_tabs", json!({"session": session}))?;
-    let tabs: Value = serde_json::from_str(&text(&tabs)).map_err(|e| e.to_string())?;
-    if tabs.as_array().map(Vec::len) != Some(1) || tabs[0]["tab"] != tab.as_str() {
-        return Err(format!("list_tabs: {tabs}"));
-    }
-    // Every other tab handle, the user's own tab among them, is unknown to the session.
-    let own: u64 = tab.parse().map_err(|_| format!("tab handle {tab}"))?;
-    for other in (0..=own + 1).filter(|&t| t != own) {
-        let r = c.tool(
-            "navigate",
-            json!({"session": session, "tab": other.to_string(), "url": page}),
-        )?;
-        if r.is_ok() {
-            return Err(format!("tab {other} outside the session was reachable"));
-        }
-    }
-    c.step("isolation", format!("1 tab; tabs 0..={} refused", own + 1));
-
-    // twice, as fast as the calls go: each is a click of its own (`event.detail` 1)
-    for _ in 0..2 {
-        c.ok(
-            "click",
-            json!({"session": session, "tab": tab, "ref": button}),
-        )?;
-    }
-    c.ok(
-        "wait_for",
-        json!({"session": session, "tab": tab, "text": "pressed"}),
-    )?;
-    c.step("click", &button);
-    c.ok(
-        "type",
-        json!({"session": session, "tab": tab, "ref": field, "text": TYPED}),
-    )?;
-    c.ok(
-        "wait_for",
-        json!({"session": session, "tab": tab, "text": format!("typed {TYPED}")}),
-    )?;
-    c.step("type", &field);
+/// `evaluate`: statements, a top-level return, promises, values JSON cannot carry, a throw
+/// with its stack, and a script that never ends.
+fn evaluate(c: &mut Client, s: &dyn Fn(Value) -> Value) -> Result<(), String> {
     let script = "document.getElementById('name').value + '|' + document.title + '|' + clicks";
-    let value = c.ok(
-        "evaluate",
-        json!({"session": session, "tab": tab, "script": script}),
-    )?;
-    let value = text(&value);
+    let value = text(&c.ok("evaluate", s(json!({"script": script})))?);
     if value != format!("\"{TYPED}|pressed|11\"") {
         return Err(format!("evaluate: {value}"));
     }
-    c.step("evaluate", &value);
-    let shot = c.ok("screenshot", json!({"session": session, "tab": tab}))?;
-    let png = shot["content"][0]["data"]
-        .as_str()
-        .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
-        .ok_or("screenshot: no image")?;
-    let (w, h) = crate::shot_io::png_size(&png).ok_or("screenshot: not a PNG")?;
-    if w == 0 || h == 0 {
-        return Err(format!("screenshot: {w}x{h}"));
+    for (script, want) in [
+        ("let a = 2; a * 21", "42"),
+        ("const x = 5;\nreturn x + 1", "6"),
+        (
+            "new Promise(r => setTimeout(() => r({ok: true}), 50))",
+            "{\"ok\":true}",
+        ),
+        ("await Promise.resolve(7)", "7"),
+        (
+            "({el: document.body, list: new Set([1]), n: 1})",
+            "{\"el\":\"[node body]\",\"list\":[1],\"n\":1}",
+        ),
+        ("undefined", "undefined"),
+        ("NaN", "NaN"),
+    ] {
+        let got = text(&c.ok("evaluate", s(json!({"script": script})))?);
+        if got != want {
+            return Err(format!("evaluate {script:?}: {got}, not {want}"));
+        }
     }
-    c.step("screenshot", format!("{w}x{h} PNG, {} bytes", png.len()));
-
-    let opened = c.ok("open_tab", json!({"session": session, "url": page}))?;
-    let opened: Value = serde_json::from_str(&text(&opened)).map_err(|e| e.to_string())?;
-    let second = opened["tab"].as_str().unwrap_or_default().to_owned();
-    c.ok("close_tab", json!({"session": session, "tab": second}))?;
-    c.step("open_tab", format!("tab {second} opened and closed"));
-
-    c.ok("stop_session", json!({"session": session}))?;
-    if c.tool("list_tabs", json!({"session": session}))?.is_ok() {
-        return Err("the stopped session still answers".into());
+    let node = text(&c.ok("evaluate", s(json!({"script": "document.body"})))?);
+    if !node.starts_with("[not JSON] a DOM node (body)") {
+        return Err(format!("evaluate of a node: {node}"));
     }
-    c.step("stop_session", "the handle is dead");
-    // Left running: the browser's quit must end it and close its Space (checked by the host).
+    match c.tool(
+        "evaluate",
+        s(json!({"script": "function boom() { throw new Error('boom') }\nboom()"})),
+    )? {
+        Err(e) if e.contains("Error: boom") && e.contains("at boom") => {}
+        r => return Err(format!("evaluate of a throw: {r:?}")),
+    }
+    match c.tool(
+        "evaluate",
+        s(json!({"script": "new Promise(() => {})", "timeout_ms": 300})),
+    )? {
+        Err(e) if e.contains("in time") => {}
+        r => return Err(format!("evaluate of a promise that never settles: {r:?}")),
+    }
+    match c.tool(
+        "evaluate",
+        s(json!({"script": "while (true) {}", "timeout_ms": 300})),
+    )? {
+        Err(e) if e.contains("is stopped") => {}
+        r => return Err(format!("evaluate of an endless loop: {r:?}")),
+    }
+    // the page runs on
+    if text(&c.ok("evaluate", s(json!({"script": "document.title"})))?) != "\"pressed\"" {
+        return Err("the page did not run on after a stopped script".into());
+    }
+    c.step(
+        "evaluate",
+        "statements, return, promises, await, node named, throw with stack, timeouts",
+    );
+    Ok(())
+}
+
+/// `wait_for`'s conditions, and `type` with `submit` waiting as `navigate` does.
+fn waiting(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    read: &str,
+    base: &str,
+) -> Result<(), String> {
+    let click = |c: &mut Client, name: &str| -> Result<(), String> {
+        let r = ref_of(read, &format!("- button {name:?}")).ok_or(format!("no {name} button"))?;
+        c.ok("click", s(json!({"ref": r}))).map(|_| ())
+    };
+    // a field's own value is not the page's text, unless asked
+    match c.tool(
+        "wait_for",
+        s(json!({"text": "only in a field", "timeout_ms": 300})),
+    )? {
+        Err(e) if e.contains("timed out") => {}
+        r => return Err(format!("wait_for matched a field's value: {r:?}")),
+    }
     c.ok(
-        "start_session",
-        json!({"purpose": "ended by the quit", "headless": true}),
+        "wait_for",
+        s(json!({"text": "only in a field", "in_values": true})),
     )?;
-    c.step("start_session", "a second one, left for the quit");
-    Ok((c.steps, c))
+    click(c, "Hide")?;
+    c.ok("wait_for", s(json!({"text_gone": "Going away"})))?;
+    // an in-page navigation (the history API, a moment after the click)
+    click(c, "Push")?;
+    let moved = json_of(&c.ok("wait_for", s(json!({"navigation": true})))?)?;
+    if !moved["url"]
+        .as_str()
+        .is_some_and(|u| u.ends_with("/mcp/pushed"))
+    {
+        return Err(format!("wait_for navigation: {moved}"));
+    }
+    c.ok("wait_for", s(json!({"url": "/mcp/pushed"})))?;
+    c.step(
+        "wait_for",
+        "field values left out (and matched with in_values), text gone, an in-page navigation, url",
+    );
+    // a form submit loads the next page before it answers; a field with no form answers that
+    // no load followed
+    let page = text(&c.ok("read_page", s(json!({})))?);
+    let query = ref_of(&page, "- textField \"Query\"").ok_or(format!("read_page: {page}"))?;
+    let typed = text(&c.ok(
+        "type",
+        s(json!({"ref": query, "text": TYPED, "submit": true})),
+    )?);
+    let next = text(&c.ok(
+        "evaluate",
+        s(json!({"script": "location.pathname + location.search + ' ' + document.readyState"})),
+    )?);
+    if !typed.contains("the page loaded") || next != "\"/mcp/next?q=wubble complete\"" {
+        return Err(format!("type submit: {typed}; then {next}"));
+    }
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp")})))?;
+    let page = text(&c.ok("read_page", s(json!({})))?);
+    let name = ref_of(&page, "- textField \"Name\"").ok_or(format!("read_page: {page}"))?;
+    let stayed = text(&c.ok(
+        "type",
+        s(json!({"ref": name, "text": TYPED, "submit": true})),
+    )?);
+    if !stayed.contains("no page load followed") {
+        return Err(format!("type submit with no form: {stayed}"));
+    }
+    c.step(
+        "type",
+        "submit waited for the next page; with no form, said no load followed",
+    );
+    Ok(())
+}
+
+/// `press_key`: wubble's history chords on the session's tab, its window chords refused, the
+/// address bar's chord only to the page.
+fn keys(c: &mut Client, s: &dyn Fn(Value) -> Value, page: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{page}/next")})))?;
+    c.ok("press_key", s(json!({"key": "Alt+ArrowLeft"})))?;
+    let at = text(&c.ok("evaluate", s(json!({"script": "location.pathname"})))?);
+    if at != "\"/mcp\"" {
+        return Err(format!("Alt+ArrowLeft did not go back: at {at}"));
+    }
+    let l = text(&c.ok("press_key", s(json!({"key": "Control+L"})))?);
+    if !l.contains("does not run for an agent") {
+        return Err(format!("Control+L: {l}"));
+    }
+    match c.tool("press_key", s(json!({"key": "Control+Shift+T"})))? {
+        Err(e) if e.contains("not pressed") => {}
+        r => return Err(format!("Control+Shift+T: {r:?}")),
+    }
+    c.step(
+        "press_key",
+        "Alt+ArrowLeft went back, Control+L said the address bar does not open, Control+Shift+T refused",
+    );
+    Ok(())
+}
+
+/// `screenshot` of an element at any scroll (and of one far down, scrolled to), and of the
+/// whole page; `click` on the sticky bar's links at the top and scrolled.
+fn shots(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp/sticky")})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
+    let (overview, repos) = (find("- link \"Overview\"")?, find("- link \"Repositories")?);
+    let (boxed, far) = (find("- button \"Box\"")?, find("- button \"Far\"")?);
+    for (y, link, said) in [
+        (0, &overview, "at overview"),
+        (400, &repos, "at repositories"),
+    ] {
+        c.ok(
+            "evaluate",
+            s(json!({"script": format!("scrollTo(0, {y})")})),
+        )?;
+        c.ok("click", s(json!({"ref": link})))?;
+        c.ok("wait_for", s(json!({"text": said})))?;
+    }
+    c.step(
+        "click",
+        "the sticky bar's Overview at scroll 0 and Repositories at 400",
+    );
+    const BLUE: [u8; 3] = [0, 128, 255];
+    for y in [0, 50, 150, 300] {
+        c.ok(
+            "evaluate",
+            s(json!({"script": format!("scrollTo(0, {y})")})),
+        )?;
+        let (w, h, px) = picture(&c.ok("screenshot", s(json!({"ref": boxed})))?)?;
+        // the box is 200x120; at 150 and 300 the bar hides its top part
+        if !(w.abs_diff(200) <= 1 && (40..=121).contains(&h) && near(px, BLUE)) {
+            return Err(format!("the box at scroll {y}: {w}x{h}, centre {px:?}"));
+        }
+    }
+    let (w, h, px) = picture(&c.ok("screenshot", s(json!({"ref": far})))?)?;
+    if !(w.abs_diff(200) <= 1 && h.abs_diff(60) <= 1 && near(px, [255, 64, 0])) {
+        return Err(format!("the far box: {w}x{h}, centre {px:?}"));
+    }
+    let (_, full, _) = picture(&c.ok("screenshot", s(json!({"full_page": true})))?)?;
+    if full < 2500 {
+        return Err(format!("the full page is {full} high"));
+    }
+    c.step(
+        "screenshot",
+        format!("the box cropped right at scroll 0, 50, 150, 300; the far one scrolled to; full page {full} high"),
+    );
+    Ok(())
+}
+
+/// `hover`, `drag` (between elements, and inside a canvas by its coordinates) and `scroll`.
+fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp/tools")})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
+    let log = |c: &mut Client| -> Result<String, String> {
+        Ok(text(&c.ok(
+            "evaluate",
+            s(json!({"script": "document.getElementById('log').textContent"})),
+        )?))
+    };
+    c.ok("hover", s(json!({"ref": find("- button \"Hover me\"")?})))?;
+    c.ok("wait_for", s(json!({"text": "hovered"})))?;
+    let canvas = find("- canvas \"Sketch\"")?;
+    c.ok(
+        "drag",
+        s(json!({"ref": canvas, "x": 20, "y": 30, "to_x": 120, "to_y": 80})),
+    )?;
+    let drawn = log(c)?;
+    if drawn != "\"canvas from 20,30 to 120,80 moved true\"" {
+        return Err(format!("drag in the canvas: {drawn}"));
+    }
+    c.ok(
+        "drag",
+        s(json!({"ref": find("- button \"Source\"")?, "to_ref": find("- button \"Target\"")?})),
+    )?;
+    let dropped = log(c)?;
+    if dropped != "\"dropped Source on dst\"" {
+        return Err(format!("drag between buttons: {dropped}"));
+    }
+    // coordinates anywhere but in a canvas are refused
+    match c.tool(
+        "click",
+        s(json!({"ref": find("- button \"Source\"")?, "x": 1, "y": 1})),
+    )? {
+        Err(e) if e.contains("only inside a <canvas>") => {}
+        r => return Err(format!("coordinates on a button: {r:?}")),
+    }
+    match c.tool("drag", s(json!({"ref": canvas, "to_x": 400, "to_y": 10})))? {
+        Err(e) if e.contains("outside the canvas") => {}
+        r => return Err(format!("a drag out of the canvas: {r:?}")),
+    }
+    c.step(
+        "hover, drag",
+        "hovered; drawn in the canvas 20,30 to 120,80; Source dropped on Target; coordinates outside a canvas refused",
+    );
+    // the wheel over the page's middle, an element scrolled to, the wheel inside a pane
+    let until = |what: &str| {
+        json!({"script": format!(
+            "await new Promise(r => {{ const f = () => ({what}) ? r(true) : setTimeout(f, 20); f() }})"
+        ), "timeout_ms": 5000})
+    };
+    let state = |c: &mut Client| -> String {
+        let js = "JSON.stringify([scrollY, document.getElementById('pane').getBoundingClientRect().top])";
+        c.ok("evaluate", s(json!({"script": js})))
+            .map(|v| text(&v))
+            .unwrap_or_default()
+    };
+    // an element far down scrolled to; the wheel over the page's middle, down and up
+    c.ok(
+        "scroll",
+        s(json!({"ref": find("- staticText \"Bottom\"")?})),
+    )?;
+    c.ok(
+        "evaluate",
+        s(until(
+            "document.getElementById('pane').getBoundingClientRect().top < innerHeight",
+        )),
+    )
+    .map_err(|e| format!("Bottom into view: {e}; {}", state(c)))?;
+    let bottom = text(&c.ok("evaluate", s(json!({"script": "scrollY"})))?);
+    c.ok("scroll", s(json!({"direction": "up", "amount": 300})))?;
+    c.ok("evaluate", s(until(&format!("scrollY < {bottom}"))))
+        .map_err(|e| format!("the wheel up: {e}; {}", state(c)))?;
+    let up = text(&c.ok("evaluate", s(json!({"script": "scrollY"})))?);
+    c.ok("scroll", s(json!({"direction": "down", "amount": 100})))?;
+    c.ok("evaluate", s(until(&format!("scrollY > {up}"))))
+        .map_err(|e| format!("the wheel down: {e}; {}", state(c)))?;
+    // Not checked: the wheel over a nested scroller (the pane) scrolls it in some runs only;
+    // the wheel event reaches the pane, the document takes the scroll (TODO.md, MCP server).
+    c.step(
+        "scroll",
+        "Bottom brought into view, the wheel scrolled the page up and down",
+    );
+    Ok(())
+}
+
+/// `read_text`: an article's prose, capped with a note, and one element's text.
+fn reading(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/memory")})))?;
+    let article = text(&c.ok("read_text", s(json!({})))?);
+    if !article.starts_with("The Quiet Physics of Soap Films\nBy A. Bubble")
+        || !article.contains("A soap film is a sheet of water")
+        || article.contains("Home · About")
+    {
+        return Err(format!("read_text: {article}"));
+    }
+    let cut = text(&c.ok("read_text", s(json!({"max_chars": 200})))?);
+    if !cut.contains("[cut at 200 of ") {
+        return Err(format!("read_text capped: {cut}"));
+    }
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let heading = ref_of(&read, "- heading 1").ok_or(format!("read_page: {read}"))?;
+    let one = text(&c.ok("read_text", s(json!({"ref": heading})))?);
+    if one != "The Quiet Physics of Soap Films" {
+        return Err(format!("read_text of the heading: {one}"));
+    }
+    c.step(
+        "read_text",
+        format!(
+            "the article ({} chars) without the nav, capped with a note, one heading",
+            article.len()
+        ),
+    );
+    Ok(())
+}
+
+/// A session's tab cannot be taken off http(s): a script, a pop-up, a server's redirect.
+fn safety(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    session: &str,
+    page: &str,
+    base: &str,
+) -> Result<(), String> {
+    let off_web = |c: &mut Client| -> Result<Option<String>, String> {
+        let tabs = json_of(&c.ok("list_tabs", json!({"session": session}))?)?;
+        Ok(tabs.as_array().into_iter().flatten().find_map(|t| {
+            let url = t["url"].as_str().unwrap_or_default();
+            let web = ["http://", "https://", "about:"]
+                .iter()
+                .any(|p| url.starts_with(p));
+            (!web).then(|| url.to_owned())
+        }))
+    };
+    c.ok("navigate", s(json!({"url": page})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    // a refused navigation is the error of the call that started it, when it is refused
+    // before it is sent (a pop-up Chromium refuses itself opens nothing and says nothing)
+    for name in ["Open chrome", "Open file", "Go file"] {
+        let r = ref_of(&read, &format!("- button {name:?}")).ok_or(format!("no {name}"))?;
+        match c.tool("click", s(json!({"ref": r})))? {
+            Ok(_) => {}
+            Err(e) if e.contains("not a web address") => {}
+            Err(e) => return Err(format!("click {name}: {e}")),
+        }
+    }
+    for script in [
+        "location.href = 'file:///etc/passwd'",
+        "window.open('chrome://version'); 1",
+        "location.href = 'chrome://version'",
+    ] {
+        match c.tool("evaluate", s(json!({"script": script})))? {
+            Ok(_) => {}
+            Err(e) if e.contains("not a web address") => {}
+            Err(e) => return Err(format!("evaluate {script}: {e}")),
+        }
+    }
+    // a navigation off the web would show here (the host checks the pop-ups at the end)
+    match c.tool(
+        "wait_for",
+        s(json!({"navigation": true, "timeout_ms": 1500})),
+    )? {
+        Err(e) if e.contains("timed out") => {}
+        r => return Err(format!("a script moved the session's tab: {r:?}")),
+    }
+    for to in ["to-file", "to-chrome"] {
+        let _ = c.tool("navigate", s(json!({"url": format!("{base}/mcp/{to}")})))?;
+        if let Some(url) = off_web(c)? {
+            return Err(format!("a redirect took the session's tab to {url}"));
+        }
+    }
+    if let Some(url) = off_web(c)? {
+        return Err(format!("the session's tab is at {url}"));
+    }
+    for url in [
+        "file:///etc/passwd",
+        "chrome://version",
+        "javascript:alert(1)",
+        "data:text/html,x",
+    ] {
+        match c.tool("navigate", s(json!({"url": url})))? {
+            Err(e) if e.contains("only http and https") => {}
+            r => return Err(format!("navigate {url}: {r:?}")),
+        }
+    }
+    c.step(
+        "safety",
+        "location and window.open to file: and chrome: (by click and by script), redirects to file: and chrome:, navigate off the web: the tab stayed on http(s)",
+    );
+    sites(c, s, session, page, base)
+}
+
+/// A session's tab stays on its sites: a link, a script's `location`, a form, `window.open`
+/// and a server's redirect to a host left out are each refused, as the error of the call,
+/// naming the host and `request_more`; the tab stays where it was.
+fn sites(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    session: &str,
+    page: &str,
+    base: &str,
+) -> Result<(), String> {
+    let refused = |what: &str, r: Result<Value, String>| -> Result<(), String> {
+        match r {
+            Err(e) if e.contains("a.localhost") && e.contains("request_more") => Ok(()),
+            r => Err(format!("{what} to a.localhost: {r:?}")),
+        }
+    };
+    let tabs = |c: &mut Client| -> Result<Vec<String>, String> {
+        let tabs = json_of(&c.ok("list_tabs", json!({"session": session}))?)?;
+        Ok(tabs
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| t["url"].as_str().unwrap_or_default().to_owned())
+            .collect())
+    };
+    c.ok("navigate", s(json!({"url": page})))?;
+    let before = tabs(c)?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let link = ref_of(&read, "- link \"Elsewhere link\"").ok_or("no Elsewhere link")?;
+    refused("a link", c.tool("click", s(json!({"ref": link})))?)?;
+    for name in ["Go elsewhere", "Open elsewhere"] {
+        let r = ref_of(&read, &format!("- button {name:?}")).ok_or(format!("no {name}"))?;
+        refused(name, c.tool("click", s(json!({"ref": r})))?)?;
+    }
+    let far = ref_of(&read, "- textField \"Far\"").ok_or("no Far field")?;
+    refused(
+        "a form",
+        c.tool("type", s(json!({"ref": far, "text": "x", "submit": true})))?,
+    )?;
+    refused(
+        "location.href",
+        c.tool(
+            "evaluate",
+            s(json!({"script": "location.href = document.querySelector('a[href*=\"a.localhost\"]').href"})),
+        )?,
+    )?;
+    refused(
+        "a redirect",
+        c.tool(
+            "navigate",
+            s(json!({"url": format!("{base}/mcp/to-elsewhere")})),
+        )?,
+    )?;
+    let after = tabs(c)?;
+    if after != before || after.iter().any(|u| u.contains("a.localhost")) {
+        return Err(format!("the tabs were {before:?}, now {after:?}"));
+    }
+    c.step(
+        "sites",
+        "a link, location.href, a form, window.open and a redirect to a.localhost (not on the sites) refused, each the call's error naming the host and request_more; the tab stayed",
+    );
+    Ok(())
+}
+
+/// The host's side of the run: the sheets it has allowed, the window choice the next approval
+/// must open the session's Space with (`Host::mcp_smoke_answer`), and the tab switch after the
+/// client.
+#[derive(Default)]
+pub struct McpSmoke {
+    /// The sheets answered so far ([`SHEETS`]).
+    pub sheets: usize,
+    pub expect: Option<wubble_core::agent::Mode>,
+    /// Pop-ups off the web a session's page asked for, refused.
+    pub popups_refused: usize,
+    /// Session tabs that reached an address off the web anyway and were blanked.
+    pub blanked: usize,
+    /// Navigations of session tabs refused for the session's sites (before they were sent,
+    /// pop-ups, or taken back).
+    pub navigations_refused: usize,
+    /// The client's step count, kept while the host switches tabs.
+    pub steps: usize,
+    /// The run turned hosting off before the quit (`Host::mcp_smoke_off`).
+    pub hosting_off: bool,
+    /// The Space the first session left its tab in (`stop_session` with `keep_tabs`).
+    pub kept_space: Option<wubble_core::space::SpaceId>,
+    /// The switch's step and the tab whose frame it waits for (`Host::mcp_smoke_switch`).
+    pub switch: Option<(usize, wubble_core::tab::TabId)>,
+    /// The panes' frame size before the switch hid the sidebar.
+    pub sized: Option<(u32, u32)>,
+    pub deadline: slint::Timer,
+}
+
+/// The approval sheet on screen, found by its elements (their ids and roles, in a debug build)
+/// and pressed as winit's pointer events would press it.
+pub mod sheet {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use slint::LogicalPosition;
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use wubble_ui::AppWindow;
+
+    fn root(window: &AppWindow) -> Result<ElementHandle, String> {
+        ElementHandle::find_by_element_id(window, "AppWindow::agent-sheet")
+            .next()
+            .ok_or_else(|| "no agent sheet in the window".into())
+    }
+
+    fn centre(e: &ElementHandle) -> LogicalPosition {
+        let (p, s) = (e.absolute_position(), e.size());
+        LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+    }
+
+    /// The centre of the window's button `label`, wherever it is (the Spaces popup's dustbins).
+    pub fn labelled(window: &AppWindow, label: &str) -> Result<LogicalPosition, String> {
+        ElementHandle::find_by_accessible_label(window, label)
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+            .map(|e| centre(&e))
+            .ok_or_else(|| format!("no {label:?} button"))
+    }
+
+    /// The centre of the sheet's button `label` (Allow, Deny).
+    pub fn button(window: &AppWindow, label: &str) -> Result<LogicalPosition, String> {
+        root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Button)
+            .match_accessible_label(label)
+            .find_first()
+            .map(|e| centre(&e))
+            .ok_or_else(|| format!("no {label} button on the sheet"))
+    }
+
+    /// The centre of segment `i` of the sheet's Window choice.
+    pub fn window_choice(window: &AppWindow, i: usize) -> Result<LogicalPosition, String> {
+        root(window)?
+            .query_descendants()
+            .match_id("SegRow::seg")
+            .find_all()
+            .get(i)
+            .map(centre)
+            .ok_or_else(|| format!("no window choice {i} on the sheet"))
+    }
+
+    /// The Window choice the sheet shows selected (its tabs' `accessible-item-selected`).
+    pub fn chosen(window: &AppWindow) -> Result<Option<String>, String> {
+        Ok(root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Tab)
+            .find_all()
+            .into_iter()
+            .find(|e| e.accessible_item_selected() == Some(true))
+            .and_then(|e| e.accessible_label())
+            .map(|l| l.to_string()))
+    }
+
+    /// The Sites list editor on the sheet.
+    fn sites(window: &AppWindow) -> Result<ElementHandle, String> {
+        root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::List)
+            .match_accessible_label("Sites")
+            .find_first()
+            .ok_or_else(|| "no Sites editor on the sheet".into())
+    }
+
+    /// The centre of the Sites editor's "+".
+    pub fn add_site(window: &AppWindow) -> Result<LogicalPosition, String> {
+        sites(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Button)
+            .match_accessible_label("Add")
+            .find_first()
+            .map(|e| centre(&e))
+            .ok_or_else(|| "no Add button in the Sites editor".into())
+    }
+
+    /// Whether the Sites editor shows a draft (a text field).
+    pub fn drafting(window: &AppWindow) -> Result<bool, String> {
+        Ok(sites(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::TextInput)
+            .find_first()
+            .is_some())
+    }
+
+    /// `text` typed into what has the focus, key by key.
+    pub fn type_text(window: &AppWindow, text: &str) {
+        let w = slint::ComponentHandle::window(window);
+        for c in text.chars() {
+            let text: slint::SharedString = c.to_string().into();
+            w.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            w.dispatch_event(WindowEvent::KeyReleased { text });
+        }
+    }
+
+    /// Escape pressed and released, to the window.
+    pub fn escape(window: &AppWindow) {
+        let w = slint::ComponentHandle::window(window);
+        let text: slint::SharedString = slint::platform::Key::Escape.into();
+        w.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        w.dispatch_event(WindowEvent::KeyReleased { text });
+    }
+
+    /// A left click at `at`, through the window's event path.
+    pub fn click(window: &AppWindow, at: LogicalPosition) {
+        let w = slint::ComponentHandle::window(window);
+        let button = PointerEventButton::Left;
+        w.dispatch_event(WindowEvent::PointerMoved { position: at });
+        w.dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button,
+        });
+        w.dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button,
+        });
+    }
 }
 
 #[cfg(test)]

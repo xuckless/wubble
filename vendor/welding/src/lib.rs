@@ -148,14 +148,14 @@ pub use permissions::{PermissionId, PermissionKind};
 pub use runtime::CefWindowsSandboxContext;
 pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, PumpScheduler};
 // wubble change: `RequestAction`, `RequestFilter`, `ResourceRequest` (change 21);
-// `ResponseInfo`, `ResponseObserver` (change 36).
+// `ResponseInfo`, `ResponseObserver` (change 36); `NavigationGuard` (change 53).
 pub use surface::{
     AcceptFilter, BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
     CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuMedia, ContextMenuTarget, Cookie,
     CursorShape, Panning, DragEventKind, DragFile, DragFileContents, DragImage, DragInput, DragOperations, DragPayload, EventModifiers, PdfMargins, PdfOptions,
     FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
     MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent, NewWindowKind, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,
+    NavigationEvent, NavigationGuard, NewWindowKind, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,
     RequestFilter, ResourceRequest, ResponseInfo, ResponseObserver, SameSite,
     SnapshotPngCompletion, SnapshotRequestId, TouchInput, TouchPhase, WebRequestId, ZoomCommand,
 };

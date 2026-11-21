@@ -1,12 +1,16 @@
 import { SheetFrame } from "sheet-frame.slint";
 import { AgentSheetView } from "model.slint";
 import { Segmented } from "../kit/controls/segmented.slint";
-import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+import { BCard, BRow, BStackRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+import { ListEditor, ListEditorAdds, ListEditorMode } from "../kit/controls/list-editor.slint";
 
 // An agent session's approval sheet (docs/research/mcp-server.md section 6): who asks (the
 // calling program, as the host found it), the secrets it asks for by name, the sites it limits
-// itself to, windowed or headless, Allow and Deny. The design has no such sheet (derived-review.md,
-// Agent sessions): the SheetFrame chrome over a settings card of rows, as the print sheet. It is
+// itself to, windowed or headless, Allow and Deny. A running session's `request_more` shows the
+// same sheet with only what is new and no window choice (`sheet.more`). The owner edits the two lists before Allow
+// (the kit's list editor, as Settings' lists): the host holds them and builds the grant. The
+// design has no such sheet (derived-review.md, Agent sessions): the SheetFrame chrome over a
+// settings card of rows, as the print sheet. It is
 // modal and the window's, one at a time (`wubble_core::overlay::Kind::AgentSheet`); `answered`
 // is the intent (allow, headless), the host answers the session. Enter never approves (the
 // sheet may appear while the user types: keyjacking); Escape and Deny refuse, only the Allow
@@ -14,6 +18,13 @@ import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
 export component AgentSheet inherits SheetFrame {
     in property <AgentSheetView> sheet;
     callback answered(bool, bool);
+    // a list editor's "−": (a site, else a secret name; its key)
+    callback removed(bool, string);
+    // the Sites editor's draft (`pages::submission`); the host answers with `answer` / `note`
+    callback site-submitted(string);
+    // A list editor holds a draft (or an edit): Escape drops that, not the sheet (the host's
+    // Escape for the overlay stack waits while this is on).
+    out property <bool> editing;
 
     // The window choice: restarts from what the client asked, at each sheet.
     property <bool> headless;
@@ -31,8 +42,8 @@ export component AgentSheet inherits SheetFrame {
     }
 
     open: root.sheet.open;
-    title: "Let an agent use wubble?";
-    message: root.view.client + " asks to browse in a Space of its own. It reads the pages it opens and can click and type there.";
+    title: root.view.more ? "Let the agent use more?" : "Let an agent use wubble?";
+    message: root.view.more ? root.view.client + " asks for more in its session. Only what it does not have yet is listed; nothing changes unless you allow it." : root.view.client + " asks to browse in a Space of its own. It reads the pages it opens and can click and type there.";
     accept-text: "Allow";
     cancel-text: "Deny";
     enter-accepts: false;
@@ -47,26 +58,58 @@ export component AgentSheet inherits SheetFrame {
         root.take-focus();
     }
 
-    BCard {
-        BRow {
+    // Built at the first sheet and kept, as the print sheet's: its Window choice takes its slot
+    // in the controls registry in `init`, and built with the window it did so before the host
+    // wired the registry, sharing slot 0 with a menu (no indicator, presses on the menu's slot).
+    if root.view.serial > 0: BCard {
+        // the secret names asked for: the owner may remove one (none can be added: a name is
+        // only what a client asks for, and none is bound to a login yet)
+        BStackRow {
             title: "Secrets";
-            BNote {
-                text: root.view.secrets.length == 0 ? "None asked for" : "Names only";
+            ListEditor {
+                columns: ["Name"];
+                count: root.view.secrets.length;
+                row-at(i) => {
+                    return root.view.secrets[i];
+                }
+                adds: ListEditorAdds.none;
+                editable: false;
+                label: "Secrets";
+                empty: "None asked for";
+                removed(k) => {
+                    root.removed(false, k);
+                }
             }
         }
-        for name in root.view.secrets: BRow {
-            title: name;
-        }
-        BRow {
+        // the sites the session is limited to; the owner removes, adds and edits them (the
+        // host answers each draft); none: any site
+        BStackRow {
             title: "Sites";
-            BNote {
-                text: root.view.sites.length == 0 ? "Any site" : "Only these";
+            ListEditor {
+                columns: ["Site"];
+                count: root.view.sites.length;
+                row-at(i) => {
+                    return root.view.sites[i];
+                }
+                adds: ListEditorAdds.draft;
+                editable: true;
+                answer: root.view.answer;
+                note: root.view.note;
+                label: "Sites";
+                empty: root.view.more ? "None asked for" : "Any site";
+                placeholders: ["example.com"];
+                removed(k) => {
+                    root.removed(true, k);
+                }
+                submitted(t) => {
+                    root.site-submitted(t);
+                }
+                changed mode => {
+                    root.editing = self.mode != ListEditorMode.browse;
+                }
             }
         }
-        for site in root.view.sites: BRow {
-            title: site;
-        }
-        BRow {
+        if !root.view.more: BRow {
             title: "Window";
             Segmented {
                 compact: true;

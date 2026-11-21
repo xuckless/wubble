@@ -63,7 +63,9 @@ pub struct SpaceRow {
     pub name: String,
     pub tint: Rgb,
     pub icon: SpaceIcon,
-    /// An agent session's Space (`host/agent.rs` marks it).
+    /// An agent Space (`Space::agent`, running session or not): its tile draws the agent glyph.
+    pub agent_space: bool,
+    /// A running agent session's Space (`host/agent.rs` marks it): the header's stop mark.
     pub agent: bool,
 }
 
@@ -160,6 +162,7 @@ pub fn view_model(
                 name: s.name.clone(),
                 tint: s.tint,
                 icon: s.icon,
+                agent_space: s.agent,
                 agent: false,
             })
         })

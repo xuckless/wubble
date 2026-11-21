@@ -80,8 +80,11 @@ pub enum Overlay {
     AgentSheet,
     /// An approved agent session in the window: its tab rows and Space header carry the mark.
     AgentTabs,
-    /// The same session, the footer's Spaces popup open over the agent's Space row.
+    /// The same session and a Space an ended session left (its tabs kept), the footer's Spaces
+    /// popup open: the user's Space, then the two agent Spaces with their dustbins.
     AgentSpaces,
+    /// The same session asking for more (`request_more`): the sheet lists only what is new.
+    AgentMore,
     /// The shown tab plays sound and / or is muted (the sound badge's states).
     Sound {
         audible: bool,
@@ -115,6 +118,9 @@ pub enum Overlay {
     SettingsSearch(&'static str),
     /// Two extensions installed (in memory only): Settings' Extensions section.
     ExtensionsList,
+    /// Hosting on with three agent apps in the run's scratch home (Claude Code, Codex, VS Code):
+    /// Settings' Agents (MCP) section.
+    AgentsHosting,
     /// The footer's extensions popover over two extensions' actions.
     ExtensionsPopover,
     /// The install prompt over an extension that asks for several things.
@@ -269,6 +275,10 @@ pub const SCENES: &[Scene] = &[
     },
     over("agent-spaces-popup", Overlay::AgentSpaces),
     Scene {
+        pointer: Some(AGENT_SPACE_BIN),
+        ..over("agent-spaces-popup-bin", Overlay::AgentSpaces)
+    },
+    Scene {
         frames: BURST,
         ..over("command-bar-open", Overlay::CommandBar(""))
     },
@@ -387,6 +397,12 @@ pub const SCENES: &[Scene] = &[
         overlay: Overlay::ExtensionsList,
         ..on("settings-extensions", InternalPage::Settings)
     },
+    // Settings' Agents (MCP) section, hosting, with the apps wubble added itself to
+    Scene {
+        click: Some(NAV_AGENTS),
+        overlay: Overlay::AgentsHosting,
+        ..on("settings-agents", InternalPage::Settings)
+    },
     // a search that names built-in pages: their redirect rows over the settings it leaves
     Scene {
         overlay: Overlay::SettingsSearch("tabs"),
@@ -484,6 +500,7 @@ pub const SCENES: &[Scene] = &[
     // approval sheet, the marks of an approved session's tabs and Space (wubble-only, derived)
     on("agent-activity", InternalPage::AgentLog),
     over("agent-sheet", Overlay::AgentSheet),
+    over("agent-sheet-more", Overlay::AgentMore),
     over("agent-tabs", Overlay::AgentTabs),
 ];
 
@@ -500,15 +517,44 @@ const RAIL_SOUND_BADGE: (u16, u16) = (45, 113);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
 // autofill menu's first login.
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);
+/// The dustbin on the running session's row of the Spaces popup (`agent-spaces-popup`).
+const AGENT_SPACE_BIN: (u16, u16) = (229, 718);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
 // Settings at the design's 1360x880 (extended sidebar): a routing rule's row in General, the
-// section list's Spaces, Sites and Updates, the Spaces list's second row.
+// section list's Spaces, Sites, Extensions, Agents and Updates, the Spaces list's second row.
 const NAV_GENERAL: (u16, u16) = (420, 197);
 const NAV_SPACES: (u16, u16) = (420, 387);
 const NAV_SITES: (u16, u16) = (420, 425);
 const NAV_EXTENSIONS: (u16, u16) = (420, 501);
-const NAV_UPDATES: (u16, u16) = (420, 539);
+/// The section list's row pitch, logical px.
+const NAV_PITCH: u16 = 38;
+
+impl Scene {
+    /// It shows extensions: without the engine's extension patches there are none to show.
+    pub fn needs_extensions(&self) -> bool {
+        matches!(
+            self.overlay,
+            Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt
+        )
+    }
+
+    /// Where its click lands: a Settings section row below Extensions is one row higher when
+    /// the engine has no extension patches (the Extensions row is gone).
+    pub fn click_at(&self, extensions: bool) -> Option<(u16, u16)> {
+        let (x, y) = self.click?;
+        let settings = self.page == Some(InternalPage::Settings);
+        Some(
+            if settings && !extensions && x == NAV_EXTENSIONS.0 && y > NAV_EXTENSIONS.1 {
+                (x, y - NAV_PITCH)
+            } else {
+                (x, y)
+            },
+        )
+    }
+}
+const NAV_AGENTS: (u16, u16) = (420, 539);
+const NAV_UPDATES: (u16, u16) = (420, 577);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);

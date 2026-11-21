@@ -250,7 +250,15 @@ pub struct View {
     /// The client DevTools windows are created with: it reports them to the
     /// engine (`app::extra`), which must close them before `cef::shutdown`.
     devtools_client: cef::Client,
+    /// Where the page may go ([`View::set_navigation_rule`]), read by welding's guard.
+    rule: NavigationRule,
 }
+
+/// Where a view's page may go: a host's rule over a top-level navigation's URL, or none
+/// (anywhere). Shared with the view's `welding::NavigationGuard`, which reads it on CEF's UI
+/// thread before each navigation is sent.
+pub type Rule = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+type NavigationRule = Arc<std::sync::RwLock<Option<Rule>>>;
 
 /// The second frame stream: the popup widget's newest frame and where to
 /// draw it (physical pixels, relative to the view; may leave the view).
@@ -284,6 +292,12 @@ impl View {
         let layout = config.layout.clamped();
         let request_filter = filter.clone().map(crate::filter::request_filter);
         let response_observer = observer.map(crate::filter::response_observer);
+        let rule: NavigationRule = Arc::default();
+        let read = Arc::clone(&rule);
+        let guard = welding::NavigationGuard::new(move |url| {
+            let rule = read.read().unwrap_or_else(|e| e.into_inner());
+            rule.as_ref().is_none_or(|allows| allows(url))
+        });
         let producer = new_producer(
             runtime,
             config.url,
@@ -291,7 +305,7 @@ impl View {
             (config.frame_rate, config.begin_frames),
             &config.gpu,
             profile,
-            (request_filter, response_observer),
+            (request_filter, response_observer, guard),
         )?;
         let mut producer = producer;
         if let Some(area) = layout.area {
@@ -328,7 +342,16 @@ impl View {
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
             devtools_client,
+            rule,
         })
+    }
+
+    /// Where the page may go from now on: each top-level navigation (each hop of a redirect)
+    /// to a URL `rule` refuses is cancelled before it is sent, and reported as
+    /// [`PageEvent::NavigationRefused`]; `None` lets it go anywhere. Same-document changes
+    /// (the history API) and pages restored from the back-forward cache are not asked.
+    pub fn set_navigation_rule(&mut self, rule: Option<Rule>) {
+        *self.rule.write().unwrap_or_else(|e| e.into_inner()) = rule;
     }
 
     /// CEF's identifier for this view, as [`crate::filter::RequestInfo::browser_id`]
@@ -1769,6 +1792,9 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         E::ContextMenuDismissed => one(Route::Page(PageEvent::ContextMenuDismissed)),
         E::StatusChanged { text } => one(Route::Page(PageEvent::LinkStatus(text))),
         E::Tooltip { text } => one(Route::Page(PageEvent::Tooltip(text))),
+        E::NavigationRefused { url, redirect } => {
+            one(Route::Page(PageEvent::NavigationRefused { url, redirect }))
+        }
         E::ProtocolExecution { url, user_gesture } => {
             one(Route::Page(PageEvent::ExternalProtocol {
                 url,
@@ -1960,9 +1986,10 @@ fn new_producer(
     (frame_rate, begin_frames): (u32, bool),
     gpu: &HostWgpuContext,
     profile: welding::SharedProfile,
-    (request_filter, response_observer): (
+    (request_filter, response_observer, navigation_guard): (
         Option<welding::RequestFilter>,
         Option<welding::ResponseObserver>,
+        welding::NavigationGuard,
     ),
 ) -> Result<PlatformCefProducer, EngineError> {
     let config = welding::PlatformCefConfig {
@@ -1978,6 +2005,7 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
+            navigation_guard: Some(navigation_guard),
             // CDP: `View::set_frozen`, `View::cdp` (page dark mode, screenshots).
             devtools_protocol: true,
             response_observer,
@@ -2003,6 +2031,7 @@ fn new_producer(
     _hooks: (
         Option<welding::RequestFilter>,
         Option<welding::ResponseObserver>,
+        welding::NavigationGuard,
     ),
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(

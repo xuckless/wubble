@@ -34,8 +34,21 @@ export component ConfirmButton inherits Button {
     property <int> slot: -1;
     out property <ControlView> v: Controls.view(root.slot);
     property <int> gen: Controls.generation;
-    init => {
+    // made before the registry was wired (a surface built with the window): the slot is
+    // taken once it is (`Controls.wired`), with the value then
+    property <bool> wired: Controls.wired;
+    function take() {
         root.slot = Controls.acquire(5, root.busy-text != "" ? root.busy-ms : 0);
+    }
+    init => {
+        if root.wired {
+            root.take();
+        }
+    }
+    changed wired => {
+        if root.wired && root.slot < 0 {
+            root.take();
+        }
     }
     changed gen => {
         Controls.alive(root.slot);

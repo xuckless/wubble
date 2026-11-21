@@ -625,3 +625,21 @@ fn flatten_skips_the_hidden_and_stops_at_the_cap() {
     tree.apply(&parse_updates(&ax(&hide)));
     assert_eq!(tree.flatten(usize::MAX).len(), 3);
 }
+
+#[test]
+fn a_link_item_carries_its_target() {
+    let mut tree = PageTree::default();
+    first(&mut tree, page());
+    let items = tree.flatten(usize::MAX);
+    let link = items
+        .iter()
+        .find(|i| i.kind == Kind::Link)
+        .expect("the link");
+    assert_eq!(link.url, "https://example.test/more");
+    assert!(
+        items
+            .iter()
+            .filter(|i| i.kind != Kind::Link)
+            .all(|i| i.url.is_empty())
+    );
+}

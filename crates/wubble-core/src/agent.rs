@@ -7,9 +7,14 @@
 //! [`Grant::secret_for`] says the page's origin is the login's. Generating a token, showing the
 //! sheet, opening and tearing down the session's Space are [`Effect`]s the host executes.
 
+pub mod harness;
+pub mod hosting;
+pub mod jsonc;
 pub mod keys;
 pub mod log;
+pub mod manifest;
 pub mod refs;
+pub mod spot;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -49,12 +54,104 @@ pub enum GrantError {
     BadName(String),
 }
 
+/// Why a session may not load an address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisitRefusal {
+    /// Not an http or https address (`file:`, `data:`, `javascript:`, `chrome:`, ...).
+    NotWeb,
+    /// Not on the grant's sites.
+    NotGranted,
+}
+
+impl VisitRefusal {
+    pub fn note(self) -> &'static str {
+        match self {
+            VisitRefusal::NotWeb => "only http and https pages can be opened",
+            VisitRefusal::NotGranted => "not a site this session may visit: ask with request_more",
+        }
+    }
+}
+
+/// Whether a scheme is the web's (http, https), as a URL parser reads it: without case.
+pub fn is_web(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+}
+
+/// The address a session may load for `url` (the parser's spelling: `HTTPS://A.test` is
+/// `https://a.test/`), or why not.
+pub fn may_visit(grant: &Grant, url: &str) -> Result<String, VisitRefusal> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| VisitRefusal::NotWeb)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(VisitRefusal::NotWeb);
+    }
+    let url = parsed.to_string();
+    if grant.allows_site(&url) {
+        Ok(url)
+    } else {
+        Err(VisitRefusal::NotGranted)
+    }
+}
+
+/// Whether a session's tab may go to `url` by any top-level navigation (the agent's own, a
+/// link, a script, a form, each hop of a redirect, history): a blank page, or what
+/// [`may_visit`] allows. The grant's sites are where the tab may be, not what its pages may
+/// fetch: sub-resources are never asked.
+pub fn may_go(grant: &Grant, url: &str) -> Result<(), VisitRefusal> {
+    if url == "about:blank" {
+        return Ok(());
+    }
+    may_visit(grant, url).map(|_| ())
+}
+
+/// The agent's error for a navigation [`may_go`] refused: the site named, and the way on.
+pub fn refused_note(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") => format!(
+            "the page tried to go to {}, which is not on this session's sites: the navigation \
+             was refused and the tab stayed where it was (ask for the site with request_more)",
+            u.host_str().unwrap_or_default()
+        ),
+        _ => format!(
+            "the page tried to go to {url}, which is not a web address: the navigation was \
+             refused and the tab stayed where it was"
+        ),
+    }
+}
+
+/// What a running session asks for on top of its grant (`request_more`), reduced to what is
+/// new ([`Grant::missing`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct More {
+    pub sites: Vec<String>,
+    pub secrets: Vec<String>,
+}
+
+impl More {
+    pub fn is_empty(&self) -> bool {
+        self.sites.is_empty() && self.secrets.is_empty()
+    }
+}
+
+/// The answer a `request_more` gets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MoreAnswer {
+    /// The owner pressed Allow: what the grant gained (a secret name gains nothing until it is
+    /// bound to a login).
+    Granted(More),
+    /// The owner pressed Deny (or Escape): the session runs on with its grant.
+    Denied,
+    /// Everything asked for is granted already: no sheet.
+    NothingNew,
+    /// A sheet for this session is up already.
+    Busy,
+}
+
 /// What the owner lets a session use. Built by the approval sheet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
     secrets: BTreeMap<String, SecretBinding>,
-    /// Empty: any site.
-    sites: Vec<Pattern>,
+    /// The site patterns as the owner left them, and parsed. Empty: any site.
+    sites: Vec<(String, Pattern)>,
     pub mode: Mode,
 }
 
@@ -78,7 +175,10 @@ impl Grant {
         }
         let sites = sites
             .iter()
-            .map(|s| Pattern::parse(s).ok_or_else(|| GrantError::BadSite(s.clone())))
+            .map(|s| {
+                let p = Pattern::parse(s).ok_or_else(|| GrantError::BadSite(s.clone()))?;
+                Ok((s.trim().to_owned(), p))
+            })
             .collect::<Result<_, _>>()?;
         Ok(Grant {
             secrets,
@@ -94,7 +194,60 @@ impl Grant {
 
     /// Whether the session may visit `url`: any page when the owner gave no sites.
     pub fn allows_site(&self, url: &str) -> bool {
-        self.sites.is_empty() || self.sites.iter().any(|p| p.matches(url))
+        self.sites.is_empty() || self.sites.iter().any(|(_, p)| p.matches(url))
+    }
+
+    /// The site patterns granted, as the owner left them; empty: any site.
+    pub fn sites(&self) -> impl Iterator<Item = &str> {
+        self.sites.iter().map(|(s, _)| s.as_str())
+    }
+
+    /// What of `sites` and `secrets` this grant does not hold yet: a site not granted (none,
+    /// when any site is), a secret name not granted. A bare site (`github.com`,
+    /// `*.github.com`) is held when its host is allowed already, any other pattern when it is
+    /// listed as written; without case, repeats once.
+    pub fn missing(&self, sites: &[String], secrets: &[String]) -> More {
+        let mut more = More::default();
+        if !self.sites.is_empty() {
+            for site in sites.iter().map(|s| s.trim()) {
+                let same = |s: &str| s.eq_ignore_ascii_case(site);
+                let bare = site.strip_prefix("*.").unwrap_or(site);
+                let covered = !bare.contains('/')
+                    && !bare.contains(':')
+                    && self.allows_site(&format!("https://{bare}/"))
+                    && self.allows_site(&format!("http://{bare}/"));
+                if !site.is_empty()
+                    && !covered
+                    && !self.sites().any(same)
+                    && !more.sites.iter().any(|s| same(s))
+                {
+                    more.sites.push(site.to_owned());
+                }
+            }
+        }
+        for name in secrets.iter().map(|s| s.trim()) {
+            if !name.is_empty()
+                && !self.secrets.contains_key(name)
+                && !more.secrets.iter().any(|s| s == name)
+            {
+                more.secrets.push(name.to_owned());
+            }
+        }
+        more
+    }
+
+    /// This grant with `sites` added (a grant of any site stays one); the secrets and the mode
+    /// stay.
+    pub fn widened(&self, sites: &[String]) -> Result<Grant, GrantError> {
+        if self.sites.is_empty() {
+            return Ok(self.clone());
+        }
+        let all: Vec<String> = self
+            .sites()
+            .map(str::to_owned)
+            .chain(sites.iter().cloned())
+            .collect();
+        Grant::new(self.secrets.clone(), &all, self.mode)
     }
 
     /// The login to fill variable `name` from into a frame of `frame_url` under `top_url`:
@@ -103,6 +256,82 @@ impl Grant {
     pub fn secret_for(&self, name: &str, top_url: &str, frame_url: &str) -> Option<&LoginRef> {
         let b = self.secrets.get(name)?;
         may_fill(top_url, frame_url, &b.origin).then_some(&b.login)
+    }
+}
+
+/// What the approval sheet lets the owner change before Allow: the secret names the client
+/// asked for (removed only: none can be bound to a login yet) and the sites (empty: any site).
+/// The host keeps one per waiting session; Allow builds the grant from it ([`answer`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lists {
+    pub secrets: Vec<String>,
+    pub sites: Vec<String>,
+}
+
+/// One change on the sheet's list editors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListEdit<'a> {
+    RemoveSecret(&'a str),
+    RemoveSite(&'a str),
+    /// A site added at the end, or put in the place of `replacing` (an edit in place).
+    PutSite {
+        replacing: Option<&'a str>,
+        site: &'a str,
+    },
+}
+
+/// Why a site was refused; the editor shows the note under its draft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListRefusal {
+    NotASite,
+    Listed,
+}
+
+impl ListRefusal {
+    pub fn note(self) -> &'static str {
+        match self {
+            ListRefusal::NotASite => {
+                "Not a site: example.com, *.example.com or https://example.com/docs/*"
+            }
+            ListRefusal::Listed => "Already in the list",
+        }
+    }
+}
+
+impl Lists {
+    /// The client's request, as the sheet first shows it.
+    pub fn asked(secrets: &[String], sites: &[String]) -> Lists {
+        Lists {
+            secrets: secrets.to_vec(),
+            sites: sites.to_vec(),
+        }
+    }
+
+    /// Applies `edit`; a site must be a [`Pattern`] and not already listed (trimmed). Removing
+    /// what is not listed changes nothing.
+    pub fn edit(&mut self, edit: ListEdit) -> Result<(), ListRefusal> {
+        match edit {
+            ListEdit::RemoveSecret(name) => self.secrets.retain(|s| s != name),
+            ListEdit::RemoveSite(site) => self.sites.retain(|s| s != site),
+            ListEdit::PutSite { replacing, site } => {
+                let site = site.trim();
+                if Pattern::parse(site).is_none() {
+                    return Err(ListRefusal::NotASite);
+                }
+                if self
+                    .sites
+                    .iter()
+                    .any(|s| s == site && Some(s.as_str()) != replacing)
+                {
+                    return Err(ListRefusal::Listed);
+                }
+                match replacing.and_then(|r| self.sites.iter().position(|s| s == r)) {
+                    Some(i) => site.clone_into(&mut self.sites[i]),
+                    None => self.sites.push(site.to_owned()),
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -176,8 +405,11 @@ pub fn admit(env: Env) -> Result<(), Refusal> {
 pub enum StopReason {
     Refused(Refusal),
     Denied,
-    /// The owner's stop command (works while headless).
+    /// The owner's stop command (works while headless), or the agent's `stop_session`.
     Stopped,
+    /// The agent ended the session keeping its tabs for the owner (`stop_session`
+    /// `keep_tabs`).
+    Released,
     ClientGone,
     BrowserQuit,
 }
@@ -192,6 +424,13 @@ pub enum State {
         /// `None` until the host answered `Effect::MintToken`.
         token: Option<Token>,
     },
+    /// Running on its grant while the owner is asked for more (`request_more`): only what is
+    /// new is on the sheet, and only the owner's Allow widens the grant.
+    AskingMore {
+        grant: Grant,
+        token: Token,
+        more: More,
+    },
     Stopped(StopReason),
 }
 
@@ -203,6 +442,13 @@ pub enum Event {
     TokenMinted(Token),
     Deny,
     Stop,
+    /// The agent ends the session and leaves its tabs to the owner.
+    Release,
+    /// The agent asks for more sites or secret names (`request_more`).
+    AskMore {
+        sites: Vec<String>,
+        secrets: Vec<String>,
+    },
     ClientDisconnects,
     BrowserQuits,
 }
@@ -217,6 +463,13 @@ pub enum Effect {
     OpenSpace(Mode),
     /// Close that Space's tabs, drop the token and the socket.
     Teardown,
+    /// Leave the Space and its tabs to the owner: ordinary tabs of its container, saved like
+    /// any other Space; the token dies.
+    Release,
+    /// Ask the owner for what is new (a sheet listing only it).
+    ShowMoreSheet(More),
+    /// Answer the waiting `request_more`.
+    AnswerMore(MoreAnswer),
 }
 
 impl State {
@@ -225,15 +478,43 @@ impl State {
     }
 
     /// The grant of a running session whose token is `presented`: what every call is checked by.
+    /// While the owner is asked for more, the grant as it was.
     pub fn authorize(&self, presented: &str) -> Option<&Grant> {
         match self {
             State::Running {
                 grant,
                 token: Some(t),
+            }
+            | State::AskingMore {
+                grant, token: t, ..
             } if t.matches(presented) => Some(grant),
             _ => None,
         }
     }
+
+    /// The grant a running session works under (also while it asks for more).
+    pub fn grant(&self) -> Option<&Grant> {
+        match self {
+            State::Running { grant, .. } | State::AskingMore { grant, .. } => Some(grant),
+            _ => None,
+        }
+    }
+}
+
+/// The session whose Space and container hold `tab` now, by the model, with its grant: the one
+/// owner of which navigation rule a tab's view carries. `sessions`: each running session's id,
+/// Space, container and grant. A tab moved out of a session's Space is no longer held; one moved
+/// in is.
+pub fn holder<K: Clone>(
+    model: &crate::model::Model,
+    tab: crate::tab::TabId,
+    sessions: &[(K, crate::space::SpaceId, crate::space::ContainerId, &Grant)],
+) -> Option<(K, Grant)> {
+    sessions.iter().find_map(|(id, space, container, grant)| {
+        model
+            .holds(*space, *container, tab)
+            .then(|| (id.clone(), (*grant).clone()))
+    })
 }
 
 /// The one lifecycle. An event that means nothing in the state leaves it as it is; a stopped
@@ -282,12 +563,123 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
         (Requested, Event::Stop) => (Stopped(StopReason::Stopped), vec![]),
         (Requested, Event::ClientDisconnects) => (Stopped(StopReason::ClientGone), vec![]),
         (Requested, Event::BrowserQuits) => (Stopped(StopReason::BrowserQuit), vec![]),
+        (
+            Running {
+                grant,
+                token: Some(token),
+            },
+            Event::AskMore { sites, secrets },
+        ) => {
+            let more = grant.missing(&sites, &secrets);
+            if more.is_empty() {
+                let state = Running {
+                    grant,
+                    token: Some(token),
+                };
+                return (state, vec![AnswerMore(MoreAnswer::NothingNew)]);
+            }
+            (
+                AskingMore {
+                    grant,
+                    token,
+                    more: more.clone(),
+                },
+                vec![ShowMoreSheet(more)],
+            )
+        }
+        (state @ AskingMore { .. }, Event::AskMore { .. }) => {
+            (state, vec![AnswerMore(MoreAnswer::Busy)])
+        }
+        (AskingMore { grant, token, .. }, Event::Approve(widened)) => {
+            let granted = More {
+                sites: widened
+                    .sites()
+                    .filter(|s| !grant.sites().any(|g| g == *s))
+                    .map(str::to_owned)
+                    .collect(),
+                secrets: widened
+                    .secret_names()
+                    .filter(|s| !grant.secret_names().any(|g| g == *s))
+                    .map(str::to_owned)
+                    .collect(),
+            };
+            // the mode is the session's, whatever the sheet says
+            let grant = Grant {
+                mode: grant.mode,
+                ..widened
+            };
+            (
+                Running {
+                    grant,
+                    token: Some(token),
+                },
+                vec![
+                    DismissApprovalSheet,
+                    AnswerMore(MoreAnswer::Granted(granted)),
+                ],
+            )
+        }
+        (AskingMore { grant, token, .. }, Event::Deny) => (
+            Running {
+                grant,
+                token: Some(token),
+            },
+            vec![DismissApprovalSheet, AnswerMore(MoreAnswer::Denied)],
+        ),
+        (AskingMore { .. }, Event::Stop) => (
+            Stopped(StopReason::Stopped),
+            vec![DismissApprovalSheet, Teardown],
+        ),
+        (AskingMore { .. }, Event::Release) => (
+            Stopped(StopReason::Released),
+            vec![DismissApprovalSheet, Release],
+        ),
+        (AskingMore { .. }, Event::ClientDisconnects) => (
+            Stopped(StopReason::ClientGone),
+            vec![DismissApprovalSheet, Teardown],
+        ),
+        (AskingMore { .. }, Event::BrowserQuits) => (
+            Stopped(StopReason::BrowserQuit),
+            vec![DismissApprovalSheet, Teardown],
+        ),
         (Running { .. }, Event::Stop) => (Stopped(StopReason::Stopped), vec![Teardown]),
+        (Running { token: Some(_), .. }, Event::Release) => {
+            (Stopped(StopReason::Released), vec![Release])
+        }
         (Running { .. }, Event::ClientDisconnects) => {
             (Stopped(StopReason::ClientGone), vec![Teardown])
         }
         (Running { .. }, Event::BrowserQuits) => (Stopped(StopReason::BrowserQuit), vec![Teardown]),
         (state, _) => (state, vec![]),
+    }
+}
+
+/// What the dustbin on an agent Space's row (the Spaces popup) does, by the session that holds
+/// the Space now (`None`: none does, the session ended and left its tabs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Clear {
+    /// [`Event::Stop`] to that session alone: its teardown deletes the Space, its tabs and its
+    /// container.
+    Stop,
+    /// The host deletes the Space, its tabs and its container itself, as a teardown does.
+    Delete,
+}
+
+/// The dustbin on an agent Space's row ([`crate::space::Space::agent`]; a user's Space has none).
+pub fn clear(holder: Option<&State>) -> Clear {
+    match holder {
+        Some(State::Stopped(_)) | None => Clear::Delete,
+        Some(_) => Clear::Stop,
+    }
+}
+
+/// The owner's answer to a sheet for more (`State::AskingMore`): Allow widens `grant` by the
+/// sites the owner left on it (`Lists::sites`); Deny keeps the grant. A site that is no pattern
+/// denies.
+pub fn answer_more(grant: &Grant, sites: &[String], allow: bool) -> Event {
+    match grant.widened(sites) {
+        Ok(widened) if allow => Event::Approve(widened),
+        _ => Event::Deny,
     }
 }
 
@@ -312,6 +704,42 @@ pub fn answer(sites: &[String], allow: bool, headless: bool) -> Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sheet_lists_remove_add_and_edit_sites() {
+        let mut l = Lists::asked(&["A".into(), "B".into()], &["example.com".into()]);
+        assert_eq!(l.edit(ListEdit::RemoveSecret("A")), Ok(()));
+        assert_eq!(l.secrets, ["B"]);
+        let put = |replacing, site| ListEdit::PutSite { replacing, site };
+        assert_eq!(l.edit(put(None, " github.com ")), Ok(()));
+        assert_eq!(l.sites, ["example.com", "github.com"]);
+        assert_eq!(l.edit(put(None, "github.com")), Err(ListRefusal::Listed));
+        assert_eq!(l.edit(put(None, "not a site")), Err(ListRefusal::NotASite));
+        assert_eq!(l.edit(put(Some("example.com"), "*.example.org")), Ok(()));
+        assert_eq!(l.sites, ["*.example.org", "github.com"]);
+        // an edit that keeps its own text is no duplicate
+        assert_eq!(l.edit(put(Some("github.com"), "github.com")), Ok(()));
+        assert_eq!(l.edit(ListEdit::RemoveSite("github.com")), Ok(()));
+        assert_eq!(l.edit(ListEdit::RemoveSite("gone.com")), Ok(()));
+        assert_eq!(l.sites, ["*.example.org"]);
+    }
+
+    #[test]
+    fn allow_grants_the_edited_sites_and_an_empty_list_any_site() {
+        let mut l = Lists::asked(&[], &["example.com".into()]);
+        let Event::Approve(g) = answer(&l.sites, true, false) else {
+            panic!("not approved");
+        };
+        assert!(!g.allows_site("https://github.com/"));
+        assert_eq!(g.mode, Mode::Windowed);
+        l.edit(ListEdit::RemoveSite("example.com")).unwrap();
+        let Event::Approve(g) = answer(&l.sites, true, true) else {
+            panic!("not approved");
+        };
+        assert!(g.allows_site("https://github.com/"));
+        assert_eq!(g.mode, Mode::Headless);
+        assert_eq!(g.secret_names().count(), 0);
+    }
 
     const ON: Env = Env {
         mcp_enabled: true,
@@ -564,6 +992,225 @@ mod tests {
         assert_eq!(answer(&["a b".to_string()], true, false), Event::Deny);
     }
 
+    fn on(sites: &[&str]) -> State {
+        let sites: Vec<String> = sites.iter().map(|s| s.to_string()).collect();
+        State::Running {
+            grant: Grant::new([], &sites, Mode::Headless).unwrap(),
+            token: Some(Token::new("t")),
+        }
+    }
+
+    fn ask(sites: &[&str], secrets: &[&str]) -> Event {
+        Event::AskMore {
+            sites: sites.iter().map(|s| s.to_string()).collect(),
+            secrets: secrets.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn asking_for_more_shows_only_what_is_new() {
+        let (s, e) = transition(
+            on(&["github.com"]),
+            ask(
+                &[
+                    "GitHub.com",
+                    "gist.github.com",
+                    "x.test",
+                    "X.test",
+                    "https://github.com/a/*",
+                ],
+                &["NPM", "NPM"],
+            ),
+        );
+        // github.com covers its subdomains; a pattern with a path is listed as written
+        let more = More {
+            sites: vec!["x.test".into(), "https://github.com/a/*".into()],
+            secrets: vec!["NPM".into()],
+        };
+        assert_eq!(e, vec![Effect::ShowMoreSheet(more.clone())]);
+        let State::AskingMore { grant, more: m, .. } = &s else {
+            panic!("{s:?}");
+        };
+        assert_eq!(*m, more);
+        // the old grant still answers the session's calls meanwhile
+        assert!(s.authorize("t").is_some());
+        assert!(!grant.allows_site("https://x.test/"));
+        // a second ask while the sheet is up
+        let (s, e) = transition(s, ask(&["x.test"], &[]));
+        assert_eq!(e, vec![Effect::AnswerMore(MoreAnswer::Busy)]);
+        assert!(matches!(s, State::AskingMore { .. }));
+    }
+
+    #[test]
+    fn nothing_new_needs_no_sheet() {
+        for (state, sites) in [
+            (on(&["a.test"]), &["a.test"][..]),
+            (on(&[]), &["b.test"][..]),
+        ] {
+            let (s, e) = transition(state.clone(), ask(sites, &[]));
+            assert_eq!(s, state);
+            assert_eq!(e, vec![Effect::AnswerMore(MoreAnswer::NothingNew)]);
+        }
+    }
+
+    #[test]
+    fn only_allow_widens_the_grant_and_deny_keeps_the_session() {
+        let (asking, _) = transition(on(&["a.test"]), ask(&["b.test"], &["NPM"]));
+        let State::AskingMore { grant, .. } = &asking else {
+            panic!("asking");
+        };
+        let grant = grant.clone();
+        // Deny: running on the old grant
+        let (s, e) = transition(
+            asking.clone(),
+            answer_more(&grant, &["b.test".into()], false),
+        );
+        assert_eq!(s, on(&["a.test"]));
+        assert_eq!(
+            e,
+            vec![
+                Effect::DismissApprovalSheet,
+                Effect::AnswerMore(MoreAnswer::Denied)
+            ]
+        );
+        // Allow, the owner having added one more site on the sheet
+        let left = ["b.test".to_string(), "c.test".to_string()];
+        let (s, e) = transition(asking.clone(), answer_more(&grant, &left, true));
+        let g = s.authorize("t").unwrap();
+        assert!(g.allows_site("https://b.test/") && g.allows_site("https://c.test/"));
+        assert!(g.allows_site("https://a.test/") && !g.allows_site("https://d.test/"));
+        assert_eq!(g.mode, Mode::Headless);
+        assert_eq!(
+            e,
+            vec![
+                Effect::DismissApprovalSheet,
+                Effect::AnswerMore(MoreAnswer::Granted(More {
+                    sites: left.to_vec(),
+                    secrets: vec![]
+                }))
+            ]
+        );
+        // a site that is no pattern denies
+        assert_eq!(answer_more(&grant, &["a b".into()], true), Event::Deny);
+    }
+
+    #[test]
+    fn a_session_asking_for_more_ends_as_a_running_one() {
+        let (asking, _) = transition(on(&["a.test"]), ask(&["b.test"], &[]));
+        for (ev, why, last) in [
+            (Event::Stop, StopReason::Stopped, Effect::Teardown),
+            (Event::Release, StopReason::Released, Effect::Release),
+            (
+                Event::ClientDisconnects,
+                StopReason::ClientGone,
+                Effect::Teardown,
+            ),
+            (
+                Event::BrowserQuits,
+                StopReason::BrowserQuit,
+                Effect::Teardown,
+            ),
+        ] {
+            let (s, e) = transition(asking.clone(), ev);
+            assert_eq!(s, State::Stopped(why));
+            assert_eq!(e, vec![Effect::DismissApprovalSheet, last]);
+        }
+    }
+
+    #[test]
+    fn release_leaves_the_tabs_and_kills_the_token() {
+        let (s, e) = transition(running(Some("t")), Event::Release);
+        assert_eq!(s, State::Stopped(StopReason::Released));
+        assert_eq!(e, vec![Effect::Release]);
+        assert!(s.authorize("t").is_none());
+        // before the token exists, and while awaiting approval: nothing
+        for state in [running(None), awaiting(), State::Requested] {
+            let (s, e) = transition(state.clone(), Event::Release);
+            assert_eq!(s, state);
+            assert!(e.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_session_tab_goes_only_where_its_grant_says() {
+        let some = Grant::new([], &["a.localhost".to_string()], Mode::Headless).unwrap();
+        assert_eq!(may_go(&some, "http://a.localhost:8080/x?y#z"), Ok(()));
+        assert_eq!(may_go(&some, "HTTP://A.localhost/"), Ok(()));
+        assert_eq!(may_go(&some, "about:blank"), Ok(()));
+        assert_eq!(
+            may_go(&some, "http://b.localhost/"),
+            Err(VisitRefusal::NotGranted)
+        );
+        for off in [
+            "file:///etc/passwd",
+            "chrome://version",
+            "data:text/html,x",
+            "about:config",
+        ] {
+            assert_eq!(may_go(&some, off), Err(VisitRefusal::NotWeb), "{off}");
+        }
+        // an empty list is any web site, still nothing off the web
+        let any = Grant::new([], &[], Mode::Headless).unwrap();
+        assert_eq!(may_go(&any, "https://anything.test/"), Ok(()));
+        assert_eq!(may_go(&any, "file:///x"), Err(VisitRefusal::NotWeb));
+        assert!(refused_note("http://b.localhost:9/p").contains("to go to b.localhost,"));
+        assert!(refused_note("http://b.localhost:9/p").contains("request_more"));
+    }
+
+    #[test]
+    fn the_dustbin_stops_a_live_session_and_deletes_a_left_space() {
+        let asking = State::AskingMore {
+            grant: Grant::new([], &[], Mode::Headless).unwrap(),
+            token: Token("t".into()),
+            more: More::default(),
+        };
+        for live in [running(Some("t")), running(None), asking] {
+            assert_eq!(clear(Some(&live)), Clear::Stop);
+            // and the stop is the teardown that deletes the Space
+            let (s, e) = transition(live, Event::Stop);
+            assert!(matches!(s, State::Stopped(_)));
+            assert!(e.contains(&Effect::Teardown), "{e:?}");
+        }
+        assert_eq!(clear(None), Clear::Delete);
+        assert_eq!(
+            clear(Some(&State::Stopped(StopReason::Released))),
+            Clear::Delete
+        );
+    }
+
+    #[test]
+    fn only_web_addresses_on_the_grant_s_sites_are_visited() {
+        let any = Grant::new([], &[], Mode::Headless).unwrap();
+        assert_eq!(
+            may_visit(&any, "HTTPS://Example.test/A"),
+            Ok("https://example.test/A".into())
+        );
+        assert_eq!(
+            may_visit(&any, " http://a.test "),
+            Ok("http://a.test/".into())
+        );
+        for bad in [
+            "file:///etc/passwd",
+            "FILE:///etc/passwd",
+            "data:text/html,x",
+            "javascript:alert(1)",
+            "chrome://version",
+            "about:blank",
+            "example.com",
+            "",
+        ] {
+            assert_eq!(may_visit(&any, bad), Err(VisitRefusal::NotWeb), "{bad}");
+            assert!(!is_web(bad), "{bad}");
+        }
+        let some = Grant::new([], &["a.test".into()], Mode::Headless).unwrap();
+        assert!(may_visit(&some, "HTTP://A.TEST/x").is_ok());
+        assert_eq!(
+            may_visit(&some, "https://b.test/"),
+            Err(VisitRefusal::NotGranted)
+        );
+        assert!(is_web("HTTPS://x.test"));
+    }
+
     #[test]
     fn a_bad_grant_is_refused() {
         let b = SecretBinding {
@@ -582,5 +1229,61 @@ mod tests {
             Grant::new([], &["a b".to_string()], Mode::Headless),
             Err(GrantError::BadSite("a b".into()))
         );
+    }
+
+    /// A tab dragged out of a session's Space is free; one dragged in is held to the grant.
+    #[test]
+    fn the_model_says_which_tabs_a_session_holds() {
+        use crate::model::{Command, Dest, Effect as M, Model, apply};
+        use crate::space::ContainerId;
+        let open = |m: Model| {
+            let (m, fx) = apply(
+                m,
+                Command::NewTab {
+                    url: "https://a.test".into(),
+                    container: None,
+                    opener: None,
+                },
+            );
+            let tab = fx
+                .iter()
+                .find_map(|e| match e {
+                    M::CreateTab { tab, .. } => Some(*tab),
+                    _ => None,
+                })
+                .unwrap();
+            (m, tab)
+        };
+        let m = Model::new(std::time::Instant::now());
+        let (m, agent_tab) = open(m);
+        let (m, _) = apply(
+            m,
+            Command::NewSpace {
+                name: "Agent".into(),
+                tint: crate::space::Rgb(1, 2, 3),
+                container: ContainerId::DEFAULT,
+            },
+        );
+        let agent_space = m.spaces.last().unwrap().id;
+        let user_space = m.spaces[0].id;
+        let g = grant(Mode::Windowed);
+        let sessions = [("s1", agent_space, ContainerId::DEFAULT, &g)];
+        let into = |space| Dest::Normal { space, index: 0 };
+        let (m, _) = apply(
+            m,
+            Command::MoveTab {
+                tab: agent_tab,
+                to: into(agent_space),
+            },
+        );
+        assert_eq!(holder(&m, agent_tab, &sessions), Some(("s1", g.clone())));
+        let (m, _) = apply(
+            m,
+            Command::MoveTab {
+                tab: agent_tab,
+                to: into(user_space),
+            },
+        );
+        assert_eq!(holder(&m, agent_tab, &sessions), None, "dragged out: free");
     }
 }

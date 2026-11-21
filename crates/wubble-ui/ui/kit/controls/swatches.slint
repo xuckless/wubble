@@ -39,8 +39,21 @@ export component Swatches inherits Rectangle {
     property <bool> tab-focus;
     property <length> pitch: SettingsCss.wb-st-sw--width + SettingsCss.st-swatches--gap;
 
-    init => {
+    // made before the registry was wired (a surface built with the window): the slot is
+    // taken once it is (`Controls.wired`), with the value then
+    property <bool> wired: Controls.wired;
+    function take() {
         root.slot = Controls.acquire(6, root.index);
+    }
+    init => {
+        if root.wired {
+            root.take();
+        }
+    }
+    changed wired => {
+        if root.wired && root.slot < 0 {
+            root.take();
+        }
     }
     changed index => {
         Controls.set-value(root.slot, root.index);

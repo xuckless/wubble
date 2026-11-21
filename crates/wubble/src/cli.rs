@@ -8,6 +8,17 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 pub use crate::load_run::Variant;
 pub use crate::measure::Scenario;
 
+/// `wubble --help` and `wubble mcp --help`: how an agent uses wubble.
+const AGENT_USE: &str = r#"Agent use: wubble hosts an MCP server for AI agents on this computer once you turn it on in
+Settings > Agents (MCP) (off by default). An agent harness starts `wubble mcp`, which speaks MCP
+on stdio and relays to the running browser's private socket (no TCP port); it finds the
+browser by itself. Generic server entry: {"command": "<path to wubble>", "args": ["mcp"]}.
+Examples: `claude mcp add wubble -- <path to wubble> mcp`; `codex mcp add wubble -- <path to
+wubble> mcp`; `gemini mcp add -s user wubble <path to wubble> mcp`. Turning hosting on also
+adds that entry to the harnesses it finds (Settings lists them). Every session needs your
+approval on screen, so the first call, start_session, can block for minutes: give the server a
+long tool timeout."#;
+
 /// `--measure`'s run time unless `--seconds` says otherwise.
 const DEFAULT_SECONDS: NonZeroU32 = NonZeroU32::new(10).unwrap();
 
@@ -16,7 +27,8 @@ const DEFAULT_SECONDS: NonZeroU32 = NonZeroU32::new(10).unwrap();
     name = "wubble",
     about = "The wubble browser.",
     version,
-    args_conflicts_with_subcommands = true
+    args_conflicts_with_subcommands = true,
+    after_help = AGENT_USE
 )]
 struct Cli {
     #[command(subcommand)]
@@ -112,11 +124,16 @@ struct Cli {
 #[derive(clap::Subcommand, Debug)]
 enum Sub {
     /// Speak MCP on stdio for an agent harness, relayed to the running browser's private socket
-    /// (agent sessions, off by default: `agent.mcp_enabled`). Starts no browser.
+    /// (Settings > Agents (MCP), off by default). Finds the hosting browser by itself; starts no
+    /// browser.
+    #[command(after_help = AGENT_USE)]
     Mcp {
-        /// The browser's profile directory, if it was started with one.
+        /// The browser's profile directory, to choose one of several hosting browsers.
         #[arg(long, value_name = "DIR")]
         profile: Option<PathBuf>,
+        /// Print the hosting browsers (profile, socket, version, pid) and exit.
+        #[arg(long, conflicts_with = "profile")]
+        list: bool,
     },
 }
 
@@ -308,6 +325,8 @@ pub enum Command {
     /// `wubble mcp`: the stdio relay to the browser's MCP socket on this profile.
     Mcp {
         profile: Option<PathBuf>,
+        /// `--list`: print the hosting browsers instead.
+        list: bool,
     },
 }
 
@@ -351,8 +370,8 @@ impl TryFrom<Cli> for Command {
 
     fn try_from(cli: Cli) -> Result<Self, Self::Error> {
         let conflict = |msg| Err(Cli::command().error(ErrorKind::ArgumentConflict, msg));
-        if let Some(Sub::Mcp { profile }) = cli.sub {
-            return Ok(Command::Mcp { profile });
+        if let Some(Sub::Mcp { profile, list }) = cli.sub {
+            return Ok(Command::Mcp { profile, list });
         }
         if let Some(scenario) = cli.measure {
             // clap rejects a URL, `--smoke` and `--profile` next to it.
@@ -669,11 +688,15 @@ mod tests {
     fn mcp_is_the_relay_and_takes_a_profile() {
         assert_eq!(
             parse(["wubble", "mcp"]).ok(),
-            Some(Command::Mcp { profile: None })
+            Some(Command::Mcp {
+                profile: None,
+                list: false
+            })
         );
         assert_eq!(
             parse(["wubble", "mcp", "--profile", "/tmp/p"]).ok(),
             Some(Command::Mcp {
+                list: false,
                 profile: Some(PathBuf::from("/tmp/p"))
             })
         );

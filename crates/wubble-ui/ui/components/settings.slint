@@ -13,7 +13,7 @@
 
 import { Shell } from "../kit/derived.slint";
 import { Mark } from "../kit/chrome/mark.slint";
-import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem, PageLinkItem, ExtensionItem } from "model.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem, PageLinkItem, ExtensionItem, AgentsView, AgentAppItem } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
@@ -31,6 +31,7 @@ import { NavRow, NavIndicator, NavGroup } from "../kit/settings/nav.slint";
 import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours, PageLinkRow } from "../kit/settings/section.slint";
 import { ResetButton } from "../kit/settings/reset.slint";
 import { ExtensionsCard } from "extensions-section.slint";
+import { AgentsCard } from "agents-section.slint";
 
 export { Field, SectionHeader, Card }
 
@@ -382,6 +383,11 @@ export component SettingsPage inherits Rectangle {
     // the Extensions section: the installed list, and whether it differs from what this run loaded
     in property <[ExtensionItem]> extensions;
     in property <bool> extensions-restart;
+    // the engine has wubble's extension patches (`wubble_engine::ext_api::available`)
+    in property <bool> extensions-available: true;
+    // the Agents (MCP) group: hosting, and the agent apps found here
+    in property <AgentsView> agents;
+    in property <[AgentAppItem]> agent-apps;
     in property <AboutView> about;
     in property <UpdatesView> updates;
     // the search box has text: only the matching rows show, the other sections are left out
@@ -412,6 +418,10 @@ export component SettingsPage inherits Rectangle {
     callback extension-toggled(string, bool);
     callback extension-removed(string);
     callback extension-options(string);
+    callback agents-toggled(bool);
+    callback agents-copy(string);
+    callback agent-app-added(string);
+    callback agent-app-removed(string);
     // the Updates group: its switch, "Check now", "Restart to update"
     callback updates-toggled(bool);
     callback updates-check();
@@ -424,6 +434,10 @@ export component SettingsPage inherits Rectangle {
         page.reset();
         nav-scroll.reset();
         root.tracked = 0;
+    }
+    // the section list back at its top, the page where it is (the gallery)
+    public function nav-to-top() {
+        nav-scroll.reset();
     }
     // `q` typed into the search (the gallery's search scene)
     public function type-query(q: string) {
@@ -452,9 +466,13 @@ export component SettingsPage inherits Rectangle {
     property <int> spaces-at: root.table + 1;
     property <int> sites-at: root.table + 2;
     property <int> lists-at: root.table + 3;
+    // without the engine's extension patches the Extensions section and its nav row are gone,
+    // and the sections after it move up one
+    property <int> ext-gap: root.extensions-available ? 0 : 1;
     property <int> extensions-at: root.table + 4;
-    property <int> updates-at: root.table + 5;
-    property <int> about-at: root.table + 6;
+    property <int> agents-at: root.table + 5 - root.ext-gap;
+    property <int> updates-at: root.table + 6 - root.ext-gap;
+    property <int> about-at: root.table + 7 - root.ext-gap;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
     property <int> matches: root.rows.length + root.bindings.length;
     // what the search leaves: "N settings", then ", M pages" when it names pages
@@ -848,7 +866,7 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                if !root.searching: Section {
+                if !root.searching && root.extensions-available: Section {
                     index: root.extensions-at;
                     top: self.y + root.main-top;
                     scroll: page.scroll;
@@ -882,6 +900,44 @@ export component SettingsPage inherits Rectangle {
                         }
                         options(id) => {
                             root.extension-options(id);
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
+                    index: root.agents-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    below: Shell.section-below;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    SectionHead {
+                        text: "Agents (MCP)";
+                    }
+                    AgentsCard {
+                        view: root.agents;
+                        apps: root.agent-apps;
+                        accent: root.accent;
+                        toggled(on) => {
+                            root.agents-toggled(on);
+                        }
+                        activity => {
+                            root.page-requested("open-agent-log");
+                        }
+                        copy(text) => {
+                            root.agents-copy(text);
+                        }
+                        add(id) => {
+                            root.agent-app-added(id);
+                        }
+                        remove(id) => {
+                            root.agent-app-removed(id);
                         }
                     }
                 }
@@ -1090,24 +1146,28 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                     for extra[i] in [
-                        { title: "Keyboard shortcuts", icon: Glyph.keyboard, shown: root.bindings.length > 0 },
-                        { title: "Spaces", icon: Glyph.stack, shown: !root.searching },
-                        { title: "Sites", icon: Glyph.lock, shown: !root.searching },
-                        { title: "Filter lists", icon: Glyph.shield, shown: !root.searching },
-                        { title: "Extensions", icon: Glyph.puzzle, shown: !root.searching },
-                        { title: "Updates", icon: Glyph.download, shown: !root.searching },
-                        { title: "About", icon: Glyph.bubble, shown: !root.searching },
+                        { title: "Keyboard shortcuts", icon: Glyph.keyboard, shown: root.bindings.length > 0, gone: false },
+                        { title: "Spaces", icon: Glyph.stack, shown: !root.searching, gone: false },
+                        { title: "Sites", icon: Glyph.lock, shown: !root.searching, gone: false },
+                        { title: "Filter lists", icon: Glyph.shield, shown: !root.searching, gone: false },
+                        { title: "Extensions", icon: Glyph.puzzle, shown: !root.searching, gone: !root.extensions-available },
+                        { title: "Agents (MCP)", icon: Glyph.agent, shown: !root.searching, gone: false },
+                        { title: "Updates", icon: Glyph.download, shown: !root.searching, gone: false },
+                        { title: "About", icon: Glyph.bubble, shown: !root.searching, gone: false },
                     ]: Rectangle {
-                        height: root.pitch;
+                        // a row after a gone one stands for the section one index lower
+                        property <int> index: root.table + i - (i > 4 ? root.ext-gap : 0);
+                        height: extra.gone ? 0 : root.pitch;
+                        visible: !extra.gone;
                         NavRow {
                             y: 0px;
                             title: extra.title;
                             icon-path: extra.icon;
                             enabled: extra.shown;
-                            on: root.current == root.table + i;
+                            on: root.current == parent.index;
                             accent: root.accent;
                             picked => {
-                                root.pick(root.table + i);
+                                root.pick(parent.index);
                             }
                         }
                     }

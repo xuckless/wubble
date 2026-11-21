@@ -14,7 +14,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -64,7 +64,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -472,6 +472,9 @@ export component AppWindow inherits Window {
     in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
     in property <[ExtensionItem]> settings-extensions <=> settings-ui.extensions;
     in property <bool> settings-extensions-restart <=> settings-ui.extensions-restart;
+    in property <bool> settings-extensions-available <=> settings-ui.extensions-available;
+    in property <AgentsView> settings-agents <=> settings-ui.agents;
+    in property <[AgentAppItem]> settings-agent-apps <=> settings-ui.agent-apps;
     in property <AboutView> settings-about <=> settings-ui.about;
     in property <UpdatesView> settings-updates <=> settings-ui.updates;
     in property <[PageLinkItem]> settings-pages <=> settings-ui.pages;
@@ -507,6 +510,10 @@ export component AppWindow inherits Window {
     // An agent session's approval sheet; the intent is (allow, headless).
     in property <AgentSheetView> agent-sheet-view;
     callback agent-sheet-answered(bool, bool);
+    callback agent-sheet-removed(bool, string);
+    callback agent-sheet-site-submitted(string);
+    // A list editor on the agent sheet holds a draft: Escape is its, not the sheet's.
+    out property <bool> agent-sheet-editing: agent-sheet.editing;
     // The agent activity log page, newest first.
     in property <[AgentLogItem]> agent-log;
     // A touchpad history swipe: -1..1 of the way to forward (negative) or back; 0 hides the
@@ -557,6 +564,10 @@ export component AppWindow inherits Window {
     callback extension-toggled <=> settings-ui.extension-toggled;
     callback extension-removed <=> settings-ui.extension-removed;
     callback extension-options <=> settings-ui.extension-options;
+    callback agents-toggled <=> settings-ui.agents-toggled;
+    callback agents-copy <=> settings-ui.agents-copy;
+    callback agent-app-added <=> settings-ui.agent-app-added;
+    callback agent-app-removed <=> settings-ui.agent-app-removed;
     callback updates-toggled <=> settings-ui.updates-toggled;
     callback updates-check <=> settings-ui.updates-check;
     callback updates-restart <=> settings-ui.updates-restart;
@@ -593,6 +604,8 @@ export component AppWindow inherits Window {
     in property <[MenuEntry]> spaces-menu-entries;
     in-out property <bool> spaces-open: false;
     callback spaces-menu-requested();
+    // an agent Space row's dustbin (the host clears that Space; the popup stays open)
+    callback space-cleared(int);
     // a dragged tab over the popup: the line it would drop on (-1 none), its top in the list,
     // or the sticky New Space row (the host's, from wubble_core::tabdrag)
     in property <int> spaces-drop-line: -1;
@@ -662,6 +675,11 @@ export component AppWindow inherits Window {
     // `q` typed into the settings page's search (the gallery)
     public function settings-type-query(q: string) {
         settings-ui.type-query(q);
+    }
+    // the settings page's section list back at its top (the gallery, before it clicks a
+    // section by its place)
+    public function settings-nav-to-top() {
+        settings-ui.nav-to-top();
     }
 
     // Puts `text` on the clipboard through Slint's own (no clipboard crate): a hidden field
@@ -1369,6 +1387,12 @@ export component AppWindow inherits Window {
                 answered(allow, headless) => {
                     root.agent-sheet-answered(allow, headless);
                 }
+                removed(site, key) => {
+                    root.agent-sheet-removed(site, key);
+                }
+                site-submitted(text) => {
+                    root.agent-sheet-site-submitted(text);
+                }
             }
             // The history swipe's chip at the edge it goes toward.
             if root.swipe-progress != 0: SwipeChip {
@@ -1684,6 +1708,9 @@ export component AppWindow inherits Window {
         new-space => {
             root.spaces-open = false;
             root.shell-action("new-space");
+        }
+        cleared(id) => {
+            root.space-cleared(id);
         }
         dismissed => {
             root.spaces-open = false;

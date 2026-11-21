@@ -63,7 +63,7 @@ impl Store {
         let mut space_at: HashMap<SpaceId, usize> = HashMap::new();
         let mut rows = c
             .query(
-                "SELECT id, name, tint, container_id, active_tab_id, icon, never_sleep FROM spaces \
+                "SELECT id, name, tint, container_id, active_tab_id, icon, never_sleep, agent FROM spaces \
                  ORDER BY position",
                 (),
             )
@@ -88,6 +88,7 @@ impl Store {
                     .transpose()?,
                 split: None,
                 never_sleep: r.get::<i64>(6)? != 0,
+                agent: r.get::<i64>(7)? != 0,
             });
         }
         if spaces.is_empty() {
@@ -390,8 +391,8 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
 async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon, never_sleep) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon, never_sleep, \
+             agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
     for (i, s) in m.spaces.iter().enumerate() {
@@ -408,6 +409,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             active,
             s.icon.id(),
             i64::from(s.never_sleep),
+            i64::from(s.agent),
         ))
         .await?;
     }
@@ -614,6 +616,7 @@ mod tests {
                 on: true,
             },
         );
+        m = ap(m, Command::MarkAgentSpace(SpaceId(1)));
         m.check().unwrap();
         m
     }
@@ -770,6 +773,7 @@ mod tests {
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
             assert!(m.spaces[2].never_sleep && !m.spaces[0].never_sleep);
+            assert!(m.spaces[1].agent && !m.spaces[0].agent);
             assert!(m.tabs.values().any(|t| t.last_active_ms == 5_000));
             store.save_session(&m).await.unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
@@ -993,6 +997,7 @@ mod tests {
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                     split: None,
                     never_sleep: false,
+                    agent: false,
                 },
                 Space {
                     id: SpaceId(1),
@@ -1005,6 +1010,7 @@ mod tests {
                     active: Some(TabId(21)), // the saved active tab
                     split: None,
                     never_sleep: false,
+                    agent: false,
                 },
             ];
             let containers = vec![
@@ -1180,6 +1186,7 @@ mod tests {
             for (i, s) in m.spaces.iter_mut().enumerate() {
                 s.icon = SpaceIcon::nth(i);
                 s.never_sleep = false; // no such column before v12
+                s.agent = false; // nor this one before v15
             }
             m.tabs.values_mut().for_each(|t| t.last_active_ms = 0);
             let tx = store.conn.transaction().await.unwrap();

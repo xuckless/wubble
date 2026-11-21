@@ -181,6 +181,8 @@ pub enum Applied {
     Glance(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
+    /// Whether wubble hosts its MCP server (`agent::hosting`), switched at once.
+    McpHosting(bool),
 }
 
 /// `def`'s value in `stored`, or its default when absent or invalid (as the store reads it).
@@ -339,6 +341,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
+        k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })

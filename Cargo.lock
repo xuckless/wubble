@@ -8667,6 +8667,7 @@ dependencies = [
  "i-slint-backend-winit",
  "i-slint-core",
  "interprocess",
+ "libc",
  "log",
  "lzma-rs",
  "objc2-app-kit 0.3.2",
@@ -8747,6 +8748,7 @@ dependencies = [
  "semver",
  "serde_json",
  "sha2 0.11.1",
+ "toml_edit",
  "url",
  "zeroize",
 ]

@@ -13,8 +13,12 @@ pub mod frame;
 pub mod server;
 pub mod tools;
 
-pub use call::{AgentCall, ButtonKind, ElementRef, NavTarget, SessionId, TabId, WaitCondition};
+pub use call::{
+    AgentCall, ButtonKind, Direction, DragTo, ElementRef, NavTarget, Offset, SessionId, TabId,
+    WaitCondition,
+};
 pub use frame::{FrameError, LineFramer, encode_line};
 pub use server::{
-    Content, Incoming, RequestId, RpcError, ToolResult, handle_line, tool_response, unavailable,
+    CallId, Content, Era, INSTRUCTIONS, Incoming, LEGACY_VERSIONS, PROTOCOL_VERSION, Peer,
+    RequestId, RpcError, ToolResult, handle_line, progress, tool_response, unavailable,
 };

@@ -22,10 +22,12 @@ use rand::RngCore;
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model};
 use wubble_ax::{AxItem, Bounds, PageTree, Reach};
+use wubble_core::agent::keys::{KeyPlan, SessionNav};
 use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
+use wubble_core::agent::spot;
 use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
-use wubble_core::agent::{Refusal, StopReason, Token};
+use wubble_core::agent::{MoreAnswer, Refusal, StopReason, Token};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
 use wubble_core::secret::Secret;
@@ -34,7 +36,9 @@ use wubble_core::tab::TabId;
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
 use wubble_engine::page::{EditCommand, PageEvent};
-use wubble_mcp::{AgentCall, ButtonKind, NavTarget, RequestId, ToolResult, WaitCondition};
+use wubble_mcp::{
+    AgentCall, ButtonKind, CallId, Direction, DragTo, NavTarget, Offset, ToolResult, WaitCondition,
+};
 use wubble_ui::{AgentLogItem, AgentSheetView, AppWindow};
 use wubble_vault::RecordId;
 
@@ -46,8 +50,45 @@ use crate::with_host;
 const WAIT: Duration = Duration::from_secs(30);
 /// Items `read_page` returns unless asked for fewer.
 const READ_ITEMS: usize = 500;
+/// Characters `read_text` returns unless asked otherwise.
+const READ_CHARS: usize = 20_000;
+/// Characters of a script's value `evaluate` returns.
+const EVAL_CHARS: usize = 100_000;
+/// After `type` with `submit`, how long a load has to begin before none is taken to follow.
+const SUBMIT_GRACE: Duration = Duration::from_secs(1);
+/// Ticks a `scroll` turns the wheel in, and the time between them.
+const WHEEL_TICKS: u32 = 5;
+const WHEEL_TICK: Duration = Duration::from_millis(20);
+/// How often a call waiting on the owner reports progress.
+const BEAT: Duration = Duration::from_secs(5);
+/// How long an action that may start a navigation (a click, a key, a script) waits before it
+/// answers, so a navigation its page started and the session's sites refused is its error.
+const SETTLE: Duration = Duration::from_millis(300);
+/// Steps a drag's pointer moves in between its press and its release.
+const DRAG_STEPS: u32 = 8;
+/// How long after a script's own `timeout_ms` the call gives up waiting for the page's answer.
+const EVAL_GRACE: Duration = Duration::from_millis(1000);
+/// The DevTools object group `evaluate`'s values are held in until answered.
+const EVAL_GROUP: &str = "wubble-agent";
+/// Turns `evaluate`'s value into plain JSON (called on it with `returnByValue`): nodes and
+/// functions named, cycles and depth cut, maps and sets as objects and arrays.
+const SERIALISE: &str = "function(){const seen=new WeakSet();let n=0;\
+const walk=(v,d)=>{if(v===undefined)return null;\
+if(typeof v==='bigint'||typeof v==='symbol')return v.toString();\
+if(typeof v==='number'&&!isFinite(v))return String(v);\
+if(v===null||(typeof v!=='object'&&typeof v!=='function'))return v;\
+if(typeof v==='function')return '[function '+(v.name||'anonymous')+']';\
+if(typeof Node!=='undefined'&&v instanceof Node)return '[node '+String(v.nodeName).toLowerCase()+(v.id?'#'+v.id:'')+']';\
+if(seen.has(v))return '[circular]';if(d>20||++n>20000)return '[cut]';seen.add(v);\
+if(v instanceof Date)return isNaN(v)?null:v.toISOString();if(v instanceof RegExp)return String(v);\
+if(v instanceof Error)return v.stack||String(v);\
+if(v instanceof Map)return Object.fromEntries(Array.from(v,([k,x])=>[String(k),walk(x,d+1)]));\
+if(v instanceof Set||Array.isArray(v)||ArrayBuffer.isView(v))return Array.from(v,x=>walk(x,d+1));\
+const o={};for(const k of Object.keys(v))o[k]=walk(v[k],d+1);return o};return walk(this,0)}";
 /// Items a ref is looked up among.
 const ALL_ITEMS: usize = 10_000;
+/// `--smoke mcp`'s tab switch: the step that hides the sidebar (`Host::mcp_smoke_switch`).
+const SWITCH_RESIZE: usize = 4;
 /// The page a session's first tab opens on.
 const BLANK: &str = "about:blank";
 
@@ -60,30 +101,35 @@ struct Conn {
 /// what the effects made for it.
 struct Session {
     conn: ConnId,
+    /// The calling program, as the connection found it (the sheets name it).
+    client: String,
     state: State,
     purpose: String,
-    sites: Vec<String>,
+    /// What the client asked for, as the owner leaves it on the sheet; Allow grants its sites.
+    lists: agent::Lists,
     /// The `start_session` call, answered once the token exists (or the session ended).
-    start: Option<RequestId>,
+    start: Option<CallId>,
     /// The Space and container the approval opened.
     space: Option<(SpaceId, ContainerId)>,
     /// Why the session was refused, when not the owner's word.
     note: Option<&'static str>,
     /// When it began waiting for the sheet (`Agents::fresh`); the sheet takes the lowest.
     asked: u64,
+    /// The `request_more` call waiting for the owner's answer.
+    more: Option<Reply>,
 }
 
 /// What a call's answer is logged and sent with.
 #[derive(Clone)]
 struct Reply {
     conn: ConnId,
-    id: RequestId,
+    id: CallId,
     session: Option<SessionId>,
     tool: &'static str,
     target: Option<String>,
 }
 
-/// A click or text, at an element's centre.
+/// What a call does at an element once it is located on screen.
 enum Act {
     Click {
         button: MouseButton,
@@ -99,10 +145,28 @@ enum Act {
         text: Secret,
         name: String,
     },
+    Hover,
+    /// Press here, then release at `to`.
+    Drag {
+        to: DragTo,
+    },
+    /// Release, here, the drag pressed at `from`.
+    Drop {
+        from: (f64, f64),
+    },
+    /// The wheel, by `(dx, dy)` CSS px (positive: right, down), over the element.
+    Wheel {
+        dx: f64,
+        dy: f64,
+    },
+    /// Into view only.
+    Reveal,
+    /// A picture of the element.
+    Shot,
 }
 
-/// How far the load a `navigate` asked for has come: the end of a load started before it
-/// (a new tab's `about:blank`) is not its end.
+/// How far the load a call asked for has come: the end of a load started before it (a new
+/// tab's `about:blank`) is not its end.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Load {
     Asked,
@@ -120,13 +184,35 @@ fn focus_script(x: f64, y: f64) -> String {
     )
 }
 
+/// Where locating an element is (DevTools: `DOM.scrollIntoViewIfNeeded`, then
+/// `DOM.getContentQuads`, by the node's backend id, which is its accessibility id).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Locating {
+    Revealing,
+    Measuring,
+}
+
+/// Where `evaluate` is: the script as given, the script again as an async function body (it
+/// had a top-level `return`), the promise it gave being awaited, or its value being serialised.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Evaluating {
+    First,
+    AsBody,
+    Awaiting,
+    Serialising,
+}
+
 /// What a waiting call waits for.
 enum Wait {
-    /// `navigate`: its load to end and the new document's tree (other than `before`).
+    /// `navigate` (and `type` with `submit`, `open_tab` with a URL): its load to end and the
+    /// new document's tree (other than `before`). With `grace`: no load begun by then means
+    /// none follows.
     Navigated {
         tab: TabId,
         before: Option<String>,
         load: Load,
+        answer: String,
+        grace: Option<(Instant, String)>,
     },
     /// `wait_for` load: no load running and a tree.
     Loaded {
@@ -141,10 +227,25 @@ enum Wait {
     Text {
         tab: TabId,
         text: String,
+        /// Form fields' values count too.
+        values: bool,
+        /// Waits for the text to be gone.
+        gone: bool,
     },
     Element {
         tab: TabId,
         target: String,
+    },
+    /// The tab's address to contain `part`.
+    Url {
+        tab: TabId,
+        part: String,
+    },
+    /// The tab's address or document to differ from these.
+    Moved {
+        tab: TabId,
+        url: String,
+        document: Option<String>,
     },
     /// `read_page` before the page has a tree.
     Tree {
@@ -154,11 +255,20 @@ enum Wait {
     },
     Eval {
         id: u64,
+        tab: TabId,
+        script: String,
+        timeout: u32,
+        stage: Evaluating,
+    },
+    /// `read_text`'s article script.
+    Article {
+        id: u64,
+        max: usize,
     },
     Shot {
         id: u64,
     },
-    /// The element was out of view: the page was asked to scroll it to the middle.
+    /// An element of a frame was out of view: the page was asked to scroll it to the middle.
     Scroll {
         id: u64,
         tab: TabId,
@@ -166,12 +276,34 @@ enum Wait {
         viewport: Bounds,
         act: Act,
     },
+    /// An element of the page's own document, being scrolled into view and measured.
+    Locate {
+        id: u64,
+        tab: TabId,
+        node: i32,
+        stage: Locating,
+        at: Option<Offset>,
+        viewport: Bounds,
+        act: Act,
+    },
+    /// `screenshot` of an element: where the viewport is in the document, for the clip.
+    Metrics {
+        id: u64,
+        tab: TabId,
+        rect: spot::Rect,
+    },
     /// `fill_secret`: the vault's answer.
     Vault {
         nonce: u64,
         tab: TabId,
         target: String,
         name: String,
+    },
+    /// A click, a key or a script done: its answer after [`SETTLE`], unless a navigation it
+    /// started is refused meanwhile (`agent_refused`).
+    Settle {
+        tab: TabId,
+        answer: String,
     },
     /// `fill_secret` clicked its element: the page's word on where focus went
     /// ([`focus_script`]).
@@ -199,10 +331,26 @@ pub(super) struct Agents {
     pending: Vec<Pending>,
     next: u64,
     timer: slint::Timer,
+    /// Progress for the calls that wait on the owner (`start_session`, `request_more`), while
+    /// any does; and how many beats it has sent.
+    beat: slint::Timer,
+    beats: u64,
     /// The window the sheet shows in and the session it shows, while it does.
     sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
+    /// Each session tab's last address its grant allowed: where a tab that got somewhere else
+    /// is taken back to.
+    pub(super) last_at: HashMap<TabId, String>,
+    /// The grant each view's navigation rule was last set from (`agent_rules`).
+    rules: HashMap<wubble_engine::app::ViewId, Option<agent::Grant>>,
+    /// The agent Space its dustbin is deleting, while it is (its tabs are not the user's closed
+    /// tabs, as in a session's teardown).
+    pub(super) clearing: Option<SpaceId>,
+    /// The answer to the sheet's last Sites draft: its serial, and the note (empty: taken).
+    answer: (i32, &'static str),
+    /// DevTools calls whose answers mean nothing (an object group released).
+    ignored: Vec<u64>,
 }
 
 impl Agents {
@@ -217,6 +365,28 @@ impl Agents {
             .values()
             .filter_map(|s| s.space.map(|(sp, _)| sp))
             .collect()
+    }
+}
+
+/// The tab a call waits on, if it waits on one.
+fn wait_tab(wait: &Wait) -> Option<TabId> {
+    match wait {
+        Wait::Navigated { tab, .. }
+        | Wait::Loaded { tab }
+        | Wait::Opened { tab, .. }
+        | Wait::Text { tab, .. }
+        | Wait::Element { tab, .. }
+        | Wait::Url { tab, .. }
+        | Wait::Moved { tab, .. }
+        | Wait::Tree { tab, .. }
+        | Wait::Eval { tab, .. }
+        | Wait::Scroll { tab, .. }
+        | Wait::Locate { tab, .. }
+        | Wait::Metrics { tab, .. }
+        | Wait::Vault { tab, .. }
+        | Wait::Focus { tab, .. }
+        | Wait::Settle { tab, .. } => Some(*tab),
+        _ => None,
     }
 }
 
@@ -235,7 +405,8 @@ fn mint() -> Token {
     Token::new(bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
-/// One `read_page` line: role, level, name, value, state, ref.
+/// One `read_page` line: role, level, name, value, a link's target, state, ref. Text is given
+/// whole.
 fn line(item: &AxItem, r: &str) -> String {
     let mut out = format!("- {}", item.role);
     if item.level > 0 {
@@ -244,6 +415,9 @@ fn line(item: &AxItem, r: &str) -> String {
     out.push_str(&format!(" {:?}", item.name));
     if !item.value.is_empty() {
         out.push_str(&format!(" value={:?}", item.value));
+    }
+    if !item.url.is_empty() {
+        out.push_str(&format!(" url={:?}", item.url));
     }
     if let Some(c) = item.checked {
         out.push_str(if c { " checked" } else { " unchecked" });
@@ -262,19 +436,123 @@ fn inside(b: Bounds, outer: Bounds) -> bool {
         && b.y + b.height <= outer.y + outer.height
 }
 
+fn point_of((x, y): (f64, f64)) -> Point {
+    Point {
+        x: x as f32,
+        y: y as f32,
+    }
+}
+
+/// The left button down at `point` (a drag's start).
+fn press(view: &mut wubble_engine::view::View, point: Point, now: Duration) {
+    view.focus(true);
+    view.mouse_move(point, &Modifiers::default(), now);
+    view.forget_clicks();
+    let held = Modifiers {
+        buttons: Buttons::default().with(MouseButton::Left, true),
+        ..Modifiers::default()
+    };
+    view.mouse_button(MouseButton::Left, true, point, &held, now);
+}
+
+/// The pointer, its left button held, moved from `from` to `to` in [`DRAG_STEPS`] steps (a
+/// page that starts a drag after a few pixels sees them).
+fn glide(view: &mut wubble_engine::view::View, from: (f64, f64), to: (f64, f64), now: Duration) {
+    let held = Modifiers {
+        buttons: Buttons::default().with(MouseButton::Left, true),
+        ..Modifiers::default()
+    };
+    for i in 1..=DRAG_STEPS {
+        let t = f64::from(i) / f64::from(DRAG_STEPS);
+        let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        view.mouse_move(point_of(at), &held, now);
+    }
+}
+
+/// `read_text`'s answer from the page's article script (`pagescripts::reader_text`): the
+/// title, the byline and the text, or the page's whole text when it has no article.
+fn article_text(json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    let field = |k: &str| v[k].as_str().unwrap_or_default().trim().to_owned();
+    let text = field("text");
+    let mut out = String::new();
+    if v["article"] == true {
+        for head in [field("title"), field("byline")] {
+            if !head.is_empty() {
+                out.push_str(&head);
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    } else {
+        out.push_str("[no article found: the page's whole text]\n\n");
+    }
+    out.push_str(&text);
+    Some(out)
+}
+
+/// `text` cut to `max` characters, with a note saying so.
+fn capped(text: &str, max: usize) -> String {
+    let total = text.chars().count();
+    if total <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push_str(&format!(
+        "\n[cut at {max} of {total} characters: max_chars raises the cap, ref reads one part]"
+    ));
+    out
+}
+
+/// What a sheet asks about a session: who asks, the window it asked for, and whether it is a
+/// sheet for more (`request_more`: only what is new, no window choice).
+struct Ask {
+    client: String,
+    headless: bool,
+    more: bool,
+}
+
 /// The sheet's window view of what it shows.
-fn sheet_view(request: &Request, sites: &[String], serial: i32) -> AgentSheetView {
-    let names = |v: &[String]| -> slint::ModelRc<slint::SharedString> {
-        let v: Vec<slint::SharedString> = v.iter().map(|s| s.as_str().into()).collect();
-        v.as_slice().into()
+fn sheet_view(ask: &Ask, lists: &agent::Lists, serial: i32, answer: (i32, &str)) -> AgentSheetView {
+    // one column each: the name, the site
+    let rows = |v: &[String]| -> slint::ModelRc<wubble_ui::EntryItem> {
+        let entries: Vec<wubble_core::pages::Entry> = v
+            .iter()
+            .map(|s| wubble_core::pages::Entry {
+                label: s.clone(),
+                key: s.clone(),
+                cells: vec![s.clone()],
+            })
+            .collect();
+        wubble_ui::settings::entry_items(&entries).as_slice().into()
     };
     AgentSheetView {
         open: true,
         serial,
-        client: request.client.as_str().into(),
-        secrets: names(&request.wants_secrets),
-        sites: names(sites),
-        headless: request.wants_mode == Mode::Headless,
+        client: ask.client.as_str().into(),
+        secrets: rows(&lists.secrets),
+        sites: rows(&lists.sites),
+        answer: answer.0,
+        note: answer.1.into(),
+        headless: ask.headless,
+        more: ask.more,
+    }
+}
+
+/// What the sheet asks about `s`, while it waits for one.
+fn asking(s: &Session) -> Option<Ask> {
+    match &s.state {
+        State::AwaitingApproval(request) => Some(Ask {
+            client: request.client.clone(),
+            headless: request.wants_mode == Mode::Headless,
+            more: false,
+        }),
+        State::AskingMore { grant, .. } => Some(Ask {
+            client: s.client.clone(),
+            headless: grant.mode == Mode::Headless,
+            more: true,
+        }),
+        _ => None,
     }
 }
 
@@ -291,6 +569,7 @@ fn stopped_text(reason: StopReason, note: Option<&str>) -> String {
         }
         StopReason::Denied => "the user denied the session".into(),
         StopReason::Stopped => "the session was stopped".into(),
+        StopReason::Released => "the session ended; its tabs are the user's now".into(),
         StopReason::ClientGone => "the client went away".into(),
         StopReason::BrowserQuit => "the browser quit".into(),
     }
@@ -302,6 +581,15 @@ impl Host {
         match event {
             McpEvent::Connected { conn, out, client } => {
                 self.agents.conns.insert(conn, Conn { out, client });
+            }
+            // hosting turned off while the connection was open: nothing is served on it
+            McpEvent::Call { conn, id, .. } if !self.mcp_serving() => {
+                if let Some(c) = self.agents.conns.get(&conn) {
+                    c.out.send(wubble_mcp::tool_response(
+                        &id,
+                        &ToolResult::error(crate::mcp::NOT_RUNNING),
+                    ));
+                }
             }
             McpEvent::Call { conn, id, call } => self.agent_call(conn, id, call),
             McpEvent::Gone(conn) => {
@@ -337,8 +625,14 @@ impl Host {
         for id in all {
             self.agent_event(&id, Event::BrowserQuits);
         }
-        // `--smoke mcp` leaves a session running for this: its Space must be gone.
-        if self.checks.mcp_smoke {
+        // `--smoke mcp` leaves a session running for this: its Space must be gone (unless the
+        // run turned hosting off first, which ended it the same way: `mcp_smoke_off`)
+        if self
+            .checks
+            .mcp_smoke
+            .as_ref()
+            .is_some_and(|r| !r.hosting_off)
+        {
             let left = spaces
                 .iter()
                 .any(|sp| self.model.spaces.iter().any(|s| s.id == *sp));
@@ -354,7 +648,7 @@ impl Host {
         use wubble_core::settings as defs;
         let stored = &self.settings.stored;
         Env {
-            mcp_enabled: value_of(&defs::AGENT_MCP_ENABLED, stored) == "1",
+            mcp_enabled: self.mcp_serving(),
             remote_port: defs::remote_port(
                 value_of(&defs::DEVTOOLS_REMOTE_PORT, stored)
                     .parse()
@@ -384,6 +678,7 @@ impl Host {
         {
             self.agent_forget(id);
         }
+        self.agent_rules();
     }
 
     fn agent_effect(&mut self, id: &SessionId, effect: Effect) {
@@ -406,7 +701,17 @@ impl Host {
                 }
                 self.agent_sheet_pump();
             }
-            Effect::OpenSpace(mode) => self.agent_open_space(id, mode),
+            Effect::OpenSpace(mode) => {
+                // `--smoke mcp`: the grant's mode is the one the sheet showed when Allow was pressed
+                if let Some(expect) = self.checks.mcp_smoke.as_mut().and_then(|r| r.expect.take())
+                    && expect != mode
+                {
+                    self.fail(format!(
+                        "the sheet showed {expect:?}, the session opened {mode:?}"
+                    ));
+                }
+                self.agent_open_space(id, mode);
+            }
             Effect::MintToken => {
                 let token = mint();
                 self.agent_event(id, Event::TokenMinted(token.clone()));
@@ -423,6 +728,66 @@ impl Host {
                     self.dispatch(Command::DeleteContainer(container));
                 }
             }
+            // the Space and its container stay, the owner's now: once the session leaves the
+            // table its tabs are no longer driven, and the Space is saved like any other
+            Effect::Release => {
+                if let Some((space, _)) = self
+                    .agents
+                    .sessions
+                    .get_mut(id)
+                    .and_then(|s| s.space.take())
+                {
+                    for tab in self.model.order(space) {
+                        self.agents.refs.remove(&tab);
+                    }
+                    self.dispatch(Command::SetSpaceNeverSleep { space, on: false });
+                }
+            }
+            Effect::ShowMoreSheet(more) => {
+                let asked = self.agents.fresh();
+                if let Some(s) = self.agents.sessions.get_mut(id) {
+                    s.asked = asked;
+                    // the sheet lists only what is new; the owner may edit it as at the start
+                    s.lists = agent::Lists::asked(&more.secrets, &more.sites);
+                }
+                self.agent_sheet_pump();
+            }
+            Effect::AnswerMore(answer) => {
+                let Some(reply) = self.agents.sessions.get_mut(id).and_then(|s| s.more.take())
+                else {
+                    return;
+                };
+                let sites: Vec<String> = self
+                    .agents
+                    .sessions
+                    .get(id)
+                    .and_then(|s| s.state.grant())
+                    .map(|g| g.sites().map(str::to_owned).collect())
+                    .unwrap_or_default();
+                match answer {
+                    MoreAnswer::Granted(more) => {
+                        let body = json!({
+                            "granted": {"sites": more.sites, "secrets": more.secrets},
+                            "sites": sites,
+                            "note": "a secret name is granted once the user binds it to a saved \
+                                login, which the sheet cannot do yet",
+                        });
+                        self.agent_send(reply, ToolResult::text(body.to_string()), Outcome::Done);
+                    }
+                    MoreAnswer::Denied => self.agent_refuse(
+                        reply,
+                        "the user denied it: the session runs on with what it had",
+                    ),
+                    MoreAnswer::NothingNew => self.agent_send(
+                        reply,
+                        ToolResult::text("nothing new: the session has all of it already"),
+                        Outcome::Done,
+                    ),
+                    MoreAnswer::Busy => {
+                        self.agent_refuse(reply, "the user is already being asked for more")
+                    }
+                }
+            }
         }
     }
 
@@ -431,22 +796,18 @@ impl Host {
     /// Shows the first waiting session's sheet when the overlays let it (one modal at a time:
     /// a page's dialog or the user's sheet makes it wait; the pump asks again).
     pub(super) fn agent_sheet_pump(&mut self) {
+        self.agent_beat_arm();
         if self.agents.sheet.is_some() {
             return;
         }
         // the session that has waited longest (the session table is the one owner of who waits)
-        let Some((id, request, sites)) = self
+        let Some((id, ask, lists)) = self
             .agents
             .sessions
             .iter()
-            .filter_map(|(id, s)| match &s.state {
-                State::AwaitingApproval(request) => {
-                    Some((s.asked, id.clone(), request.clone(), s.sites.clone()))
-                }
-                _ => None,
-            })
+            .filter_map(|(id, s)| Some((s.asked, id.clone(), asking(s)?, s.lists.clone())))
             .min_by_key(|(asked, ..)| *asked)
-            .map(|(_, id, request, sites)| (id, request, sites))
+            .map(|(_, id, ask, lists)| (id, ask, lists))
         else {
             return;
         };
@@ -457,10 +818,11 @@ impl Host {
             return;
         }
         self.agents.sheets += 1;
-        window.set_agent_sheet_view(sheet_view(&request, &sites, self.agents.sheets));
+        self.agents.answer = (0, "");
+        window.set_agent_sheet_view(sheet_view(&ask, &lists, self.agents.sheets, (0, "")));
         self.agents.sheet = Some((window.as_weak(), id));
         self.render_surfaces(&window);
-        if self.checks.mcp_smoke {
+        if self.checks.mcp_smoke.is_some() {
             let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
         }
     }
@@ -478,14 +840,74 @@ impl Host {
         let Some((_, id)) = self.agents.sheet.clone() else {
             return;
         };
-        let sites = self
-            .agents
-            .sessions
-            .get(&id)
-            .map(|s| s.sites.clone())
-            .unwrap_or_default();
+        let Some(s) = self.agents.sessions.get(&id) else {
+            return;
+        };
+        let event = match &s.state {
+            // a sheet for more: Allow widens the grant by what the owner left on it
+            State::AskingMore { grant, .. } => agent::answer_more(grant, &s.lists.sites, allow),
+            _ => agent::answer(&s.lists.sites, allow, headless),
+        };
         // the session's transition dismisses the sheet and shows the next
-        self.agent_event(&id, agent::answer(&sites, allow, headless));
+        self.agent_event(&id, event);
+    }
+
+    /// A list editor's "−" on the sheet: a site, else a secret name, leaves what Allow grants.
+    pub(crate) fn agent_sheet_removed(&mut self, site: bool, key: &str) {
+        let edit = if site {
+            agent::ListEdit::RemoveSite(key)
+        } else {
+            agent::ListEdit::RemoveSecret(key)
+        };
+        let _ = self.agent_sheet_edit(edit);
+        self.agent_sheet_render();
+    }
+
+    /// The Sites editor's draft (`pages::submission`: one cell, and the site it replaces when
+    /// it edits one): taken into the session's list, or refused with a note; either way the
+    /// editor gets its answer.
+    pub(crate) fn agent_sheet_site_submitted(&mut self, text: &str) {
+        let draft = wubble_core::pages::submission(text);
+        let site = draft.cells.first().copied().unwrap_or_default();
+        let result = self.agent_sheet_edit(agent::ListEdit::PutSite {
+            replacing: draft.replacing,
+            site,
+        });
+        self.agents.answer = (
+            self.agents.answer.0.wrapping_add(1),
+            result.err().map_or("", agent::ListRefusal::note),
+        );
+        self.agent_sheet_render();
+    }
+
+    /// One edit of the shown session's lists (`agent::Lists::edit`).
+    fn agent_sheet_edit(&mut self, edit: agent::ListEdit) -> Result<(), agent::ListRefusal> {
+        let Some((_, id)) = &self.agents.sheet else {
+            return Ok(());
+        };
+        let Some(s) = self.agents.sessions.get_mut(id) else {
+            return Ok(());
+        };
+        s.lists.edit(edit)
+    }
+
+    /// The shown sheet's view again, after an edit (same serial: the window choice stays).
+    fn agent_sheet_render(&mut self) {
+        let Some((window, id)) = &self.agents.sheet else {
+            return;
+        };
+        let (Some(window), Some(s)) = (window.upgrade(), self.agents.sessions.get(id)) else {
+            return;
+        };
+        let Some(ask) = asking(s) else {
+            return;
+        };
+        window.set_agent_sheet_view(sheet_view(
+            &ask,
+            &s.lists,
+            self.agents.sheets,
+            self.agents.answer,
+        ));
     }
 
     /// The sheet is showing (the overlay stack's read).
@@ -502,13 +924,18 @@ impl Host {
             id.clone(),
             Session {
                 conn: 0,
+                client: "Claude Code".into(),
                 state: State::Requested,
                 purpose: "Look up the release notes".into(),
-                sites: vec!["github.com".into()],
+                lists: agent::Lists::asked(
+                    &["GITHUB_TOKEN".into(), "NPM_TOKEN".into()],
+                    &["github.com".into(), "*.githubusercontent.com".into()],
+                ),
                 start: None,
                 space: None,
                 note: None,
                 asked: 0,
+                more: None,
             },
         );
         let request = Request {
@@ -524,16 +951,56 @@ impl Host {
         if !approved {
             return;
         }
-        self.agent_event(&id, agent::answer(&["github.com".to_string()], true, false));
+        self.agent_event(&id, agent::answer(&[GALLERY_SITE.to_string()], true, false));
         let Some((space, _)) = self.agents.sessions.get(&id).and_then(|s| s.space) else {
             return;
         };
-        for url in ["https://github.com/", "https://github.com/releases"] {
+        for url in [GALLERY_PAGES[0], GALLERY_PAGES[1]] {
             self.dispatch(Command::OpenInSpace {
                 space,
                 url: url.into(),
             });
         }
+    }
+
+    /// `--smoke gallery`: a Space a session made and left with its tabs (an agent Space for
+    /// good, no session holding it).
+    pub(super) fn gallery_agent_kept(&mut self) {
+        const NAME: &str = "Agent: draft the issue";
+        // one scene after another on one profile: made once
+        if self.model.spaces.iter().any(|s| s.name == NAME) {
+            return;
+        }
+        let Command::NewSpace { tint, .. } = self.model.new_space() else {
+            return;
+        };
+        self.dispatch(Command::NewSpace {
+            name: NAME.into(),
+            tint,
+            container: ContainerId::DEFAULT,
+        });
+        let Some(space) = self.model.spaces.last().map(|s| s.id) else {
+            return;
+        };
+        self.dispatch(Command::MarkAgentSpace(space));
+        self.dispatch(Command::OpenInSpace {
+            space,
+            url: GALLERY_PAGES[2].into(),
+        });
+    }
+
+    /// `--smoke gallery`: the approved session asks for a site and a secret it lacks, and one
+    /// it has: the sheet lists only the two new ones.
+    pub(super) fn gallery_agent_more(&mut self) {
+        self.gallery_agent(true);
+        let id = SessionId("gallery".into());
+        self.agent_event(
+            &id,
+            Event::AskMore {
+                sites: vec!["github.com".into(), "registry.npmjs.org".into()],
+                secrets: vec!["NPM_TOKEN".into()],
+            },
+        );
     }
 
     /// `--smoke gallery`: entries for the activity page.
@@ -578,6 +1045,45 @@ impl Host {
         let all: Vec<SessionId> = self.agents.sessions.keys().cloned().collect();
         for id in all {
             self.agent_event(&id, Event::Stop);
+        }
+    }
+
+    /// The dustbin on an agent Space's row in the Spaces popup (`agent::clear`): the session
+    /// holding the Space is stopped (that one alone), its teardown deleting the Space; a Space
+    /// no session holds any more (its tabs were left to the owner) is deleted as a teardown
+    /// does. A user's Space has no dustbin, and is never deleted here.
+    pub(super) fn agent_space_cleared(&mut self, space: SpaceId) {
+        let Some(container) = self
+            .model
+            .spaces
+            .iter()
+            .find(|s| s.id == space && s.agent)
+            .map(|s| s.container)
+        else {
+            return;
+        };
+        let holder = self
+            .agents
+            .sessions
+            .iter()
+            .find(|(_, s)| s.space.is_some_and(|(sp, _)| sp == space))
+            .map(|(id, s)| (id.clone(), s.state.clone()));
+        match agent::clear(holder.as_ref().map(|(_, state)| state)) {
+            agent::Clear::Stop => {
+                if let Some((id, _)) = holder {
+                    self.agent_event(&id, Event::Stop);
+                }
+            }
+            agent::Clear::Delete => {
+                self.agents.clearing = Some(space);
+                self.dispatch(Command::DeleteSpace(space));
+                self.agents.clearing = None;
+                // the session's own container; never the Default one, nor one another Space uses
+                let shared = self.model.spaces.iter().any(|s| s.container == container);
+                if container != ContainerId::DEFAULT && !shared {
+                    self.dispatch(Command::DeleteContainer(container));
+                }
+            }
         }
     }
 
@@ -648,6 +1154,7 @@ impl Host {
             s.space = Some((space, container));
         }
         self.dispatch(Command::SetSpaceNeverSleep { space, on: true });
+        self.dispatch(Command::MarkAgentSpace(space));
         self.dispatch(Command::OpenInSpace {
             space,
             url: BLANK.into(),
@@ -705,6 +1212,9 @@ impl Host {
             return;
         };
         let why = stopped_text(reason, s.note);
+        if let Some(reply) = s.more {
+            self.agent_send(reply, ToolResult::error(why.clone()), Outcome::Failed);
+        }
         if let Some(request) = s.start {
             let reply = Reply {
                 conn: s.conn,
@@ -729,7 +1239,7 @@ impl Host {
 
     // ----- calls
 
-    fn agent_call(&mut self, conn: ConnId, id: RequestId, call: AgentCall) {
+    fn agent_call(&mut self, conn: ConnId, id: CallId, call: AgentCall) {
         let mut reply = Reply {
             conn,
             id,
@@ -771,9 +1281,28 @@ impl Host {
         let tab = tab.unwrap_or(TabId(u64::MAX));
         match call {
             AgentCall::StartSession { .. } => {}
-            AgentCall::StopSession { .. } => {
-                self.agent_send(reply, ToolResult::text("stopped"), Outcome::Done);
-                self.agent_event(&session, Event::Stop);
+            AgentCall::StopSession { keep_tabs, .. } => {
+                let (text, event) = if keep_tabs {
+                    (
+                        "stopped; the session's tabs are the user's now",
+                        Event::Release,
+                    )
+                } else {
+                    ("stopped", Event::Stop)
+                };
+                self.agent_send(reply, ToolResult::text(text), Outcome::Done);
+                self.agent_event(&session, event);
+            }
+            AgentCall::RequestMore { sites, secrets, .. } => {
+                let Some(s) = self.agents.sessions.get_mut(&session) else {
+                    return;
+                };
+                if s.more.is_some() {
+                    return self.agent_refuse(reply, "the user is already being asked for more");
+                }
+                // answered by the transition's `AnswerMore`, at once or from the sheet
+                s.more = Some(reply);
+                self.agent_event(&session, Event::AskMore { sites, secrets });
             }
             AgentCall::Navigate { target, .. } => self.agent_navigate(reply, &session, tab, target),
             AgentCall::ReadPage {
@@ -781,13 +1310,21 @@ impl Host {
             } => {
                 let max = max_items.map_or(READ_ITEMS, |n| n as usize);
                 let within = within.map(|r| r.0);
-                if let Some(text) = self.agent_read(tab, within.as_deref(), max) {
-                    return self.agent_send(reply, ToolResult::text(text), Outcome::Done);
+                match self.agent_read(tab, within.as_deref(), max) {
+                    Some(Ok(text)) => self.agent_send(reply, ToolResult::text(text), Outcome::Done),
+                    Some(Err(e)) => self.agent_fail(reply, e),
+                    None => self.agent_wait(reply, Wait::Tree { tab, within, max }, WAIT),
                 }
-                self.agent_wait(reply, Wait::Tree { tab, within, max }, WAIT);
+            }
+            AgentCall::ReadText {
+                within, max_chars, ..
+            } => {
+                let max = max_chars.map_or(READ_CHARS, |n| n as usize);
+                self.agent_read_text(reply, tab, within.map(|r| r.0), max);
             }
             AgentCall::Click {
                 target,
+                at,
                 button,
                 count,
                 ..
@@ -796,8 +1333,20 @@ impl Host {
                     button: mouse(button),
                     count,
                 };
-                self.agent_act(reply, tab, &target.0, act);
+                self.agent_act(reply, tab, &target.0, at, act);
             }
+            AgentCall::Hover { target, at, .. } => {
+                self.agent_act(reply, tab, &target.0, at, Act::Hover)
+            }
+            AgentCall::Drag { target, at, to, .. } => {
+                self.agent_act(reply, tab, &target.0, at, Act::Drag { to })
+            }
+            AgentCall::Scroll {
+                target,
+                direction,
+                amount,
+                ..
+            } => self.agent_scroll(reply, tab, target.map(|r| r.0), direction, amount),
             AgentCall::Type {
                 target,
                 text,
@@ -808,16 +1357,34 @@ impl Host {
                     text: Secret::new(text),
                     submit,
                 };
-                self.agent_act(reply, tab, &target.0, act);
+                self.agent_act(reply, tab, &target.0, None, act);
             }
-            AgentCall::PressKey { key, .. } => match self.agent_keys(tab, &key) {
-                Ok(()) => self.agent_send(reply, ToolResult::text("pressed"), Outcome::Done),
-                Err(e) => self.agent_send(reply, ToolResult::error(e), Outcome::Failed),
+            AgentCall::PressKey { key, .. } => self.agent_press(reply, &session, tab, &key),
+            AgentCall::Screenshot {
+                crop, full_page, ..
+            } => match crop {
+                Some(r) => self.agent_act(reply, tab, &r.0, None, Act::Shot),
+                None => {
+                    let capture = if full_page {
+                        wubble_core::shot::Capture::FullPage
+                    } else {
+                        wubble_core::shot::Capture::Visible
+                    };
+                    self.agent_capture(reply, tab, capture);
+                }
             },
-            AgentCall::Screenshot { crop, .. } => self.agent_shot(reply, tab, crop.map(|r| r.0)),
             AgentCall::ListTabs { .. } => {
                 let text = self.agent_list(&session);
                 self.agent_send(reply, ToolResult::text(text), Outcome::Done);
+            }
+            AgentCall::FocusTab { .. } => {
+                let Some((space, _)) = self.agents.sessions.get(&session).and_then(|s| s.space)
+                else {
+                    return self.agent_fail(reply, "the session has no Space");
+                };
+                self.dispatch(Command::SwitchSpace(space));
+                self.dispatch(Command::ActivateTab(tab));
+                self.agent_send(reply, ToolResult::text("focused"), Outcome::Done);
             }
             AgentCall::OpenTab { url, .. } => self.agent_open_tab(reply, &session, url),
             AgentCall::CloseTab { .. } => {
@@ -826,23 +1393,37 @@ impl Host {
             }
             AgentCall::WaitFor {
                 condition,
+                in_values,
                 timeout_ms,
                 ..
             } => {
+                let text = |text: String, gone: bool| Wait::Text {
+                    tab,
+                    text,
+                    values: in_values,
+                    gone,
+                };
                 let wait = match condition {
                     WaitCondition::Load => Wait::Loaded { tab },
-                    WaitCondition::Text(text) => Wait::Text { tab, text },
+                    WaitCondition::Text(t) => text(t, false),
+                    WaitCondition::TextGone(t) => text(t, true),
                     WaitCondition::Element(r) => Wait::Element { tab, target: r.0 },
+                    WaitCondition::Url(part) => Wait::Url { tab, part },
+                    WaitCondition::Navigation => Wait::Moved {
+                        tab,
+                        url: self.agent_url(tab),
+                        document: self.agent_document(tab),
+                    },
                 };
                 let within = timeout_ms.map_or(WAIT, |ms| Duration::from_millis(ms.into()));
                 self.agent_wait(reply, wait, within);
                 self.agent_check();
             }
-            AgentCall::Evaluate { script, .. } => {
-                match self.tab_view(tab).and_then(|v| v.eval(&script)) {
-                    Some(id) => self.agent_wait(reply, Wait::Eval { id: id.0 }, WAIT),
-                    None => self.agent_fail(reply, "the page cannot run scripts now"),
-                }
+            AgentCall::Evaluate {
+                script, timeout_ms, ..
+            } => {
+                let timeout = timeout_ms.unwrap_or(WAIT.as_millis() as u32);
+                self.agent_evaluate(reply, tab, script, timeout, Evaluating::First);
             }
             AgentCall::FillSecret { target, secret, .. } => {
                 self.agent_fill(reply, &session, tab, target.0, &secret)
@@ -866,13 +1447,15 @@ impl Host {
             id.clone(),
             Session {
                 conn: reply.conn,
+                client: client.clone(),
                 state: State::Requested,
                 purpose,
-                sites,
+                lists: agent::Lists::asked(&secrets, &sites),
                 start: Some(reply.id),
                 space: None,
                 note: None,
                 asked: 0,
+                more: None,
             },
         );
         let request = Request {
@@ -896,21 +1479,30 @@ impl Host {
     }
 
     fn agent_grant(&self, session: &SessionId) -> Option<&Grant> {
-        match &self.agents.sessions.get(session)?.state {
-            State::Running { grant, .. } => Some(grant),
-            _ => None,
-        }
+        self.agents.sessions.get(session)?.state.grant()
+    }
+
+    fn agent_url(&self, tab: TabId) -> String {
+        self.model
+            .tabs
+            .get(&tab)
+            .map(|t| t.url.clone())
+            .unwrap_or_default()
+    }
+
+    fn agent_document(&self, tab: TabId) -> Option<String> {
+        self.ax_tree(tab)
+            .and_then(|t| t.document().map(str::to_owned))
     }
 
     fn agent_navigate(&mut self, reply: Reply, session: &SessionId, tab: TabId, target: NavTarget) {
-        let before = self
-            .ax_tree(tab)
-            .and_then(|t| t.document().map(str::to_owned));
+        let before = self.agent_document(tab);
         match target {
             NavTarget::Url(url) => {
-                if let Err(why) = self.agent_may_visit(session, &url) {
-                    return self.agent_refuse(reply, why);
-                }
+                let url = match self.agent_may_visit(session, &url) {
+                    Ok(url) => url,
+                    Err(why) => return self.agent_refuse(reply, why),
+                };
                 self.dispatch(Command::Navigate { tab, url });
             }
             NavTarget::Back | NavTarget::Forward | NavTarget::Reload => {
@@ -928,40 +1520,50 @@ impl Host {
             tab,
             before,
             load: Load::Asked,
+            answer: "loaded".into(),
+            grace: None,
         };
         self.agent_wait(reply, wait, WAIT);
     }
 
-    /// Whether the session may load `url`: http(s) only, and on the grant's sites if it has any.
-    fn agent_may_visit(&self, session: &SessionId, url: &str) -> Result<(), &'static str> {
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err("only http and https pages can be opened");
-        }
-        match self.agent_grant(session) {
-            Some(g) if g.allows_site(url) => Ok(()),
-            _ => Err("not a site this session may visit"),
-        }
+    /// The address the session may load for `url` (the parser's spelling): http(s) only, and
+    /// on the grant's sites if it has any (`agent::may_visit`).
+    fn agent_may_visit(&self, session: &SessionId, url: &str) -> Result<String, &'static str> {
+        let grant = self
+            .agent_grant(session)
+            .ok_or("the session is not running")?;
+        agent::may_visit(grant, url).map_err(agent::VisitRefusal::note)
     }
 
     fn agent_open_tab(&mut self, reply: Reply, session: &SessionId, url: Option<String>) {
-        if let Some(url) = &url
-            && let Err(why) = self.agent_may_visit(session, url)
-        {
-            return self.agent_refuse(reply, why);
-        }
+        let url = match url.map(|u| self.agent_may_visit(session, &u)).transpose() {
+            Ok(url) => url,
+            Err(why) => return self.agent_refuse(reply, why),
+        };
         let Some((space, _)) = self.agents.sessions.get(session).and_then(|s| s.space) else {
             return self.agent_fail(reply, "the session has no Space");
         };
+        let loads = url.is_some();
         self.dispatch(Command::OpenInSpace {
             space,
             url: url.unwrap_or_else(|| BLANK.into()),
         });
-        match self.model.order(space).last().copied() {
-            Some(tab) => {
-                let body = json!({ "tab": tab.0.to_string() });
-                self.agent_opened(reply, tab, body.to_string());
-            }
-            None => self.agent_fail(reply, "the tab did not open"),
+        let Some(tab) = self.model.order(space).last().copied() else {
+            return self.agent_fail(reply, "the tab did not open");
+        };
+        let answer = json!({ "tab": tab.0.to_string() }).to_string();
+        if loads {
+            // as `navigate`: once its page has loaded
+            let wait = Wait::Navigated {
+                tab,
+                before: None,
+                load: Load::Asked,
+                answer,
+                grace: None,
+            };
+            self.agent_wait(reply, wait, WAIT);
+        } else {
+            self.agent_opened(reply, tab, answer);
         }
     }
 
@@ -973,6 +1575,8 @@ impl Host {
             .and_then(|s| s.space)
             .map(|(sp, _)| sp);
         let tabs = space.map(|sp| self.model.order(sp)).unwrap_or_default();
+        let active = space.and_then(|sp| self.model.spaces.iter().find(|s| s.id == sp)?.active);
+        let shown = self.shown();
         let rows: Vec<Value> = tabs
             .into_iter()
             .filter_map(|t| {
@@ -985,14 +1589,22 @@ impl Host {
                     "title": tab.title,
                     "url": tab.url,
                     "loading": loading,
+                    "active": active == Some(t),
+                    "shown": shown == Some(t),
                 }))
             })
             .collect();
         Value::Array(rows).to_string()
     }
 
-    /// The page's items as `read_page` lines, once its tree exists.
-    fn agent_read(&mut self, tab: TabId, within: Option<&str>, max: usize) -> Option<String> {
+    /// The page's items as `read_page` lines, once its tree exists; an error for a ref that
+    /// names nothing on it. A list cut at `max` ends with a note of the total.
+    fn agent_read(
+        &mut self,
+        tab: TabId,
+        within: Option<&str>,
+        max: usize,
+    ) -> Option<Result<String, &'static str>> {
         let items = self
             .ax_tree(tab)
             .filter(|t| t.viewport().is_some())?
@@ -1006,18 +1618,64 @@ impl Host {
                 .map(|i| i.bounds)
         });
         if within.is_some() && area.is_none() {
-            return Some("stale ref: take a new snapshot".into());
+            return Some(Err("stale ref: take a new snapshot"));
         }
-        let lines: Vec<String> = items
+        let all: Vec<&AxItem> = items
             .iter()
             .filter(|i| area.is_none_or(|a| inside(i.bounds, a)))
+            .collect();
+        let mut lines: Vec<String> = all
+            .iter()
             .take(max)
             .map(|i| line(i, &book.name(&i.tree, i.id)))
             .collect();
-        Some(lines.join("\n"))
+        if all.len() > max {
+            let total = if items.len() >= ALL_ITEMS {
+                format!("at least {}", all.len())
+            } else {
+                all.len().to_string()
+            };
+            lines.push(format!(
+                "[{max} of {total} items: max_items raises the cap (default {READ_ITEMS}), \
+                 ref reads one part]"
+            ));
+        }
+        Some(Ok(lines.join("\n")))
     }
 
-    /// The item `target` names on `tab`'s page now, and the page's viewport.
+    /// `read_text`: one element's text from the accessibility mirror, or the page's article
+    /// (Readability, in the page) or its whole text.
+    fn agent_read_text(&mut self, reply: Reply, tab: TabId, within: Option<String>, max: usize) {
+        let Some(r) = within else {
+            let script = crate::pagescripts::reader_text();
+            return match self.tab_view(tab).and_then(|v| v.eval(&script)) {
+                Some(id) => self.agent_wait(reply, Wait::Article { id: id.0, max }, WAIT),
+                None => self.agent_fail(reply, "the page cannot run scripts now"),
+            };
+        };
+        let Some((item, _, _)) = self.agent_item(tab, &r) else {
+            return self.agent_fail(reply, "stale ref: take a new snapshot");
+        };
+        let items = self
+            .ax_tree(tab)
+            .map(|t| t.flatten(ALL_ITEMS))
+            .unwrap_or_default();
+        let words: Vec<&str> = items
+            .iter()
+            .filter(|i| inside(i.bounds, item.bounds))
+            .map(|i| i.name.as_str())
+            .filter(|n| !n.is_empty())
+            .collect();
+        let text = if words.is_empty() {
+            item.name.clone()
+        } else {
+            words.join("\n")
+        };
+        self.agent_send(reply, ToolResult::text(capped(&text, max)), Outcome::Done);
+    }
+
+    /// The item `target` names on `tab`'s page now, the page's viewport, and whether it is in
+    /// the page's own document (not a frame's).
     fn agent_item(&self, tab: TabId, target: &str) -> Option<(AxItem, Bounds, bool)> {
         let (tree, node) = self.agents.refs.get(&tab)?.resolve(target)?;
         let page = self.ax_tree(tab)?;
@@ -1030,12 +1688,57 @@ impl Host {
         Some((item, viewport, top))
     }
 
-    fn agent_act(&mut self, reply: Reply, tab: TabId, target: &str, act: Act) {
-        let Some((item, viewport, _)) = self.agent_item(tab, target) else {
-            return self.agent_fail(reply, "stale ref: take a new snapshot");
+    /// `act` on the element `target` names. An element of the page's own document is
+    /// scrolled into view and measured as the page lays it out now (DevTools, by its node:
+    /// Blink's accessibility id is the node's own id), never from the mirror's boxes, which
+    /// the page's scroll leaves behind; a frame's element is reached from the mirror's box.
+    /// Raw coordinates (`at`) are taken only inside a canvas.
+    fn agent_act(&mut self, reply: Reply, tab: TabId, target: &str, at: Option<Offset>, act: Act) {
+        let Some((item, viewport, top)) = self.agent_item(tab, target) else {
+            return self.agent_unpress(reply, tab, &act, "stale ref: take a new snapshot");
         };
+        let canvas_point = at.is_some()
+            || matches!(
+                act,
+                Act::Drag {
+                    to: DragTo::Offset(_)
+                }
+            );
+        if canvas_point && item.role != "canvas" {
+            return self.agent_refuse(
+                reply,
+                "coordinates are taken only inside a <canvas> element: name the element by ref",
+            );
+        }
+        if top && item.id > 0 {
+            let params = json!({ "backendNodeId": item.id });
+            return match self
+                .tab_view(tab)
+                .and_then(|v| v.cdp("DOM.scrollIntoViewIfNeeded", &params))
+            {
+                Some(id) => {
+                    let wait = Wait::Locate {
+                        id: id.0,
+                        tab,
+                        node: item.id,
+                        stage: Locating::Revealing,
+                        at,
+                        viewport,
+                        act,
+                    };
+                    self.agent_wait(reply, wait, WAIT)
+                }
+                None => self.agent_unpress(reply, tab, &act, "the page cannot be reached now"),
+            };
+        }
+        if canvas_point || matches!(act, Act::Shot) {
+            return self.agent_refuse(
+                reply,
+                "this works only on the page's own document, not in a frame",
+            );
+        }
         match wubble_ax::reach(item.bounds, viewport) {
-            Reach::At { x, y } => self.agent_input(reply, tab, x, y, act),
+            Reach::At { x, y } => self.agent_at(reply, tab, (x, y), act),
             Reach::ScrollBy { dx, dy } => {
                 let script = super::ax::scroll_script(dx, dy);
                 match self.tab_view(tab).and_then(|v| v.eval(&script)) {
@@ -1049,28 +1752,250 @@ impl Host {
                         };
                         self.agent_wait(reply, wait, WAIT);
                     }
-                    None => self.agent_fail(reply, "the page cannot scroll now"),
+                    None => self.agent_unpress(reply, tab, &act, "the page cannot scroll now"),
                 }
             }
         }
     }
 
-    /// The click or text at `(x, y)` of `tab`'s page (CSS px), through the view's pointer and
-    /// key input as the user's would go, and the call's answer.
-    fn agent_input(&mut self, reply: Reply, tab: TabId, x: f64, y: f64, act: Act) {
+    /// The element of a `Locate` was scrolled into view (`DOM.scrollIntoViewIfNeeded`) and
+    /// measured (`DOM.getContentQuads`): the next step, or the action where it shows.
+    fn agent_located(&mut self, p: Pending, result: &Result<Value, String>) {
+        let Wait::Locate {
+            tab,
+            node,
+            stage,
+            at,
+            viewport,
+            act,
+            ..
+        } = p.wait
+        else {
+            return;
+        };
+        let answer = match result {
+            Ok(v) => v,
+            Err(e) => {
+                let why = format!("the element cannot be reached: {e}");
+                return self.agent_unpress(p.reply, tab, &act, &why);
+            }
+        };
+        match stage {
+            Locating::Revealing if matches!(act, Act::Reveal) => {
+                self.agent_send(
+                    p.reply,
+                    ToolResult::text("scrolled into view"),
+                    Outcome::Done,
+                );
+            }
+            Locating::Revealing => {
+                let params = json!({ "backendNodeId": node });
+                match self
+                    .tab_view(tab)
+                    .and_then(|v| v.cdp("DOM.getContentQuads", &params))
+                {
+                    Some(id) => {
+                        let wait = Wait::Locate {
+                            id: id.0,
+                            tab,
+                            node,
+                            stage: Locating::Measuring,
+                            at,
+                            viewport,
+                            act,
+                        };
+                        self.agent_wait(p.reply, wait, WAIT);
+                    }
+                    None => {
+                        self.agent_unpress(p.reply, tab, &act, "the page cannot be reached now")
+                    }
+                }
+            }
+            Locating::Measuring => {
+                let quads = spot::quads(answer);
+                let size = (viewport.width, viewport.height);
+                if matches!(act, Act::Shot) {
+                    return match spot::visible(&quads, size) {
+                        Some(rect) => self.agent_measure(p.reply, tab, rect),
+                        None => self.agent_fail(p.reply, spot::Unreachable::Hidden.note()),
+                    };
+                }
+                let at = at.map(|o| (f64::from(o.x), f64::from(o.y)));
+                let point = match spot::point(&quads, size, at) {
+                    Ok(point) => point,
+                    Err(why) => return self.agent_unpress(p.reply, tab, &act, why.note()),
+                };
+                // a drag to a point of the same canvas: its end is measured now too
+                if let Act::Drag {
+                    to: DragTo::Offset(o),
+                } = &act
+                {
+                    let to = (f64::from(o.x), f64::from(o.y));
+                    return match spot::point(&quads, size, Some(to)) {
+                        Ok(end) => self.agent_drag(p.reply, tab, point, end),
+                        Err(why) => self.agent_fail(p.reply, why.note()),
+                    };
+                }
+                self.agent_at(p.reply, tab, point, act);
+            }
+        }
+    }
+
+    /// A failed step of an action: a drag's pressed button is let go first.
+    fn agent_unpress(&mut self, reply: Reply, tab: TabId, act: &Act, why: &str) {
+        if let Act::Drop { from } = act {
+            let now = self.input.now();
+            if let Some(view) = self.tab_view(tab) {
+                let point = point_of(*from);
+                view.mouse_button(MouseButton::Left, false, point, &Modifiers::default(), now);
+            }
+        }
+        self.agent_fail(reply, why);
+    }
+
+    /// `act` at `(x, y)` of `tab`'s page (viewport CSS px), through the view's pointer and key
+    /// input as the user's would go, and the call's answer.
+    fn agent_at(&mut self, reply: Reply, tab: TabId, (x, y): (f64, f64), act: Act) {
+        let now = self.input.now();
+        let point = point_of((x, y));
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_unpress(reply, tab, &act, "the tab has no page");
+        };
+        match act {
+            Act::Click { .. } | Act::Type { .. } | Act::Fill { .. } => {
+                self.agent_input(reply, tab, x, y, act)
+            }
+            Act::Hover => {
+                view.mouse_move(point, &Modifiers::default(), now);
+                self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+                self.agent_send(reply, ToolResult::text("hovering"), Outcome::Done);
+            }
+            Act::Wheel { dx, dy } => {
+                view.mouse_move(point, &Modifiers::default(), now);
+                let step = (dx / f64::from(WHEEL_TICKS), dy / f64::from(WHEEL_TICKS));
+                self.agent_wheel(reply, tab, point, step, WHEEL_TICKS);
+            }
+            Act::Drag {
+                to: DragTo::Element(target),
+            } => {
+                // pressed here, then the end is found (and scrolled to, if it must be)
+                press(view, point, now);
+                self.agent_act(reply, tab, &target.0, None, Act::Drop { from: (x, y) });
+            }
+            Act::Drag {
+                to: DragTo::Offset(_),
+            } => self.agent_fail(reply, "a drag to a point is measured with its canvas"),
+            Act::Drop { from } => {
+                glide(view, from, (x, y), now);
+                let held = Modifiers {
+                    buttons: Buttons::default(),
+                    ..Modifiers::default()
+                };
+                view.mouse_button(MouseButton::Left, false, point, &held, now);
+                self.agent_dragged(reply);
+            }
+            Act::Reveal => self.agent_send(reply, ToolResult::text("in view"), Outcome::Done),
+            Act::Shot => self.agent_fail(
+                reply,
+                "a picture of an element of a frame cannot be cropped",
+            ),
+        }
+    }
+
+    /// The wheel's next `left` ticks of `step` (CSS px, positive: right, down) at `point`, one
+    /// per [`WHEEL_TICK`] as a mouse wheel turns (Chromium takes a burst of ticks at once as one
+    /// gesture it may drop); the answer after the last.
+    fn agent_wheel(&mut self, reply: Reply, tab: TabId, point: Point, step: (f64, f64), left: u32) {
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_fail(reply, "the tab has no page");
+        };
+        // the view's wheel takes positive as up and left
+        view.wheel(point, -step.0 as f32, -step.1 as f32, &Modifiers::default());
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        if left <= 1 {
+            return self.agent_send(reply, ToolResult::text("scrolled"), Outcome::Done);
+        }
+        slint::Timer::single_shot(WHEEL_TICK, move || {
+            with_host(|h| h.agent_wheel(reply, tab, point, step, left - 1));
+        });
+    }
+
+    /// A drag from `from` to `to` in one go (both measured already).
+    fn agent_drag(&mut self, reply: Reply, tab: TabId, from: (f64, f64), to: (f64, f64)) {
         let now = self.input.now();
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
         };
-        let point = Point {
-            x: x as f32,
-            y: y as f32,
+        press(view, point_of(from), now);
+        glide(view, from, to, now);
+        view.mouse_button(
+            MouseButton::Left,
+            false,
+            point_of(to),
+            &Modifiers::default(),
+            now,
+        );
+        self.agent_dragged(reply);
+    }
+
+    /// A drag was let go: a page's own drag and drop the press may have started (an HTML
+    /// `draggable`, which runs in the window's pointer, not the agent's) is dropped with
+    /// nothing, so the window is not left in it.
+    fn agent_dragged(&mut self, reply: Reply) {
+        let page_drag = self.drag_cancelled();
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        let text = if page_drag {
+            "dragged; the page began an HTML drag and drop, which agent drags do not carry: it was dropped with nothing"
+        } else {
+            "dragged"
         };
+        self.agent_send(reply, ToolResult::text(text), Outcome::Done);
+    }
+
+    /// `scroll`: an element into view (`ref` alone), or the wheel over it or over the middle
+    /// of the page.
+    fn agent_scroll(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        target: Option<String>,
+        direction: Option<Direction>,
+        amount: Option<u32>,
+    ) {
+        let viewport = self.ax_tree(tab).and_then(PageTree::viewport);
+        let Some(direction) = direction else {
+            let Some(target) = target else {
+                return self.agent_fail(reply, "ref or direction is required");
+            };
+            return self.agent_act(reply, tab, &target, None, Act::Reveal);
+        };
+        let (w, h) = viewport.map_or((800.0, 600.0), |v| (v.width, v.height));
+        let by = |size: f64| amount.map_or(size * 0.8, f64::from);
+        let (dx, dy) = match direction {
+            Direction::Up => (0.0, -by(h)),
+            Direction::Down => (0.0, by(h)),
+            Direction::Left => (-by(w), 0.0),
+            Direction::Right => (by(w), 0.0),
+        };
+        match target {
+            Some(target) => self.agent_act(reply, tab, &target, None, Act::Wheel { dx, dy }),
+            None => self.agent_at(reply, tab, (w / 2.0, h / 2.0), Act::Wheel { dx, dy }),
+        }
+    }
+
+    /// A click or text at `(x, y)` of `tab`'s page (CSS px), and the call's answer.
+    fn agent_input(&mut self, reply: Reply, tab: TabId, x: f64, y: f64, act: Act) {
+        let now = self.input.now();
+        let before = self.agent_document(tab);
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_fail(reply, "the tab has no page");
+        };
+        let point = point_of((x, y));
         view.focus(true);
         view.mouse_move(point, &Modifiers::default(), now);
         let (button, count) = match &act {
             Act::Click { button, count } => (*button, *count),
-            Act::Type { .. } | Act::Fill { .. } => (MouseButton::Left, 1),
+            _ => (MouseButton::Left, 1),
         };
         // each call's clicks are counted alone, not as the next of the last call's
         view.forget_clicks();
@@ -1084,12 +2009,26 @@ impl Host {
             }
         }
         let answer = match act {
-            Act::Click { .. } => "clicked",
             Act::Type { text, submit } => {
                 view.edit(EditCommand::SelectAll);
                 view.ime_commit(text.expose());
-                if submit && let Err(e) = self.agent_keys(tab, "Enter") {
-                    return self.agent_fail(reply, &e);
+                if submit {
+                    if let Err(e) = self.agent_keys(tab, "Enter") {
+                        return self.agent_fail(reply, &e);
+                    }
+                    // as `navigate` when a load follows; a page that stays shows no load
+                    let wait = Wait::Navigated {
+                        tab,
+                        before,
+                        load: Load::Asked,
+                        answer: "typed and submitted; the page loaded".into(),
+                        grace: Some((
+                            Instant::now() + SUBMIT_GRACE,
+                            "typed and submitted; no page load followed".into(),
+                        )),
+                    };
+                    self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+                    return self.agent_wait(reply, wait, WAIT);
                 }
                 "typed"
             }
@@ -1105,9 +2044,10 @@ impl Host {
                 };
                 return self.agent_wait(reply, wait, WAIT);
             }
+            _ => "clicked",
         };
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
-        self.agent_send(reply, ToolResult::text(answer), Outcome::Done);
+        self.agent_settle(reply, tab, answer.into());
     }
 
     /// The page's answer to [`focus_script`]: the secret is typed only into the element that
@@ -1133,6 +2073,51 @@ impl Host {
         self.agent_send(reply, ToolResult::text("filled"), Outcome::Done);
     }
 
+    /// `press_key`: the chord to the page, unless it is one of wubble's shortcuts
+    /// (`agent::keys::plan`): back, forward and reload act on this tab as `navigate`; the
+    /// others never act for an agent, and the answer says so.
+    fn agent_press(&mut self, reply: Reply, session: &SessionId, tab: TabId, name: &str) {
+        let chord = match agent::keys::chord_of(name) {
+            Ok(chord) => chord,
+            Err(e) => return self.agent_fail(reply, &format!("unknown key {name:?}: {e:?}")),
+        };
+        let named = |host: &Host, action| host.keymap.tooltip_text(action).0;
+        match agent::keys::plan(self.keymap.action_for(chord)) {
+            KeyPlan::Page => match self.agent_keys(tab, name) {
+                Ok(()) => self.agent_settle(reply, tab, "pressed".into()),
+                Err(e) => self.agent_fail(reply, &e),
+            },
+            KeyPlan::PageNotBrowser(action) => {
+                let text = format!(
+                    "pressed, to the page only: {name} is also wubble's \"{}\" shortcut, which \
+                     does not run for an agent",
+                    named(self, action)
+                );
+                match self.agent_keys(tab, name) {
+                    Ok(()) => self.agent_settle(reply, tab, text),
+                    Err(e) => self.agent_fail(reply, &e),
+                }
+            }
+            KeyPlan::Navigate(nav) => {
+                let target = match nav {
+                    SessionNav::Back => NavTarget::Back,
+                    SessionNav::Forward => NavTarget::Forward,
+                    SessionNav::Reload => NavTarget::Reload,
+                };
+                self.agent_navigate(reply, session, tab, target);
+            }
+            KeyPlan::Refused(action) => {
+                let why = format!(
+                    "not pressed: {name} is wubble's \"{}\" shortcut, which acts on the window, \
+                     not on this session's page (open_tab, close_tab, focus_tab and navigate \
+                     do what the session may)",
+                    named(self, action)
+                );
+                self.agent_refuse(reply, &why);
+            }
+        }
+    }
+
     /// A Playwright key name pressed and released on `tab`'s page.
     fn agent_keys(&mut self, tab: TabId, name: &str) -> Result<(), String> {
         let chord =
@@ -1146,31 +2131,218 @@ impl Host {
         Ok(())
     }
 
-    fn agent_shot(&mut self, reply: Reply, tab: TabId, crop: Option<String>) {
-        let clip = match crop {
-            Some(r) => match self.agent_item(tab, &r) {
-                Some((item, _, _)) => Some(item.bounds),
-                None => return self.agent_fail(reply, "stale ref: take a new snapshot"),
-            },
-            None => None,
-        };
-        let params = match clip {
-            Some(b) => wubble_core::shot::params(wubble_core::shot::Capture::Clip(
-                wubble_core::shot::RectF {
-                    x: b.x,
-                    y: b.y,
-                    w: b.width,
-                    h: b.height,
+    /// `screenshot` of an element: where the viewport is in the document (the clip is in
+    /// document px), then the capture.
+    fn agent_measure(&mut self, reply: Reply, tab: TabId, rect: spot::Rect) {
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Page.getLayoutMetrics", &json!({})))
+        {
+            Some(id) => self.agent_wait(
+                reply,
+                Wait::Metrics {
+                    id: id.0,
+                    tab,
+                    rect,
                 },
-            )),
-            None => wubble_core::shot::params(wubble_core::shot::Capture::Visible),
-        };
+                WAIT,
+            ),
+            None => self.agent_fail(reply, "the page cannot be captured now"),
+        }
+    }
+
+    fn agent_capture(&mut self, reply: Reply, tab: TabId, capture: wubble_core::shot::Capture) {
+        let params = wubble_core::shot::params(capture);
         match self
             .tab_view(tab)
             .and_then(|v| v.cdp("Page.captureScreenshot", &params))
         {
             Some(id) => self.agent_wait(reply, Wait::Shot { id: id.0 }, WAIT),
             None => self.agent_fail(reply, "the page cannot be captured now"),
+        }
+    }
+
+    /// `evaluate` through DevTools (`Runtime.evaluate` in the page's main world, REPL mode:
+    /// statements give their completion value, `await` works at the top), the promise awaited.
+    fn agent_evaluate(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        script: String,
+        timeout: u32,
+        stage: Evaluating,
+    ) {
+        // REPL mode gives statements their completion value and `await` at the top; a body
+        // with `return` is a function's, whose promise plain evaluation awaits
+        let params = match stage {
+            Evaluating::AsBody => json!({
+                "expression": format!("(async () => {{\n{script}\n}})()"),
+                "awaitPromise": true,
+                "objectGroup": EVAL_GROUP,
+                "timeout": timeout,
+            }),
+            _ => json!({
+                "expression": script,
+                "replMode": true,
+                "awaitPromise": true,
+                "objectGroup": EVAL_GROUP,
+                "timeout": timeout,
+            }),
+        };
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Runtime.evaluate", &params))
+        {
+            Some(id) => {
+                let wait = Wait::Eval {
+                    id: id.0,
+                    tab,
+                    script,
+                    timeout,
+                    stage,
+                };
+                // the page's own stop comes first (DevTools' `timeout`), then the call's
+                let within = Duration::from_millis(timeout.into()) + EVAL_GRACE;
+                self.agent_wait(reply, wait, within);
+            }
+            None => self.agent_fail(reply, "the page cannot run scripts now"),
+        }
+    }
+
+    /// DevTools' answer to `evaluate`'s call: a value, the error with its stack, or a note
+    /// for what JSON cannot carry.
+    fn agent_evaluated(&mut self, p: Pending, result: &Result<Value, String>) {
+        let Wait::Eval {
+            tab,
+            script,
+            timeout,
+            stage,
+            ..
+        } = p.wait
+        else {
+            return;
+        };
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.agent_release_values(tab);
+                return self.agent_fail(
+                    p.reply,
+                    &format!(
+                        "the script did not finish ({e}): a script still running at timeout_ms \
+                         ({timeout} ms) is stopped"
+                    ),
+                );
+            }
+        };
+        if let Some(thrown) = v.get("exceptionDetails") {
+            let what = thrown["exception"]["description"]
+                .as_str()
+                .or_else(|| thrown["text"].as_str())
+                .unwrap_or("an exception")
+                .to_owned();
+            if stage == Evaluating::First && what.starts_with("SyntaxError: Illegal return") {
+                return self.agent_evaluate(p.reply, tab, script, timeout, Evaluating::AsBody);
+            }
+            self.agent_release_values(tab);
+            let at = format!(
+                " (line {}, column {})",
+                thrown["lineNumber"].as_i64().unwrap_or(0) + 1,
+                thrown["columnNumber"].as_i64().unwrap_or(0) + 1
+            );
+            let text = if what.contains("\n    at ") {
+                format!("threw: {what}")
+            } else {
+                format!("threw: {what}{at}")
+            };
+            return self.agent_fail(p.reply, &capped(&text, EVAL_CHARS));
+        }
+        let r = &v["result"];
+        if stage == Evaluating::Serialising {
+            self.agent_release_values(tab);
+            let text = serde_json::to_string(&r["value"]).unwrap_or_else(|_| "null".into());
+            return self.agent_settle(p.reply, tab, capped(&text, EVAL_CHARS));
+        }
+        // a value that is itself a promise (REPL mode awaits only its own): awaited too
+        if r["subtype"] == "promise" && stage != Evaluating::Awaiting {
+            let params = json!({ "promiseObjectId": r["objectId"] });
+            return match self
+                .tab_view(tab)
+                .and_then(|v| v.cdp("Runtime.awaitPromise", &params))
+            {
+                Some(id) => {
+                    let wait = Wait::Eval {
+                        id: id.0,
+                        tab,
+                        script,
+                        timeout,
+                        stage: Evaluating::Awaiting,
+                    };
+                    let left = p.deadline.saturating_duration_since(Instant::now());
+                    self.agent_wait(p.reply, wait, left)
+                }
+                None => self.agent_fail(p.reply, "the page cannot run scripts now"),
+            };
+        }
+        let text = match (r["type"].as_str(), r["subtype"].as_str()) {
+            (Some("undefined"), _) => Some("undefined".to_owned()),
+            _ if r.get("unserializableValue").is_some() => {
+                r["unserializableValue"].as_str().map(str::to_owned)
+            }
+            _ if r.get("value").is_some() => serde_json::to_string(&r["value"]).ok(),
+            (_, Some("node")) => Some(format!(
+                "[not JSON] a DOM node ({}): return what you need of it, such as .textContent, \
+                 .outerHTML or .href",
+                r["description"].as_str().unwrap_or("a node")
+            )),
+            (Some("function"), _) => Some(format!(
+                "[not JSON] a function ({}): call it, or return what it returns",
+                r["description"]
+                    .as_str()
+                    .and_then(|d| d.lines().next())
+                    .unwrap_or("anonymous")
+            )),
+            (Some("symbol"), _) => r["description"].as_str().map(str::to_owned),
+            (_, Some("error")) => r["description"].as_str().map(str::to_owned),
+            _ => None,
+        };
+        if let Some(text) = text {
+            self.agent_release_values(tab);
+            return self.agent_settle(p.reply, tab, capped(&text, EVAL_CHARS));
+        }
+        // an object: made plain JSON in the page
+        let params = json!({
+            "objectId": r["objectId"],
+            "functionDeclaration": SERIALISE,
+            "returnByValue": true,
+        });
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Runtime.callFunctionOn", &params))
+        {
+            Some(id) => {
+                let wait = Wait::Eval {
+                    id: id.0,
+                    tab,
+                    script,
+                    timeout,
+                    stage: Evaluating::Serialising,
+                };
+                self.agent_wait(p.reply, wait, WAIT);
+            }
+            None => self.agent_fail(p.reply, "the page cannot run scripts now"),
+        }
+    }
+
+    /// Lets the page drop the values `evaluate` held (its object group); the answer means
+    /// nothing.
+    fn agent_release_values(&mut self, tab: TabId) {
+        let params = json!({ "objectGroup": EVAL_GROUP });
+        if let Some(id) = self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Runtime.releaseObjectGroup", &params))
+        {
+            self.agents.ignored.push(id.0);
         }
     }
 
@@ -1235,7 +2407,7 @@ impl Host {
             return;
         };
         match value {
-            Some(text) => self.agent_act(p.reply, tab, &target, Act::Fill { text, name }),
+            Some(text) => self.agent_act(p.reply, tab, &target, None, Act::Fill { text, name }),
             None => self.agent_fail(p.reply, "the vault has no such login"),
         }
     }
@@ -1265,10 +2437,15 @@ impl Host {
             });
     }
 
-    /// A web event of `tab`: the start, then the end, of a load lets `navigate` go on.
+    /// A web event of `tab`: the start, then the end, of a load lets `navigate` go on. A
+    /// session's tab that commits an address off the web (a script's `location`, a redirect
+    /// Chromium let through) is taken back to a blank page.
     pub(super) fn agent_web(&mut self, tab: TabId, event: &WebEvent) {
         let step = |load: Load| match (load, event) {
-            (Load::Asked, WebEvent::LoadStarted) => Load::Started,
+            (
+                Load::Asked,
+                WebEvent::LoadStarted | WebEvent::LoadingChanged { loading: true, .. },
+            ) => Load::Started,
             (Load::Started, WebEvent::LoadingChanged { loading: false, .. }) => Load::Ended,
             (load, _) => load,
         };
@@ -1279,19 +2456,251 @@ impl Host {
                 *load = step(*load);
             }
         }
+        if let WebEvent::UrlChanged(url) = event
+            && self.agent_drives(tab)
+        {
+            match self.agent_grant_of(tab) {
+                // where the rule could not ask (a page from the back-forward cache, a script's
+                // address Chromium let through): taken back, the agent or the log told
+                Some((_, grant))
+                    if agent::may_go(&grant, url).is_err() && !url.starts_with("about:") =>
+                {
+                    eprintln!("wubble: agent: a session tab reached {url}: taken back");
+                    self.agent_refused(tab, url);
+                    self.agent_take_back(tab);
+                }
+                Some(_) => {
+                    self.agents.last_at.insert(tab, url.clone());
+                }
+                None if !agent::is_web(url) && !url.starts_with("about:") => {
+                    self.agent_backstop(tab, url);
+                }
+                None => {}
+            }
+        }
     }
 
-    /// The page's answer to a script or a capture a call sent; whether it was one.
+    /// An action's answer once a navigation it started had [`SETTLE`] to be refused.
+    fn agent_settle(&mut self, reply: Reply, tab: TabId, answer: String) {
+        self.agent_wait(reply, Wait::Settle { tab, answer }, SETTLE);
+    }
+
+    /// The progress beat runs while a call waits on the owner's sheet, so a client that passed a
+    /// progress token sees the call is alive (Claude Code's idle timer counts them).
+    fn agent_beat_arm(&mut self) {
+        let waiting = self
+            .agents
+            .sessions
+            .values()
+            .any(|s| s.start.is_some() || s.more.is_some());
+        if !waiting {
+            self.agents.beat.stop();
+            return;
+        }
+        if !self.agents.beat.running() {
+            self.agents
+                .beat
+                .start(slint::TimerMode::Repeated, BEAT, || {
+                    with_host(Host::agent_beat)
+                });
+        }
+    }
+
+    fn agent_beat(&mut self) {
+        self.agents.beats += 1;
+        let step = self.agents.beats;
+        let mut sent = false;
+        for s in self.agents.sessions.values() {
+            let (id, what) = match (&s.start, &s.more) {
+                (Some(id), _) => (id, "waiting for the owner to approve the session"),
+                (_, Some(more)) => (&more.id, "waiting for the owner to answer"),
+                _ => continue,
+            };
+            sent = true;
+            if let (Some(note), Some(conn)) = (
+                wubble_mcp::progress(id, step, what),
+                self.agents.conns.get(&s.conn),
+            ) {
+                conn.out.send(note);
+            }
+        }
+        if !sent {
+            self.agents.beat.stop();
+        }
+    }
+
+    /// The grant of the session that drives `tab`.
+    fn agent_grant_of(&self, tab: TabId) -> Option<(SessionId, agent::Grant)> {
+        let sessions: Vec<_> = self
+            .agents
+            .sessions
+            .iter()
+            .filter_map(|(id, s)| {
+                let (space, container) = s.space?;
+                Some((id.clone(), space, container, s.state.grant()?))
+            })
+            .collect();
+        agent::holder(&self.model, tab, &sessions)
+    }
+
+    /// Each view's navigation rule (`agent::may_go`), derived from the model (`agent::holder`):
+    /// a running session's tabs go only where its grant says, every other tab anywhere. Run
+    /// after every model change (`Host::dispatch`: a tab dragged into or out of a session's
+    /// Space), a session's state change, and a view's opening; a view is told only when its
+    /// grant changed.
+    pub(super) fn agent_rules(&mut self) {
+        // a closed tab, or one no longer a session's, has no last allowed address
+        let held: Vec<TabId> = self
+            .agents
+            .last_at
+            .keys()
+            .copied()
+            .filter(|t| self.agent_grant_of(*t).is_some())
+            .collect();
+        self.agents.last_at.retain(|t, _| held.contains(t));
+        let tabs: Vec<(TabId, wubble_engine::app::ViewId)> =
+            self.views.iter().map(|(t, v)| (*t, *v)).collect();
+        self.agents
+            .rules
+            .retain(|view, _| tabs.iter().any(|(_, v)| v == view));
+        for (tab, view_id) in tabs {
+            let grant = self.agent_grant_of(tab).map(|(_, grant)| grant);
+            if self.agents.rules.get(&view_id) == Some(&grant) {
+                continue;
+            }
+            let rule = grant.clone().map(|grant| {
+                let rule: wubble_engine::view::Rule =
+                    std::sync::Arc::new(move |url: &str| agent::may_go(&grant, url).is_ok());
+                rule
+            });
+            if let Some(view) = self.tab_view(tab) {
+                view.set_navigation_rule(rule);
+                self.agents.rules.insert(view_id, grant);
+            }
+        }
+    }
+
+    /// A session's tab was kept from going to `url` (its rule refused the navigation before it
+    /// was sent, a pop-up there, or it got there and was taken back): the call in flight on the
+    /// tab fails with the reason; with none, the page went on its own and the activity log says
+    /// so.
+    pub(super) fn agent_refused(&mut self, tab: TabId, url: &str) {
+        let Some((session, _)) = self.agent_grant_of(tab) else {
+            return;
+        };
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.navigations_refused += 1;
+        }
+        let note = agent::refused_note(url);
+        let (on_tab, rest): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.agents.pending)
+            .into_iter()
+            .partition(|p| wait_tab(&p.wait) == Some(tab));
+        self.agents.pending = rest;
+        if on_tab.is_empty() {
+            self.agent_log(
+                &session,
+                "navigation_refused",
+                Some(url.to_owned()),
+                Outcome::Refused,
+            );
+        }
+        for p in on_tab {
+            self.agent_fail(p.reply, &note);
+        }
+        self.agent_arm();
+        // the tab's address is still the page it never left (a `navigate` wrote the new one)
+        if let Some(at) = self.agents.last_at.get(&tab).cloned()
+            && self.agent_url(tab) != at
+        {
+            self.dispatch(Command::UrlChanged { tab, url: at });
+        }
+    }
+
+    /// A session's tab is somewhere a session may not be: back to a blank page, logged.
+    fn agent_backstop(&mut self, tab: TabId, url: &str) {
+        eprintln!("wubble: agent: a session tab reached {url}: blanked");
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.blanked += 1;
+        }
+        let session = self.agents.sessions.iter().find_map(|(id, s)| {
+            let (space, container) = s.space?;
+            self.model.holds(space, container, tab).then(|| id.clone())
+        });
+        if let Some(session) = session {
+            self.agent_log(
+                &session,
+                "left_the_web",
+                Some(url.to_owned()),
+                Outcome::Refused,
+            );
+        }
+        self.agent_take_back(tab);
+    }
+
+    /// `tab` back to its last address the session's grant allowed (a blank page if none).
+    fn agent_take_back(&mut self, tab: TabId) {
+        let back = self
+            .agents
+            .last_at
+            .get(&tab)
+            .cloned()
+            .unwrap_or(BLANK.into());
+        self.dispatch(Command::Navigate { tab, url: back });
+    }
+
+    /// A page's pop-up from a session's tab: one off the web (`window.open('file:...')`,
+    /// `chrome:`, `mailto:`) opens nothing (wubble would load it as the browser, which a page
+    /// itself may not); whether it was refused.
+    pub(super) fn agent_popup_refused(&mut self, tab: TabId, url: &str) -> bool {
+        if !self.agent_drives(tab) || url == BLANK {
+            return false;
+        }
+        // a web pop-up goes where the session's sites allow (`agent::may_go`), as the tab
+        if agent::is_web(url) {
+            let allowed = self
+                .agent_grant_of(tab)
+                .is_none_or(|(_, grant)| agent::may_go(&grant, url).is_ok());
+            if !allowed {
+                self.agent_refused(tab, url);
+            }
+            return !allowed;
+        }
+        let session = self.agents.sessions.iter().find_map(|(id, s)| {
+            let (space, container) = s.space?;
+            self.model.holds(space, container, tab).then(|| id.clone())
+        });
+        if let Some(session) = session {
+            self.agent_log(
+                &session,
+                "popup_off_the_web",
+                Some(url.to_owned()),
+                Outcome::Refused,
+            );
+        }
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.popups_refused += 1;
+        }
+        true
+    }
+
+    /// The page's answer to a script or a DevTools call a call sent; whether it was one.
     pub(super) fn agent_answer(&mut self, event: &PageEvent) -> bool {
         let id = match event {
             PageEvent::EvalResult { id, .. } => id.0,
             PageEvent::CdpReply { id, .. } => id.0,
             _ => return false,
         };
+        if let Some(i) = self.agents.ignored.iter().position(|w| *w == id) {
+            self.agents.ignored.swap_remove(i);
+            return true;
+        }
         let Some(i) = self.agents.pending.iter().position(|p| match p.wait {
-            Wait::Eval { id: w }
-            | Wait::Shot { id: w, .. }
+            Wait::Eval { id: w, .. }
+            | Wait::Article { id: w, .. }
+            | Wait::Shot { id: w }
             | Wait::Scroll { id: w, .. }
+            | Wait::Locate { id: w, .. }
+            | Wait::Metrics { id: w, .. }
             | Wait::Focus { id: w, .. } => w == id,
             _ => false,
         }) else {
@@ -1299,11 +2708,28 @@ impl Host {
         };
         let p = self.agents.pending.remove(i);
         self.agent_arm();
-        match (p.wait, event) {
-            (Wait::Eval { .. }, PageEvent::EvalResult { result, .. }) => match result {
-                Ok(json) => self.agent_send(p.reply, ToolResult::text(json.clone()), Outcome::Done),
-                Err(e) => self.agent_fail(p.reply, e),
-            },
+        match (&p.wait, event) {
+            (Wait::Eval { .. }, PageEvent::CdpReply { result, .. }) => {
+                self.agent_evaluated(p, result)
+            }
+            (Wait::Locate { .. }, PageEvent::CdpReply { result, .. }) => {
+                self.agent_located(p, result)
+            }
+            (Wait::Article { max, .. }, PageEvent::EvalResult { result, .. }) => {
+                let max = *max;
+                match result.as_deref().map(article_text) {
+                    Ok(Some(text)) => {
+                        let text = ToolResult::text(capped(&text, max));
+                        self.agent_send(p.reply, text, Outcome::Done);
+                    }
+                    Ok(None) => self.agent_fail(p.reply, "the page gave no text"),
+                    Err(e) => self.agent_fail(p.reply, e),
+                }
+            }
+            (Wait::Metrics { tab, rect, .. }, PageEvent::CdpReply { result, .. }) => {
+                let (tab, rect) = (*tab, *rect);
+                self.agent_clip(p.reply, tab, rect, result);
+            }
             (Wait::Shot { .. }, PageEvent::CdpReply { result, .. }) => {
                 let data = result
                     .as_ref()
@@ -1318,28 +2744,32 @@ impl Host {
                     None => self.agent_fail(p.reply, &format!("no picture: {result:?}")),
                 }
             }
-            (
-                Wait::Scroll {
+            (Wait::Scroll { .. }, PageEvent::EvalResult { result, .. }) => {
+                let Wait::Scroll {
                     tab,
                     bounds,
                     viewport,
                     act,
                     ..
-                },
-                PageEvent::EvalResult { result, .. },
-            ) => match super::ax::reach_after(bounds, viewport, result) {
-                Some(Reach::At { x, y }) => self.agent_input(p.reply, tab, x, y, act),
-                Some(Reach::ScrollBy { .. }) => {
-                    self.agent_fail(p.reply, "the element stays out of view")
+                } = p.wait
+                else {
+                    return true;
+                };
+                match super::ax::reach_after(bounds, viewport, result) {
+                    Some(Reach::At { x, y }) => self.agent_at(p.reply, tab, (x, y), act),
+                    Some(Reach::ScrollBy { .. }) => {
+                        self.agent_unpress(p.reply, tab, &act, "the element stays out of view")
+                    }
+                    None => self.agent_unpress(p.reply, tab, &act, "the page did not scroll"),
                 }
-                None => self.agent_fail(p.reply, "the page did not scroll"),
-            },
-            (
-                Wait::Focus {
+            }
+            (Wait::Focus { .. }, PageEvent::EvalResult { result, .. }) => {
+                let Wait::Focus {
                     tab, text, name, ..
-                },
-                PageEvent::EvalResult { result, .. },
-            ) => {
+                } = p.wait
+                else {
+                    return true;
+                };
                 let href = result
                     .as_deref()
                     .ok()
@@ -1351,6 +2781,45 @@ impl Host {
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
         true
+    }
+
+    /// `screenshot` of an element: its visible box (viewport px) moved by where the viewport
+    /// is in the document (`Page.getLayoutMetrics`), as the capture's clip wants it
+    /// (`shot::clip`).
+    fn agent_clip(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        rect: spot::Rect,
+        result: &Result<Value, String>,
+    ) {
+        let view = result.as_ref().ok().map(|v| &v["cssVisualViewport"]);
+        let num = |k: &str| view.and_then(|v| v[k].as_f64());
+        let (Some(page_left), Some(page_top), Some(width), Some(height)) = (
+            num("pageX"),
+            num("pageY"),
+            num("clientWidth"),
+            num("clientHeight"),
+        ) else {
+            return self.agent_fail(reply, &format!("no page metrics: {result:?}"));
+        };
+        let metrics = wubble_core::shot::Metrics {
+            page_left,
+            page_top,
+            width,
+            height,
+            element: None,
+        };
+        let r = wubble_core::shot::RectF {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: rect.h,
+        };
+        match wubble_core::shot::clip(r, &metrics) {
+            Some(clip) => self.agent_capture(reply, tab, wubble_core::shot::Capture::Clip(clip)),
+            None => self.agent_fail(reply, spot::Unreachable::Hidden.note()),
+        }
     }
 
     /// Answers every waiting call whose condition holds now, and those past their deadline.
@@ -1381,6 +2850,9 @@ impl Host {
             | Wait::Opened { tab, .. }
             | Wait::Text { tab, .. }
             | Wait::Element { tab, .. }
+            | Wait::Url { tab, .. }
+            | Wait::Moved { tab, .. }
+            | Wait::Settle { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             // answered by the page or the vault; only their deadline is checked here
             _ if late => {
@@ -1397,27 +2869,60 @@ impl Host {
         let loading = matches!(phase, Some(Phase::Loading { .. }));
         let page = self.ax_tree(tab).filter(|t| t.viewport().is_some());
         let document = page.and_then(PageTree::document).map(str::to_owned);
-        let done: Option<String> = match &p.wait {
-            Wait::Navigated { before, load, .. } => {
+        let url = self.agent_url(tab);
+        let done: Option<Result<String, &str>> = match &p.wait {
+            Wait::Navigated {
+                before,
+                load,
+                answer,
+                grace,
+                ..
+            } => {
                 let ended = *load == Load::Ended;
                 let fresh = document.is_some() && document != *before;
-                match (ended && fresh, ended && late) {
-                    (true, _) => Some("loaded".into()),
-                    (false, true) => Some("loaded (the page's tree did not change)".into()),
-                    _ => None,
+                let none_began = *load == Load::Asked && grace.as_ref().is_some_and(|g| now >= g.0);
+                if ended && fresh {
+                    Some(Ok(answer.clone()))
+                } else if none_began {
+                    grace.as_ref().map(|g| Ok(g.1.clone()))
+                } else if ended && late {
+                    Some(Ok(format!("{answer} (the page's tree did not change)")))
+                } else {
+                    None
                 }
             }
-            Wait::Loaded { .. } => (!loading && document.is_some()).then(|| "loaded".into()),
-            Wait::Opened { answer, .. } => (phase == Some(Phase::Loaded)).then(|| answer.clone()),
-            Wait::Text { text, .. } => page
-                .map(|t| t.flatten(ALL_ITEMS))
-                .is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|i| i.name.contains(text.as_str()) || i.value.contains(text.as_str()))
-                })
-                .then(|| "found".into()),
-            Wait::Element { tab, target } => self.agent_item(*tab, target).map(|_| "found".into()),
+            Wait::Loaded { .. } => (!loading && document.is_some()).then(|| Ok("loaded".into())),
+            Wait::Settle { answer, .. } => late.then(|| Ok(answer.clone())),
+            Wait::Opened { answer, .. } => {
+                (phase == Some(Phase::Loaded)).then(|| Ok(answer.clone()))
+            }
+            Wait::Text {
+                text, values, gone, ..
+            } => page.map(|t| t.flatten(ALL_ITEMS)).and_then(|items| {
+                let shows = items.iter().any(|i| {
+                    i.name.contains(text.as_str()) || (*values && i.value.contains(text.as_str()))
+                });
+                match (shows, *gone) {
+                    (true, false) => Some(Ok("found".into())),
+                    (false, true) => Some(Ok("gone".into())),
+                    _ => None,
+                }
+            }),
+            Wait::Element { tab, target } => {
+                self.agent_item(*tab, target).map(|_| Ok("found".into()))
+            }
+            Wait::Url { part, .. } => url
+                .contains(part.as_str())
+                .then(|| Ok(json!({ "url": url }).to_string())),
+            Wait::Moved {
+                url: before,
+                document: was,
+                ..
+            } => {
+                let moved = url != *before || (document.is_some() && document != *was);
+                // a new document: once its load ended
+                (moved && !loading).then(|| Ok(json!({ "url": url }).to_string()))
+            }
             Wait::Tree { tab, within, max } => {
                 let (tab, within, max) = (*tab, within.clone(), *max);
                 self.agent_read(tab, within.as_deref(), max)
@@ -1425,8 +2930,12 @@ impl Host {
             _ => None,
         };
         match done {
-            Some(text) => {
+            Some(Ok(text)) => {
                 self.agent_send(p.reply, ToolResult::text(text), Outcome::Done);
+                None
+            }
+            Some(Err(why)) => {
+                self.agent_fail(p.reply, why);
                 None
             }
             None if late => {
@@ -1473,57 +2982,579 @@ impl Host {
         self.store.push_agent_log(entry);
     }
 
-    /// `--smoke mcp`: the sheet is up. Checks what it shows against what the client asked, then
-    /// answers it through the window's own callback, as its buttons do: Allow, but Deny for the
-    /// session that asks for a secret.
+    /// `--smoke mcp`: the sheet is up. Checks what it shows against the next row of
+    /// `mcp_smoke::SHEETS`, then answers it with the pointer (and keys), as a person would
+    /// (`mcp_smoke::sheet`). Each press must answer the sheet at once; the Space an approval
+    /// opens must be in the mode the sheet showed (`agent_open_space`).
     pub(crate) fn mcp_smoke_answer(&mut self) {
+        use crate::mcp_smoke::{Press, SHEETS, sheet};
         let Some(window) = self.agents.sheet.as_ref().and_then(|(w, _)| w.upgrade()) else {
             return self.fail("the approval sheet is not up".into());
         };
         let view = window.get_agent_sheet_view();
-        let secrets: Vec<String> = view.secrets.iter().map(|s| s.to_string()).collect();
-        let sites: Vec<String> = view.sites.iter().map(|s| s.to_string()).collect();
+        let secrets: Vec<String> = view.secrets.iter().map(|s| s.key.to_string()).collect();
+        let sites: Vec<String> = view.sites.iter().map(|s| s.key.to_string()).collect();
         if !view.open || view.client.is_empty() {
             return self.fail("the approval sheet names no client".into());
         }
-        let deny = !secrets.is_empty();
-        if deny && (secrets != ["GITHUB_PASSWORD"] || sites != ["example.com"]) {
-            return self.fail(format!("the sheet shows {secrets:?} on {sites:?}"));
-        }
-        if !deny && (!sites.is_empty() || !view.headless) {
+        let Some(run) = &mut self.checks.mcp_smoke else {
+            return;
+        };
+        let Some(want) = SHEETS.get(run.sheets) else {
+            return self.fail(format!("an approval sheet more than the {}", SHEETS.len()));
+        };
+        run.sheets += 1;
+        let n = run.sheets;
+        if view.more != want.more
+            || secrets != want.secrets
+            || sites != want.sites
+            || view.headless != want.headless
+        {
             return self.fail(format!(
-                "the sheet shows {sites:?}, headless {}",
-                view.headless
+                "sheet {n} shows more {}, {secrets:?} on {sites:?}, headless {}",
+                view.more, view.headless
+            ));
+        }
+        let press = want.press;
+        let windowed = press == Press::WindowedAllow;
+        if !want.more && press != Press::Deny {
+            run.expect = Some(if windowed || !want.headless {
+                Mode::Windowed
+            } else {
+                Mode::Headless
+            });
+        }
+        let serial = view.serial;
+        let headless = view.headless;
+        let more = view.more;
+        let client = view.client.to_string();
+        let weak = window.as_weak();
+        // later, outside the host: the sheet's callbacks call back into it
+        let _ = slint::invoke_from_event_loop(move || {
+            let fail = |why: String| with_host(|h| h.fail(why));
+            let shown = |w: &AppWindow| {
+                let v = w.get_agent_sheet_view();
+                v.open && v.serial == serial
+            };
+            let steps = || -> Result<(), String> {
+                let w = weak.upgrade().ok_or("no window")?;
+                if !more {
+                    let asked = if headless { "Headless" } else { "Windowed" };
+                    if sheet::chosen(&w)?.as_deref() != Some(asked) {
+                        return Err(format!(
+                            "the sheet's window choice shows {:?} selected, the client asked {asked}",
+                            sheet::chosen(&w)?
+                        ));
+                    }
+                } else if sheet::chosen(&w)?.is_some() {
+                    return Err("a sheet for more shows a window choice".into());
+                }
+                if windowed {
+                    let at = sheet::window_choice(&w, 0)?;
+                    sheet::click(&w, at);
+                    if sheet::chosen(&w)?.as_deref() != Some("Windowed") {
+                        return Err(format!(
+                            "a press on Windowed at {at:?} left {:?} selected",
+                            sheet::chosen(&w)?
+                        ));
+                    }
+                }
+                if press == Press::EscapeDraftThenAllow {
+                    sheet::click(&w, sheet::add_site(&w)?);
+                    sheet::type_text(&w, "x.test");
+                    if !sheet::drafting(&w)? {
+                        return Err("the Sites editor opened no draft".into());
+                    }
+                    // Escape as the keyboard sends it: through the host's key path first
+                    let mut taken = false;
+                    with_host(|h| taken = h.mcp_smoke_escape(&w));
+                    if taken {
+                        return Err("Escape in the Sites draft was taken by the window (it denies the sheet)".into());
+                    }
+                    // what the host let through reaches the window
+                    sheet::escape(&w);
+                    if !shown(&w) || sheet::drafting(&w)? {
+                        return Err("Escape in the Sites draft did not drop just the draft".into());
+                    }
+                }
+                let label = if press == Press::Deny {
+                    "Deny"
+                } else {
+                    "Allow"
+                };
+                let at = sheet::button(&w, label)?;
+                sheet::click(&w, at);
+                if shown(&w) {
+                    return Err(format!(
+                        "a press on {label} at {at:?} did not answer the sheet"
+                    ));
+                }
+                println!(
+                    "smoke: mcp sheet {client}{} asks {secrets:?} on {sites:?}, pressed {}{label}",
+                    if more { " (more)" } else { "" },
+                    match press {
+                        Press::WindowedAllow => "Windowed, then ",
+                        Press::EscapeDraftThenAllow =>
+                            "+, typed x.test, Escape (the draft went, the sheet stayed), then ",
+                        _ => "",
+                    }
+                );
+                Ok(())
+            };
+            if let Err(why) = steps() {
+                fail(why);
+            }
+        });
+    }
+
+    /// `--smoke mcp`: Escape pressed and released as the keyboard sends it, to the host's own
+    /// key handling (which goes before the window's); whether the host took the press.
+    pub(crate) fn mcp_smoke_escape(&mut self, window: &AppWindow) -> bool {
+        let Some(keys) = wubble_core::keys::Chord::parse("Escape")
+            .ok()
+            .and_then(crate::parity::key_inputs)
+        else {
+            return true;
+        };
+        let mut taken = false;
+        for key in &keys {
+            let took = self.key(window, key) == slint::winit_030::EventResult::PreventDefault;
+            taken |= took && key.pressed;
+        }
+        taken
+    }
+
+    /// `--smoke mcp`'s client finished: its step count, or what failed. The tab its first
+    /// session left to the owner must be the owner's: open, in a Space no session holds, not
+    /// driven, its Space allowed to sleep. Then the agent's closed tab and its loads must be
+    /// none of the user's (the store answers in order, so after what the session's calls
+    /// filed).
+    pub(crate) fn mcp_smoke_done(&mut self, result: Result<crate::mcp_smoke::Done, String>) {
+        let done = match result {
+            Ok(done) => done,
+            Err(e) => return self.fail(e),
+        };
+        let kept = TabId(done.kept);
+        let space = self
+            .model
+            .spaces
+            .iter()
+            .find(|s| self.model.order(s.id).contains(&kept));
+        // the owner's tabs now, in a Space that stays an agent Space
+        let ok = space
+            .is_some_and(|s| !self.agents.spaces().contains(&s.id) && !s.never_sleep && s.agent)
+            && !self.agent_drives(kept);
+        if !ok {
+            return self.fail(format!(
+                "the tab the session kept ({}) is not the owner's: Space {:?}",
+                kept.0,
+                space.map(|s| (&s.name, s.never_sleep))
             ));
         }
         println!(
-            "smoke: mcp sheet {} asks {secrets:?} on {sites:?}, answered {}",
-            view.client,
-            if deny { "Deny" } else { "Allow" }
+            "smoke: mcp hand-off ok tab {} kept in {:?}, no longer driven, still an agent Space",
+            kept.0,
+            space.map(|s| s.name.clone()).unwrap_or_default()
         );
-        let headless = view.headless;
-        let _ = self
-            .w
-            .window
-            .upgrade_in_event_loop(move |w| w.invoke_agent_sheet_answered(!deny, headless));
+        let kept_space = space.map(|s| s.id);
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.kept_space = kept_space;
+        }
+        // what the session's page tried for (`mcp_smoke::safety`): no tab anywhere reached it
+        let off: Vec<String> = self
+            .model
+            .tabs
+            .values()
+            .map(|t| t.url.clone())
+            .filter(|u| {
+                ["file:", "chrome:", "javascript:"]
+                    .iter()
+                    .any(|s| u.starts_with(s))
+            })
+            .collect();
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.steps = done.steps;
+            let (refused, blanked, held) =
+                (run.popups_refused, run.blanked, run.navigations_refused);
+            if !off.is_empty() {
+                return self.fail(format!("tabs off the web: {off:?}"));
+            }
+            // `mcp_smoke::sites`: a link, a script, a form, a pop-up and a redirect
+            if held < 5 {
+                return self.fail(format!("{held} navigations held to the sites, not 5"));
+            }
+            // Chromium refuses most of them itself; these count what reached wubble's own guards
+            println!(
+                "smoke: mcp safety ok no tab at file:, chrome: or javascript:; pop-ups refused by \
+                 wubble {refused}, session tabs blanked by wubble {blanked}, navigations held to \
+                 the sites {held}"
+            );
+        }
+        self.mcp_smoke_switch(0);
     }
 
-    /// `--smoke mcp`'s client finished: its step count, or what failed. Then the agent's
-    /// closed tab and its loads must be none of the user's (the store answers in order, so
-    /// after what the session's calls filed).
-    pub(crate) fn mcp_smoke_done(&mut self, result: Result<usize, String>) {
-        let steps = match result {
-            Ok(steps) => steps,
-            Err(e) => return self.fail(e),
+    /// `--smoke mcp`, after the client: the windowed session's two tabs in the window: the
+    /// first shown, the second, the first again (the same size), the second, then the sidebar
+    /// hidden (the second's pane widens, `SWITCH_RESIZE`), then the first again. A tab shown again must present a frame of its own at its pane's new size:
+    /// an agent's view is never hidden for CEF, so nothing else replaces the small snapshot its
+    /// pane stands in with, nor the size it had while unshown. Each step waits for its tab's
+    /// frame (`frame_arrived`); a deadline says which never came.
+    pub(super) fn mcp_smoke_switch(&mut self, step: usize) {
+        let tabs: Vec<TabId> = self
+            .agents
+            .sessions
+            .values()
+            .find(|s| matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Windowed))
+            .and_then(|s| s.space)
+            .map(|(space, _)| self.model.order(space))
+            .unwrap_or_default();
+        let [first, second] = tabs[..] else {
+            return self.fail(format!("the windowed session has tabs {tabs:?}, not two"));
         };
-        self.store.pop_closed(move |closed| {
-            let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| match closed {
-                    Some(c) => host.fail(format!("the user's closed tabs hold {}", c.url)),
-                    None => host.mcp_smoke_history(steps),
-                })
+        let Some(&tab) = [first, second, first, second, second, first].get(step) else {
+            // shown again at full size: on to the dustbins
+            return self.mcp_smoke_bins();
+        };
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.switch = Some((step, tab));
+        }
+        if step == SWITCH_RESIZE {
+            // the sidebar hides: the pane widens (the shell's callback calls back into the host:
+            // later, outside it)
+            let _ = self.w.window.upgrade_in_event_loop(|window| {
+                window.invoke_sidebar_mode_requested(wubble_ui::SidebarMode::Hidden);
+            });
+        } else {
+            self.dispatch(Command::ActivateTab(tab));
+            // already on screen with a frame of its own (the first step, if it was shown)
+            if self.w.frames.contains_key(&tab) && !self.snapshots.standing_in(tab) {
+                return self.mcp_smoke_frame(tab);
+            }
+        }
+        let deadline = slint::Timer::default();
+        deadline.start(slint::TimerMode::SingleShot, WAIT, move || {
+            with_host(|h| {
+                if h.checks.mcp_smoke.as_ref().and_then(|r| r.switch) == Some((step, tab)) {
+                    let shows = h.w.frames.get(&tab).map(|f| f.image.size());
+                    let snapshot = if h.snapshots.standing_in(tab) {
+                        ", its snapshot"
+                    } else {
+                        ""
+                    };
+                    h.fail(format!(
+                        "agent tab {} (switch step {step}) got no frame at its pane's size: \
+                         the pane shows {shows:?}{snapshot}",
+                        tab.0
+                    ));
+                }
             });
         });
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.deadline = deadline;
+        }
+    }
+
+    /// `--smoke mcp`: a frame of `tab` reached its pane. The switch's step waiting for it moves
+    /// on once the pane shows a frame of its own at its view's size (CEF may paint a pixel
+    /// more), after the resize one at a new size; later, outside the frame loop.
+    pub(super) fn mcp_smoke_frame(&mut self, tab: TabId) {
+        let Some((step, waiting)) = self.checks.mcp_smoke.as_ref().and_then(|r| r.switch) else {
+            return;
+        };
+        if waiting != tab {
+            return;
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host(|h| {
+                if h.checks.mcp_smoke.as_ref().and_then(|r| r.switch) != Some((step, tab)) {
+                    return;
+                }
+                let wanted = h.tab_view(tab).and_then(|v| v.wanted_frame());
+                let shows = h.w.frames.get(&tab).map(|f| f.image.size());
+                let Some(run) = &mut h.checks.mcp_smoke else {
+                    return;
+                };
+                let (Some(w), Some(s)) = (wanted, shows) else {
+                    return;
+                };
+                let full = s.width + 1 >= w.width && s.height + 1 >= w.height;
+                let resized = run
+                    .sized
+                    .is_some_and(|before| before != (s.width, s.height));
+                // not yet: the resize's frame, or a frame painted before it, comes later
+                if !full || (step >= SWITCH_RESIZE && !resized) {
+                    return;
+                }
+                if step + 1 == SWITCH_RESIZE {
+                    run.sized = Some((s.width, s.height));
+                }
+                run.switch = None;
+                println!(
+                    "smoke: mcp switch step {step} tab {}: {}x{}",
+                    tab.0, s.width, s.height
+                );
+                h.mcp_smoke_switch(step + 1);
+            })
+        });
+    }
+
+    /// `--smoke mcp`, the Spaces popup's dustbins pressed by pointer: the kept Space's (no
+    /// session) and the headless session's (running: only it stops); the user's Space has none;
+    /// the popup stays open. Then the user's closed tabs and history.
+    fn mcp_smoke_bins(&mut self) {
+        let running = self
+            .agents
+            .sessions
+            .iter()
+            .find(|(_, s)| matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Headless))
+            .and_then(|(id, s)| Some((id.clone(), s.space?.0)));
+        let kept = self.checks.mcp_smoke.as_ref().and_then(|r| r.kept_space);
+        let (Some((session, live)), Some(kept)) = (running.clone(), kept) else {
+            return self.fail(format!(
+                "no Spaces to clear: running {running:?}, kept {kept:?}"
+            ));
+        };
+        let name = |h: &Host, sp: SpaceId| {
+            h.model
+                .spaces
+                .iter()
+                .find(|s| s.id == sp)
+                .map(|s| s.name.clone())
+                .unwrap_or_default()
+        };
+        let (kept_name, live_name) = (name(self, kept), name(self, live));
+        let users: Vec<String> = self
+            .model
+            .spaces
+            .iter()
+            .filter(|s| !s.agent)
+            .map(|s| s.name.clone())
+            .collect();
+        self.spaces_menu_requested();
+        let weak = self.w.window.clone();
+        // pressed outside the host, as winit's events would come, once the popup is laid out
+        slint::Timer::single_shot(Duration::from_millis(500), move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let ask = |f: &dyn Fn(&Host) -> Result<(), String>| {
+                let mut r = Ok(());
+                with_host(|h| r = f(h));
+                r
+            };
+            let press = |label: &str| -> Result<(), String> {
+                let at = crate::mcp_smoke::sheet::labelled(&window, label)?;
+                crate::mcp_smoke::sheet::click(&window, at);
+                Ok(())
+            };
+            let check = || -> Result<(), String> {
+                if !window.get_spaces_open() {
+                    return Err("the Spaces popup did not open".into());
+                }
+                for user in &users {
+                    if crate::mcp_smoke::sheet::labelled(&window, &format!("Clear {user}")).is_ok()
+                    {
+                        return Err(format!("the user's Space {user:?} has a dustbin"));
+                    }
+                }
+                press(&format!("Clear {kept_name}"))?;
+                ask(&|h| {
+                    if h.model.spaces.iter().any(|s| s.id == kept) {
+                        return Err(format!("{kept_name:?} is still there"));
+                    }
+                    Ok(())
+                })?;
+                if !window.get_spaces_open() {
+                    return Err("the popup closed on the dustbin".into());
+                }
+                press(&format!("Clear {live_name}"))?;
+                ask(&|h| {
+                    if h.agents.sessions.contains_key(&session) {
+                        return Err("the session runs on".into());
+                    }
+                    if h.model.spaces.iter().any(|s| s.id == live) {
+                        return Err(format!("{live_name:?} is still there"));
+                    }
+                    if !h.agents.sessions.values().any(|s| !s.state.is_stopped()) {
+                        return Err("the dustbin stopped the other session too".into());
+                    }
+                    Ok(())
+                })?;
+                if !window.get_spaces_open() {
+                    return Err("the popup closed on the dustbin".into());
+                }
+                Ok(())
+            };
+            let result = check();
+            with_host(|h| match result {
+                Err(e) => h.fail(format!("dustbin: {e}")),
+                Ok(()) => {
+                    println!(
+                        "smoke: mcp dustbin ok pressed on {kept_name:?} (kept, no session): gone; \
+                         on {live_name:?} (running): that session stopped, its Space gone, the \
+                         other runs on; {users:?} has none; the popup stayed open"
+                    );
+                    window.set_spaces_open(false);
+                    if let Err(e) = h.mcp_smoke_off() {
+                        return h.fail(format!("hosting off: {e}"));
+                    }
+                    let steps = h.checks.mcp_smoke.as_ref().map_or(0, |r| r.steps);
+                    h.store.pop_closed(move |closed| {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_host(|host| match closed {
+                                Some(c) => {
+                                    host.fail(format!("the user's closed tabs hold {}", c.url))
+                                }
+                                None => host.mcp_smoke_history(steps),
+                            })
+                        });
+                    });
+                }
+            });
+        });
+    }
+
+    /// `--smoke mcp`: agent apps in the smoke's scratch home (Codex without a file yet, opencode
+    /// with comments, VS Code, which wubble does not write), then hosting turned on through its
+    /// setting: wubble is in the first two, a backup beside the one that had a file; Remove and
+    /// Add on Codex take it out (and keep it out) and put it back.
+    pub(crate) fn mcp_smoke_on(&mut self) -> Result<(), String> {
+        use wubble_core::agent::harness;
+        let home = self
+            .hosting
+            .place
+            .as_ref()
+            .and_then(|p| p.home.clone())
+            .ok_or("no MCP place")?;
+        let io = |e: std::io::Error| e.to_string();
+        std::fs::create_dir_all(home.join(".codex")).map_err(io)?;
+        std::fs::create_dir_all(home.join(".config/opencode")).map_err(io)?;
+        std::fs::create_dir_all(home.join(".config/Code/User")).map_err(io)?;
+        let opencode = home.join(".config/opencode/opencode.jsonc");
+        std::fs::write(&opencode, SMOKE_OPENCODE).map_err(io)?;
+        // an entry named wubble the owner wrote: wubble never touches it
+        std::fs::create_dir_all(home.join(".cursor")).map_err(io)?;
+        let cursor = home.join(".cursor/mcp.json");
+        std::fs::write(&cursor, SMOKE_CURSOR).map_err(io)?;
+        self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "1");
+        if !self.mcp_serving() {
+            return Err(format!("not hosting: {:?}", self.hosting.state));
+        }
+        // the switch turned on at run time is drawn on, from the hosting state (Settings is
+        // not open here: drawn as it would be when it opens)
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_agents(&window);
+            let shown = window.get_settings_agents();
+            if !shown.on || !shown.status.contains("Hosting") {
+                return Err(format!("the switch shows {} ({})", shown.on, shown.status));
+            }
+        }
+        let codex = home.join(".codex/config.toml");
+        let has = |id: &str, file: &std::path::Path| {
+            let h = harness::find(id).ok_or("no such app")?;
+            let text = std::fs::read_to_string(file).unwrap_or_default();
+            h.has(&text).map_err(|e| e.to_string())
+        };
+        if !has("codex", &codex)? || !has("opencode", &opencode)? {
+            return Err("not added to Codex and opencode".into());
+        }
+        let backup = harness::backup_of(&opencode);
+        if std::fs::read_to_string(&backup).ok().as_deref() != Some(SMOKE_OPENCODE) {
+            return Err("no backup of opencode's file".into());
+        }
+        if home.join(".config/Code/User/mcp.json").exists() {
+            return Err("VS Code's file was written".into());
+        }
+        if std::fs::read_to_string(&cursor).ok().as_deref() != Some(SMOKE_CURSOR) {
+            return Err("the owner's own wubble entry in Cursor's file was touched".into());
+        }
+        self.agent_app_removed("codex");
+        if has("codex", &codex)? {
+            return Err("Remove left Codex's entry".into());
+        }
+        self.agent_app_added("codex");
+        if !has("codex", &codex)? {
+            return Err("Add did not put Codex's entry back".into());
+        }
+        println!(
+            "smoke: mcp apps ok on: added to Codex (a new config.toml) and opencode (comments \
+             kept, backup beside it), VS Code only offered, the owner's own wubble entry in \
+             Cursor left alone; Remove and Add on Codex"
+        );
+        Ok(())
+    }
+
+    /// `--smoke mcp`: hosting turned off through its setting while a session runs: the session
+    /// ends and its Space closes, the socket and the manifest go, a new connection is refused.
+    fn mcp_smoke_off(&mut self) -> Result<(), String> {
+        let (socket, manifest) = self.mcp_files().ok_or("no MCP place")?;
+        if !socket.exists() || !manifest.exists() {
+            return Err(format!("not hosting: {socket:?} {manifest:?}"));
+        }
+        let listed = crate::mcp::hosting_browsers()
+            .iter()
+            .any(|m| std::path::Path::new(&m.socket) == socket);
+        if !listed {
+            return Err("the manifest does not list this browser".into());
+        }
+        let spaces = self.agents.spaces();
+        if spaces.is_empty() {
+            return Err("no session runs".into());
+        }
+        self.write_setting(wubble_core::settings::AGENT_MCP_ENABLED.key, "0");
+        if let Some(window) = self.w.window.upgrade()
+            && {
+                self.render_agents(&window);
+                window.get_settings_agents().on
+            }
+        {
+            return Err("the switch is drawn on after hosting stopped".into());
+        }
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.hosting_off = true;
+        }
+        if !self.agents.sessions.is_empty() {
+            return Err("a session runs on".into());
+        }
+        if spaces
+            .iter()
+            .any(|sp| self.model.spaces.iter().any(|s| s.id == *sp))
+        {
+            return Err("a session's Space stayed open".into());
+        }
+        if socket.exists() || manifest.exists() {
+            return Err(format!("left behind: {socket:?} {manifest:?}"));
+        }
+        // the agent apps: wubble's entries out, the rest of each file as it was
+        if let Some(home) = self.hosting.place.as_ref().and_then(|p| p.home.clone()) {
+            let opencode = std::fs::read_to_string(home.join(".config/opencode/opencode.jsonc"))
+                .unwrap_or_default();
+            let codex =
+                std::fs::read_to_string(home.join(".codex/config.toml")).unwrap_or_default();
+            if opencode != SMOKE_OPENCODE || codex.contains("wubble") {
+                return Err(format!(
+                    "the apps' files kept wubble: {opencode:?} {codex:?}"
+                ));
+            }
+            let cursor = std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap_or_default();
+            if cursor != SMOKE_CURSOR {
+                return Err("turning off removed the owner's own wubble entry".into());
+            }
+        }
+        use interprocess::local_socket::prelude::*;
+        let name = socket
+            .as_path()
+            .to_fs_name::<interprocess::local_socket::GenericFilePath>()
+            .map_err(|e| e.to_string())?;
+        if interprocess::local_socket::Stream::connect(name).is_ok() {
+            return Err("a new connection was taken".into());
+        }
+        println!(
+            "smoke: mcp hosting ok on through its setting at run time, off through it with a \
+             session running: the session ended and its Space closed, socket and manifest gone, \
+             a new connection refused, wubble out of the apps' files (opencode's byte for byte)"
+        );
+        Ok(())
     }
 
     fn mcp_smoke_history(&mut self, steps: usize) {
@@ -1541,3 +3572,20 @@ impl Host {
         });
     }
 }
+
+/// `--smoke mcp`: opencode's file as a person keeps it (a comment, an empty server table).
+const SMOKE_OPENCODE: &str =
+    "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  // mine\n  \"mcp\": {}\n}\n";
+
+/// `--smoke mcp`: Cursor's file with a wubble entry the owner wrote by hand.
+const SMOKE_CURSOR: &str =
+    "{\"mcpServers\": {\"wubble\": {\"command\": \"/home/me/bin/wubble\", \"args\": [\"mcp\"]}}}\n";
+
+/// `--smoke gallery`: the agent scenes' site and pages. A `.localhost` host is loopback in
+/// Chromium (no DNS, nothing leaves the machine): a gallery run asks the network for nothing.
+const GALLERY_SITE: &str = "github.localhost";
+const GALLERY_PAGES: [&str; 3] = [
+    "http://github.localhost/",
+    "http://github.localhost/releases",
+    "http://github.localhost/issues/new",
+];

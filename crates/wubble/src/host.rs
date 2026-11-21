@@ -31,6 +31,8 @@ mod gallery;
 pub(crate) mod gallery_orbs;
 mod gesture;
 mod gpu;
+mod harness;
+mod hosting;
 mod hover;
 mod layers;
 mod look;
@@ -55,6 +57,7 @@ mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
+pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
 pub use swipe::Swipe;
@@ -300,8 +303,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
-    /// `--smoke mcp`: agent sessions are approved without the sheet (`host/agent.rs`).
-    pub mcp_smoke: bool,
+    /// `--smoke mcp`: the host answers each approval sheet with the pointer (`host/agent.rs`).
+    pub mcp_smoke: Option<crate::mcp_smoke::McpSmoke>,
     /// `--smoke overlay` (`host/overlay.rs`).
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
@@ -524,6 +527,8 @@ pub struct Host {
     /// The extensions' shell: the list, the footer popover, the popup, the install prompt
     /// (`host/ext_ui.rs`).
     ext_ui: ext_ui::ExtUi,
+    /// Whether the MCP server is hosted (`host/hosting.rs`).
+    hosting: hosting::McpHosting,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
@@ -724,6 +729,7 @@ impl Host {
             look: look::Look::new(),
             glance_enabled: true,
             ext_ui: ext_ui::ExtUi::new(installed),
+            hosting: Default::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -922,6 +928,8 @@ impl Host {
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
         self.held_popups.retain(|tab, _| tabs.contains_key(tab));
         self.preview.forget_except(|tab| tabs.contains_key(tab));
+        // a tab moved into or out of a session's Space: its navigation rule follows the model
+        self.agent_rules();
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();
@@ -987,6 +995,7 @@ impl Host {
                         }
                         self.builtins_view_opened(tab, &url);
                         self.ax_view_opened(tab);
+                        self.agent_rules();
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -1024,9 +1033,15 @@ impl Host {
                 // An agent session's page is never shown, yet must lay out, keep its
                 // accessibility tree and paint for screenshots: visible to CEF, in no window
                 // (`host/agent.rs`).
-                let visible = visible || self.agent_drives(tab);
+                let driven = self.agent_drives(tab);
                 if let Some(view) = self.tab_view(tab) {
-                    view.set_visible(visible);
+                    // Shown in a pane, it must paint now: a hidden view's show asks CEF for a
+                    // frame (`View::set_visible`), but this one was never hidden, and a still
+                    // page paints nothing new, so its pane kept the small snapshot it stood in.
+                    if visible && driven && view.is_visible() {
+                        view.repaint();
+                    }
+                    view.set_visible(visible || driven);
                 }
                 self.pace(PaceEvent::Wake);
             }
@@ -1637,6 +1652,11 @@ impl Host {
     /// window, or held back for the address pill).
     fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
         use wubble_core::popup::{self, Outcome};
+        // An agent session's page opens nothing off the web (wubble would load it as the
+        // browser, which the page itself may not).
+        if self.agent_popup_refused(tab, &request.url) {
+            return;
+        }
         // A `target=_blank` mailto: link opens the app and no tab, as in Chromium.
         if wubble_engine::page::is_external(&request.url) {
             self.external_link(tab, request.url, Some(request.gesture));
@@ -2180,8 +2200,12 @@ impl Host {
         if self.archiving.contains_key(&tab) {
             return; // filed in the Archive instead
         }
-        if self.agent_drives(tab) {
-            return; // an agent session's tab is none of the user's
+        // an agent session's tab is none of the user's, nor is one of an agent Space the owner
+        // clears with its dustbin, kept or not (as the session's own teardown)
+        let cleared = self.model.location(tab).map(|(sp, _)| sp) == self.agents.clearing
+            && self.agents.clearing.is_some();
+        if self.agent_drives(tab) || cleared {
+            return;
         }
         let Some(t) = self.model.tabs.get(&tab) else {
             return;
@@ -2227,6 +2251,7 @@ impl Host {
     pub fn shutdown(&mut self, ui: UiState) {
         // agent sessions end with the browser, their Spaces closed before the last save
         self.agents_quit();
+        self.mcp_quit();
         self.media_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, &self.agents.spaces(), ui);
@@ -3143,6 +3168,14 @@ impl Host {
             && (self.drag_cancelled() || self.cancel_tab_drag())
         {
             return EventResult::PreventDefault;
+        }
+        // A draft in the agent sheet's list editor takes Escape before anything: it drops the
+        // draft, never the whole sheet (which would deny) nor the page's load.
+        if key.unmodified == Key::Named(NamedKey::Escape)
+            && self.agent_sheet_open()
+            && window.get_agent_sheet_editing()
+        {
+            return EventResult::Propagate;
         }
         // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
         // a menu): wubble_core::overlay.

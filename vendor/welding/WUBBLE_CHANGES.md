@@ -485,6 +485,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`libcef_dll_dylib.cc`) and `initialize` would then fail. The stub returns
    `FeatureRequired`. Used by wubble-engine's .crx unpacker.
 
+53. **A navigation guard.** `surface.rs`: `NavigationGuard` (a `Fn(&str) -> bool`)
+    and `CefSurfaceConfig::navigation_guard`; `handlers.rs`: `OnBeforeBrowse`
+    asks it for each main-frame navigation, every redirect hop included, before
+    the request is sent, and cancels a refused one (returns true), pushing
+    `NavigationEvent::NavigationRefused { url, redirect }`. A panicking guard
+    refuses (fails closed). wubble keeps an agent session's tab on the sites its grant allows.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

@@ -1,10 +1,10 @@
-//! The v0 tool table as data (docs/research/mcp-server.md section 0 and 4): name, description,
+//! The tool table as data (docs/research/mcp-server.md section 0 and 4): name, description,
 //! arguments, annotations. The JSON Schema served by `tools/list` and the argument validation in
 //! `tools/call` are both generated from these rows, so the two cannot drift.
 
 use serde_json::{Map, Value, json};
 
-use crate::call::{AgentCall, Args, ButtonKind, NavTarget, WaitCondition};
+use crate::call::{AgentCall, Args, ButtonKind, Direction, DragTo, NavTarget, WaitCondition};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Ty {
@@ -95,10 +95,31 @@ const UI: Annotations = Annotations {
     ..ACT
 };
 
+/// A canvas point: from the canvas's top-left, CSS px.
+const X: Arg = arg(
+    "x",
+    Ty::Int(0, 100_000),
+    false,
+    "Only for a <canvas> ref: a point from its box's top-left (CSS px, as getBoundingClientRect has it), with y. Else the element's centre.",
+);
+const Y: Arg = arg("y", Ty::Int(0, 100_000), false, "With x.");
+
+fn button(a: &Args) -> ButtonKind {
+    match a.str("button").as_deref() {
+        Some("right") => ButtonKind::Right,
+        Some("middle") => ButtonKind::Middle,
+        _ => ButtonKind::Left,
+    }
+}
+
 pub static TOOLS: &[Tool] = &[
     Tool {
         name: "start_session",
-        description: "Ask the user to approve an agent session in its own Space. Blocks until answered.",
+        description: "Start here. Asks the browser's owner to approve an agent session in its own \
+            Space: a sheet on their screen, so this call blocks until they answer, often for \
+            minutes (allow a long tool timeout; progress notifications come every few seconds \
+            if you pass a progressToken). Returns the session handle and the first tab's handle, \
+            which every other tool takes.",
         args: &[
             arg(
                 "purpose",
@@ -110,7 +131,9 @@ pub static TOOLS: &[Tool] = &[
                 "sites",
                 Ty::StrList,
                 false,
-                "Sites the session expects to visit.",
+                "Sites the session's tabs may be on (host patterns; empty: any http(s) site). \
+                Every top-level navigation is held to them (links, scripts, forms, redirects, \
+                pop-ups, history); what a page fetches (images, scripts, XHR) is not.",
             ),
             arg(
                 "secrets",
@@ -133,8 +156,18 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "stop_session",
-        description: "End a session and close its tabs.",
-        args: &[SESSION],
+        description: "End a session. Its tabs close, unless keep_tabs leaves them to the user as \
+            ordinary tabs of the session's Space. Closing the connection ends the session as \
+            without keep_tabs: to hand work over, call this with keep_tabs first.",
+        args: &[
+            SESSION,
+            arg(
+                "keep_tabs",
+                Ty::Bool,
+                false,
+                "Leave the tabs open for the user (the handle dies either way).",
+            ),
+        ],
         annotations: Annotations {
             read_only: false,
             destructive: true,
@@ -145,12 +178,46 @@ pub static TOOLS: &[Tool] = &[
         build: |a| {
             Ok(AgentCall::StopSession {
                 session: a.session()?,
+                keep_tabs: a.bool("keep_tabs"),
+            })
+        },
+    },
+    Tool {
+        name: "request_more",
+        description: "Ask the user for more sites or secret names mid-session. The approval \
+            sheet lists only what the session does not have yet; blocks until the user answers. \
+            Nothing is granted unless the user presses Allow; on Deny the session runs on as it was.",
+        args: &[
+            SESSION,
+            arg(
+                "sites",
+                Ty::StrList,
+                false,
+                "Sites to add: where the session's tabs may go, not what pages may fetch.",
+            ),
+            arg(
+                "secrets",
+                Ty::StrList,
+                false,
+                "Secret names to add (never their values).",
+            ),
+        ],
+        annotations: UI,
+        one_of: &[],
+        build: |a| {
+            Ok(AgentCall::RequestMore {
+                session: a.session()?,
+                sites: a.list("sites"),
+                secrets: a.list("secrets"),
             })
         },
     },
     Tool {
         name: "navigate",
-        description: "Load a URL in a tab, or go back, forward or reload.",
+        description: "Load a URL in a tab, or go back, forward or reload; returns once the new \
+            page has loaded. The tab stays on the session's sites: a navigation elsewhere (this \
+            one, a redirect, or one a click, key or script starts) is refused, the tab stays, and \
+            the call that started it fails naming the site (ask with request_more).",
         args: &[
             SESSION,
             TAB,
@@ -179,7 +246,9 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "read_page",
-        description: "The page's accessibility tree as flat items with refs.",
+        description: "The page's accessibility tree as flat items in reading order: role, name, \
+            value, state, a link's target, and a ref for the other tools. Names are given whole. \
+            A cut list ends with a note of how many items there are.",
         args: &[
             SESSION,
             TAB,
@@ -188,7 +257,7 @@ pub static TOOLS: &[Tool] = &[
                 "max_items",
                 Ty::Int(1, 10_000),
                 false,
-                "Cap on returned items.",
+                "Cap on returned items (default 500).",
             ),
         ],
         annotations: READ_WEB,
@@ -203,8 +272,36 @@ pub static TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "read_text",
+        description: "The page's readable text: the article (title, byline, body, by Mozilla's \
+            Readability), else the whole page's text; or one element's text by ref. Capped, with \
+            a note when cut.",
+        args: &[
+            SESSION,
+            TAB,
+            arg("ref", Ty::Str, false, "Only this element's text."),
+            arg(
+                "max_chars",
+                Ty::Int(100, 200_000),
+                false,
+                "Cap on returned characters (default 20000).",
+            ),
+        ],
+        annotations: READ_WEB,
+        one_of: &[],
+        build: |a| {
+            Ok(AgentCall::ReadText {
+                session: a.session()?,
+                tab: a.tab()?,
+                within: a.eref("ref"),
+                max_chars: a.int("max_chars"),
+            })
+        },
+    },
+    Tool {
         name: "click",
-        description: "Click an element by ref.",
+        description: "Click an element by ref: scrolled into view first, clicked at the centre \
+            of its visible box.",
         args: &[
             SESSION,
             TAB,
@@ -221,6 +318,8 @@ pub static TOOLS: &[Tool] = &[
                 false,
                 "Click count (2 for a double click). Default 1.",
             ),
+            X,
+            Y,
         ],
         annotations: ACT,
         one_of: &[],
@@ -229,18 +328,123 @@ pub static TOOLS: &[Tool] = &[
                 session: a.session()?,
                 tab: a.tab()?,
                 target: a.target()?,
-                button: match a.str("button").as_deref() {
-                    Some("right") => ButtonKind::Right,
-                    Some("middle") => ButtonKind::Middle,
-                    _ => ButtonKind::Left,
-                },
+                at: a.offset("x", "y")?,
+                button: button(a),
                 count: a.int("count").unwrap_or(1),
             })
         },
     },
     Tool {
+        name: "hover",
+        description: "Move the pointer over an element by ref (scrolled into view first).",
+        args: &[SESSION, TAB, REF, X, Y],
+        annotations: Annotations {
+            destructive: false,
+            ..ACT
+        },
+        one_of: &[],
+        build: |a| {
+            Ok(AgentCall::Hover {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                at: a.offset("x", "y")?,
+            })
+        },
+    },
+    Tool {
+        name: "drag",
+        description: "Press on an element by ref, move to another element (to_ref) or, inside \
+            a <canvas>, to a point of it (to_x, to_y), and release: the pointer's own events \
+            (mouse down, moves, up).",
+        args: &[
+            SESSION,
+            TAB,
+            REF,
+            X,
+            Y,
+            arg("to_ref", Ty::Str, false, "The element to release on."),
+            arg(
+                "to_x",
+                Ty::Int(0, 100_000),
+                false,
+                "Only when ref is a <canvas>: where to release, from its top-left, with to_y.",
+            ),
+            arg("to_y", Ty::Int(0, 100_000), false, "With to_x."),
+        ],
+        annotations: ACT,
+        one_of: &["to_ref", "to_x"],
+        build: |a| {
+            let to = match (a.eref("to_ref"), a.offset("to_x", "to_y")?) {
+                (Some(r), _) => DragTo::Element(r),
+                (None, Some(o)) => DragTo::Offset(o),
+                (None, None) => return Err("`to_ref` or `to_x` with `to_y` is required".into()),
+            };
+            Ok(AgentCall::Drag {
+                session: a.session()?,
+                tab: a.tab()?,
+                target: a.target()?,
+                at: a.offset("x", "y")?,
+                to,
+            })
+        },
+    },
+    Tool {
+        name: "scroll",
+        description: "Scroll an element by ref into view; or, with a direction, scroll the page \
+            (or the scrollable element under ref) by amount pixels, as a mouse wheel does.",
+        args: &[
+            SESSION,
+            TAB,
+            arg(
+                "ref",
+                Ty::Str,
+                false,
+                "The element to bring into view or scroll inside.",
+            ),
+            arg(
+                "direction",
+                Ty::Enum(&["up", "down", "left", "right"]),
+                false,
+                "Wheel direction.",
+            ),
+            arg(
+                "amount",
+                Ty::Int(1, 100_000),
+                false,
+                "Pixels to scroll (default: most of the viewport).",
+            ),
+        ],
+        annotations: Annotations {
+            destructive: false,
+            ..ACT
+        },
+        one_of: &[],
+        build: |a| {
+            let direction = match a.str("direction").as_deref() {
+                Some("up") => Some(Direction::Up),
+                Some("down") => Some(Direction::Down),
+                Some("left") => Some(Direction::Left),
+                Some("right") => Some(Direction::Right),
+                _ => None,
+            };
+            let target = a.eref("ref");
+            if target.is_none() && direction.is_none() {
+                return Err("`ref` or `direction` is required".into());
+            }
+            Ok(AgentCall::Scroll {
+                session: a.session()?,
+                tab: a.tab()?,
+                target,
+                direction,
+                amount: a.int("amount"),
+            })
+        },
+    },
+    Tool {
         name: "type",
-        description: "Type text into an element by ref.",
+        description: "Type text into an element by ref (replacing what it holds). With submit, \
+            press Enter and wait as navigate does when a page load follows.",
         args: &[
             SESSION,
             TAB,
@@ -262,7 +466,9 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "press_key",
-        description: "Send a named key (Enter, Escape, ArrowDown, Control+A) to the page.",
+        description: "Send a named key (Enter, Escape, ArrowDown, Control+A) to the page. \
+            wubble's back, forward and reload chords act on this tab; its other shortcuts \
+            (tabs, the address bar, closed tabs) never act for an agent, and the reply says so.",
         args: &[
             SESSION,
             TAB,
@@ -280,11 +486,18 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "screenshot",
-        description: "A PNG of the tab, or of one element.",
+        description: "A PNG of what the tab shows, of one element (scrolled into view first) or \
+            of the whole page.",
         args: &[
             SESSION,
             TAB,
             arg("ref", Ty::Str, false, "Crop to this element."),
+            arg(
+                "full_page",
+                Ty::Bool,
+                false,
+                "The whole page, beyond the view.",
+            ),
         ],
         annotations: Annotations {
             idempotent: false,
@@ -292,16 +505,23 @@ pub static TOOLS: &[Tool] = &[
         },
         one_of: &[],
         build: |a| {
+            let full_page = a.bool("full_page");
+            let crop = a.eref("ref");
+            if full_page && crop.is_some() {
+                return Err("`ref` and `full_page` exclude each other".into());
+            }
             Ok(AgentCall::Screenshot {
                 session: a.session()?,
                 tab: a.tab()?,
-                crop: a.eref("ref"),
+                crop,
+                full_page,
             })
         },
     },
     Tool {
         name: "list_tabs",
-        description: "The session's tabs: handle, title, origin, loading.",
+        description: "The session's tabs: handle, title, URL, loading, whether it is its \
+            Space's selected tab (active) and whether the window shows it now (shown).",
         args: &[SESSION],
         annotations: READ,
         one_of: &[],
@@ -312,8 +532,21 @@ pub static TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "focus_tab",
+        description: "Bring a session tab forward: the window shows its Space and selects it.",
+        args: &[SESSION, TAB],
+        annotations: UI,
+        one_of: &[],
+        build: |a| {
+            Ok(AgentCall::FocusTab {
+                session: a.session()?,
+                tab: a.tab()?,
+            })
+        },
+    },
+    Tool {
         name: "open_tab",
-        description: "Open a tab in the session's Space.",
+        description: "Open a tab in the session's Space; with a URL, returns once it has loaded.",
         args: &[
             SESSION,
             arg("url", Ty::Str, false, "http(s) URL; blank when omitted."),
@@ -329,7 +562,7 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "close_tab",
-        description: "Close a tab the session opened.",
+        description: "Close a tab of the session.",
         args: &[SESSION, TAB],
         annotations: Annotations {
             open_world: false,
@@ -345,11 +578,16 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         name: "wait_for",
-        description: "Wait until text appears, an element exists, or the page has loaded.",
+        description: "Wait until text appears or is gone, an element exists, the page has \
+            loaded, or the address changes (url, navigation; in-page history changes count). \
+            Text is matched in what the page shows, not in form fields' values unless in_values. \
+            load waits for the document's own load only: a page that fetches after an in-page \
+            navigation is not followed, so wait for its text or url instead.",
         args: &[
             SESSION,
             TAB,
-            arg("text", Ty::Str, false, "Visible text to wait for."),
+            arg("text", Ty::Str, false, "Text to wait for."),
+            arg("text_gone", Ty::Str, false, "Text to wait to disappear."),
             arg("ref", Ty::Str, false, "Element ref to wait for."),
             arg(
                 "load",
@@ -358,30 +596,60 @@ pub static TOOLS: &[Tool] = &[
                 "Wait for the load to finish (true).",
             ),
             arg(
+                "url",
+                Ty::Str,
+                false,
+                "Wait until the tab's address contains this.",
+            ),
+            arg(
+                "navigation",
+                Ty::Bool,
+                false,
+                "Wait until the address or the document changes (true).",
+            ),
+            arg(
+                "in_values",
+                Ty::Bool,
+                false,
+                "Also match text in form fields' values.",
+            ),
+            arg(
                 "timeout_ms",
                 Ty::Int(1, 120_000),
                 false,
-                "Give up after this long.",
+                "Give up after this long (default 30000).",
             ),
         ],
         annotations: READ,
-        one_of: &["text", "ref", "load"],
+        one_of: &["text", "text_gone", "ref", "load", "url", "navigation"],
         build: |a| {
             Ok(AgentCall::WaitFor {
                 session: a.session()?,
                 tab: a.tab()?,
-                condition: match (a.str("text"), a.eref("ref")) {
-                    (Some(t), _) => WaitCondition::Text(t),
-                    (_, Some(r)) => WaitCondition::Element(r),
-                    _ => WaitCondition::Load,
+                condition: if let Some(t) = a.str("text") {
+                    WaitCondition::Text(t)
+                } else if let Some(t) = a.str("text_gone") {
+                    WaitCondition::TextGone(t)
+                } else if let Some(r) = a.eref("ref") {
+                    WaitCondition::Element(r)
+                } else if let Some(u) = a.str("url") {
+                    WaitCondition::Url(u)
+                } else if a.bool("navigation") {
+                    WaitCondition::Navigation
+                } else {
+                    WaitCondition::Load
                 },
+                in_values: a.bool("in_values"),
                 timeout_ms: a.int("timeout_ms"),
             })
         },
     },
     Tool {
         name: "evaluate",
-        description: "Evaluate a script in the page and return its JSON result.",
+        description: "Run JavaScript in the page: an expression or statements (the last \
+            statement's value is returned; a top-level return or await works). A promise is \
+            awaited. Returns JSON; a DOM node or a function is named, not serialised; a throw \
+            returns the error with its stack.",
         args: &[
             SESSION,
             TAB,
@@ -391,6 +659,12 @@ pub static TOOLS: &[Tool] = &[
                 true,
                 "JavaScript expression or statements.",
             ),
+            arg(
+                "timeout_ms",
+                Ty::Int(1, 120_000),
+                false,
+                "Stop the script and stop waiting for its promise after this long (default 30000).",
+            ),
         ],
         annotations: ACT,
         one_of: &[],
@@ -399,6 +673,7 @@ pub static TOOLS: &[Tool] = &[
                 session: a.session()?,
                 tab: a.tab()?,
                 script: a.req("script")?,
+                timeout_ms: a.int("timeout_ms"),
             })
         },
     },
@@ -561,10 +836,16 @@ mod tests {
             "wait_for",
             "evaluate",
             "fill_secret",
+            "request_more",
+            "read_text",
+            "focus_tab",
+            "scroll",
+            "hover",
+            "drag",
         ] {
             assert!(find(n).is_some(), "{n}");
         }
-        assert_eq!(TOOLS.len(), 14);
+        assert_eq!(TOOLS.len(), 20);
     }
 
     #[test]

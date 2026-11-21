@@ -65,6 +65,90 @@ could not be changed, and its Secrets and Sites were not editable (they become t
 list editor, and what the owner leaves in the lists is the grant); an agent tab the owner switched to showed a
 blurred page. Still open from section 0: binding a secret's name to a saved login on the sheet.
 
+**Built after the tests (2026-11-20, `xm/sheet-fix`), the tool surface is 20 tools** (the table is data in
+`wubble-mcp/src/tools.rs`; section 4 stays the plan): `start_session`, `stop_session` (`keep_tabs`: the Space and its
+tabs stay the owner's), `request_more` (sites, secret names; the sheet lists only what is new, every time),
+`navigate`, `read_page` (link targets, whole text, a note when cut), `read_text` (Readability's article or the page's
+text, or one element's; capped with a note), `click`, `hover`, `drag` (to a ref, or inside a canvas to a point),
+`scroll` (into view, or the wheel), `type` (`submit` waits as `navigate`), `press_key` (wubble's back, forward and
+reload chords act on the tab; its window chords are refused, and the reply says so), `screenshot` (an element
+scrolled into view and cropped right at any scroll, or `full_page`), `list_tabs` (`active`, `shown`), `focus_tab`,
+`open_tab` (waits for its load), `close_tab`, `wait_for` (text, `text_gone`, ref, load, `url`, `navigation`;
+`in_values` for form fields), `evaluate` (statements, top-level await and return, promises awaited, nodes named, a
+throw with its stack, `timeout_ms`), `fill_secret`. Element actions take their place from the live layout
+(DevTools, by the node), not the accessibility mirror; raw coordinates only inside a `<canvas>` by ref. A closed
+connection still tears the session down: hand-off is explicit (decisions.md "Agent hand-off"); a kept Space stays
+an agent Space, which the owner clears with its dustbin in the Spaces popup (decisions.md "Agent Spaces"). A session's sites hold for every top-level navigation of its tabs (decisions.md "Agent sites hold for
+the tab"). Known limit: the sites say where a tab may be, not what its pages may fetch: a page on an allowed site
+still loads images, scripts and XHR from anywhere, as it would for the owner. Not done: network
+idle for in-page navigations; the wheel over a nested scroller (TODO.md).
+
+**A blind agent's first contact (2026-11-20).** An agent on another model, told only "wubble is running and has
+an MCP server", reached a working `tools/list` in six commands, and only by reading the process list: `--profile`
+in `ps` gave the profile, the `mcp` line in `wubble --help` gave the relay. On the way, `initialize` returned
+"method not found" (the server spoke only the 2026-07-28 revision) and the runtime directory held stale
+`wubble-<hex>.sock` files from earlier runs. Fixed after it: earlier revisions served through `initialize`
+(decisions.md "MCP dual era"), progress beats while `start_session` waits on the sheet, the relay finding the
+hosting browser by itself from a manifest and `wubble mcp --list`, an "Agent use" section in both `--help`s,
+stale sockets swept at start and removed on a clean exit, and hosting switched live from Settings (section 0.2).
+
+## 0.2 Being findable (research, 2026-11-20)
+
+Owner: "If you turn the hosting of an MCP server on, things such as the Claude app, Claude Code, Antigravity,
+Codex etc. would see the endpoint." Tags: [V] verified in the source or the vendor's documentation (or run here),
+[I] inferred, [?] not settled.
+
+**No discovery exists.** [V] No MCP revision (2024-11-05 through 2026-07-28 and the draft) defines how an app finds
+a local server it was not configured with. The official Registry lists public servers only ("does not support
+private servers") and is "not intended to be directly consumed by host applications". SEP-2633 (a standard client
+`mcp.json`) is a draft that names no location; the issue asking for local discovery is open. `server/discover`
+(2026-07-28) describes a server the client is already connected to. [V] Every app reads its own file, and every
+one of them runs a stdio server; none is URL-only, so a private socket behind `wubble mcp` reaches all of them and
+no TCP port is needed. [V] A few apps read others' files: VS Code (`chat.mcp.discovery.enabled`, on by default only
+for the Copilot CLI's file) and `claude mcp add-from-claude-desktop` (macOS and WSL).
+
+**So hosting writes the entry.** Turning hosting on adds `wubble` (stdio, `<abs path> mcp`, `--profile` only for a
+profile that is not the default) to each app found here whose format is verified, unless the owner took wubble out
+of it in Settings (remembered: `agent.mcp_opted_out`); turning it off removes the entries wubble wrote, while they are still as it wrote them
+(`agent.mcp_added`; an entry named wubble that wubble did not write is never touched); a quit leaves them, and the relay then says the browser is not running. A backup is written
+beside each file before wubble's first write; the rest of the file is kept byte for byte (JSONC comments, trailing
+commas and unknown keys; TOML through `toml_edit`); a file that does not parse is left alone and its row says why.
+Apps are found by a file or directory of their own, read when Settings opens or hosting turns on: nothing runs in
+the background and no app's CLI is run.
+
+| App | File (Linux; macOS where it differs) | Entry | Written |
+|---|---|---|---|
+| Claude Code | `~/.claude.json`, `mcpServers` | `type: stdio`, `command`, `args` | yes [V]; run here: `CLAUDE_CONFIG_DIR=<scratch> claude mcp list` (2.1.330) on the file wubble wrote: "wubble ... ✔ Connected" |
+| Claude desktop | `~/.config/Claude/claude_desktop_config.json` (`~/Library/Application Support/Claude/`) | `command`, `args` | yes [V] |
+| Codex | `~/.codex/config.toml`, `[mcp_servers.wubble]` | `command`, `args`, `tool_timeout_sec = 3600` | yes [V] |
+| Gemini CLI | `~/.gemini/settings.json` (JSONC), `mcpServers` | `command`, `args`, `timeout` (ms, an hour) | yes [V] |
+| Antigravity | `~/.gemini/config/mcp_config.json`, `mcpServers` | `command`, `args` | yes [V] |
+| Cursor | `~/.cursor/mcp.json`, `mcpServers` | `type: stdio`, `command`, `args` | yes [V] |
+| opencode | `~/.config/opencode/opencode.json(c)`, `mcp` | `type: local`, `command: [..]` | yes; run here: opencode 1.17.9 `mcp list --pure` with scratch XDG dirs: "✓ wubble connected". Its published schema shows `mcp.servers.<name>` and calls the flat form deprecated, but 1.17.9 refuses the nested form ("a server named servers"), so wubble writes the flat one [V] |
+| Zed | `~/.config/zed/settings.json` (JSONC), `context_servers` | `command`, `args` | yes [V] |
+| Windsurf (Devin Local) | `~/.config/devin/mcp_config.json`, `mcpServers` | `command`, `args` | yes on Linux [V]; the older Windsurf path and macOS [?] |
+| Kiro | `~/.kiro/settings/mcp.json`, `mcpServers` | `command`, `args` | yes [V] |
+| Amp | `~/.config/amp/settings.json`, key `amp.mcpServers` | `command`, `args` | yes [V] |
+| Cline (CLI) | `~/.cline/data/settings/cline_mcp_settings.json`, `mcpServers` | `command`, `args` | yes [V] |
+| VS Code | `~/.config/Code/User/mcp.json`, `servers` | `type: stdio` required | no: the file name is [I]; entry to copy |
+| Copilot CLI | `~/.copilot/mcp-config.json` | shape [?] | no: entry to copy |
+| Goose | `~/.config/goose/config.yaml` | YAML | no: entry to copy |
+
+**Timeouts for the long first call** (`start_session` waits for the owner's press; wubble sends a progress beat
+every 5 s while it waits). [V] Claude Code: 30 s to start (`MCP_TIMEOUT`), no per-request timer on stdio
+(`MCP_TOOL_TIMEOUT` defaults to 100000000 ms), an idle timeout of 30 min that progress resets, and a call moved to
+the background after 120 s. [V] Codex: 30 s to start, 300 s per call (`tool_timeout_sec`, which wubble's entry
+raises to an hour). [V] Gemini CLI: 10 min (`timeout`, raised to an hour). [V] opencode: 12 h per call; progress does
+not reset it. [V] Zed: 60 s (`context_server_timeout`). [?] Cursor, VS Code, Antigravity, Claude desktop.
+
+**Protocol.** [V] The TypeScript SDK's latest revision is 2025-11-25 and its clients send `initialize`; rmcp's is
+2026-07-28 and its client tries `server/discover` first and falls back. wubble answers both (decisions.md "MCP dual
+era"), the newest first in the manifest's `protocolVersions`.
+
+**Security, as Settings states it.** Being findable is not access: every session still needs the owner's press on
+the approval sheet; the socket is private to the user (0600), never a TCP port; nothing is hosted while the switch
+is off. The manifest (`<runtime dir>/wubble/mcp/<hash>.json`, never the shared temp root) holds no secret, and a relay trusts it only when it and its socket are the user's own and private.
+
 ## 1. Summary and recommendation
 
 Build it, after the first release, as **sessions**. The user asks their harness for something; the agent calls
@@ -457,6 +541,18 @@ No test asserts timings (AGENTS.md). TOTP and passkeys follow the vault's own ro
   fresh container, deterministic airlocks only, flags as signals, socket plus stdio bridge, build after release.
 
 ## Sources
+
+Section 0.2: modelcontextprotocol.io/specification (2024-11-05 to 2026-07-28); https://modelcontextprotocol.io/registry/about;
+https://modelcontextprotocol.io/docs/develop/connect-local-servers; https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2633;
+https://github.com/modelcontextprotocol/modelcontextprotocol/issues/2963; https://code.claude.com/docs/en/mcp,
+https://code.claude.com/docs/en/env-vars, https://code.claude.com/docs/en/desktop-linux; Codex's `docs/config.md`
+(openai/codex); https://geminicli.com/docs/tools/mcp-server/; https://antigravity.google/docs/mcp;
+https://cursor.com/docs/context/mcp, https://cursor.com/docs/cli/mcp; https://opencode.ai/docs/mcp-servers/,
+https://opencode.ai/docs/config/; https://zed.dev/docs/ai/mcp; https://docs.devin.ai/desktop/cascade/mcp,
+https://docs.devin.ai/cli/extensibility/mcp/configuration.md; https://kiro.dev/docs/mcp/configuration/;
+https://ampcode.com/docs/customize/mcp; https://docs.cline.bot/mcp/configuring-mcp-servers;
+https://code.visualstudio.com/docs/agents/reference/mcp-configuration, https://code.visualstudio.com/docs/configure/settings;
+https://goose-docs.ai/docs/getting-started/using-extensions.
 
 1. MCP specification, latest (2026-07-28): https://modelcontextprotocol.io/specification/latest [V]
 2. MCP 2026-07-28 changelog (stateless, `server/discover`, multi round-trip requests, roots deprecated, Tasks extension, no stream resumption): https://modelcontextprotocol.io/specification/2026-07-28/changelog [V]

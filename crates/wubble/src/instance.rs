@@ -124,7 +124,7 @@ pub fn path_of(socket: Socket, profile: &Path, runtime: &Path) -> PathBuf {
 }
 
 /// FNV-1a, 64 bit: a hash that stays the same across Rust releases (`DefaultHasher` does not).
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
@@ -205,6 +205,65 @@ pub(crate) fn remove_stale(path: &Path) -> io::Result<()> {
 pub(crate) fn remove_stale(_path: &Path) -> io::Result<()> {
     Ok(())
 }
+
+/// Whether something listens on the socket at `path`: the one rule for "stale" (`sweep`,
+/// `mcp::hosting_browsers`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Live,
+    /// Refused or not there: nobody will answer again; the file may go.
+    Dead,
+    /// Any other error (permissions, too many files): left alone.
+    Unknown,
+}
+
+pub fn probe(path: &Path) -> Probe {
+    let Ok(name) = path.to_fs_name::<GenericFilePath>() else {
+        return Probe::Unknown;
+    };
+    match Stream::connect(name) {
+        Ok(_) => Probe::Live,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            Probe::Dead
+        }
+        Err(_) => Probe::Unknown,
+    }
+}
+
+/// Removes the sockets in `runtime` that dead browsers left behind (a hashed name: a profile
+/// path too long for the socket address), instance and MCP alike: only sockets this user owns
+/// whose probe says dead. Then the manifests of browsers that no longer host.
+#[cfg(unix)]
+pub fn sweep(runtime: &Path) {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let Ok(entries) = std::fs::read_dir(runtime) else {
+        return;
+    };
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !(name.starts_with("wubble-") && name.ends_with(".sock")) {
+            continue;
+        }
+        let mine = std::fs::symlink_metadata(&path)
+            .is_ok_and(|m| m.file_type().is_socket() && m.uid() == me);
+        if mine && probe(&path) == Probe::Dead {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    // the manifests: `mcp::hosting_browsers` removes the dead ones as it reads them
+    let _ = crate::mcp::hosting_browsers();
+}
+
+/// A named pipe leaves no file behind.
+#[cfg(not(unix))]
+pub fn sweep(_runtime: &Path) {}
 
 /// Accepts later starts on `listener` until the process ends, handing each one's message to
 /// `deliver`. On its own thread: `accept` blocks.

@@ -5,6 +5,7 @@
 
 use wubble_core::overlay::{self, Effect, Event, Kind, Layer, Stack};
 use wubble_core::print::Sheet;
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_ui::{AppWindow, CommandBarState, CommandPlacement};
 
@@ -122,12 +123,20 @@ impl Host {
         self.render_surfaces(&window);
     }
 
+    /// The dustbin on an agent Space's row: that Space is cleared (`agent_space_cleared`); the
+    /// popup stays open over the rows left, and a window that showed the Space shows another.
+    pub fn space_cleared(&mut self, space: SpaceId) {
+        self.agent_space_cleared(space);
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_surfaces(&window);
+        }
+    }
+
     /// This window's Spaces popup (wubble_core::spacemenu), as drawn and as dropped on.
     pub(super) fn spaces_popup(&self) -> wubble_core::spacemenu::Popup {
         wubble_core::spacemenu::popup(
             &self.model.spaces,
             crate::shell::window_space(&self.model, self.w.id),
-            &self.agents.spaces().into_iter().collect(),
         )
     }
 
