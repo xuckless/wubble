@@ -163,6 +163,17 @@ impl Host {
         }
     }
 
+    /// `Effect::Refresh`: a start with hosting on: wubble's own entries kept current (the binary
+    /// or profile may have moved), none added; one the owner deleted stays deleted (its row
+    /// offers Add).
+    pub(super) fn mcp_refresh(&mut self) {
+        let opted_out = self.stored_list(&defs::AGENT_MCP_OPTED_OUT);
+        let found = self.harnesses_found();
+        for h in harness::targets(&found, &opted_out) {
+            self.harness_apply(h, Moment::Resume);
+        }
+    }
+
     /// `Effect::Unregister`: exactly the entries wubble owns, still as it wrote them, come out.
     pub(super) fn mcp_unregister(&mut self) {
         for id in self.records().into_keys() {

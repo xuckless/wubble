@@ -37,14 +37,17 @@ pub(crate) struct McpHosting {
 }
 
 impl Host {
-    /// Where this browser hosts; the stored switch takes effect now.
+    /// Where this browser hosts; the stored switch takes effect now, as a start (`Resume`:
+    /// wubble's own entries kept current, none added).
     pub fn set_mcp(&mut self, place: McpPlace) {
         self.hosting.place = Some(place);
-        let on = self.hosting.wanted;
-        self.mcp_switch(on);
+        if self.hosting.wanted {
+            self.mcp_hosting(Event::Resume);
+        }
     }
 
-    /// The switch, as the setting says (`Applied::McpHosting`).
+    /// The switch, as the setting says (`Applied::McpHosting`): replayed at start before the
+    /// place is known (only remembered then), or the owner's press.
     pub(super) fn mcp_switch(&mut self, on: bool) {
         self.hosting.wanted = on;
         if self.hosting.place.is_none() {
@@ -122,6 +125,7 @@ impl Host {
             }
             // the agent apps' configuration (`host/harness.rs`)
             Effect::Register => self.mcp_register(),
+            Effect::Refresh => self.mcp_refresh(),
             Effect::Unregister => self.mcp_unregister(),
         }
     }

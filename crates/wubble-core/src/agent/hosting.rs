@@ -9,8 +9,12 @@
 pub enum Hosting {
     #[default]
     Off,
-    /// Asked to bind; the socket is not up yet.
-    Starting,
+    /// Asked to bind; the socket is not up yet. `by_owner`: the owner turned it on (wubble then
+    /// adds itself to the agent apps), else a start with it already on (wubble only keeps its own
+    /// entries current).
+    Starting {
+        by_owner: bool,
+    },
     On,
     /// The socket could not be bound; the switch is still on.
     Failed(String),
@@ -18,7 +22,10 @@ pub enum Hosting {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// The owner turned the switch on.
     TurnOn,
+    /// The browser started with the switch on.
+    Resume,
     TurnOff,
     Bound,
     BindFailed(String),
@@ -37,8 +44,11 @@ pub enum Effect {
     StopSessions,
     WriteManifest,
     RemoveManifest,
-    /// Add wubble to the detected harnesses the owner has not opted out of (`harness`).
+    /// Add wubble to the detected harnesses the owner has not opted out of (`harness`,
+    /// `Moment::TurnOn`).
     Register,
+    /// Keep wubble's own entries current, add none (`Moment::Resume`).
+    Refresh,
     /// Remove the entries wubble added.
     Unregister,
 }
@@ -47,14 +57,16 @@ pub fn transition(state: Hosting, event: Event) -> (Hosting, Vec<Effect>) {
     use Effect::*;
     use Hosting::*;
     match (state, event) {
-        (Off | Failed(_), Event::TurnOn) => (Starting, vec![Bind]),
-        (Starting, Event::Bound) => (On, vec![WriteManifest, Register]),
-        (Starting, Event::BindFailed(why)) => (Failed(why), vec![]),
-        (On | Starting, Event::TurnOff) => {
+        (Off | Failed(_), Event::TurnOn) => (Starting { by_owner: true }, vec![Bind]),
+        (Off, Event::Resume) => (Starting { by_owner: false }, vec![Bind]),
+        (Starting { by_owner: true }, Event::Bound) => (On, vec![WriteManifest, Register]),
+        (Starting { by_owner: false }, Event::Bound) => (On, vec![WriteManifest, Refresh]),
+        (Starting { .. }, Event::BindFailed(why)) => (Failed(why), vec![]),
+        (On | Starting { .. }, Event::TurnOff) => {
             (Off, vec![StopSessions, Unbind, RemoveManifest, Unregister])
         }
         (Failed(_), Event::TurnOff) => (Off, vec![Unregister]),
-        (On | Starting, Event::Quit) => (Off, vec![StopSessions, Unbind, RemoveManifest]),
+        (On | Starting { .. }, Event::Quit) => (Off, vec![StopSessions, Unbind, RemoveManifest]),
         (state, _) => (state, vec![]),
     }
 }
@@ -70,7 +82,7 @@ impl Hosting {
     pub fn status(&self, remote_port: Option<u16>) -> String {
         match (self, remote_port) {
             (Hosting::Off, _) => "Off: nothing is hosted, no agent can reach wubble.".into(),
-            (Hosting::Starting, _) => "Starting…".into(),
+            (Hosting::Starting { .. }, _) => "Starting…".into(),
             (Hosting::On, Some(port)) => format!(
                 "Hosting, but every session is refused while the debugging port ({port}) is \
                  set: turn it off under Privacy."
@@ -92,7 +104,10 @@ mod tests {
     #[test]
     fn on_binds_then_writes_and_registers() {
         let (s, e) = transition(Hosting::Off, Event::TurnOn);
-        assert_eq!((s.clone(), e), (Hosting::Starting, vec![Bind]));
+        assert_eq!(
+            (s.clone(), e),
+            (Hosting::Starting { by_owner: true }, vec![Bind])
+        );
         assert!(!s.serving());
         let (s, e) = transition(s, Event::Bound);
         assert_eq!((s.clone(), e), (Hosting::On, vec![WriteManifest, Register]));
@@ -126,12 +141,15 @@ mod tests {
 
     #[test]
     fn a_failed_bind_says_why_and_can_be_tried_again() {
-        let (s, e) = transition(Hosting::Starting, Event::BindFailed("in use".into()));
+        let (s, e) = transition(
+            Hosting::Starting { by_owner: true },
+            Event::BindFailed("in use".into()),
+        );
         assert_eq!((s.clone(), e), (Hosting::Failed("in use".into()), vec![]));
         assert!(s.status(None).contains("in use"));
         assert_eq!(
             transition(s.clone(), Event::TurnOn),
-            (Hosting::Starting, vec![Bind])
+            (Hosting::Starting { by_owner: true }, vec![Bind])
         );
         assert_eq!(
             transition(s, Event::TurnOff),
@@ -144,5 +162,30 @@ mod tests {
         assert!(Hosting::On.status(Some(9222)).contains("9222"));
         assert!(Hosting::On.status(None).contains("approval"));
         assert!(Hosting::Off.status(None).contains("nothing is hosted"));
+    }
+
+    /// A start with the switch on keeps wubble's entries current but adds none: an entry the
+    /// owner deleted from an app's file stays deleted.
+    #[test]
+    fn a_start_refreshes_the_owner_s_turn_on_registers() {
+        let (s, e) = transition(Hosting::Off, Event::Resume);
+        assert_eq!(
+            (s.clone(), e),
+            (Hosting::Starting { by_owner: false }, vec![Bind])
+        );
+        assert_eq!(
+            transition(s, Event::Bound),
+            (Hosting::On, vec![WriteManifest, Refresh])
+        );
+        let owner = transition(Hosting::Off, Event::TurnOn).0;
+        assert_eq!(
+            transition(owner, Event::Bound),
+            (Hosting::On, vec![WriteManifest, Register])
+        );
+        // a resume while on or after a failure does nothing
+        assert_eq!(
+            transition(Hosting::On, Event::Resume),
+            (Hosting::On, vec![])
+        );
     }
 }
