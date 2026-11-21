@@ -617,6 +617,24 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
     }
 }
 
+/// The DevTools call or page script a waiting call waits on the answer of, if any.
+fn answer_id(wait: &Wait) -> Option<u64> {
+    match *wait {
+        Wait::Eval { id, .. }
+        | Wait::Article { id, .. }
+        | Wait::Shot { id }
+        | Wait::Scroll { id, .. }
+        | Wait::Locate { id, .. }
+        | Wait::Metrics { id, .. }
+        | Wait::Focus { id, .. }
+        | Wait::TypeMark { id, .. }
+        | Wait::TypeFocus { id, .. }
+        | Wait::Select { id, .. }
+        | Wait::Input { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
 /// What a waiting call is doing, as a file chooser opening on its tab sees it
 /// ([`upload::Stage`]): every stage of `upload_file`, and the calls whose input or script may
 /// open one.
@@ -3639,111 +3657,126 @@ impl Host {
         self.agent_act(reply, tab, target, None, Act::Upload { paths });
     }
 
-    /// Intercepts `Routed::Chooser` for agent-driven tabs: never opens an OS file dialog.
-    /// If `upload_file` is armed on `tab`, answers Chromium directly and waits for the AX tree
-    /// to refresh; otherwise cancels the chooser, logs it, and fails any in-flight click/settle.
+    /// A file chooser the page opened in `tab` ([`upload::chooser`]): the owner's goes on to
+    /// the OS dialog (false); a clicked `upload_file`'s is answered with its files; any other in
+    /// a session's tab is cancelled, logged, and the calls whose input or script may have
+    /// opened it fail with the advice to use `upload_file`.
     pub(super) fn agent_chooser(
         &mut self,
         tab: TabId,
         id: RequestId,
         spec: &crate::chooser::DialogSpec,
     ) -> bool {
-        if !self.agent_drives(tab) {
-            return false;
+        let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
+        match upload::chooser(mode, &self.agent_stages(tab)) {
+            upload::Chooser::Owner => false,
+            upload::Chooser::Answer => {
+                self.agent_answer_chooser(tab, id, spec);
+                true
+            }
+            upload::Chooser::Cancel => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_file_chooser(id, None);
+                }
+                self.agent_chooser_cancelled(tab);
+                true
+            }
         }
+    }
+
+    /// A chooser cancelled in `tab`: logged, and the calls in flight there whose input or
+    /// script may have opened it fail ([`upload::CHOOSER_CANCELLED`]).
+    fn agent_chooser_cancelled(&mut self, tab: TabId) {
+        if let Some((session, _)) = self.agent_grant_of(tab) {
+            self.agent_log(&session, "file_chooser_blocked", None, Outcome::Refused);
+        }
+        let (hit, kept): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.agents.pending)
+            .into_iter()
+            .partition(|p| {
+                wait_tab(&p.wait) == Some(tab)
+                    && matches!(stage(&p.wait), Stage::Input | Stage::UploadClicked)
+            });
+        self.agents.pending = kept;
+        for p in hit {
+            // a DevTools call or script it waits on answers into nothing
+            if let Some(id) = answer_id(&p.wait) {
+                self.agents.ignored.push(id);
+            }
+            if matches!(p.wait, Wait::Eval { .. }) {
+                self.agent_release_values(tab);
+            }
+            self.agent_fail(p.reply, upload::CHOOSER_CANCELLED);
+        }
+        self.agent_arm();
+    }
+
+    /// The clicked `upload_file`'s chooser, answered with its files.
+    fn agent_answer_chooser(
+        &mut self,
+        tab: TabId,
+        id: RequestId,
+        spec: &crate::chooser::DialogSpec,
+    ) {
         let armed =
             self.agents.pending.iter().position(|p| {
                 wait_tab(&p.wait) == Some(tab) && stage(&p.wait) == Stage::UploadClicked
             });
-        if let Some(i) = armed {
-            let p = self.agents.pending.remove(i);
-            let paths = match p.wait {
-                Wait::Chooser { paths, .. } => paths,
-                Wait::Input {
-                    id: fence_id,
-                    then: Then::Upload { paths },
-                    ..
-                } => {
-                    self.agents.ignored.push(fence_id);
-                    paths
-                }
-                _ => unreachable!(),
-            };
-            if let Err(why) = chooser_allows(spec.pick, paths.len()) {
-                if let Some(view) = self.tab_view(tab) {
-                    view.answer_file_chooser(id, None);
-                }
-                self.agent_fail(p.reply, why);
-                self.agent_arm();
-                return true;
+        let Some(i) = armed else {
+            // no upload waits for it after all: cancelled
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_file_chooser(id, None);
             }
-            let rev = self.ax_rev(tab);
-            let names = p.reply.target.clone().unwrap_or_default();
-            let answered = self
-                .tab_view(tab)
-                .is_some_and(|v| v.answer_file_chooser(id, Some(&paths)));
-            if !answered {
-                self.agent_fail(p.reply, "the tab has no page");
-                self.agent_arm();
-                return true;
+            return;
+        };
+        let p = self.agents.pending.remove(i);
+        let paths = match p.wait {
+            Wait::Chooser { paths, .. } => paths,
+            Wait::Input {
+                id: fence_id,
+                then: Then::Upload { paths },
+                ..
+            } => {
+                self.agents.ignored.push(fence_id);
+                paths
             }
-            let answer = if names.is_empty() {
-                "uploaded".into()
-            } else {
-                format!("uploaded {names}")
-            };
-            let markers = upload_ax_markers(&paths);
-            let settle_at = Instant::now() + UPLOAD_AX_SETTLE;
-            self.agent_wait(
-                p.reply,
-                Wait::Uploaded {
-                    tab,
-                    rev,
-                    markers,
-                    settle_at,
-                    answer,
-                },
-                UPLOAD_AX_WAIT,
-            );
-            return true;
-        }
-        // Unasked file chooser in an agent-driven tab: always cancel, never show rfd.
-        if let Some(view) = self.tab_view(tab) {
-            view.answer_file_chooser(id, None);
-        }
-        if let Some((session, _)) = self.agent_grant_of(tab) {
-            self.agent_log(&session, "file_chooser_blocked", None, Outcome::Refused);
-        }
-        let mut kept = Vec::with_capacity(self.agents.pending.len());
-        let mut blocked = Vec::new();
-        for p in std::mem::take(&mut self.agents.pending) {
-            let hit = match &p.wait {
-                Wait::Input {
-                    tab: t,
-                    id: fence_id,
-                    ..
-                } if *t == tab => {
-                    self.agents.ignored.push(*fence_id);
-                    true
-                }
-                Wait::Settle { tab: t, .. } | Wait::Started { tab: t, .. } if *t == tab => true,
-                _ => false,
-            };
-            if hit {
-                blocked.push(p.reply);
-            } else {
-                kept.push(p);
+            _ => unreachable!(),
+        };
+        if let Err(why) = chooser_allows(spec.pick, paths.len()) {
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_file_chooser(id, None);
             }
+            self.agent_fail(p.reply, why);
+            self.agent_arm();
+            return;
         }
-        self.agents.pending = kept;
-        for reply in blocked {
-            self.agent_fail(
-                reply,
-                "this action opened a file chooser, which is blocked in agent sessions: use upload_file instead",
-            );
+        let rev = self.ax_rev(tab);
+        let names = p.reply.target.clone().unwrap_or_default();
+        let answered = self
+            .tab_view(tab)
+            .is_some_and(|v| v.answer_file_chooser(id, Some(&paths)));
+        if !answered {
+            self.agent_fail(p.reply, "the tab has no page");
+            self.agent_arm();
+            return;
         }
-        self.agent_arm();
-        true
+        let answer = if names.is_empty() {
+            "uploaded".into()
+        } else {
+            format!("uploaded {names}")
+        };
+        let markers = upload_ax_markers(&paths);
+        let settle_at = Instant::now() + UPLOAD_AX_SETTLE;
+        self.agent_wait(
+            p.reply,
+            Wait::Uploaded {
+                tab,
+                rev,
+                markers,
+                settle_at,
+                answer,
+            },
+            UPLOAD_AX_WAIT,
+        );
     }
 
     /// What each call waiting on `tab` is doing ([`stage`]).
@@ -4091,20 +4124,12 @@ impl Host {
             self.agents.ignored.swap_remove(i);
             return true;
         }
-        let Some(i) = self.agents.pending.iter().position(|p| match p.wait {
-            Wait::Eval { id: w, .. }
-            | Wait::Article { id: w, .. }
-            | Wait::Shot { id: w }
-            | Wait::Scroll { id: w, .. }
-            | Wait::Locate { id: w, .. }
-            | Wait::Metrics { id: w, .. }
-            | Wait::Focus { id: w, .. }
-            | Wait::TypeMark { id: w, .. }
-            | Wait::TypeFocus { id: w, .. }
-            | Wait::Select { id: w, .. }
-            | Wait::Input { id: w, .. } => w == id,
-            _ => false,
-        }) else {
+        let Some(i) = self
+            .agents
+            .pending
+            .iter()
+            .position(|p| answer_id(&p.wait) == Some(id))
+        else {
             return false;
         };
         let p = self.agents.pending.remove(i);
