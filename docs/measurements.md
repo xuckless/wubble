@@ -223,6 +223,48 @@ wubble is about 16 % behind Chromium on Speedometer and within one run's noise o
 
 Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
 
+## pf/perf against main, quiet machine (2026-11-21, numbers of record)
+
+The release builds of main at f43b5cf ("base") and of pf/perf at cc5a49a ("final": partial rendering, page damage in
+place, the energy fixes), run on the invisible display (60 Hz, 1360x880). The two builds alternated, base then final,
+3 rounds, each run waiting for a load average under 3 (one agent and the other lanes were idle or finished; per-run
+load averages are 0.8 to 3.4).
+
+Main thread, `scripts/bench/profile.sh` (20 s of `perf` LBR at 999 Hz each): samples, then shares.
+
+| | base 1, 2, 3 | final 1, 2, 3 |
+|---|---|---|
+| 1080p60 VP9 clip in a page: main-thread samples | 2932, 1882, 2064 | 1527, 1641, 2738 |
+| - Slint render of the window | 67.8, 65.5, 64.9 % | 59.7, 60.2, 60.2 % |
+| - item tree walk | 20.2, 18.0, 20.9 % | 28.6, 29.8, 31.7 % |
+| - Skia flush | 15.9, 17.3, 15.7 % | 7.5, 8.7, 6.8 % |
+| - recording (paths, text, rects, layers) | 20.5, 19.6, 17.9 % | 8.7, 8.4, 8.0 % |
+| - tree CPU, main process (user + system) | 64/16, 36/10, 42/11 % | 36/8, 36/9, 63/15 % |
+| 16 px CSS spinner: main-thread samples | 2633, 3359, 1941 | 1625, 1373, 3396 |
+| - tree CPU, main process | 23/14, 30/19, 15/10 % | 13/8, 12/8, 37/20 % |
+
+Each column has one run well above the others (the machine's other work); the medians are what to compare:
+video 2064 → 1641 main-thread samples (−20 %), spinner 2633 → 1625 (−38 %).
+
+`--measure scroll` (10 s): render p50 0.34, 0.33, 0.54 ms (base) against 0.23, 0.24, 0.22 ms; frame interval p99
+24.7 to 32.5 ms (base: a few late frames each run) against 17.3 to 18.8 ms.
+
+Energy table (`scripts/bench/energy.sh`, 10 s per scenario; base has no `--measure-page`, so only idle, scroll and
+canvas). CPU s/s and wake-ups/s, the three runs' range:
+
+| scenario | base | final |
+|---|---|---|
+| idle | 0.01, 519 to 520 (Slint 0.23/s) | 0.00 to 0.01, 505 to 506 (Slint 0 to 0.05/s) |
+| scroll | 0.15 to 0.17, 2558 to 2635 | 0.14 to 0.16, 2531 to 2602 |
+| canvas | 0.20 to 0.22, 3364 to 3463 | 0.17 to 0.21, 3107 to 3444 |
+| start page | | 0.08 to 0.09, 783 to 797 (scene and Slint 60/s) |
+| spinner | | 0.12 to 0.14, 2240 to 2360 |
+| caret | | 0.02, 643 to 648 |
+| video page | | 0.35 to 0.39, 4683 to 4845 |
+
+The tables below in this file from earlier on 2026-11-21 were taken with a load average of 11 to 40 and stay
+as the record of what was measured then, not as numbers to compare against.
+
 ## Shell partial rendering (pf/perf step 1, 2026-11-21)
 
 Same machine, release builds (`release` profile, symbols kept) of the commit before and after, on the invisible
