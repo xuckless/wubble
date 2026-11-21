@@ -80,7 +80,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
+- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -125,6 +125,14 @@ Open, to build or check:
 
 ## Built in instead of extensions
 - [ ] Content blocker: uBO scriptlet coverage
+
+## Privacy and containers (hardening pass, open)
+- [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
+- [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
+- [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
+- [ ] First start without a compiled list cache: requests pass until the background compile ends (seen once on a loaded machine); hold the first navigation until the engine is ready
+- [ ] Routing rules: renaming or deleting a Space (or container) a rule names silently turns the rule off, with no mark in the list; Space names are not unique; a Space named with `,` or `->` cannot be named by a rule; the row label does not say typed addresses and page links are not routed
+- [ ] Pill and counter: no check drives the shell by pointer for the blocker menu, the Sites list revoke or the Spaces list in a running window (only the engine side is driven, `notes/hp/privtools` of the pass)
 
 ## Design fidelity
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals

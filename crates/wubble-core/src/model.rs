@@ -278,10 +278,11 @@ pub enum Command {
         size: Option<(u32, u32)>,
     },
     /// A link from another app: a new tab in `space` (`None`: the active one) shown in a
-    /// Little window.
+    /// Little window, in `container` (`None`: the Space's own).
     OpenLittle {
         url: String,
         space: Option<SpaceId>,
+        container: Option<ContainerId>,
     },
     /// The Little window's tab becomes an ordinary tab of `space`, shown; the window closes.
     PromoteLittle {
@@ -2033,7 +2034,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::ReturnPip => m.return_pip(),
         Command::MoveTabToWindow { tab, to } => m.move_tab_to_window(tab, to),
         Command::OpenPopupWindow { url, opener, size } => m.open_popup_window(url, opener, size),
-        Command::OpenLittle { url, space } => m.open_little(url, space),
+        Command::OpenLittle {
+            url,
+            space,
+            container,
+        } => m.open_little(url, space, container),
         Command::PromoteLittle { window, space } => m.promote_little(window, space),
         Command::SetSleepPolicy(policy) => {
             m.policy = policy;

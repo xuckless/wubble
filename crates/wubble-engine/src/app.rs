@@ -269,10 +269,14 @@ impl PageFeatures {
             Knob::Enable(f) => Some(f),
             _ => None,
         });
-        let disable = list(|k| match k {
-            Knob::Disable(f) => Some(f),
-            _ => None,
-        });
+        let disable: Vec<&str> = QUIET_FEATURES
+            .iter()
+            .map(|(feature, _)| *feature)
+            .chain(list(|k| match k {
+                Knob::Disable(f) => Some(f),
+                _ => None,
+            }))
+            .collect();
         let mut out = vec![];
         for (name, features) in [("enable-features", enable), ("disable-features", disable)] {
             if !features.is_empty() {
@@ -499,8 +503,49 @@ fn nvidia_vaapi(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -
 /// platform table must not add its own `enable-features`: merge it here.
 /// The `enable-features` switch is not here: [`PageFeatures::switches`] writes it, from the
 /// user's settings, nor the extension system's: [`extension_switches`] writes those, from the
-/// installed list. Empty now; the table stays for the next switch every OS needs.
-const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+/// installed list.
+///
+/// "Nothing phones home": a fresh profile with no page open asked Google for the component
+/// updater (`update.googleapis.com`, the on-device model's manifest among them), a clock
+/// (`clients2.google.com/time`), the spelling dictionary (`redirector.gvt1.com`), the omnibox's
+/// AI Mode eligibility (`www.google.com/async/folae`) and a translate ranker model
+/// (`www.gstatic.com`), measured with a net log (`docs/research/extensions.md` section 3). The first two
+/// switches turn off what Chromium honours; the on-device model's manifest component is
+/// registered by `chrome_browser_main_extra_parts_optimization_guide.cc` whatever they say, so
+/// the infrastructure hosts Chromium updates itself from (no page of anyone's is there) are
+/// also made unresolvable inside Chromium's own network stack: the request is still tried and
+/// fails, nothing is looked up or sent.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
+    ("disable-component-update", None),
+    ("disable-background-networking", None),
+    (
+        "host-resolver-rules",
+        Some(
+            "MAP update.googleapis.com ~NOTFOUND, MAP *.gvt1.com ~NOTFOUND, MAP *.gvt2.com ~NOTFOUND",
+        ),
+    ),
+];
+
+/// Chromium features switched off for the same reason ([`CHROMIUM_SWITCHES`]): each is a request
+/// of Chromium's own, made with no page open, and each with what it asks.
+const QUIET_FEATURES: &[(&str, &str)] = &[
+    (
+        "NetworkTimeServiceQuerying",
+        "clients2.google.com/time/1/current: a clock query",
+    ),
+    (
+        "AimEnabled",
+        "www.google.com/async/folae: the omnibox's AI Mode eligibility",
+    ),
+    (
+        "TranslateRankerQuery",
+        "www.gstatic.com translate ranker model (with the next)",
+    ),
+    (
+        "TranslateRankerEnforcement",
+        "the same model, loaded when this one is on",
+    ),
+];
 
 /// The extension system's switches for the installed, enabled extensions `paths`.
 ///
@@ -1378,20 +1423,89 @@ mod tests {
     #[test]
     fn linux_gets_the_shared_switches_and_its_video_fix() {
         let cef = cef_config(&config("/opt/wubble", "/c"));
-        assert_eq!(
-            cef.command_line_switches,
-            vec![
-                (
-                    "enable-features".to_string(),
-                    Some("OverlayScrollbar,MiddleClickAutoscroll".to_string())
-                ),
-                (
-                    "enable-blink-features".to_string(),
-                    Some("MiddleClickAutoscroll".to_string())
-                ),
-                ("disable-extensions".to_string(), None),
-                ("disable-gpu-memory-buffer-video-frames".to_string(), None),
-            ]
+        let mut want = vec![
+            (
+                "enable-features".to_string(),
+                Some("OverlayScrollbar,MiddleClickAutoscroll".to_string()),
+            ),
+            quiet_features(&[]),
+            (
+                "enable-blink-features".to_string(),
+                Some("MiddleClickAutoscroll".to_string()),
+            ),
+            ("disable-extensions".to_string(), None),
+        ];
+        want.extend(quiet_switches());
+        want.push(("disable-gpu-memory-buffer-video-frames".to_string(), None));
+        assert_eq!(cef.command_line_switches, want);
+    }
+
+    /// The `disable-features` every run carries (`QUIET_FEATURES`), then `more`.
+    fn quiet_features(more: &[&str]) -> (String, Option<String>) {
+        let all: Vec<&str> = QUIET_FEATURES
+            .iter()
+            .map(|(f, _)| *f)
+            .chain(more.iter().copied())
+            .collect();
+        ("disable-features".to_string(), Some(all.join(",")))
+    }
+
+    /// The plain switches every run carries (`CHROMIUM_SWITCHES`).
+    fn quiet_switches() -> Vec<(String, Option<String>)> {
+        CHROMIUM_SWITCHES
+            .iter()
+            .map(|(n, v)| ((*n).to_string(), v.map(str::to_string)))
+            .collect()
+    }
+
+    /// "Nothing phones home": what a fresh profile asked Google for with no page open is off by
+    /// a switch or a feature on every command line, and the hosts Chromium updates itself from
+    /// cannot be resolved (the component updater registers itself whatever the switches say).
+    #[test]
+    fn chromium_s_own_requests_are_switched_off() {
+        let cef = cef_config(&config("/opt/wubble", "/c"));
+        let has = |name: &str| {
+            cef.command_line_switches
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(has("disable-component-update"), Some(None));
+        assert_eq!(has("disable-background-networking"), Some(None));
+        let rules = has("host-resolver-rules").flatten().unwrap();
+        for host in ["update.googleapis.com", "*.gvt1.com", "*.gvt2.com"] {
+            assert!(rules.contains(&format!("MAP {host} ~NOTFOUND")), "{rules}");
+        }
+        let features = has("disable-features").flatten().unwrap();
+        for feature in [
+            "NetworkTimeServiceQuerying",
+            "AimEnabled",
+            "TranslateRankerQuery",
+            "TranslateRankerEnforcement",
+        ] {
+            assert!(features.split(',').any(|f| f == feature), "{features}");
+        }
+        // the user's own page features never undo it
+        let spare_off = PageFeatures {
+            spare_renderer: false,
+            ..PageFeatures::default()
+        };
+        let merged = spare_off.switches();
+        let off = merged
+            .iter()
+            .find(|(n, _)| n == "disable-features")
+            .unwrap();
+        assert!(
+            off.1
+                .as_deref()
+                .unwrap()
+                .contains("NetworkTimeServiceQuerying")
+        );
+        assert!(
+            off.1
+                .as_deref()
+                .unwrap()
+                .ends_with("SpareRendererForSitePerProcess")
         );
     }
 
@@ -1412,17 +1526,20 @@ mod tests {
             middle_click_autoscroll: false,
             ..PageFeatures::default()
         };
-        assert!(off.switches().is_empty());
+        assert_eq!(off.switches(), [quiet_features(&[])]);
         let scrollbars = PageFeatures {
             overlay_scrollbars: true,
             ..off
         };
         assert_eq!(
             scrollbars.switches(),
-            [(
-                "enable-features".to_string(),
-                Some("OverlayScrollbar".to_string())
-            )]
+            [
+                (
+                    "enable-features".to_string(),
+                    Some("OverlayScrollbar".to_string())
+                ),
+                quiet_features(&[]),
+            ]
         );
     }
 
@@ -1445,7 +1562,7 @@ mod tests {
                     "enable-features",
                     Some("OverlayScrollbar,BackForwardCache:cache_size/2")
                 ),
-                s("disable-features", Some("SpareRendererForSitePerProcess")),
+                quiet_features(&["SpareRendererForSitePerProcess"]),
                 s("max-decoded-image-size-mb", Some("64")),
                 s("disable-site-isolation-trials", None),
                 s("renderer-process-limit", Some("8")),
@@ -1457,7 +1574,10 @@ mod tests {
             middle_click_autoscroll: false,
             ..PageFeatures::default()
         };
-        assert_eq!(off.switches(), [s("disable-back-forward-cache", None)]);
+        assert_eq!(
+            off.switches(),
+            [quiet_features(&[]), s("disable-back-forward-cache", None)]
+        );
     }
 
     #[test]
@@ -1469,7 +1589,7 @@ mod tests {
             ..PageFeatures::default()
         };
         assert_eq!(PageFeatures::default().remote_debugging_port, None);
-        assert!(base.switches().is_empty());
+        assert_eq!(base.switches(), [quiet_features(&[])]);
         let open = PageFeatures {
             remote_debugging_port: Some(9333),
             ..base
@@ -1477,6 +1597,7 @@ mod tests {
         assert_eq!(
             open.switches(),
             [
+                quiet_features(&[]),
                 s("remote-debugging-port", Some("9333")),
                 s("remote-allow-origins", Some("http://127.0.0.1:9333"))
             ]
@@ -1693,6 +1814,7 @@ mod tests {
                     "enable-features",
                     Some("OverlayScrollbar,MiddleClickAutoscroll,VaapiOnNvidiaGPUs")
                 ),
+                quiet_features(&[]),
                 s("enable-blink-features", Some("MiddleClickAutoscroll")),
             ]
         );

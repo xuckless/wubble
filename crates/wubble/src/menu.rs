@@ -2034,6 +2034,7 @@ mod tests {
             Cmd::OpenLittle {
                 url: "https://l.test".into(),
                 space: None,
+                container: None,
             },
         );
         let little = m.focused();

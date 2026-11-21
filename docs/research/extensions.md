@@ -83,6 +83,10 @@ grepped for every non-loopback URL [V]:
   (`update.googleapis.com/service/update2/json`), network time (`clients2.google.com/time/1/current`), a component diff
   from `edgedl.me.gvt1.com`, the spellcheck dictionary (`redirector.gvt1.com/edgedl/chrome/dict/en-us-10-2.bdic`) and
   `www.google.com/async/folae` (an omnibox/AI Mode prefetch [I]) are requested on a throwaway profile in both modes.
+  Switched off in the privacy pass (`CHROMIUM_SWITCHES`, `QUIET_FEATURES` in `wubble-engine/src/app.rs`): a 7 minute capture on a private
+  network namespace then shows no DNS query or connection; the translate ranker model (`www.gstatic.com`) and the on-device model's
+  manifest component (an `update.googleapis.com` request registered by `chrome_browser_main_extra_parts_optimization_guide.cc`
+  whatever `disable-component-update` says) were found there too.
 
 ## 4. Gaps that need a Chromium or CEF patch
 

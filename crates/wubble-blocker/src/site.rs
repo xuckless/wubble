@@ -15,12 +15,11 @@ pub enum Shields {
 pub struct SiteOverrides(BTreeSet<String>);
 
 impl SiteOverrides {
-    /// Add a host (case and one trailing dot ignored). Returns false if it was present
-    /// or empty.
-    pub fn insert(&mut self, host: &str) -> bool {
-        let host = host.trim().to_ascii_lowercase();
-        let host = host.strip_suffix('.').unwrap_or(&host);
-        !host.is_empty() && self.0.insert(host.to_owned())
+    /// Add a site, as its host (`wubble_core::routing::site_host`: case, a trailing dot, a
+    /// scheme, a port or a path typed with it are ignored, a name in Unicode is its punycode).
+    /// Returns false if it was present or is no site.
+    pub fn insert(&mut self, site: &str) -> bool {
+        wubble_core::routing::site_host(site).is_some_and(|host| self.0.insert(host))
     }
 
     /// Shields for a page. An unparsable URL or one without a host gets `On`.
@@ -88,6 +87,30 @@ mod tests {
         assert!(!o.insert("example.com"));
         assert!(!o.insert(" "));
         assert_eq!(o.shields_for("https://example.com/"), Shields::Off);
+    }
+
+    #[test]
+    fn entries_typed_with_a_port_a_scheme_or_unicode_still_match() {
+        let mut o = SiteOverrides::default();
+        for typed in [
+            "127.0.0.1:8080",
+            "https://Shop.Test/x",
+            "bücher.de",
+            "[::1]:3000",
+        ] {
+            assert!(o.insert(typed), "{typed}");
+        }
+        assert!(!o.insert("a b"));
+        for url in [
+            "http://127.0.0.1:8080/page",
+            "https://www.shop.test/",
+            "https://xn--bcher-kva.de/",
+            "https://bücher.de/",
+            "http://[::1]:3000/",
+        ] {
+            assert_eq!(o.shields_for(url), Shields::Off, "{url}");
+        }
+        assert_eq!(o.shields_for("http://127.0.0.2:8080/"), Shields::On);
     }
 
     #[test]
