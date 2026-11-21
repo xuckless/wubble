@@ -52,6 +52,16 @@ define_class!(
             }
         }
 
+        // `terminate:` is Cocoa's one entry for an orderly quit (the Quit item and Cmd+Q, the
+        // Dock, Activity Monitor's Quit, logout, restart and shut down). AppKit's own ends the
+        // process with exit() inside the run loop, so Chromium could not shut down; as cefclient
+        // (cef `tests/cefclient/cefclient_mac.mm`, `-[ClientApplication terminate:]`) and Chrome
+        // (`chrome/browser/chrome_browser_application_mac.mm`, `-[BrowserCrApplication
+        // terminate:]`) do, it starts the browser's own close and returns: "Return, don't exit.
+        // The application is responsible for exiting on its own." The handler ends the event
+        // loop (winit stops `NSApp` with `stop:`), the host drains CEF and `main` returns, which
+        // ends the process; a logout waits for that exit, as it does for Chrome. Without a
+        // handler (before the loop runs, after the drain), AppKit's own terminate runs.
         #[unsafe(method(terminate:))]
         unsafe fn terminate(&self, sender: Option<&AnyObject>) {
             let handler = QUIT_HANDLER.lock().ok().and_then(|g| *g);
