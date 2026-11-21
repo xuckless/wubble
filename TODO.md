@@ -31,6 +31,7 @@ Next, in order:
 Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools (20 after `xm/sheet-fix`), sessions in their own Space and container, the approval sheet, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
 - [ ] An element inside a frame is still placed from the accessibility mirror's boxes, which a scrolled page leaves behind (the top document uses the live layout); the mirror's coordinates are wrong after a scroll for the screen-reader pane too (Chromium sends no root scroll offset)
+- [ ] a tab moved into an agent session's Space keeps its back-forward cache and any prerender made before: activating either runs no navigation throttle, so the guard is not asked and only the commit backstop takes the tab back (after the page showed); drop those for a tab that joins a session (or disable the cache and prerender for session tabs) and add a smoke probe
 - [ ] publish wubble-mcp to npm (owner go, owner's npm account; steps in docs/release.md)
 - [ ] agent apps wubble does not write yet (VS Code, Copilot CLI, Goose; Windsurf on macOS): verify each file's name and entry shape, then make them `Format`s in `agent::harness`
 - [ ] Windows: the agent apps' paths (`agent::harness` lists Linux and macOS only) and the manifest's runtime dir
