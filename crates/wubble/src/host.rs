@@ -1760,9 +1760,12 @@ impl Host {
     pub(crate) fn open_external(&mut self, message: crate::instance::Message) {
         match message {
             crate::instance::Message::Open(url) => {
-                let space =
-                    wubble_core::routing::resolve(&self.model, &self.routing_rules, &url).space;
-                self.dispatch(Command::OpenLittle { url, space })
+                let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+                self.dispatch(Command::OpenLittle {
+                    url,
+                    space: routed.space,
+                    container: routed.container,
+                })
             }
             crate::instance::Message::Focus => self.raise_window(self.model.focused()),
         }
