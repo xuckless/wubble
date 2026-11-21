@@ -266,6 +266,11 @@ The gallery shots, with partial on against off (off's runs against each other gi
   rasterizes the icon paths after it slightly differently; verify's reference finds the image cached and
   starts none. Upstream draws each frame once, so it shows the first draw, as the presented frame does.
 
+Against main (a49a1be, 3 runs, its own spread as the noise): every shot of the 12 pf/perf runs, partial on or
+off, is within main's spread, but for three kinds of difference. Settings' Agents page and its Updates group
+print the binary's path, which differs. The first sidebar scenes vary by 1000 to 2400 px in every pf/perf run,
+on and off alike. And the inset-shadow edges above.
+
 `42-toast-question` (1 run in 4 earlier) was not a stale frame. In that run Chromium's GPU process exited
 (133) while the page was alive, and from the next resize on the page laid out with smaller body text. Killing
 the GPU process at the same point (SIGTRAP to the helper with a `GpuWatchdog` thread, once scene 15 is shot)
