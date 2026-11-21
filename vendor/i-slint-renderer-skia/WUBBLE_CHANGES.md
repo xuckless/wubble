@@ -28,10 +28,15 @@ Every change is marked `wubble change` in the source.
    - `lib.rs`: `default_wgpu_30` makes the partial rendering state; `partial_rendering_state`
      keeps it although a rendering notifier is set (upstream turns it off then, as a notifier
      might draw into the target: wubble's draws only into its own textures).
-   - `lib.rs` `render_components_to_canvas`: with partial rendering the `BeforeRendering`
-     notifier runs before the dirty region is computed (upstream: after the clear, which a
-     notifier drawing into the target needs), so what it sets in a frame (the shell's springs,
-     new images) is drawn in that frame.
+   - `lib.rs` `render_to_canvas`: with partial rendering the `BeforeRendering` notifier runs
+     first, before `draw_contents` (upstream: after the clear, which a notifier drawing into the
+     target needs). `draw_contents` instantiates the tree's `if` and `for` elements before it
+     calls the renderer, so an element a notifier shows (wubble's exit page on a tab switch)
+     appeared one frame late, and a frame showed the pane empty, upstream too.
+   - `lib.rs` `render_components_to_canvas`: the dirty region is rounded out to whole physical
+     pixels before items are tested against it. The clip already was, so an edge pixel the
+     logical region only partly covered was cleared and redrawn without the items that cover
+     only its other part: a one-pixel residue.
    - `lib.rs` `take_snapshot`: the next frame is drawn whole (a snapshot's render takes the
      changes it draws off the partial renderer's books; the kept frame has not seen them).
    - `wgpu_renderer.rs`: `SkiaWGPU30Renderer::render_to_kept_texture` renders offscreen the
@@ -40,7 +45,9 @@ Every change is marked `wubble change` in the source.
      whole frames; `verify`: on, and every presented frame is compared with a whole redraw, a
      readback per frame, mismatches logged), and the counts `--measure` prints (frames, the
      share of the window redrawn, items drawn: `itemrenderer.rs` counts each draw call).
-   - `lib.rs` `verify_presented`, `Surface::read_presented`: the `verify` mode.
+   - `lib.rs` `verify_presented`, `Surface::read_presented`, `Surface::render_reference`: the
+     `verify` mode; the reference is drawn whole into a texture like the kept frame (a Skia
+     snapshot surface anti-aliases some edge pixels differently).
 
    A texture Slint shows and the application writes in place behind an image that stays the
    same is invisible to the partial renderer: its writer marks the window dirty

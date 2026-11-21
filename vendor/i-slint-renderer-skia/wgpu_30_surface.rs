@@ -51,6 +51,8 @@ pub struct WGPUSurface {
     alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     // wubble change: the frame kept between renders, see `render` and `partial.rs`.
     retained: RefCell<Option<wgpu::Texture>>,
+    /// wubble change: `verify`'s reference frame, a texture like the kept one drawn whole.
+    reference: RefCell<Option<wgpu::Texture>>,
     /// Whether `retained` holds the last presented frame (a resize or a new texture: not).
     retained_valid: Cell<bool>,
     /// Whether frames go through `retained`: partial rendering on and the swapchain image
@@ -158,6 +160,7 @@ impl WGPUSurface {
             backend,
             alpha_modes: swapchain_capabilities.alpha_modes,
             retained: RefCell::new(None),
+            reference: RefCell::new(None),
             retained_valid: Cell::new(false),
             retain,
         })
@@ -180,6 +183,7 @@ impl WGPUSurface {
             backend,
             alpha_modes: vec![],
             retained: RefCell::new(None),
+            reference: RefCell::new(None),
             retained_valid: Cell::new(false),
             retain: false,
         }
@@ -212,6 +216,15 @@ impl WGPUSurface {
         {
             return (texture.clone(), self.retained_valid.get());
         }
+        let texture = self.kept_texture(config);
+        *retained = Some(texture.clone());
+        self.retained_valid.set(false);
+        (texture, false)
+    }
+
+    /// wubble change: a texture for a kept frame, of the swapchain's size and format, cleared
+    /// through wgpu (which then counts it initialised and never clears it behind Skia's back).
+    fn kept_texture(&self, config: &wgpu::SurfaceConfiguration) -> wgpu::Texture {
         let texture = self.wgpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Slint kept frame"),
             size: wgpu::Extent3d {
@@ -250,9 +263,7 @@ impl WGPUSurface {
             multiview_mask: None,
         });
         self.wgpu.queue.submit(Some(encoder.finish()));
-        *retained = Some(texture.clone());
-        self.retained_valid.set(false);
-        (texture, false)
+        texture
     }
 
     /// wubble change: renders into `texture` as a kept frame: when `kept` it holds the last
@@ -721,6 +732,33 @@ impl crate::Surface for WGPUSurface {
     // renders kept frames through `SkiaWGPU30Renderer::render_to_kept_texture`.
     fn use_partial_rendering(&self) -> bool {
         crate::partial::enabled()
+    }
+
+    // wubble change: the `verify` mode's reference, drawn whole into a texture like the kept
+    // one (the same format and Skia surface kind, so the same anti-aliasing).
+    fn render_reference(
+        &self,
+        callback: &dyn Fn(
+            &skia_safe::Canvas,
+            Option<&mut skia_safe::gpu::DirectContext>,
+            u8,
+        ) -> Result<Option<DirtyRegion>, PlatformError>,
+    ) -> Option<i_slint_core::graphics::SharedPixelBuffer<i_slint_core::graphics::Rgba8Pixel>> {
+        let config = self.surface_config.borrow().clone()?;
+        let texture = {
+            let mut reference = self.reference.borrow_mut();
+            match reference.as_ref() {
+                Some(t) if t.width() == config.width && t.height() == config.height && t.format() == config.format => t.clone(),
+                _ => {
+                    let t = self.kept_texture(&config);
+                    *reference = Some(t.clone());
+                    t
+                }
+            }
+        };
+        let gr_context = &mut *self.gr_context.try_borrow_mut().ok()?;
+        self.render_kept(gr_context, &texture, false, callback).ok()?;
+        self.read_back(&texture)
     }
 
     // wubble change: the `verify` mode's presented frame.

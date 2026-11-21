@@ -785,38 +785,38 @@ impl SkiaRenderer {
         Ok(outcome)
     }
 
-    /// wubble change: the `verify` mode's check of one presented frame.
+    /// wubble change: the `verify` mode's check of one presented frame: the same state drawn
+    /// whole into a target like the kept frame (a Skia snapshot surface anti-aliases a few
+    /// edge pixels differently, so it is no reference) and compared.
     fn verify_presented(&self, surface: &dyn Surface, window: &i_slint_core::api::Window) {
         let Some(presented) = surface.read_presented() else { return };
-        let size = window.size();
-        let whole = surface.render_snapshot(size, &mut |canvas, gr_context| {
-            self.render_to_canvas(canvas, 0., (0., 0.), Some(gr_context), 0, Some(surface), window, false)
-                .map(|_| ())
-        });
-        let Some(Ok(whole)) = whole else { return };
+        let Some(whole) = surface.render_reference(&|canvas, gr_context, _| {
+            self.render_to_canvas(canvas, 0., (0., 0.), gr_context, 0, Some(surface), window, false)
+        }) else {
+            return;
+        };
         if whole.width() != presented.width() || whole.height() != presented.height() {
             return;
         }
-        // the window's frame holds premultiplied colour, the snapshot straight
-        let whole_premul: Vec<u8> = whole
-            .as_bytes()
-            .chunks_exact(4)
-            .flat_map(|p| {
-                let a = u16::from(p[3]);
-                let m = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
-                [m(p[0]), m(p[1]), m(p[2]), p[3]]
-            })
-            .collect();
         let (n, bbox) =
-            partial::compare(presented.as_bytes(), &whole_premul, presented.width() as usize);
+            partial::compare(presented.as_bytes(), whole.as_bytes(), presented.width() as usize);
         if n > 0 {
             let k = partial::record_mismatch();
             eprintln!(
-                "slint skia partial verify: {n} px differ from a whole redraw, box {bbox:?}, last dirty share {:.3}",
-                self.last_frame.get().dirty_share
+                "slint skia partial verify: {n} px differ from a whole redraw, box {bbox:?}, dirty share {:.3}, frame {}",
+                self.last_frame.get().dirty_share,
+                partial::totals().frames
             );
-            partial::dump(k, presented.width(), presented.height(), presented.as_bytes(), &whole_premul);
+            partial::dump(k, presented.width(), presented.height(), presented.as_bytes(), whole.as_bytes());
         }
+    }
+
+    /// wubble change: whether `BeforeRendering` runs before the frame is laid out (partial
+    /// rendering), not after the clear.
+    fn notifies_first(&self, invoke_rendering_notifier: bool) -> bool {
+        invoke_rendering_notifier
+            && self.has_rendering_notifier.get()
+            && self.partial_rendering_state().is_some()
     }
 
     /// wubble change: the last rendered frame's dirty share and draws.
@@ -839,6 +839,22 @@ impl SkiaRenderer {
         skia_canvas.translate(translation);
 
         let window_inner = WindowInner::from_pub(window);
+
+        // wubble change: with partial rendering the notifier runs first, before `draw_contents`
+        // (which instantiates the tree's conditional and repeated elements, then computes the
+        // dirty region): what it sets this frame (the shell's springs, new images, an element an
+        // `if` shows) is instantiated, in the region and drawn in this frame, not the next.
+        // Upstream runs it after the clear, which only a notifier drawing into the target needs;
+        // wubble's never does.
+        if self.notifies_first(invoke_rendering_notifier)
+            && let Some(surface) = surface
+        {
+            self.with_rendering_notifier(|callback| {
+                surface.with_graphics_api(&mut |api| {
+                    callback.notify(RenderingState::BeforeRendering, &api)
+                })
+            });
+        }
 
         let dirty_region = window_inner
             .draw_contents(|components, post_render| {
@@ -902,20 +918,8 @@ impl SkiaRenderer {
 
         let mut dirty_region = None;
 
-        // wubble change: with partial rendering the notifier runs before the dirty region is
-        // computed, so what it sets this frame (the shell's springs, new images) is in the
-        // region and drawn in this frame, not the next. Its clear-first ordering is only needed
-        // by a notifier drawing into the target, which wubble's never does.
-        let notify_first = invoke_rendering_notifier
-            && self.has_rendering_notifier.get()
-            && self.partial_rendering_state().is_some();
-        if notify_first && let Some(surface) = surface {
-            self.with_rendering_notifier(|callback| {
-                surface.with_graphics_api(&mut |api| {
-                    callback.notify(RenderingState::BeforeRendering, &api)
-                })
-            });
-        }
+        // wubble change: with partial rendering `render_to_canvas` ran the notifier already.
+        let notify_first = self.notifies_first(invoke_rendering_notifier);
         partial::take_drawn();
         let mut dirty_share = 1.0f32;
 
@@ -958,6 +962,20 @@ impl SkiaRenderer {
                         area_to_repaint * 100. / logical_window_size.area()
                     );
                 }
+
+                // wubble change: the region on whole physical pixels. The clip below rounds each
+                // rect out to whole pixels, so an item can be drawn into an edge pixel that the
+                // logical region only partly covers; the items the region does not touch (the
+                // partial renderer tests each against the logical region) are then missing from
+                // that pixel's blend, a residue of one pixel column or row. Rounding the region
+                // itself makes the items drawn and the pixels cleared the same set.
+                partial_renderer.dirty_region = partial_renderer.dirty_region.iter().fold(
+                    DirtyRegion::default(),
+                    |acc, rect| {
+                        let physical = (rect * scale_factor).to_rect().round_out();
+                        acc.union(&(physical / scale_factor).into())
+                    },
+                );
 
                 dirty_region = partial_renderer.dirty_region.clone().into();
                 // wubble change: the share of the window this frame redraws.
@@ -1329,6 +1347,19 @@ pub trait Surface {
     /// wubble change: the last presented frame read back, for partial rendering's `verify`
     /// mode; `None` where the surface keeps no frame.
     fn read_presented(&self) -> Option<SharedPixelBuffer<i_slint_core::graphics::Rgba8Pixel>> {
+        None
+    }
+
+    /// wubble change: `verify`'s reference: `callback` drawn whole (buffer age 0) into a target
+    /// like the kept frame and read back; `None` where the surface keeps no frame.
+    fn render_reference(
+        &self,
+        _callback: &dyn Fn(
+            &skia_safe::Canvas,
+            Option<&mut skia_safe::gpu::DirectContext>,
+            u8,
+        ) -> Result<Option<DirtyRegion>, PlatformError>,
+    ) -> Option<SharedPixelBuffer<i_slint_core::graphics::Rgba8Pixel>> {
         None
     }
 

@@ -836,12 +836,20 @@ impl Host {
             rect.width / f64::from(clip.width),
             height / f64::from(clip.height),
         );
-        // two pixels more on each side: the pane's image is sampled bilinearly
-        let x = f64::from(window.get_content_x()) + rect.x + f64::from(damage.x) * sx - 2.0;
-        let y = f64::from(window.get_content_y()) + f64::from(damage.y) * sy - 2.0;
+        // A pane shown 1:1 (one frame pixel to one physical pixel, on whole pixels: app.slint
+        // `content`) draws a changed frame pixel into that physical pixel only. Scaled (a stale
+        // frame stretched to the pane), bilinear sampling spreads each frame pixel over its
+        // neighbours' footprint: one frame pixel more on each side. The renderer rounds the
+        // region out to whole physical pixels.
+        let scale = f64::from(window.window().scale_factor());
+        let one_to_one = (rect.width * scale - f64::from(clip.width)).abs() < 0.5
+            && (height * scale - f64::from(clip.height)).abs() < 0.5;
+        let (mx, my) = if one_to_one { (0.0, 0.0) } else { (sx, sy) };
+        let x = f64::from(window.get_content_x()) + rect.x + f64::from(damage.x) * sx - mx;
+        let y = f64::from(window.get_content_y()) + f64::from(damage.y) * sy - my;
         let (w, h) = (
-            f64::from(damage.width) * sx + 4.0,
-            f64::from(damage.height) * sy + 4.0,
+            f64::from(damage.width) * sx + 2.0 * mx,
+            f64::from(damage.height) * sy + 2.0 * my,
         );
         crate::partial::mark_rect(window.window(), x as f32, y as f32, w as f32, h as f32);
         window.window().request_redraw();
