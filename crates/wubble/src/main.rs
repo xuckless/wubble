@@ -11,6 +11,7 @@ mod chooser;
 mod cli;
 mod clipboard;
 mod codecs_smoke;
+mod data_smoke;
 mod extensions;
 mod extensions_smoke;
 mod gallery_smoke;
@@ -272,6 +273,23 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Smoke(Smoke::Data) => match smoke_data() {
+            Ok(()) => {
+                println!("smoke: data ok");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: data FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::DataPhase { ending, profile }) => match smoke_profile(&profile) {
+            Ok(()) => with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile)),
+            Err(e) => {
+                eprintln!("smoke: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
             println!("{}", blocking::measure());
             ExitCode::SUCCESS
@@ -377,7 +395,9 @@ fn main() -> ExitCode {
                 | Smoke::Session
                 | Smoke::SessionPhase { .. }
                 | Smoke::Passwords
-                | Smoke::PasswordsPhase { .. } => {
+                | Smoke::PasswordsPhase { .. }
+                | Smoke::Data
+                | Smoke::DataPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
             };
@@ -666,6 +686,75 @@ fn session_phase_args(phase: &str, profile: &Path, no_sandbox: bool) -> Vec<std:
     args
 }
 
+/// `--smoke data`: the script run twice on throwaway profiles, once ending in a quit and once in
+/// a SIGKILL; after each the database is compared with what the pages showed. The opener a
+/// download's Open and Show in folder would start is a stand-in that only logs.
+fn smoke_data() -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::ExitStatusExt;
+    let exe = std::env::current_exe()?;
+    let no_sandbox = app::no_sandbox_requested(std::env::args_os());
+    for ending in [data_smoke::Ending::Quit, data_smoke::Ending::Kill] {
+        let word = if ending == data_smoke::Ending::Quit {
+            "quit"
+        } else {
+            "kill"
+        };
+        let profile =
+            std::env::temp_dir().join(format!("wubble-data-{word}-{}", std::process::id()));
+        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            // its run (`data-phase`) refuses a profile not marked as a smoke's
+            mark_smoke_profile(&profile)?;
+            let bin = profile.join("bin");
+            std::fs::create_dir_all(&bin)?;
+            let stub = bin.join("xdg-open");
+            std::fs::write(
+                &stub,
+                format!(
+                    "#!/bin/sh\necho \"$@\" >> '{}'\n",
+                    profile.join("opener.log").display()
+                ),
+            )?;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))?;
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let mut dirs = vec![bin.clone()];
+            dirs.extend(std::env::split_paths(&path));
+            let mut args: Vec<std::ffi::OsString> = vec![
+                "--smoke".into(),
+                format!("data-phase={word}").into(),
+                "--profile".into(),
+                profile.clone().into(),
+            ];
+            args.extend(no_sandbox.then(|| app::NO_SANDBOX_ARG.into()));
+            let status = std::process::Command::new(&exe)
+                .args(args)
+                .env("PATH", std::env::join_paths(dirs)?)
+                // no session bus: Show in folder would otherwise reach the person's file manager
+                .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+                .status()?;
+            match ending {
+                data_smoke::Ending::Quit if !status.success() => {
+                    return Err(format!("the {word} run exited with {status}").into());
+                }
+                data_smoke::Ending::Kill if status.signal() != Some(9) => {
+                    return Err(format!("the {word} run was not killed: {status}").into());
+                }
+                _ => {}
+            }
+            let shown = std::fs::read_to_string(profile.join(data_smoke::SUMMARY))?;
+            let db = Profile {
+                dir: profile.clone(),
+            }
+            .db_path();
+            data_smoke::compare(&shown, &db, ending).map_err(Into::into)
+        })();
+        remove_cache(&profile);
+        result?;
+        println!("smoke: data: {word} run ok");
+    }
+    Ok(())
+}
+
 /// The logins the smokes' key menus must offer: `--smoke autofill`'s fixtures' (origin,
 /// username, password), or the loopback page's one for the smokes that share its server.
 fn seed_autofill_logins(store: &StoreClient, logins: Vec<(String, String, String)>) {
@@ -742,6 +831,8 @@ struct Outcome {
     pages_passed: bool,
     /// `--smoke passwords` (this process's phase) reached its end.
     passwords_passed: bool,
+    /// `--smoke data`'s run reached its end.
+    data_passed: bool,
     gallery_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
@@ -815,6 +906,8 @@ enum Mode {
     Session(Phase),
     /// One process of `--smoke passwords`.
     Passwords(passwords_smoke::VaultPhase),
+    /// One run of `--smoke data`, ending as given.
+    Data(data_smoke::Ending),
     /// `--measure`: the scenario's bundled page, measured until it ends;
     /// CEF paced by external begin frames if `begin_frames`; the samples
     /// also go to `out` as CSV.
@@ -1259,6 +1352,12 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
             host.write_setting(&key, &value);
         })
     });
+    // the Sidebar row follows the shell's own mode; later, outside whatever changed it
+    window.on_sidebar_mode_seen(move || {
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host_in(win, |host| host.settings_sidebar_seen())
+        });
+    });
     window.on_setting_reset(move |key| with_host_in(win, |host| host.setting_reset(&key)));
     window.on_setting_entry_removed(move |key, entry| {
         with_host_in(win, |host| host.setting_entry_removed(&key, &entry))
@@ -1455,6 +1554,10 @@ fn run(
         Mode::Autofill { probe: None } => autofill_port.map(autofill_smoke::corpus),
         _ => None,
     };
+    // `--smoke data`'s pages, cookies and held downloads, on a loopback port.
+    let data_server = matches!(mode, Mode::Data(_))
+        .then(data_smoke::serve)
+        .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
     let media_port = matches!(mode, Mode::Media)
         .then(media_smoke::serve)
@@ -1536,6 +1639,7 @@ fn run(
         start_smoke: None,
         pages_smoke: None,
         passwords_smoke: None,
+        data_smoke: None,
         gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
@@ -1757,6 +1861,13 @@ fn run(
             None,
             Checks {
                 passwords_smoke: Some(passwords_smoke::PasswordsSmoke::new(*phase)),
+                ..none
+            },
+        ),
+        Mode::Data(ending) => (
+            data_server.as_ref().map(|s| s.url("/page")),
+            Checks {
+                data_smoke: data_server.map(|server| host::DataSmoke::new(server, *ending)),
                 ..none
             },
         ),
@@ -2046,6 +2157,7 @@ fn run(
         start_passed: host.start_passed,
         pages_passed: host.pages_passed,
         passwords_passed: host.passwords_passed,
+        data_passed: host.data_passed,
         gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,

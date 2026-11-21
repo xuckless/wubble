@@ -428,16 +428,24 @@ impl Host {
             .get(&tab)
             .map(|t| t.url.clone())
             .unwrap_or_default();
-        let Some(host) = wubble_core::zoom::host_of(&url) else {
+        let (Some(page_host), Some(site)) = (
+            wubble_core::routing::host_key(&url),
+            wubble_core::zoom::host_of(&url),
+        ) else {
             return;
         };
-        let allowed = self.blocker_exceptions().contains(&host);
+        // the entry the switch is about: the one turning blocking off here (a parent's, or the
+        // site's own), else this site's host (a port is no part of it)
+        let exceptions = self.blocker_exceptions();
+        let covering = pages::blocker_exception(&url, &exceptions);
+        let allowed = covering.is_some();
+        let host = covering.map_or(page_host, str::to_owned);
         let (count, hosts) = self.blocked_breakdown(tab).unwrap_or_default();
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         let mut entries = crate::menu::blocker_entries(count, &hosts, &host, allowed);
         entries.extend(crate::menu::page_theme_entries(
-            &host,
+            &site,
             self.page_theme_of(&url),
         ));
         entries.extend(self.boost_entries(&url));

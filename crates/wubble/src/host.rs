@@ -21,6 +21,7 @@ mod ax;
 mod boost;
 mod builtins;
 mod busy;
+mod data;
 mod devtools;
 mod downloads;
 mod drag;
@@ -57,6 +58,7 @@ mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
+pub(crate) use data::DataSmoke;
 pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
@@ -295,6 +297,7 @@ pub struct Checks {
     pub start_smoke: Option<crate::start_smoke::StartSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
     pub passwords_smoke: Option<crate::passwords_smoke::PasswordsSmoke>,
+    pub data_smoke: Option<DataSmoke>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
@@ -383,6 +386,7 @@ pub struct Host {
     pub start_passed: bool,
     pub pages_passed: bool,
     pub passwords_passed: bool,
+    pub data_passed: bool,
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
@@ -391,6 +395,10 @@ pub struct Host {
     gallery_burst_start: std::time::Instant,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
+    /// Steps of the settings smoke's script the window has taken.
+    settings_acted: u32,
+    /// ... and where the page's scroll was at the last look.
+    settings_scroll_seen: f32,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -640,10 +648,13 @@ impl Host {
             start_passed: false,
             pages_passed: false,
             passwords_passed: false,
+            data_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
             gallery_burst_start: std::time::Instant::now(),
             settings_read: None,
+            settings_acted: 0,
+            settings_scroll_seen: 0.0,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
             keymap: Keymap::defaults(Platform::current()),
@@ -1341,6 +1352,7 @@ impl Host {
         self.settings_smoke_step();
         self.pages_smoke_step();
         self.passwords_smoke_step();
+        self.data_smoke_step();
         self.start_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
@@ -1764,9 +1776,12 @@ impl Host {
     pub(crate) fn open_external(&mut self, message: crate::instance::Message) {
         match message {
             crate::instance::Message::Open(url) => {
-                let space =
-                    wubble_core::routing::resolve(&self.model, &self.routing_rules, &url).space;
-                self.dispatch(Command::OpenLittle { url, space })
+                let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+                self.dispatch(Command::OpenLittle {
+                    url,
+                    space: routed.space,
+                    container: routed.container,
+                })
             }
             crate::instance::Message::Focus => self.raise_window(self.model.focused()),
         }
@@ -2724,6 +2739,9 @@ impl Host {
             self.checks.settings_smoke = Some(state);
             return;
         };
+        let scroll = window.global::<wubble_ui::PageScroll>().get_y();
+        let found = settings_smoke::drive::look(&window);
+        let look = found.clone().unwrap_or_default();
         let seen = settings_smoke::Seen {
             ready: self.frame_rate.is_some(),
             on_settings: self
@@ -2735,8 +2753,43 @@ impl Host {
             views: self.engine.view_count(),
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
-            scroll: window.global::<wubble_ui::PageScroll>().get_y(),
+            scroll,
+            still: (scroll - self.settings_scroll_seen).abs() < 0.01,
+            sidebar_row: settings_smoke::drive::sidebar_row(&window),
+            sidebar_shell: wubble_core::seam::SidebarMode::from(window.get_sidebar_mode())
+                .id()
+                .to_owned(),
+            sidebar_stored: self
+                .settings
+                .stored
+                .get(wubble_core::settings::SIDEBAR_MODE.key)
+                .cloned()
+                .unwrap_or_default(),
+            shortcuts_found: settings_smoke::drive::shortcuts_found(&window),
+            capture: match self.settings.capture() {
+                wubble_core::keys::Capture::Idle => "idle",
+                wubble_core::keys::Capture::Armed(_) => "armed",
+                wubble_core::keys::Capture::Conflict { .. } => "conflict",
+            },
+            runs: settings_smoke::PROBED
+                .iter()
+                .map(|c| {
+                    let chord = wubble_core::keys::Chord::parse(c).expect("a probed chord parses");
+                    (*c, self.keymap.action_for(chord).map(|(a, _)| a.id()))
+                })
+                .collect(),
+            select_found: found.is_some(),
+            select_open: look.0,
+            select_shown: look.1,
+            engine_stored: wubble_core::apply::value_of(
+                &wubble_core::settings::SEARCH_ENGINE,
+                &self.settings.stored,
+            )
+            .to_owned(),
+            engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
+            acted: self.settings_acted,
         };
+        self.settings_scroll_seen = scroll;
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
@@ -2769,6 +2822,42 @@ impl Host {
                                 });
                             });
                         })
+                    });
+                });
+            }
+            Some(settings_smoke::Action::Drive(settings_smoke::Do::Chord(chord))) => {
+                // the keyboard's way in: the host's key path, then the step is done
+                match wubble_core::keys::Chord::parse(chord)
+                    .ok()
+                    .and_then(crate::parity::key_inputs)
+                {
+                    Some(keys) => self.smoke_keys(keys),
+                    None => self.fail(format!("no keys for the chord {chord:?}")),
+                }
+                let _ = slint::invoke_from_event_loop(|| {
+                    with_host(|host| host.settings_acted += 1);
+                });
+            }
+            Some(settings_smoke::Action::Drive(act)) => {
+                // as the pointer and keys come: from the event loop, outside the host; the step
+                // counts as done a turn of the loop later, when what it set going has settled
+                let _ = self.w.window.upgrade_in_event_loop(move |window| {
+                    let done = || {
+                        let _ = slint::invoke_from_event_loop(|| {
+                            with_host(|host| host.settings_acted += 1);
+                        });
+                    };
+                    if let Err(why) = settings_smoke::drive::run(&window, act, done) {
+                        with_host(|host| host.fail(why));
+                    }
+                });
+            }
+            Some(settings_smoke::Action::Read { key }) => {
+                self.settings_read = None;
+                self.store.read_settings(move |rows| {
+                    let value = rows.get(key).cloned().unwrap_or_default();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.settings_read = Some(value));
                     });
                 });
             }

@@ -72,11 +72,14 @@ export component Stepper inherits HorizontalLayout {
     in property <float> max;
     in property <float> step: 1;
     in property <color> accent: SettingsLayout.accent;
+    // the row's name, for a screen reader
+    in property <string> label;
     callback set(float);
 
     alignment: end;
     if root.max - root.min <= SettingsLayout.slider-range: ElasticSlider {
         compact: true;
+        label: root.label;
         value: root.value;
         min: root.min;
         max: root.max;
@@ -87,6 +90,7 @@ export component Stepper inherits HorizontalLayout {
         }
     }
     if root.max - root.min > SettingsLayout.slider-range: number := NumberField {
+        label: root.label;
         value: root.value;
         min: root.min;
         max: root.max;
@@ -157,6 +161,7 @@ component SettingRow inherits VerticalLayout {
                 }
             }
             if root.setting.control == SettingControl.stepper: stepper := Stepper {
+                label: root.setting.label;
                 value: root.setting.number;
                 min: root.setting.min;
                 max: root.setting.max;
@@ -167,6 +172,7 @@ component SettingRow inherits VerticalLayout {
             }
             // wubble: a one-line text row (a folder path), applied on Enter
             if root.setting.control == SettingControl.text: Field {
+                label: root.setting.label;
                 width: Shell.slider-width;
                 text: root.setting.value;
                 placeholder: "Default";
@@ -256,14 +262,12 @@ component BindingRow inherits Row {
             keys: root.armed ? ["Press a shortcut"] : root.item.chord == "" ? ["None"] : root.item.keys;
             accessible-role: AccessibleRole.button;
             accessible-label: root.item.label;
+            clickable: true;
             accessible-action-default => {
                 root.record(root.item.action);
             }
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.record(root.item.action);
-                }
+            clicked => {
+                root.record(root.item.action);
             }
         }
     }

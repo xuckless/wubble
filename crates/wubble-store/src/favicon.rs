@@ -9,7 +9,7 @@
 //! Icons are filed by origin (`wubble_core::url::origin_key`), not by page URL.
 //! No foreign keys: rows are deleted explicitly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wubble_core::favicon::valid_rgba;
 use wubble_core::url::origin_key;
@@ -150,6 +150,55 @@ impl Store {
         .await?;
         tx.commit().await?;
         Ok(doomed.len())
+    }
+
+    /// Forget the icons of origins that nothing refers to: no stored page, bookmark, tab (open,
+    /// archived or recently closed) is on them. Run after history is deleted, so the sites a
+    /// person cleared do not stay listed by their icons.
+    pub async fn prune_unreferenced_favicons(&mut self) -> Result<()> {
+        let mut live: HashSet<String> = HashSet::new();
+        for sql in [
+            "SELECT url FROM urls",
+            "SELECT url FROM bookmarks WHERE kind = 0",
+            "SELECT url FROM tabs",
+            "SELECT url FROM archive",
+            "SELECT url FROM recently_closed",
+        ] {
+            let mut rows = self.conn.query(sql, ()).await?;
+            while let Some(r) = rows.next().await? {
+                live.extend(origin_key(&r.get::<String>(0)?));
+            }
+        }
+        let mut rows = self
+            .conn
+            .query("SELECT origin FROM favicon_origins", ())
+            .await?;
+        let mut doomed = Vec::new();
+        while let Some(r) = rows.next().await? {
+            let origin: String = r.get(0)?;
+            if !live.contains(&origin) {
+                doomed.push(origin);
+            }
+        }
+        drop(rows);
+        if doomed.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction().await?;
+        for origin in &doomed {
+            tx.execute(
+                "DELETE FROM favicon_origins WHERE origin = ?1",
+                [origin.as_str()],
+            )
+            .await?;
+        }
+        tx.execute(
+            "DELETE FROM favicons WHERE icon_url NOT IN (SELECT icon_url FROM favicon_origins)",
+            (),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Forget every icon (clear browsing data).

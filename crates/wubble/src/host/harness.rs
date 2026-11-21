@@ -360,11 +360,7 @@ impl Host {
         let state = &self.hosting.state;
         // the switch is the hosting machine's state (one owner), not the stored setting
         let on = state.switch_on();
-        let remote_port = defs::remote_port(
-            value_of(&defs::DEVTOOLS_REMOTE_PORT, &self.settings.stored)
-                .parse()
-                .unwrap_or(0),
-        );
+        let remote_port = self.debug_port();
         let opted_out = self.stored_list(&defs::AGENT_MCP_OPTED_OUT);
         let home = self.harness_home();
         let found = self.harnesses_found();

@@ -51,6 +51,14 @@ impl SettingKind {
     }
 }
 
+/// The list settings whose entries are sites (a host covers its subdomains): the list editor
+/// keeps each as `routing::site_host` makes it.
+pub const SITE_LISTS: [&str; 3] = [
+    "blocker.exceptions",
+    "sleep.never_sites",
+    "video.hidden_sites",
+];
+
 /// Where the settings page shows a setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
@@ -61,6 +69,19 @@ pub enum Section {
     Performance,
     /// Stored but not a row on the page (it has its own editor or is dragged).
     Hidden,
+}
+
+impl Section {
+    /// The section's heading on the page (none for a hidden setting).
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::General => "General",
+            Section::Privacy => "Privacy",
+            Section::Appearance => "Appearance",
+            Section::Performance => "Performance",
+            Section::Hidden => "",
+        }
+    }
 }
 
 /// One setting.
@@ -924,6 +945,14 @@ pub fn find(key: &str) -> Option<&'static SettingDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_site_lists_are_list_settings() {
+        for key in SITE_LISTS {
+            assert_eq!(find(key).map(|d| d.kind), Some(SettingKind::List), "{key}");
+        }
+        assert!(SITE_LISTS.contains(&BLOCKER_EXCEPTIONS.key));
+    }
 
     #[test]
     fn keys_are_unique_and_labels_present() {

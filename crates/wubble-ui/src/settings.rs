@@ -19,13 +19,7 @@ fn strings<I: IntoIterator<Item = S>, S: Into<SharedString>>(items: I) -> ModelR
 }
 
 pub fn section_title(section: Section) -> &'static str {
-    match section {
-        Section::General => "General",
-        Section::Privacy => "Privacy",
-        Section::Appearance => "Appearance",
-        Section::Performance => "Performance",
-        Section::Hidden => "",
-    }
+    section.title()
 }
 
 /// What a segment shows for a stored word: an engine's name, or the word capitalised.

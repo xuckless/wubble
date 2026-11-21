@@ -27,6 +27,11 @@ Beside it, small and unordered:
 - [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
 - [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
+- [ ] Settings at a content width of 759 px or less (a window under about 1010 with the sidebar out): the design's one-column layout (`settings.css` narrow block: no section list, title and search on top) is not built, the controls run off the right edge with no way to reach them; repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
+- [ ] The Settings Select's list is drawn by Slint (no blur): the scene's window-level glass lies over the page; the design's blur needs the page's lists in a window-level layer (owner's call)
+- [ ] The search engine dropdown shows "Google" while none is chosen (the address bar asks on first use); picking Google then stores it
+- [ ] The shortcut editor has no way to clear a chord, and takes chords the page needs (Ctrl+C/V/X/A/Z) without a warning
+- [ ] Shortcut row labels mix cases ("Close Tab", "Reopen Closed Tab", "Close window"): `Action::label`
 - [ ] Settings section list has no keyboard handling (its rows are pointer and assistive-tech targets, not focusable): Tab or arrows into the list, selection moving with Down/Up; `NavScroller.reveal` is ready for it
 - [ ] Gallery: a Settings section picked far from where the page is is shot mid-jump (`settings-extensions` on the patched engine shows Filter lists passing): wait for the page's spring to land, or jump without it in the gallery
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
@@ -55,6 +60,16 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Passwords: the owner's "saved by hand, then gone" still unexplained (a keyring answering "no key" made a new one over the rows until now: guarded); run `--smoke passwords` with the Keychain on the Mac
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): the airlocks
+
+## Hardening pass: built-in pages and their data (2026-11-21, open findings; checklist in the report)
+- [ ] Task manager on Linux with the sandbox: each renderer is pid 1 in its own PID namespace, so a tab cannot be tied to its renderer (tab rows have no memory, CPU or End) and renderers are listed as "Zygote"; needs a way to ask CEF's browser process for a tab's renderer pid
+- [ ] Task manager lists internal pages (wubble://history ...) with Discard and Never sleep though they have no process
+- [ ] List pages (History, Bookmarks, Downloads, Archive): a row cannot be opened from the keyboard (only its Delete is a Tab stop; a screen reader's default action opens it); no select, delete selection, undo, copy address or keyboard open in a new tab; a bookmark folder is deleted with its contents by one press; needs a focusable kit row and a design for selection and undo
+- [ ] History rows show no time of day (only a day header)
+- [ ] Downloads: Retry restarts from any open tab, not the tab or container the download came from (a login-gated file can come back as a sign-in page); downloads that an agent session's tab starts land in the user's list and folder with no prompt (the airlock is not built)
+- [ ] Agent sessions' pages are filed in the profile's icon table (origin and icon) though their visits are not history; the agent activity log cannot be cleared
+- [ ] Two things are called "Clear browsing data" (the History page's button clears visits; the command clears cookies and cache), and the command is not found by "history"
+- [ ] `--smoke data` runs each process on its own CEF cache: a cookie cleared right before a SIGKILL and read after the next start is not checked
 
 ## Review findings (perpetual)
 The design-fidelity phase is over; this list never closes and gates nothing: findings from reviews, QA rounds and the
@@ -85,7 +100,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
+- [ ] Spell check: the dictionary download (`redirector.gvt1.com`) is refused with Chromium's other Google hosts, so a fresh profile has no spell check; bundle a dictionary or add a Settings switch (off) that allows the one download
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
@@ -130,6 +145,14 @@ Open, to build or check:
 
 ## Built in instead of extensions
 - [ ] Content blocker: uBO scriptlet coverage
+
+## Privacy and containers (hardening pass, open)
+- [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
+- [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
+- [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
+- [ ] First start without a compiled list cache: requests pass until the background compile ends (seen once on a loaded machine); hold the first navigation until the engine is ready
+- [ ] Routing rules: renaming or deleting a Space (or container) a rule names silently turns the rule off, with no mark in the list; Space names are not unique; a Space named with `,` or `->` cannot be named by a rule; the row label does not say typed addresses and page links are not routed
+- [ ] Pill and counter: no check drives the shell by pointer for the blocker menu, the Sites list revoke or the Spaces list in a running window (only the engine side is driven, `notes/hp/privtools` of the pass)
 
 ## Design fidelity
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals

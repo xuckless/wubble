@@ -568,6 +568,13 @@ pub struct Env {
     pub remote_port: Option<u16>,
 }
 
+/// The debugging port that refuses every session: the one this run's engine opened (a start
+/// switch, so turning the setting off changes nothing until the restart: any program can still
+/// drive every tab), else the one the setting asks for at the next start.
+pub fn refusing_port(opened: Option<u16>, stored: Option<u16>) -> Option<u16> {
+    opened.or(stored)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
     /// `agent.mcp_enabled` is off: nothing listens, so this is only a backstop.
@@ -1139,6 +1146,16 @@ mod tests {
             assert!(e.is_empty());
         }
         assert_eq!(admit(ON), Ok(()));
+    }
+
+    /// Turning the setting off does not close an endpoint this run opened: sessions stay
+    /// refused until the restart, and a port only set for the next start refuses them too.
+    #[test]
+    fn an_open_endpoint_refuses_sessions_whatever_the_setting_now_says() {
+        assert_eq!(refusing_port(Some(9222), None), Some(9222));
+        assert_eq!(refusing_port(None, Some(9333)), Some(9333));
+        assert_eq!(refusing_port(Some(9222), Some(9333)), Some(9222));
+        assert_eq!(refusing_port(None, None), None);
     }
 
     #[test]

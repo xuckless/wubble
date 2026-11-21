@@ -62,6 +62,16 @@ fn valid_host(h: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// A host as a rule names it: ASCII as typed, an internationalised name as the punycode a URL's
+/// host has (`bücher.de` is `xn--bcher-kva.de`), so the rule can match it.
+fn ascii_host(h: &str) -> Option<String> {
+    if h.is_ascii() {
+        Some(h.to_owned())
+    } else {
+        site_host(h)
+    }
+}
+
 impl Rule {
     /// `None` for anything that is not a rule: no `->`, a bad host, or no name at all.
     pub fn parse(text: &str) -> Option<Rule> {
@@ -69,13 +79,12 @@ impl Rule {
         if target.contains("->") {
             return None;
         }
-        let pattern = pattern.trim().to_ascii_lowercase();
+        let pattern = pattern.trim().to_lowercase();
         let pattern = pattern.strip_suffix('.').unwrap_or(&pattern);
+        let host = |h: &str| ascii_host(h).filter(|h| valid_host(h));
         let pattern = match pattern.strip_prefix("*.") {
-            Some(base) if valid_host(base) => Pattern::Subdomains(base.to_owned()),
-            Some(_) => return None,
-            None if valid_host(pattern) => Pattern::Host(pattern.to_owned()),
-            None => return None,
+            Some(base) => Pattern::Subdomains(host(base)?),
+            None => Pattern::Host(host(pattern)?),
         };
         let (space, container) = match target.split_once(',') {
             Some((s, c)) => (s, c),
@@ -96,6 +105,37 @@ impl Rule {
             space,
             container,
         })
+    }
+}
+
+/// The host a typed site stands for, as the site lists keep it: lowercase, no scheme, port, path
+/// or credentials, no leading `*.` (an entry covers its subdomains already) and no trailing dot;
+/// an internationalised name as its punycode. `None` for what is no site: empty, or with a space.
+pub fn site_host(text: &str) -> Option<String> {
+    let text = text.trim();
+    let text = text.strip_prefix("*.").unwrap_or(text);
+    if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c == '@') {
+        return None;
+    }
+    let host = if text.contains("://") {
+        host_key(text)
+    } else {
+        host_key(&format!("http://{text}"))
+    };
+    host.filter(|h| !h.starts_with('.') && !h.contains(".."))
+}
+
+/// Whether two rule texts are one rule: the same sites and the same names (case aside, as
+/// [`resolve`] reads names).
+pub fn same_rule(a: &str, b: &str) -> bool {
+    match (Rule::parse(a), Rule::parse(b)) {
+        (Some(a), Some(b)) => {
+            let lower = |n: Option<String>| n.map(|n| n.to_lowercase());
+            a.pattern == b.pattern
+                && lower(a.space) == lower(b.space)
+                && lower(a.container) == lower(b.container)
+        }
+        _ => a == b,
     }
 }
 
@@ -137,6 +177,14 @@ pub struct Routed {
 /// names resolved in `model` ignoring case. A malformed entry, or a rule naming a Space or
 /// container that does not exist, is skipped, so the next most specific rule may apply.
 pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed {
+    // an agent Space and its container are the session's: a link of the user's never lands there,
+    // where the agent could read it (a hand-off makes them the owner's, but still never by rule)
+    let agent_containers: Vec<ContainerId> = model
+        .spaces
+        .iter()
+        .filter(|s| s.agent)
+        .map(|s| s.container)
+        .collect();
     let rules: Vec<(Rule, Routed)> = entries
         .iter()
         .filter_map(|e| Rule::parse(e.as_ref()))
@@ -146,7 +194,7 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .spaces
                         .iter()
-                        .find(|s| s.name.eq_ignore_ascii_case(n))?
+                        .find(|s| !s.agent && s.name.eq_ignore_ascii_case(n))?
                         .id,
                 ),
                 None => None,
@@ -156,7 +204,9 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .containers
                         .iter()
-                        .find(|c| c.name.eq_ignore_ascii_case(n))?
+                        .find(|c| {
+                            !agent_containers.contains(&c.id) && c.name.eq_ignore_ascii_case(n)
+                        })?
                         .id,
                 ),
                 None => None,
@@ -224,6 +274,53 @@ mod tests {
         ] {
             assert_eq!(Rule::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn an_international_name_is_a_rule_on_its_punycode() {
+        let r = Rule::parse("Bücher.de -> Work").unwrap();
+        assert_eq!(r.pattern, Pattern::Host("xn--bcher-kva.de".into()));
+        let w = Rule::parse("*.bücher.de -> Work").unwrap();
+        assert_eq!(w.pattern, Pattern::Subdomains("xn--bcher-kva.de".into()));
+        // the URL's host is punycode: both rules reach it
+        assert!(route(&[r], "https://bücher.de/").is_some());
+        assert!(route(&[w], "https://shop.xn--bcher-kva.de/").is_some());
+    }
+
+    #[test]
+    fn site_host_is_the_one_entry_a_site_list_keeps() {
+        for (typed, host) in [
+            ("example.com", "example.com"),
+            ("  Example.COM. ", "example.com"),
+            ("https://www.Example.com:8443/a/b?c#d", "www.example.com"),
+            ("example.com:8080", "example.com"),
+            ("*.example.com", "example.com"),
+            ("127.0.0.1:3000", "127.0.0.1"),
+            ("[::1]:80", "[::1]"),
+            ("bücher.de", "xn--bcher-kva.de"),
+            ("localhost", "localhost"),
+        ] {
+            assert_eq!(site_host(typed).as_deref(), Some(host), "{typed}");
+        }
+        for bad in [
+            "",
+            "  ",
+            "a b.com",
+            "me@example.com",
+            "http://",
+            "a..b",
+            "\u{0}",
+        ] {
+            assert_eq!(site_host(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_rule_typed_twice_is_one_rule() {
+        assert!(same_rule("A.com -> Work, Bank", "a.com->work ,bank"));
+        assert!(same_rule("a.com. -> Work", "a.com -> Work"));
+        assert!(!same_rule("a.com -> Work", "a.com -> Home"));
+        assert!(!same_rule("a.com -> Work", "*.a.com -> Work"));
     }
 
     #[test]
@@ -299,6 +396,39 @@ mod tests {
         assert!(!host_in(&sites, "https://notexample.com"));
         assert!(!host_in(&sites, "about:blank"));
         assert!(!host_in::<String>(&[], "https://example.com"));
+    }
+
+    /// A rule must not carry the user's link into a session's Space or container.
+    #[test]
+    fn a_rule_never_names_an_agent_space_or_its_container() {
+        use crate::model::{Command, apply};
+        let m = Model::new(std::time::Instant::now());
+        let (m, _) = apply(
+            m,
+            Command::NewContainer {
+                name: "Agent 1".into(),
+            },
+        );
+        let agent_container = m.containers[1].id;
+        let (m, _) = apply(
+            m,
+            Command::NewSpace {
+                name: "Agent: draft".into(),
+                tint: crate::space::Rgb(1, 2, 3),
+                container: agent_container,
+            },
+        );
+        let agent_space = m.spaces[1].id;
+        let (m, _) = apply(m, Command::MarkAgentSpace(agent_space));
+        let entries = [
+            "a.test -> Agent: draft",
+            "b.test -> , Agent 1",
+            "c.test -> Space 1",
+        ];
+        let at = |url| resolve(&m, &entries, url);
+        assert_eq!(at("https://a.test/"), Routed::default());
+        assert_eq!(at("https://b.test/"), Routed::default());
+        assert_eq!(at("https://c.test/").space, Some(m.spaces[0].id));
     }
 
     #[test]

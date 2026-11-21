@@ -177,6 +177,8 @@ enum SmokeArg {
     SessionPhase(Phase),
     Passwords,
     PasswordsPhase(VaultPhase),
+    Data,
+    DataPhase(crate::data_smoke::Ending),
     /// `extensions` or `extensions-none`.
     Extensions {
         installed: bool,
@@ -221,6 +223,9 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         Some(("passwords-phase", "2")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Read)),
         Some(("passwords-phase", "3")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Broken)),
         Some(("passwords-phase", "4")) => Ok(SmokeArg::PasswordsPhase(VaultPhase::Lost)),
+        None if value == "data" => Ok(SmokeArg::Data),
+        Some(("data-phase", "quit")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Quit)),
+        Some(("data-phase", "kill")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Kill)),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)
@@ -229,7 +234,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `autofill=probe`, `windows`, `media`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
-             `extensions-none` or `session-phase=1|2`"
+             `extensions-none`, `data` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -306,6 +311,14 @@ pub enum Smoke {
     Passwords,
     /// One process of `Passwords`, on the profile in `profile`.
     PasswordsPhase { phase: VaultPhase, profile: PathBuf },
+    /// The built-in pages and their data on a loopback server, one run that quits and one that
+    /// is killed, the database compared with the pages after each (`data_smoke.rs`).
+    Data,
+    /// One run of `Data`, on the profile in `profile`.
+    DataPhase {
+        ending: crate::data_smoke::Ending,
+        profile: PathBuf,
+    },
     /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
     /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
     Start { dir: Option<PathBuf> },
@@ -434,6 +447,15 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::SessionPhase(phase)), None, Some(profile)) => {
                 Smoke::SessionPhase { phase, profile }
             }
+            (Some(SmokeArg::DataPhase(ending)), None, Some(profile)) => {
+                Smoke::DataPhase { ending, profile }
+            }
+            (Some(SmokeArg::DataPhase(_)), _, None) => {
+                return Err(Cli::command().error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--smoke data-phase=quit|kill needs --profile",
+                ));
+            }
             (Some(SmokeArg::SessionPhase(_)), _, None) => {
                 return Err(Cli::command().error(
                     ErrorKind::MissingRequiredArgument,
@@ -482,6 +504,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Passwords), None, None) => Smoke::Passwords,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
+            (Some(SmokeArg::Data), None, None) => Smoke::Data,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Media), None, None) => Smoke::Media,
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
@@ -930,6 +953,43 @@ mod tests {
             );
         }
         assert!(parse(["wubble", "--smoke", "session", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn smoke_data_and_its_runs() {
+        use crate::data_smoke::Ending;
+        assert_eq!(
+            parse(["wubble", "--smoke", "data"]).ok(),
+            Some(Command::Smoke(Smoke::Data))
+        );
+        for (arg, ending) in [
+            ("data-phase=quit", Ending::Quit),
+            ("data-phase=kill", Ending::Kill),
+        ] {
+            assert_eq!(
+                parse(["wubble", "--smoke", arg, "--profile", "/tmp/p"]).ok(),
+                Some(Command::Smoke(Smoke::DataPhase {
+                    ending,
+                    profile: "/tmp/p".into()
+                })),
+                "{arg}"
+            );
+            assert!(
+                parse(["wubble", "--smoke", arg]).is_err(),
+                "{arg} needs a profile"
+            );
+        }
+        assert!(parse(["wubble", "--smoke", "data", "--profile", "/tmp/p"]).is_err());
+        assert!(
+            parse([
+                "wubble",
+                "--smoke",
+                "data-phase=stop",
+                "--profile",
+                "/tmp/p"
+            ])
+            .is_err()
+        );
     }
 
     fn measure(scenario: Scenario, seconds: u32, out: Option<&str>) -> Option<Command> {

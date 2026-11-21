@@ -260,8 +260,10 @@ fn serve() -> std::io::Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     std::thread::spawn(move || {
+        // One thread a connection: Chromium opens speculative connections that send nothing,
+        // and one of those must not hold the next page's request back.
         for stream in listener.incoming().flatten() {
-            let _ = answer(stream);
+            std::thread::spawn(move || answer(stream));
         }
     });
     Ok(port)
