@@ -284,6 +284,28 @@ pub const ITEMS: &[Item] = &[
         ],
         [H(C::Visible(1)), H(C::Drag(false))]
     ),
+    // A person who shows a tab and at once presses a link on it presses where the link is drawn
+    // while the page slides in: the press reaches the link (Slint maps it through the entrance)
+    // and the drag starts. The second tab shown and loaded first; then each try shows the other
+    // tab, its entrance anew.
+    item!(
+        "dnd.press-during-the-entrance-starts-a-drag",
+        [
+            Host(HostOp::SecondTab),
+            Host(HostOp::NextTab),
+            Until(H(C::Visible(1))),
+            Until(H(C::TabTitle(1, "wubble dnd"))),
+            Until(H(C::PageEntered)),
+            Watch(HostOp::NextTab, H(C::PageEntering)),
+            PressAt(Spot::Drawn(at::LINK)),
+            MoveToSpot(Spot::Drawn(at::x(at::LINK, at::LINK.x + 12.0))),
+            MoveToSpot(Spot::Drawn(at::x(at::LINK, at::LINK.x + 30.0))),
+            Until(H(C::Drag(true))),
+            Keys("Escape"),
+            Settle(10)
+        ],
+        [H(C::Drag(false)), J("eq(seen.dragend, 'none')")]
+    ),
     item!(
         "dnd.draggable-into-the-other-pane",
         [

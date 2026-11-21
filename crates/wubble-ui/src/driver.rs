@@ -392,8 +392,10 @@ impl Driver {
     /// A tab switch: the newly shown page enters (one page only: a split's panes keep their
     /// places). Not on the first page.
     fn step_page(&mut self, window: &AppWindow, dt: f64) -> bool {
-        let tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
+        let active = window.get_active_tab_id();
+        let tab = Some(i64::from(active)).filter(|&id| id >= 0);
         let was = std::mem::replace(&mut self.page_tab, tab);
+        window.set_page_enter_tab(active);
         let switched =
             was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1;
         (self.page_t, self.exit_t) = switch_clock((self.page_t, self.exit_t), switched, dt);
