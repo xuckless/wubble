@@ -347,6 +347,41 @@ fn a_closed_row_leaves_with_its_last_title(app: &AppWindow, driver: &Shared) {
     assert!(leaving_titles(app).is_empty());
 }
 
+/// A drag of row 0 one slot down with the active row outside the drag (row 3), and a host that
+/// does not act on the move: no id and no active row change, yet the rows go back to the
+/// model's order. Row 0 springs back from where it was dropped (it does not swap springs with
+/// row 1 and jump), and every row comes to rest at its slot.
+fn a_dropped_row_returns_when_the_host_keeps_the_order(
+    app: &AppWindow,
+    driver: &Shared,
+    log: &Log,
+) {
+    app.set_tabs(tabs([10, 11, 12, 13]));
+    app.set_active_tab_id(13);
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    let y = row_centre(0);
+    press(app, ROW_X, y, PointerEventButton::Left);
+    for k in 1..=9 {
+        moved(app, ROW_X, y + k as f32 * 5.0);
+        for _ in 0..4 {
+            driver.borrow_mut().advance(app, DT);
+        }
+    }
+    release(app, ROW_X, y + 45.0, PointerEventButton::Left);
+    assert_eq!(log.borrow().moved.last(), Some(&(10, 1)));
+    driver.borrow_mut().advance(app, DT);
+    let dropped = rows(app);
+    assert!(
+        dropped[0] > 20.0 && dropped[1] < 20.0,
+        "row 0 springs back from its drop, row 1 from the slot it gave up: {dropped:?}"
+    );
+    settle(app, driver);
+    assert_eq!(rows(app), [0.0, 40.0, 80.0, 120.0]);
+    assert_eq!(app.get_selected_row(), 3);
+}
+
 #[derive(Default)]
 struct Calls {
     activated: Vec<i32>,
@@ -436,4 +471,5 @@ fn tab_list_scenarios() {
     folder_header_is_a_row(&app, &driver, &log);
     touch_sizing_resizes_rows(&app, &driver);
     a_closed_row_leaves_with_its_last_title(&app, &driver);
+    a_dropped_row_returns_when_the_host_keeps_the_order(&app, &driver, &log);
 }

@@ -257,6 +257,15 @@ impl Driver {
         ids_changed || row_changed || space_changed || tab_changed
     }
 
+    /// The rows back in the model's order, springs kept, after a drag's release or cancel:
+    /// `TabRows::up` reordered them though the model's ids and active row may not have changed
+    /// (the host did not act on the move, the active row was outside the drag), which
+    /// `read_model` alone does not see.
+    fn restore_order(&mut self, window: &AppWindow) {
+        self.read_model(window);
+        self.tabs.set_ids(&row_ids(&self.ids), self.tabs.active);
+    }
+
     /// The sidebar's compact look (chrome::compact) from the seam's live width, its mode and the
     /// peek.
     fn set_compact(&self, window: &AppWindow) {
@@ -275,7 +284,7 @@ impl Driver {
             TabUp::Moved(from, to) => {
                 let id = *self.ids.get(from)?;
                 // Back to the model's order, springs kept: the row settles where the host puts it.
-                self.read_model(window);
+                self.restore_order(window);
                 Some(Emit::Moved(id, i32::try_from(to).ok()?))
             }
             TabUp::None => None,
@@ -858,7 +867,7 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
     window.on_tab_rows_cancel(move || {
         run(&d, &w, |s, w| {
             s.tabs.cancel();
-            s.read_model(w);
+            s.restore_order(w);
             None
         })
     });
