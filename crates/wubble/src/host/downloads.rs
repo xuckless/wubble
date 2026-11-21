@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use slint::ComponentHandle;
-use wubble_core::agent::{SessionId, log::Outcome};
+use wubble_core::agent::log::Outcome;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::space::ContainerId;
 use wubble_core::tab::TabId;
@@ -154,12 +154,15 @@ impl Host {
                 suggested_name,
                 ..
             } => {
+                // An agent-driven tab's download is refused (no airlock yet: TODO.md, MCP server).
                 if self.agent_drives(tab) {
                     self.download_path_chosen(tab, id, download, None);
-                    let session = self
-                        .agent_grant_of(tab)
-                        .map_or_else(|| SessionId("-".into()), |(s, _)| s);
-                    self.agent_log(&session, "download", Some(url), Outcome::Refused);
+                    match self.agent_grant_of(tab) {
+                        Some((session, _)) => {
+                            self.agent_log(&session, "download", Some(url), Outcome::Refused)
+                        }
+                        None => eprintln!("wubble: agent: a download in a driven tab was refused"),
+                    }
                     return;
                 }
                 let save_as = self.downloads.take_save_as(tab, &url, &original_url);

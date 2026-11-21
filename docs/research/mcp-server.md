@@ -485,13 +485,13 @@ Chromium extensions are off until M6 [V decisions.md]).
 | Boundary | How the engine detects it | The prompt shows | Default | Pre-approve? |
 |---|---|---|---|---|
 | File upload | `on_file_dialog` (welding `DialogHandler`) [V] | origin, field label, file | the human picks; a file variable asks once per origin | File variables only |
-| Download, media download | `can_download`/`on_before_download` [V]; the media downloader's job | origin, name, size, type | asks | Per origin |
-| Clipboard write | Wayland: the helper's `clipboard.js` bridge reports every page copy [V]; X11, macOS, Windows: Chromium writes itself [V clipboard.rs] | text (truncated), origin | asks | Yes |
+| Download, media download | `can_download`/`on_before_download` [V]; the media downloader's job | origin, name, size, type | built: refused in an agent-driven tab (logged to the session); asks: next (TODO.md) | Per origin |
+| Clipboard write | Wayland: the helper's `clipboard.js` bridge reports every page copy [V]; X11, macOS, Windows: Chromium writes itself [V clipboard.rs] | text (truncated), origin | not built: not isolated on any platform (the bridge cannot tell the agent's copy from the human's; TODO.md) | Yes |
 | Navigation outside the list | `on_before_browse` and the resource filter on main-frame requests, redirects included [V handlers.rs] | from, to, the link's name | blocks; asks if allowed | Add the site |
 | Popup / new window | `popup.rs` with the agent-gesture tag | target origin | as navigation | As navigation |
 | Secret fill outside its binding | the origin and kind checks above | refusal, no prompt | refused | No |
 | Payment Request | `PaymentRequest.show()` [?: whether CEF 156 offers it is unverified] | merchant, total | always asks, or off in agent containers | No |
-| Permission prompts | `on_show_permission_prompt` [V] | as today, labelled "during an agent session" | the human answers | No |
+| Permission prompts | `on_show_permission_prompt` [V] | as today, labelled "during an agent session" | built: denied in an agent-driven tab, no prompt; the human answers: next (TODO.md) | No |
 | Leave-page dialog, JS prompt | welding `OnJSDialog`/`OnBeforeUnloadDialog` [V] | the page's text | agent may answer alerts and confirms | n/a |
 | Non-GET after an agent action (phase 3) | resource request handler, below | method, URL, body summary | per write mode | Per origin |
 

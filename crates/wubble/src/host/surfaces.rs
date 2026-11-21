@@ -862,22 +862,6 @@ impl Host {
         frame: String,
         request: ClipboardRequest,
     ) {
-        if self.agent_drives(tab) {
-            match request {
-                ClipboardRequest::Copy(_) | ClipboardRequest::Primary(_) => {}
-                ClipboardRequest::Paste { .. } => {
-                    if let Some(view) = self.tab_view(tab) {
-                        view.answer_clipboard(&frame, "", None);
-                    }
-                }
-                ClipboardRequest::Read(id) => {
-                    if let Some(view) = self.tab_view(tab) {
-                        view.answer_clipboard(&frame, "", Some(id));
-                    }
-                }
-            }
-            return;
-        }
         let load = |host: &mut Self, buffer| {
             host.clipboard
                 .load(window.window(), buffer)

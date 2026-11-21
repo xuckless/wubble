@@ -3071,7 +3071,7 @@ impl Host {
             match self.agent_grant_of(tab) {
                 // where the rule could not ask (a page from the back-forward cache, a script's
                 // address Chromium let through): taken back, the agent or the log told
-                Some((_, grant)) if agent::may_go(&grant, url).is_err() && url != BLANK => {
+                Some((_, grant)) if agent::may_go(&grant, url).is_err() => {
                     eprintln!("wubble: agent: a session tab reached {url}: taken back");
                     self.agent_refused(tab, url);
                     self.agent_take_back(tab);
@@ -3079,7 +3079,7 @@ impl Host {
                 Some(_) => {
                     self.agents.last_at.insert(tab, url.clone());
                 }
-                None if !agent::is_web(url) && url != BLANK => {
+                None if !agent::is_web(url) && !agent::is_blank(url) => {
                     self.agent_backstop(tab, url);
                 }
                 None => {}
@@ -3259,7 +3259,7 @@ impl Host {
     /// `chrome:`, `mailto:`) opens nothing (wubble would load it as the browser, which a page
     /// itself may not); whether it was refused.
     pub(super) fn agent_popup_refused(&mut self, tab: TabId, url: &str) -> bool {
-        if !self.agent_drives(tab) || url == BLANK {
+        if !self.agent_drives(tab) || agent::is_blank(url) {
             return false;
         }
         // a web pop-up goes where the session's sites allow (`agent::may_go`), as the tab
