@@ -152,6 +152,7 @@ component SettingRow inherits VerticalLayout {
             if root.setting.control == SettingControl.segmented && root.setting.options.length > 0: select := Select {
                 options: root.setting.options;
                 value: root.setting.selected;
+                placeholder: root.setting.placeholder;
                 label: root.setting.label;
                 accent: root.accent;
                 view-top: root.view-top;

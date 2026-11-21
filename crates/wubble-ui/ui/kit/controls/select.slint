@@ -19,7 +19,8 @@ export component Select inherits Rectangle {
     in property <[MenuEntry]> options;
     in property <int> value;
     in property <string> label;
-    in property <string> placeholder: "Ask on first search";
+    // what the trigger reads while no option is chosen (`value` out of range)
+    in property <string> placeholder;
     in property <color> accent: Palette.sky;
     // the view the menu must stay inside (window coordinates; the page's scroller), for the
     // upward flip; unbounded by default (it opens down)

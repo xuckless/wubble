@@ -499,6 +499,8 @@ export struct SettingItem {
     // a choice the design picks from a Select (the search engine): its labels as menu rows;
     // empty for the segmented ones
     options: [MenuEntry],
+    // what that Select reads while none is chosen
+    placeholder: string,
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).
