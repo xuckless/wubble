@@ -342,6 +342,8 @@ pub(super) struct Agents {
     /// Each session tab's last address its grant allowed: where a tab that got somewhere else
     /// is taken back to.
     pub(super) last_at: HashMap<TabId, String>,
+    /// The grant each view's navigation rule was last set from (`agent_rules`).
+    rules: HashMap<wubble_engine::app::ViewId, Option<agent::Grant>>,
     /// The agent Space its dustbin is deleting, while it is (its tabs are not the user's closed
     /// tabs, as in a session's teardown).
     pub(super) clearing: Option<SpaceId>,
@@ -2529,28 +2531,51 @@ impl Host {
 
     /// The grant of the session that drives `tab`.
     fn agent_grant_of(&self, tab: TabId) -> Option<(SessionId, agent::Grant)> {
-        self.agents.sessions.iter().find_map(|(id, s)| {
-            let (space, container) = s.space?;
-            let grant = s.state.grant()?;
-            self.model
-                .holds(space, container, tab)
-                .then(|| (id.clone(), grant.clone()))
-        })
+        let sessions: Vec<_> = self
+            .agents
+            .sessions
+            .iter()
+            .filter_map(|(id, s)| {
+                let (space, container) = s.space?;
+                Some((id.clone(), space, container, s.state.grant()?))
+            })
+            .collect();
+        agent::holder(&self.model, tab, &sessions)
     }
 
-    /// Each view's navigation rule (`agent::may_go`): a running session's tabs go only where
-    /// its grant says, every other tab anywhere. Run as a session's state or a tab's view
-    /// changes.
+    /// Each view's navigation rule (`agent::may_go`), derived from the model (`agent::holder`):
+    /// a running session's tabs go only where its grant says, every other tab anywhere. Run
+    /// after every model change (`Host::dispatch`: a tab dragged into or out of a session's
+    /// Space), a session's state change, and a view's opening; a view is told only when its
+    /// grant changed.
     pub(super) fn agent_rules(&mut self) {
-        let tabs: Vec<TabId> = self.views.keys().copied().collect();
-        for tab in tabs {
-            let rule = self.agent_grant_of(tab).map(|(_, grant)| {
+        // a closed tab, or one no longer a session's, has no last allowed address
+        let held: Vec<TabId> = self
+            .agents
+            .last_at
+            .keys()
+            .copied()
+            .filter(|t| self.agent_grant_of(*t).is_some())
+            .collect();
+        self.agents.last_at.retain(|t, _| held.contains(t));
+        let tabs: Vec<(TabId, wubble_engine::app::ViewId)> =
+            self.views.iter().map(|(t, v)| (*t, *v)).collect();
+        self.agents
+            .rules
+            .retain(|view, _| tabs.iter().any(|(_, v)| v == view));
+        for (tab, view_id) in tabs {
+            let grant = self.agent_grant_of(tab).map(|(_, grant)| grant);
+            if self.agents.rules.get(&view_id) == Some(&grant) {
+                continue;
+            }
+            let rule = grant.clone().map(|grant| {
                 let rule: wubble_engine::view::Rule =
                     std::sync::Arc::new(move |url: &str| agent::may_go(&grant, url).is_ok());
                 rule
             });
             if let Some(view) = self.tab_view(tab) {
                 view.set_navigation_rule(rule);
+                self.agents.rules.insert(view_id, grant);
             }
         }
     }

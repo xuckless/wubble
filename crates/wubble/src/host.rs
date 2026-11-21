@@ -928,6 +928,8 @@ impl Host {
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
         self.held_popups.retain(|tab, _| tabs.contains_key(tab));
         self.preview.forget_except(|tab| tabs.contains_key(tab));
+        // a tab moved into or out of a session's Space: its navigation rule follows the model
+        self.agent_rules();
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();

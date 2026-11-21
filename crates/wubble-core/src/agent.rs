@@ -501,6 +501,22 @@ impl State {
     }
 }
 
+/// The session whose Space and container hold `tab` now, by the model, with its grant: the one
+/// owner of which navigation rule a tab's view carries. `sessions`: each running session's id,
+/// Space, container and grant. A tab moved out of a session's Space is no longer held; one moved
+/// in is.
+pub fn holder<K: Clone>(
+    model: &crate::model::Model,
+    tab: crate::tab::TabId,
+    sessions: &[(K, crate::space::SpaceId, crate::space::ContainerId, &Grant)],
+) -> Option<(K, Grant)> {
+    sessions.iter().find_map(|(id, space, container, grant)| {
+        model
+            .holds(*space, *container, tab)
+            .then(|| (id.clone(), (*grant).clone()))
+    })
+}
+
 /// The one lifecycle. An event that means nothing in the state leaves it as it is; a stopped
 /// session ignores everything.
 pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
@@ -1213,5 +1229,61 @@ mod tests {
             Grant::new([], &["a b".to_string()], Mode::Headless),
             Err(GrantError::BadSite("a b".into()))
         );
+    }
+
+    /// A tab dragged out of a session's Space is free; one dragged in is held to the grant.
+    #[test]
+    fn the_model_says_which_tabs_a_session_holds() {
+        use crate::model::{Command, Dest, Effect as M, Model, apply};
+        use crate::space::ContainerId;
+        let open = |m: Model| {
+            let (m, fx) = apply(
+                m,
+                Command::NewTab {
+                    url: "https://a.test".into(),
+                    container: None,
+                    opener: None,
+                },
+            );
+            let tab = fx
+                .iter()
+                .find_map(|e| match e {
+                    M::CreateTab { tab, .. } => Some(*tab),
+                    _ => None,
+                })
+                .unwrap();
+            (m, tab)
+        };
+        let m = Model::new(std::time::Instant::now());
+        let (m, agent_tab) = open(m);
+        let (m, _) = apply(
+            m,
+            Command::NewSpace {
+                name: "Agent".into(),
+                tint: crate::space::Rgb(1, 2, 3),
+                container: ContainerId::DEFAULT,
+            },
+        );
+        let agent_space = m.spaces.last().unwrap().id;
+        let user_space = m.spaces[0].id;
+        let g = grant(Mode::Windowed);
+        let sessions = [("s1", agent_space, ContainerId::DEFAULT, &g)];
+        let into = |space| Dest::Normal { space, index: 0 };
+        let (m, _) = apply(
+            m,
+            Command::MoveTab {
+                tab: agent_tab,
+                to: into(agent_space),
+            },
+        );
+        assert_eq!(holder(&m, agent_tab, &sessions), Some(("s1", g.clone())));
+        let (m, _) = apply(
+            m,
+            Command::MoveTab {
+                tab: agent_tab,
+                to: into(user_space),
+            },
+        );
+        assert_eq!(holder(&m, agent_tab, &sessions), None, "dragged out: free");
     }
 }
