@@ -889,19 +889,50 @@ pub fn settings_page_from(
         .collect()
 }
 
-/// The rows whose label or key contains `query` (case-insensitive; blank keeps all). A section
-/// left with no row is dropped.
+/// The words of a settings search, lower-cased (the design's `words`).
+fn query_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Every word appears somewhere in `haystack` (the design's `matches`: words in any order).
+fn has_all(haystack: &str, words: &[String]) -> bool {
+    let haystack = haystack.to_lowercase();
+    words.iter().all(|w| haystack.contains(w.as_str()))
+}
+
+/// What a settings search reads of a row: its label, key, section, restart note, and the words
+/// of its choices (a search engine's names, "sepia", "serif").
+fn row_text(section: settings::Section, row: &SettingRow) -> String {
+    let mut text = format!("{} {} {}", row.label, row.key, section.title());
+    if row.restart {
+        text.push_str(" applies after a restart");
+    }
+    if let Control::Segmented(words) = row.control {
+        for word in words {
+            text.push(' ');
+            text.push_str(
+                crate::omnibox::ENGINES
+                    .iter()
+                    .find(|e| e.id == *word)
+                    .map_or(word, |e| e.name),
+            );
+        }
+    }
+    text
+}
+
+/// The rows every word of `query` is in (case-insensitive, any order; blank keeps all): its
+/// label, key, section, restart note or one of its choices. A section left with no row is
+/// dropped.
 pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
-    let needle = query.trim().to_lowercase();
+    let words = query_words(query);
     sections
         .iter()
         .filter_map(|s| {
             let rows: Vec<SettingRow> = s
                 .rows
                 .iter()
-                .filter(|r| {
-                    needle.is_empty() || contains_ci(r.label, &needle) || r.key.contains(&needle)
-                })
+                .filter(|r| has_all(&row_text(s.section, r), &words))
                 .cloned()
                 .collect();
             (!rows.is_empty()).then_some(SectionView {
@@ -910,6 +941,15 @@ pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
             })
         })
         .collect()
+}
+
+/// Whether a shortcut row (its action's label and its chord as shown) answers a settings
+/// search: every word is in "keyboard shortcut", the label or the chord.
+pub fn binding_matches(label: &str, chord: &str, query: &str) -> bool {
+    has_all(
+        &format!("keyboard shortcut {label} {chord}"),
+        &query_words(query),
+    )
 }
 
 // ------------------------------------------------------------------ sites
@@ -1350,6 +1390,44 @@ mod tests {
         assert_eq!(filter(&page, "zoom").len(), 1);
         assert!(filter(&page, "no such setting").is_empty());
         assert_eq!(filter(&page, "  "), page);
+    }
+
+    #[test]
+    fn filter_takes_words_in_any_order_and_reads_sections_notes_and_choices() {
+        let page = settings_page(&HashMap::new());
+        let keys = |q: &str| -> Vec<&str> {
+            filter(&page, q)
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|r| r.key))
+                .collect()
+        };
+        // words in any order
+        assert_eq!(keys("mode dark"), keys("dark mode"));
+        assert!(keys("dark mode").contains(&"pages.theme"));
+        // a choice's word finds its row
+        assert!(keys("sepia").contains(&"reader.theme"));
+        assert!(keys("duckduckgo").contains(&"search.engine"));
+        // the section's name finds its rows
+        let appearance = keys("appearance");
+        assert!(appearance.contains(&"ui.sidebar_mode") && !appearance.contains(&"zoom.default"));
+        // the note finds the rows that apply after a restart
+        let restart = keys("restart");
+        assert!(restart.contains(&"glass.scene") && !restart.contains(&"zoom.default"));
+        // a word that is nowhere keeps the row out
+        assert!(keys("zoom nonsense").is_empty());
+        // punctuation is just text: nothing has it, and nothing breaks
+        assert!(keys("(%)").contains(&"zoom.default"));
+        assert!(keys("???").is_empty());
+    }
+
+    #[test]
+    fn a_shortcut_row_answers_by_action_chord_and_the_words_keyboard_shortcut() {
+        assert!(binding_matches("New tab", "Ctrl+T", "new tab"));
+        assert!(binding_matches("New tab", "Ctrl+T", "ctrl+t"));
+        assert!(binding_matches("New tab", "Ctrl+T", "shortcut tab"));
+        assert!(binding_matches("New tab", "Ctrl+T", "keyboard"));
+        assert!(!binding_matches("New tab", "Ctrl+T", "zoom"));
+        assert!(binding_matches("New tab", "", " "));
     }
 
     #[test]

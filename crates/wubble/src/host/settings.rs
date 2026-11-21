@@ -478,10 +478,11 @@ fn render_page(window: &AppWindow, host: &Host) {
     let bindings: Vec<_> = keys::binding_rows(Platform::current(), &overrides)
         .into_iter()
         .filter(|r| {
-            needle.is_empty()
-                || r.action.label().to_lowercase().contains(&needle)
-                || r.chord
-                    .is_some_and(|c| c.to_string().to_lowercase().contains(&needle))
+            pages::binding_matches(
+                &r.action.label(),
+                &r.chord.map(|c| c.to_string()).unwrap_or_default(),
+                &page.query,
+            )
         })
         .collect();
     crate::bind::sync(
