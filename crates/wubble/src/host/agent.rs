@@ -613,12 +613,8 @@ impl Agents {
 /// `select` from the moment it asks for its node, until its answer.
 fn held_group(wait: &Wait) -> Option<(TabId, &str)> {
     match wait {
-        Wait::UploadTo {
-            tab,
-            group,
-            stage: Uploading::Reading | Uploading::Setting,
-            ..
-        } => Some((*tab, group)),
+        // from its `DOM.resolveNode`, which makes the group
+        Wait::UploadTo { tab, group, .. } => Some((*tab, group)),
         Wait::Select {
             tab,
             group,
@@ -3921,35 +3917,40 @@ impl Host {
             } => paths.len(),
             _ => 0,
         });
-        let multiple = opened.multiple;
-        let opened_by = upload::Opened::DevTools { multiple };
-        match upload::chooser(mode, &self.agent_stages(tab), opened_by, files) {
-            upload::Chooser::Owner | upload::Chooser::Drop => {}
-            upload::Chooser::Cancel => self.agent_chooser_cancelled(tab, upload::CHOOSER_CANCELLED),
-            upload::Chooser::Answer | upload::Chooser::Refuse(_) if clicked.is_none() => {}
-            upload::Chooser::Answer | upload::Chooser::Refuse(_) => {
-                let p = self.agents.pending.remove(clicked.unwrap_or_default());
-                let paths = match p.wait {
-                    Wait::Chooser { paths, .. } => paths,
-                    Wait::Input {
-                        id,
-                        then: Then::Upload { paths },
-                        ..
-                    } => {
-                        self.agents.ignored.push(id);
-                        paths
-                    }
-                    _ => return self.agent_arm(),
-                };
-                let decided = upload::chooser(mode, &[Stage::UploadClicked], opened_by, files);
-                match (decided, opened.node) {
-                    (upload::Chooser::Refuse(why), _) => self.agent_refuse(p.reply, why),
-                    (_, Some(node)) => self.agent_upload_node(p.reply, tab, node, paths, None),
-                    (_, None) => self.agent_fail(p.reply, "the file chooser named no element"),
-                }
-                self.agent_arm();
+        let opened_by = upload::Opened::DevTools {
+            multiple: opened.multiple,
+        };
+        let decision = upload::chooser(mode, &self.agent_stages(tab), opened_by, files);
+        let answered = matches!(
+            decision,
+            upload::Chooser::Answer | upload::Chooser::Refuse(_)
+        );
+        let Some(i) = clicked.filter(|_| answered) else {
+            if decision == upload::Chooser::Cancel {
+                self.agent_chooser_cancelled(tab, upload::CHOOSER_CANCELLED);
             }
+            // otherwise no call waits for it: DevTools showed nothing
+            return;
+        };
+        let p = self.agents.pending.remove(i);
+        let paths = match p.wait {
+            Wait::Chooser { paths, .. } => paths,
+            Wait::Input {
+                id,
+                then: Then::Upload { paths },
+                ..
+            } => {
+                self.agents.ignored.push(id);
+                paths
+            }
+            _ => return self.agent_arm(),
+        };
+        match (decision, opened.node) {
+            (upload::Chooser::Refuse(why), _) => self.agent_refuse(p.reply, why),
+            (_, Some(node)) => self.agent_upload_node(p.reply, tab, node, paths, None),
+            (_, None) => self.agent_fail(p.reply, "the file chooser named no element"),
         }
+        self.agent_arm();
     }
 
     /// The tabs with an `upload_file` in flight.
@@ -5653,6 +5654,23 @@ mod tests {
             );
         }
         assert_eq!(held_group(&Wait::Shot { id: 1 }), None);
+    }
+
+    #[test]
+    fn an_upload_holds_its_own_group_from_resolving_its_node() {
+        for stage in [Uploading::Resolving, Uploading::Reading, Uploading::Setting] {
+            let wait = Wait::UploadTo {
+                id: 1,
+                tab: TabId(3),
+                node: 9,
+                paths: vec![],
+                stage,
+                group: "wubble-agent-upload-4".into(),
+                object: None,
+                fallback: None,
+            };
+            assert_eq!(held_group(&wait), Some((TabId(3), "wubble-agent-upload-4")));
+        }
     }
 
     #[test]
