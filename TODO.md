@@ -145,7 +145,7 @@ Open, to build or check:
 - [ ] Re-measure `--begin-frames` on a 120 Hz (and the 300 Hz) display on Linux: it was left off there in b2 for a worse video render interval at 240 Hz
 - [ ] Mac console hand checks: ProMotion, window, Cmd keys, IME, popups, Keychain, file chooser, media keys, fullscreen
 - [ ] macOS: CEF does not finish shutting down after a windowless run over ssh; find the commit and the cause
-- [ ] Windows CI green (then drop the job's `continue-on-error`); the D3D11 shared-handle port after
+- [ ] Windows CI: the Test step now finishes and 4 tests of the `wubble` binary fail there (run 44988591703, 2026-11-22): `instance::tests::the_private_root_by_platform`, `mcp::tests::a_connection_answers_discovery_and_hands_calls_to_the_host`, `mcp::tests::a_stop_closes_open_connections_and_ids_never_repeat`, `updater::install::tests::linux_stages_switches_current_and_rolls_back` (the last is a Linux-only test not gated)
 
 ## M1: Engine layer
 - [ ] Hand checks: dead keys, autoscroll cursor feel, IME with ibus, popups, `window.open` and its badge, a download, fullscreen
