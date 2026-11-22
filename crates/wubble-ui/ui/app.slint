@@ -39,6 +39,7 @@ import { ExtensionSheet } from "components/extension-sheet.slint";
 import { SpacesMenu } from "kit/chrome/spaces-menu.slint";
 import { DragGhost } from "kit/chrome/drag-ghost.slint";
 import { DropMark } from "kit/chrome/drop-mark.slint";
+import { PrivateTint } from "kit/chrome/private-mark.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
 import { PreviewCard } from "components/preview-card.slint";
@@ -69,7 +70,8 @@ export { TabSound } from "components/model.slint";
 export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
 
 export component AppWindow inherits Window {
-    title: "wubble";
+    // A private window's title says so (Chrome's "(Incognito)" suffix).
+    title: root.private-window ? "wubble (Private)" : "wubble";
     icon: @image-url("../../../assets/icons/linux/hicolor/128x128/apps/wubble.png");
     preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
     preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
@@ -924,6 +926,8 @@ export component AppWindow inherits Window {
         border-radius: root.window-radius;
     }
     // The active Space's colour: the window's glass, the split ring and the settings' controls.
+    // The window shows a private Space (wubble_core `Space::private`): tinted, titled Private.
+    out property <bool> private-window: root.space-index >= 0 && root.space-index < root.spaces.length && root.spaces[root.space-index].private;
     property <color> space-accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
     // The window's own glass (design desktop.tsx: one Regular surface the window's size, radius
     // `radius.window`, shadow 1). The sidebar has no panel of its own: it is this glass, and the
@@ -940,6 +944,12 @@ export component AppWindow inherits Window {
         over-wgpu: GlassLayer.scene-active;
         visible: GlassLayer.scene-active;
         present: !root.page-fullscreen;
+    }
+    // A private window's mark over its ground and glass, under the chrome and the page card.
+    if root.private-window && !root.page-fullscreen: PrivateTint {
+        width: 100%;
+        height: 100%;
+        radius: root.window-radius;
     }
     // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
     MoveArea {

@@ -60,6 +60,8 @@ export struct SpaceItem {
     icon: string,
     // wubble: an agent session's Space (`SpaceName` shows the mark).
     agent: bool,
+    // wubble: a private window's Space (`SpaceName` shows the Private chip; the window is tinted).
+    private: bool,
 }
 
 // One line of the sidebar's Spaces popup (wubble_core::spacemenu: its groups' rows, a rule

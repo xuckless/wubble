@@ -1,0 +1,41 @@
+// derived: KitText(text.slint, Role.wb-space-name) on a pill tinted as `.wb-spaces-ind` is (browser/browser.css:92-96: the Space colour at .2) + Palette lilac + Shell private-tint (derived.slint)
+// The mark of a private window (Chrome's incognito window), wubble-only
+// (docs/fidelity/derived-review.md, Private windows). The design has no private browsing. Two
+// parts: `PrivateChip`, the private Space's name ("Private") as a pill in place of the Space
+// header's plain name, the header's own type in lilac (the private Space's colour, Firefox's private
+// purple) on lilac at the Space capsule's .2; and `PrivateTint`, the window's ground darkened
+// under the chrome (abyss at `Shell.private-tint`), so a private window reads as one at a glance
+// as Chrome's dark incognito frame does. Both inert; the chip names the window to assistive tech.
+
+import { Palette } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+
+export component PrivateChip inherits Rectangle {
+    in property <string> text;
+    height: BrowserCss.wb-space-name--height;
+    width: label.preferred-width + BrowserCss.wb-space-name--padding-left + BrowserCss.wb-space-name--padding-right;
+    border-radius: self.height / 2;
+    background: Palette.lilac.with-alpha(BrowserCss.wb-spaces-ind--opacity);
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    accessible-description: "This window is private: nothing of it is saved";
+    label := KitText {
+        x: BrowserCss.wb-space-name--padding-left;
+        height: parent.height;
+        role: Role.wb-space-name;
+        text: root.text;
+        color: Palette.lilac;
+        vertical-alignment: center;
+    }
+}
+
+// Covers its parent: lays the dark tint over a private window's ground and glass, under the
+// page card.
+export component PrivateTint inherits Rectangle {
+    in property <length> radius;
+    background: Shell.private-tint;
+    border-radius: root.radius;
+}

@@ -67,6 +67,8 @@ pub struct SpaceRow {
     pub agent_space: bool,
     /// A running agent session's Space (`host/agent.rs` marks it): the header's stop mark.
     pub agent: bool,
+    /// A private window's Space (`Space::private`): the header's Private chip, the window's tint.
+    pub private: bool,
 }
 
 /// The sidebar for one model. Ids that do not fit Slint's `int` are
@@ -164,6 +166,7 @@ pub fn view_model(
                 icon: s.icon,
                 agent_space: s.agent,
                 agent: false,
+                private: s.private,
             })
         })
         .collect();

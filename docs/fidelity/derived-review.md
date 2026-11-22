@@ -390,3 +390,12 @@ Chrome draws a page's drag with the image Blink made for it (a grey label for a 
 |---|---|---|---|
 | Drag ghost (`kit/chrome/drag-ghost.slint`) | Chromium's drag image at the pointer, its hotspot under it, untouched; without one, the tab drag's ghost row (shell fill, radius sm, `.wb-tab-drag`'s shadow) holding the title in `wb-tab` and under it the URL in `wb-cmd-hint` mist, as Chromium's label orders them; a dragged tab's ghost is the same piece with the title alone (moved out of app.slint) | `.wb-tab-drag`, the tab row's text | gallery drag-ghost-label, drag-ghost-image; `--smoke dnd --shot-dir` (Chromium's own images) |
 | Drop mark (`kit/chrome/drop-mark.slint`) | the split drop zone's box (ink .12 fill, ink .35 rim of 2, radius md; moved out of app.slint) over the address pill, the New tab row, the open command bar's field, the bookmarks page and a bookmarks folder row (`ListRow` `drop-target`); its rim alone as a 2 px line in the tab list's gap; a Space row is lit as the tab drag lights it | the split drop zone | gallery drag-ghost-tab-list, drag-ghost-bar |
+
+## Private windows (feat/private-windows)
+
+Chrome marks an incognito window with a dark frame and an "Incognito" label; the design has no private browsing. These pieces are wubble's, for the owner's eye.
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Private chip (`PrivateChip` in `kit/chrome/private-mark.slint`, in `SpaceName`) | a private window's Space header shows its name ("Private") as a pill in place of the plain name: the header's own type (`wb-space-name`, 12 / 500) in lilac, on lilac at the Space capsule's .2 (`.wb-spaces-ind` opacity), 18 high (the header's height), the header's 10 padding each side, radius half its height; inert, named to assistive tech with "This window is private: nothing of it is saved". The private Space's colour is the lilac swatch | `.wb-space-name`, `.wb-spaces-ind`, Palette lilac | not yet shot (no gallery scene) |
+| Private tint (`PrivateTint` in `kit/chrome/private-mark.slint`, in `app.slint` over the glass) | the window's ground and glass darkened by abyss at .35 (`Shell.private-tint`), under the sidebar's content and the page card, with the window's radius; not drawn in page fullscreen. The window title reads "wubble (Private)" | Palette abyss, Chrome's dark incognito frame | not yet shot (no gallery scene) |
