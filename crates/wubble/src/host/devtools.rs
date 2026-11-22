@@ -102,6 +102,15 @@ impl Host {
         self.dock_event(DockEvent::Toggle(tab));
     }
 
+    /// Ctrl+Shift+J: DevTools on its Console panel for the visible tab.
+    pub(super) fn devtools_console(&mut self) {
+        let Some(tab) = self.shown() else {
+            return;
+        };
+        self.reconcile_window();
+        self.dock_event(DockEvent::Console(tab));
+    }
+
     /// The context menu's Inspect at `at`, physical pixels relative to the view.
     pub(super) fn inspect_at(&mut self, tab: TabId, at: (i32, i32)) {
         // the detached window is the only way to reveal a node (Decided "DevTools")

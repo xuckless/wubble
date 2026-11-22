@@ -9,8 +9,8 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
-    self, Bookmark, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchClosed,
-    SearchEngine, SearchTab, Target,
+    self, Bookmark, Candidates, Disposition, HistoryEntry, Kind, OmniResult, OpenTab,
+    SearchClosed, SearchEngine, SearchTab, Target,
 };
 use wubble_core::space::SpaceKind;
 use wubble_core::tab::TabId;
@@ -102,6 +102,8 @@ pub enum Choice {
     SetEngine(SearchEngine),
     /// Take this entry off the recently-closed list and open it (tab search).
     ReopenClosed { url: String, closed_at_ms: i64 },
+    /// Shift+Enter: a new window, then this URL in a new tab there.
+    NewWindow(String),
 }
 
 /// The open tabs, active Space first, each Space in sidebar order. A private window lists its
@@ -241,25 +243,32 @@ pub fn target_command(
     mode: BarMode,
     engine: Option<SearchEngine>,
 ) -> Option<Choice> {
-    let load = |url: String| match mode {
-        BarMode::NewTab => Command::NewTab {
+    target_command_as(target, mode, engine, Disposition::AsOpened)
+}
+
+/// [`target_command`] with the keys Enter was pressed with (`omnibox::disposition`): Alt+Enter
+/// loads in a new tab, Shift+Enter in a new window, whatever the bar was opened for. A bar
+/// choosing a page beside the focused one keeps doing that; a switch to an open tab and an
+/// action are what they are.
+pub fn target_command_as(
+    target: &RowTarget,
+    mode: BarMode,
+    engine: Option<SearchEngine>,
+    disposition: Disposition,
+) -> Option<Choice> {
+    let load = |url: String| match (mode, disposition) {
+        (BarMode::Beside, _) => Choice::Model(Command::OpenBeside { url }),
+        (_, Disposition::NewWindow) => Choice::NewWindow(url),
+        (BarMode::Navigate(tab), Disposition::NewTab) => Choice::Model(Command::NewTab {
             url,
             container: None,
-            opener: None,
-        },
-        BarMode::Navigate(tab) => Command::Navigate { tab, url },
-        BarMode::Beside => Command::OpenBeside { url },
-        BarMode::Tabs => Command::NewTab {
-            url,
-            container: None,
-            opener: None,
-        },
+            opener: Some(tab),
+        }),
+        (_, _) => Choice::Model(load_as_opened(mode, url)),
     };
     Some(match target {
-        RowTarget::Omni(Target::Url(url)) => Choice::Model(load(url.clone())),
-        RowTarget::Omni(Target::Search(q)) => {
-            Choice::Model(load(omnibox::fill(engine?.info().search, q)))
-        }
+        RowTarget::Omni(Target::Url(url)) => load(url.clone()),
+        RowTarget::Omni(Target::Search(q)) => load(omnibox::fill(engine?.info().search, q)),
         RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(match mode {
             BarMode::Beside => Command::SplitWith(*tab),
             _ => Command::ActivateTab(*tab),
@@ -271,6 +280,19 @@ pub fn target_command(
         },
         RowTarget::PickEngine(e) => Choice::SetEngine(*e),
     })
+}
+
+/// A load where the bar was opened for it.
+fn load_as_opened(mode: BarMode, url: String) -> Command {
+    match mode {
+        BarMode::NewTab | BarMode::Tabs => Command::NewTab {
+            url,
+            container: None,
+            opener: None,
+        },
+        BarMode::Navigate(tab) => Command::Navigate { tab, url },
+        BarMode::Beside => Command::OpenBeside { url },
+    }
 }
 
 /// Whether choosing `target` loads something the user typed or picked from

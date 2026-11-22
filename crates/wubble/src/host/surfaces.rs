@@ -679,6 +679,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
                 MenuEffect::Run(MenuCommand::EditBoost(id)) => self.edit_boost(id),
                 MenuEffect::Run(MenuCommand::ClearData(what)) => self.clear_data(tab, what),
+                MenuEffect::Run(MenuCommand::CaretBrowsing { dont_ask }) => {
+                    self.caret_event(wubble_core::caret::Event::Confirm { dont_ask });
+                }
             }
         }
         answered

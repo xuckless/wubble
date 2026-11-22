@@ -153,6 +153,8 @@ pub enum Command {
     CancelDownloadsAndClose(Closing),
     /// A question's "keep" answer: the menu closes, nothing else happens.
     Dismiss,
+    /// Turn caret browsing on, and stop asking first when `dont_ask` (`caret_entries`).
+    CaretBrowsing { dont_ask: bool },
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -1176,6 +1178,39 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
         Command::ClearData(ClearData::Containers(side)),
     ));
     out
+}
+
+/// F7's question before caret browsing turns on (`wubble_core::caret`): Chrome's dialog
+/// (`chrome/browser/ui/views/accessibility/caret_browsing_dialog_delegate.cc`, its strings
+/// `IDS_CARET_BROWSING_*`, BSD-3-Clause; strings only) as a menu, whose rows are its "Turn on"
+/// button with and without "Don't ask again"; dismissing it is Cancel.
+pub fn caret_entries() -> Vec<Entry> {
+    let line = |label: &str, command, enabled| Entry {
+        label: label.into(),
+        command,
+        enabled,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
+    };
+    vec![
+        line("Turn on caret browsing?", Command::Info, false),
+        line(
+            "Move through the text of pages with the arrow keys; F7 turns it off",
+            Command::Info,
+            false,
+        ),
+        line(
+            "Turn On",
+            Command::CaretBrowsing { dont_ask: false },
+            true,
+        ),
+        line(
+            "Turn On, Don\u{2019}t Ask Again",
+            Command::CaretBrowsing { dont_ask: true },
+            true,
+        ),
+    ]
 }
 
 /// One stream of the media menu: its id, its title, and what is known of it.

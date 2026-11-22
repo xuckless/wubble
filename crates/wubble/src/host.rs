@@ -49,6 +49,7 @@ mod popups;
 mod preview;
 mod print;
 mod settings;
+mod shortcuts;
 mod snapshots;
 pub(crate) mod start;
 mod status;
@@ -288,6 +289,8 @@ struct Bar {
     generation: u64,
     /// Tab search's recently closed tabs, newest first, as the store last listed them.
     closed: Vec<omnibox::SearchClosed>,
+    /// Opened by Ctrl+E: every query is a search (`omnibox::as_search`).
+    search: bool,
 }
 
 /// What a windowed run is for, as far as the host cares.
@@ -693,6 +696,7 @@ impl Host {
                 suggestions: vec![],
                 generation: 0,
                 closed: vec![],
+                search: false,
             },
             focus_view: None,
             key_pane: None,
@@ -2202,6 +2206,7 @@ impl Host {
             return;
         }
         self.bar.mode = mode;
+        self.bar.search = false;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
         self.bar_query(window, &query);
@@ -2210,7 +2215,11 @@ impl Host {
     /// Renders the rows for `query` at once from what is at hand, and asks
     /// the store for its history hits, which re-render when they arrive.
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
-        self.bar.query = query.into();
+        self.bar.query = if self.bar.search {
+            omnibox::as_search(query)
+        } else {
+            query.into()
+        };
         self.bar.generation += 1;
         // tab search matches what is at hand: no history, no engine suggestions
         if self.bar.mode == BarMode::Tabs {
@@ -2303,7 +2312,34 @@ impl Host {
 
     /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.
     pub fn bar_closed(&mut self) {
+        self.bar.search = false;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
+    }
+
+    /// Ctrl+E, once the bar is open on the visible tab (`Plan::FocusSearch`): the field empties
+    /// and what is typed in it from now on is searched, never opened as an address.
+    pub(crate) fn bar_for_search(&mut self, window: &AppWindow) {
+        // a Little or Popup window's address is read-only: no bar opened there
+        if self.w.kind != WindowKind::Main {
+            return;
+        }
+        self.bar.search = true;
+        window.set_command_query("".into());
+        self.bar_query(window, "");
+    }
+
+    /// The keys held as a row is chosen: where it opens (`omnibox::disposition`), and whether
+    /// Ctrl asks for `www.` and `.com` around the typed name.
+    fn enter_keys(&self) -> (omnibox::Disposition, bool) {
+        let keys = self.input.keys;
+        let mods = omnibox::EnterMods {
+            ctrl: keys.control_key(),
+            alt: keys.alt_key(),
+            shift: keys.shift_key(),
+            cmd: keys.super_key(),
+        };
+        let platform = wubble_core::keys::Platform::current();
+        (omnibox::disposition(mods, platform), mods.ctrl)
     }
 
     pub fn bar_chosen(&mut self, index: i32) {
@@ -2311,15 +2347,29 @@ impl Host {
             .ok()
             .and_then(|i| self.bar.rows.get(i));
         if let Some(row) = row {
-            let target = row.target.clone();
-            self.choose(&target);
+            let (disposition, complete) = self.enter_keys();
+            // Ctrl+Enter on the typed name: www. and .com around it (Chromium's desired TLD)
+            let completed = (complete && !self.bar.search && index == 0)
+                .then(|| omnibox::with_desired_tld(&self.bar.query))
+                .flatten();
+            let target = match completed {
+                Some(url) => RowTarget::Omni(Target::Url(url)),
+                None => row.target.clone(),
+            };
+            self.choose_as(&target, disposition);
         }
         // after reading the row: clearing the suggestions re-renders the rows
         self.bar_closed();
     }
 
     fn choose(&mut self, target: &RowTarget) {
-        match bar::target_command(target, self.bar.mode, self.search_engine) {
+        self.choose_as(target, omnibox::Disposition::AsOpened);
+    }
+
+    fn choose_as(&mut self, target: &RowTarget, disposition: omnibox::Disposition) {
+        let choice =
+            bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
+        match choice {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
                 if bar::is_typed(target) {
@@ -2333,6 +2383,13 @@ impl Host {
                         with_host(|host| host.restore_closed(closed::Event::Taken, entry));
                     });
                 });
+            }
+            Some(Choice::NewWindow(url)) => {
+                self.dispatch(Command::NewWindow { space: None });
+                self.dispatch(new_tab(url, None));
+                if bar::is_typed(target) {
+                    self.typed_nav.started(self.shown());
+                }
             }
             Some(Choice::SetEngine(engine)) => {
                 self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
@@ -2406,6 +2463,20 @@ impl Host {
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
+            Plan::DevToolsConsole => self.devtools_console(),
+            Plan::FocusSearch => self.focus_search(),
+            Plan::SavePage { tab, url } => self.save_as(tab, url),
+            Plan::OpenFile => self.open_file(),
+            Plan::CaretBrowsing => self.caret_event(wubble_core::caret::Event::Toggle),
+            Plan::RaiseWindow(window) => {
+                self.dispatch(Command::FocusWindow(window));
+                self.raise_window(window);
+            }
+            Plan::Minimize => {
+                if let Some(window) = self.w.window.upgrade() {
+                    window.window().set_minimized(true);
+                }
+            }
             Plan::DockNudge(dir) => self.source_nudge(f64::from(dir)),
             Plan::OpenBeside => self.open_beside(),
             Plan::Builtin(builtin) => self.builtin(builtin),

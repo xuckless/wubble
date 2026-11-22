@@ -8,7 +8,7 @@ use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 
 use wubble_core::shot::ShotRequest;
-use wubble_core::window::WindowTarget;
+use wubble_core::window::{WindowId, WindowTarget};
 
 use wubble_engine::page::EditCommand;
 
@@ -67,6 +67,20 @@ pub enum Plan {
     CloseTabs(Vec<TabId>),
     /// F12: DevTools docked or detached for the visible tab (`wubble_core::devtools`).
     DevTools,
+    /// Ctrl+Shift+J: DevTools on its Console panel for the visible tab.
+    DevToolsConsole,
+    /// Ctrl+E: the command bar on the visible tab, every query a search.
+    FocusSearch,
+    /// Ctrl+S: download this tab's page, asking where (the menu's Save Page As).
+    SavePage { tab: TabId, url: String },
+    /// Ctrl+O: the OS dialog for local files, each opened in a new tab.
+    OpenFile,
+    /// F7: caret browsing on or off (`wubble_core::caret`).
+    CaretBrowsing,
+    /// Raise and focus this window (Cmd+`).
+    RaiseWindow(WindowId),
+    /// Cmd+M: the focused window to the dock or taskbar.
+    Minimize,
     /// The docked panel a step wider (1) or narrower (-1).
     DockNudge(i8),
     /// A built-in on the visible page (`host/builtins.rs`).
@@ -105,6 +119,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::UndoCloseTab => Plan::UndoClose,
         Action::FocusAddress => Plan::FocusAddress,
         Action::SearchTabs => Plan::SearchTabs,
+        Action::FocusSearch => Plan::FocusSearch,
         Action::NextRegion => Plan::CycleRegion(false),
         Action::PrevRegion => Plan::CycleRegion(true),
         Action::Reload => view(ViewOp::Reload),
@@ -114,6 +129,14 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::Forward => view(ViewOp::Forward),
         Action::NextTab => activate(model.tab_step(1)),
         Action::PrevTab => activate(model.tab_step(-1)),
+        Action::MoveTabUp | Action::MoveTabDown => {
+            let delta = if action == Action::MoveTabUp { -1 } else { 1 };
+            visible
+                .and_then(|tab| Some((tab, model.tab_shift(tab, delta)?)))
+                .map_or(Plan::Nothing, |(tab, to)| {
+                    Plan::Model(Command::MoveTab { tab, to })
+                })
+        }
         Action::SelectTab(n) => {
             activate(usize::from(n).checked_sub(1).and_then(|i| model.nth_tab(i)))
         }
@@ -145,8 +168,19 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::Cut => view(ViewOp::Edit(EditCommand::Cut)),
         Action::Copy => view(ViewOp::Edit(EditCommand::Copy)),
         Action::Paste => view(ViewOp::Edit(EditCommand::Paste)),
+        Action::PasteAndMatchStyle => view(ViewOp::Edit(EditCommand::PasteMatchStyle)),
         Action::SelectAll => view(ViewOp::Edit(EditCommand::SelectAll)),
         Action::Print => visible.map_or(Plan::Nothing, |_| Plan::Print),
+        // a web or file page; the shell's own pages (wubble://) have nothing to download
+        Action::SavePage => visible
+            .and_then(|t| model.tabs.get(&t))
+            .filter(|t| !t.url.is_empty() && InternalPage::from_url(&t.url).is_none())
+            .map_or(Plan::Nothing, |t| Plan::SavePage {
+                tab: t.id,
+                url: t.url.clone(),
+            }),
+        Action::OpenFile => Plan::OpenFile,
+        Action::ToggleCaretBrowsing => visible.map_or(Plan::Nothing, |_| Plan::CaretBrowsing),
         Action::Fullscreen => Plan::Fullscreen,
         Action::CopyUrl => visible
             .and_then(|t| model.tabs.get(&t))
@@ -188,6 +222,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::DevTools => visible.map_or(Plan::Nothing, |_| Plan::DevTools),
+        Action::DevToolsConsole => visible.map_or(Plan::Nothing, |_| Plan::DevToolsConsole),
         // Chromium's Ctrl+U: the page's source in a new tab beside it
         Action::ViewSource => visible
             .and_then(|t| model.tabs.get(&t))
@@ -213,6 +248,9 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::NewPrivateWindow => Plan::Model(Command::NewPrivateWindow { url: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
+        Action::MinimizeWindow => Plan::Minimize,
+        Action::NextWindow => model.window_step(1).map_or(Plan::Nothing, Plan::RaiseWindow),
+        Action::PrevWindow => model.window_step(-1).map_or(Plan::Nothing, Plan::RaiseWindow),
         Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
             Plan::Model(Command::MoveTabToWindow {
                 tab,
