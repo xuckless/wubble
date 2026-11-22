@@ -23,8 +23,8 @@ use wubble_core::start::rand::Rng;
 use wubble_core::tab::TabId;
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
-    Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect, Renderer,
-    SceneOptions, Signal, StartCard, Tier, out_size, view_of,
+    Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, PageRect, Quality, Rect,
+    Renderer, SceneOptions, Signal, StartCard, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{
@@ -412,15 +412,18 @@ impl Glass {
         let full_rate = steady && s.run.state() == RunState::Running;
         let interval = since.filter(|_| full_rate);
         s.start_frame(window, since);
+        let mut new_textures = false;
         match s.renderer.before_rendering(window.window(), now, pace) {
             // new textures only (first frame, resize, a layer's glass appearing or gone): see
             // `Renderer::before_rendering`
             Ok(frame) => {
                 if let Some(image) = frame.scene {
+                    new_textures = true;
                     window.set_scene(image);
                 }
                 for (layer, image) in OverLayer::ALL.into_iter().zip(frame.over) {
                     if let Some(image) = image {
+                        new_textures = true;
                         match layer {
                             OverLayer::Card => window.set_over_card(image),
                             OverLayer::Peek => window.set_over_peek(image),
@@ -440,8 +443,27 @@ impl Glass {
         // a changed window size is a change like a changed glass list: it wakes a still scene
         s.run
             .frame_done(window, animating, glass.is_some() || resized);
-        // the scene drew into the textures Slint already shows: Slint cannot see that
-        crate::partial::mark_window(window.window());
+        // the scene drew into the textures Slint already shows: Slint cannot see that. When a
+        // single opaque web pane covers most of the window and nothing moved/changed structure,
+        // mark only the strips around that pane plus any active overlay glass rects so Skia
+        // partial rendering skips re-compositing the opaque webpage interior.
+        let partial_pane = (!new_textures
+            && glass.is_none()
+            && !resized
+            && !s.renderer.start_shown()
+            && !window.get_edge_bowed()
+            && window.get_page_enter() >= 1.0
+            && window.get_exit_t() >= 1.0)
+            .then(|| s.renderer.single_page_rect())
+            .flatten();
+        if let Some(pane) = partial_pane {
+            let overlays = s.renderer.overlay_dirty_rects();
+            for r in scene_dirty_rects(w, h, pane, &overlays) {
+                crate::partial::mark_rect(window.window(), r.x, r.y, r.w, r.h);
+            }
+        } else {
+            crate::partial::mark_window(window.window());
+        }
         true
     }
 
@@ -457,11 +479,12 @@ impl Glass {
         }
     }
 
-    /// A pane's texture was written in place (`Host::present_panes`): the page blur follows it
-    /// as it follows a new frame.
-    pub fn pages_written(&mut self, window: &AppWindow) {
+    /// A pane's texture was written in place within `damage` (window logical px,
+    /// `Host::present_panes`): marks the page blur stale only when `damage` reaches an overlay
+    /// glass surface or the ambience around a pane.
+    pub fn pages_written(&mut self, window: &AppWindow, damage: Rect) {
         if let Glass::Scene(s) = self {
-            s.renderer.pages_written();
+            s.renderer.pages_written_rect(damage);
             if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
                 window.window().request_redraw();
             }
@@ -672,6 +695,41 @@ impl SceneHost {
     }
 }
 
+/// The logical rectangles of a window `w`×`h` that may show the scene when a single opaque web
+/// pane (`pane`) covers the content area: the four strips around `pane`'s inscribed opaque box
+/// (sidebar, gutters, and the pane's rounded corners), plus every active overlay glass rect
+/// (clamped to the window). Excludes the opaque interior of `pane` so Skia partial rendering does
+/// not re-composite the whole webpage on sidebar ambience or pointer-light updates.
+fn scene_dirty_rects(w: f32, h: f32, pane: PageRect, overlays: &[Rect]) -> Vec<Rect> {
+    let mut out = Vec::with_capacity(4 + overlays.len());
+    let r = pane.radius.max(0.0);
+    let ix0 = (pane.rect.x + r).clamp(0.0, w);
+    let iy0 = (pane.rect.y + r).clamp(0.0, h);
+    let ix1 = (pane.rect.x + pane.rect.w - r).clamp(0.0, w);
+    let iy1 = (pane.rect.y + pane.rect.h - r).clamp(0.0, h);
+    if ix1 <= ix0 || iy1 <= iy0 {
+        out.push(Rect::new(0.0, 0.0, w, h));
+        return out;
+    }
+    let mut push = |x0: f32, y0: f32, x1: f32, y1: f32| {
+        let (x0, y0) = (x0.clamp(0.0, w), y0.clamp(0.0, h));
+        let (x1, y1) = (x1.clamp(0.0, w), y1.clamp(0.0, h));
+        if x1 > x0 && y1 > y0 {
+            out.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+        }
+    };
+    // Left strip (sidebar + left rounded corners), right strip (right gutter + right corners),
+    // and top/bottom strips between them.
+    push(0.0, 0.0, ix0, h);
+    push(ix1, 0.0, w, h);
+    push(ix0, 0.0, ix1, iy0);
+    push(ix0, iy1, ix1, h);
+    for o in overlays {
+        push(o.x, o.y, o.x + o.w, o.y + o.h);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,5 +924,22 @@ mod tests {
     #[test]
     fn tints_go_to_the_scene_in_0_to_1() {
         assert_eq!(rgb01(Rgb(255, 0, 51)), [1.0, 0.0, 0.2]);
+    }
+
+    #[test]
+    fn scene_dirty_rects_excludes_opaque_pane_interior_and_includes_overlays() {
+        let pane = PageRect {
+            rect: Rect::new(240.0, 8.0, 1000.0, 780.0),
+            radius: 12.0,
+        };
+        let overlay = Rect::new(500.0, 200.0, 200.0, 100.0);
+        let rects = scene_dirty_rects(1248.0, 796.0, pane, &[overlay]);
+        // 4 strips around [252..1228, 20..776] + 1 overlay
+        assert_eq!(rects.len(), 5);
+        assert_eq!(rects[0], Rect::new(0.0, 0.0, 252.0, 796.0));
+        assert_eq!(rects[1], Rect::new(1228.0, 0.0, 20.0, 796.0));
+        assert_eq!(rects[2], Rect::new(252.0, 0.0, 976.0, 20.0));
+        assert_eq!(rects[3], Rect::new(252.0, 776.0, 976.0, 20.0));
+        assert_eq!(rects[4], overlay);
     }
 }

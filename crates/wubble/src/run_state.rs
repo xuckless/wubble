@@ -25,18 +25,12 @@ pub fn event_of(event: &WindowEvent, minimised: impl FnOnce() -> Option<bool>) -
         WindowEvent::Resized(_) => Some(RunEvent::Shown),
         WindowEvent::Focused(true) => Some(RunEvent::Shown),
         WindowEvent::Focused(false) => (minimised() == Some(true)).then_some(RunEvent::Hidden),
-        // every way the user touches the window wakes a still scene
+        // Pointer and touch events wake a still scene (pointer light, press waves, tap ripples);
+        // scroll wheel, keyboard, IME, and gestures do not drive any still-backdrop scene state.
         WindowEvent::CursorMoved { .. }
         | WindowEvent::CursorEntered { .. }
         | WindowEvent::MouseInput { .. }
-        | WindowEvent::MouseWheel { .. }
-        | WindowEvent::KeyboardInput { .. }
-        | WindowEvent::Ime(_)
-        | WindowEvent::Touch(_)
-        | WindowEvent::PinchGesture { .. }
-        | WindowEvent::PanGesture { .. }
-        | WindowEvent::RotationGesture { .. }
-        | WindowEvent::DoubleTapGesture { .. } => Some(RunEvent::Activity),
+        | WindowEvent::Touch(_) => Some(RunEvent::Activity),
         _ => None,
     }
 }
@@ -153,10 +147,17 @@ mod tests {
         );
         assert_eq!(event_of(&WindowEvent::Focused(false), || Some(false)), None);
         assert_eq!(event_of(&WindowEvent::RedrawRequested, none), None);
-        for touch in [
-            WindowEvent::CursorEntered {
-                device_id: DeviceId::dummy(),
-            },
+        assert_eq!(
+            event_of(
+                &WindowEvent::CursorEntered {
+                    device_id: DeviceId::dummy(),
+                },
+                none,
+            ),
+            Some(RunEvent::Activity)
+        );
+        // Scroll wheel and gestures do not drive any still-backdrop scene state.
+        for ignored in [
             WindowEvent::MouseWheel {
                 device_id: DeviceId::dummy(),
                 delta: MouseScrollDelta::LineDelta(0.0, 1.0),
@@ -168,11 +169,7 @@ mod tests {
                 phase: TouchPhase::Moved,
             },
         ] {
-            assert_eq!(
-                event_of(&touch, none),
-                Some(RunEvent::Activity),
-                "{touch:?}"
-            );
+            assert_eq!(event_of(&ignored, none), None, "{ignored:?}");
         }
     }
 }

@@ -154,7 +154,7 @@ const MEDIA_POLL_EVERY: Duration = Duration::from_millis(250);
 
 /// How often the video controls' hide clock is checked (`Host::tick_video`): finer than a poll,
 /// as they go 250 ms after the pointer leaves.
-const VIDEO_TICK_EVERY: Duration = Duration::from_millis(100);
+pub(crate) const VIDEO_TICK_EVERY: Duration = Duration::from_millis(100);
 
 /// How often live tabs are asked whether they play sound (the speaker glyph;
 /// CEF has no audible callback, see `wubble_engine::media`).
@@ -2189,12 +2189,8 @@ fn run(
     let lifecycle = slint::Timer::default();
     let audible = slint::Timer::default();
     let media = slint::Timer::default();
-    let video_clock = slint::Timer::default();
     if host_timers {
-        video_clock.start(slint::TimerMode::Repeated, VIDEO_TICK_EVERY, || {
-            measure::count(measure::Count::VideoTick);
-            with_host(Host::tick_video)
-        });
+        with_host(Host::enable_video_clock);
         media.start(slint::TimerMode::Repeated, MEDIA_POLL_EVERY, || {
             measure::count(measure::Count::MediaPoll);
             with_host(Host::poll_media)

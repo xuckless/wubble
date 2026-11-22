@@ -48,6 +48,61 @@ fn intersect(a: &Rect, b: &Rect) -> bool {
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
 
+/// `r` expanded outward by `pad` on every side.
+fn expand(r: &Rect, pad: f32) -> Rect {
+    Rect::new(r.x - pad, r.y - pad, r.w + pad * 2.0, r.h + pad * 2.0)
+}
+
+/// Reach in CSS px of the deepest blur level (σ ≈ 44 CSS px: <2 % contribution past 90 px).
+pub const AMBIENCE_REACH: f32 = 96.0;
+
+/// Whether a page damage rectangle `damage` (window logical px) can visibly affect either an
+/// overlay glass surface (`layer.is_some()`) or the ambience in the under-page glass around any
+/// pane (`pages`). A damage rect deep inside a pane (more than [`AMBIENCE_REACH`] from every edge
+/// of its pane) and away from every overlay does not need to rebuild the page blur pyramid `P`.
+pub fn damage_reaches_glass(
+    damage: &Rect,
+    surfaces: &[GlassSurface],
+    pages: &[PageRect],
+    ambience: bool,
+) -> bool {
+    if damage.w <= 0.0 || damage.h <= 0.0 {
+        return false;
+    }
+    if surfaces
+        .iter()
+        .any(|s| s.layer.is_some() && intersect(damage, &expand(&rect_of(s), AMBIENCE_REACH)))
+    {
+        return true;
+    }
+    if !ambience || !surfaces.iter().any(|s| s.layer.is_none()) {
+        return false;
+    }
+    // Under-page glass is visible around each pane's edges (sidebar and gutters); damage inside
+    // a pane reaches it only when within `AMBIENCE_REACH` of any edge of that pane.
+    pages.iter().any(|p| {
+        if !intersect(damage, &p.rect) {
+            return false;
+        }
+        let inner_w = p.rect.w - 2.0 * AMBIENCE_REACH;
+        let inner_h = p.rect.h - 2.0 * AMBIENCE_REACH;
+        if inner_w <= 0.0 || inner_h <= 0.0 {
+            return true;
+        }
+        let inner = Rect::new(
+            p.rect.x + AMBIENCE_REACH,
+            p.rect.y + AMBIENCE_REACH,
+            inner_w,
+            inner_h,
+        );
+        // Contained strictly inside the deep interior => cannot reach any pane edge.
+        !(damage.x >= inner.x
+            && damage.y >= inner.y
+            && damage.x + damage.w <= inner.x + inner.w
+            && damage.y + damage.h <= inner.y + inner.h)
+    })
+}
+
 /// Whether `item` lies over any of the pages, by rectangle (a rounded corner counts).
 pub fn overlaps(item: &Rect, pages: &[PageRect]) -> bool {
     pages.iter().any(|p| intersect(item, &p.rect))
@@ -325,5 +380,43 @@ mod tests {
             }),
             Build
         );
+    }
+
+    #[test]
+    fn damage_deep_inside_a_pane_does_not_reach_glass() {
+        let pages = [page(240.0, 8.0, 1000.0, 780.0)];
+        let window_glass = [GlassSurface {
+            x: 0.0,
+            y: 0.0,
+            w: 1248.0,
+            h: 796.0,
+            layer: None,
+            ..Default::default()
+        }];
+        // Blinking cursor in the middle of the page: > 96 px from every pane edge
+        let middle = Rect::new(600.0, 350.0, 20.0, 20.0);
+        assert!(!damage_reaches_glass(&middle, &window_glass, &pages, true));
+        // Damage near the sidebar edge (within 96 px of x=240): reaches ambience
+        let near_edge = Rect::new(260.0, 350.0, 20.0, 20.0);
+        assert!(damage_reaches_glass(&near_edge, &window_glass, &pages, true));
+        assert!(!damage_reaches_glass(
+            &near_edge,
+            &window_glass,
+            &pages,
+            false
+        ));
+        // An overlay over the middle of the page: middle damage reaches it even with ambience off
+        let with_overlay = [
+            window_glass[0].clone(),
+            GlassSurface {
+                x: 550.0,
+                y: 300.0,
+                w: 120.0,
+                h: 80.0,
+                layer: Some(OverLayer::Card),
+                ..Default::default()
+            },
+        ];
+        assert!(damage_reaches_glass(&middle, &with_overlay, &pages, false));
     }
 }

@@ -119,14 +119,22 @@ impl Host {
         let processes: Vec<(u32, String)> =
             procs.iter().map(|p| (p.pid, p.label.clone())).collect();
         // a renderer reports the id it has in its sandbox's PID namespace: the system's id is
-        // what the meter knows
+        // what the meter knows. Precompute each process's namespace PID once (O(P) instead of
+        // O(T * P) `/proc/<pid>/status` reads).
         let all: Vec<u32> = procs.iter().map(|p| p.pid).collect();
+        let ns_pids: std::collections::HashMap<u32, Option<u32>> = all
+            .iter()
+            .copied()
+            .map(|p| (p, wubble_sysmem::namespace_pid(p)))
+            .collect();
         let pids: BTreeMap<TabId, u32> = self
             .tasks
             .pids
             .iter()
             .filter_map(|(tab, reported)| {
-                let pid = wubble_sysmem::host_pid(*reported, &all, wubble_sysmem::namespace_pid)?;
+                let pid = wubble_sysmem::host_pid(*reported, &all, |p| {
+                    ns_pids.get(&p).copied().flatten()
+                })?;
                 Some((*tab, pid))
             })
             .collect();

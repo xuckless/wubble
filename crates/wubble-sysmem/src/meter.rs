@@ -2,7 +2,7 @@
 //! dependency; nothing copied). Linux reports RSS, which counts shared pages in every process
 //! that maps them: the numbers are shown, never asserted.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use wubble_core::tasks::Sample;
@@ -252,13 +252,18 @@ pub fn descendants(root: u32, table: &[(u32, Option<u32>)]) -> Vec<u32> {
             children.entry(parent).or_default().push(pid);
         }
     }
+    let mut visited = BTreeSet::from([root]);
     let mut out = vec![root];
     let mut i = 0;
     while i < out.len() {
-        let mut kids = children.get(&out[i]).cloned().unwrap_or_default();
-        kids.sort_unstable();
-        kids.retain(|k| !out.contains(k));
-        out.extend(kids);
+        if let Some(mut kids) = children.remove(&out[i]) {
+            kids.sort_unstable();
+            for k in kids {
+                if visited.insert(k) {
+                    out.push(k);
+                }
+            }
+        }
         i += 1;
     }
     out
