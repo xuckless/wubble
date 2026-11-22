@@ -1,10 +1,10 @@
 //! Frame pacing inputs and frame statistics. Pure: no clock is read here.
 //!
-//! Default pacing: CEF paints on its own timer at `windowless_frame_rate`,
-//! which wubble sets to the display refresh rate. [`BeginFrames`] is the
-//! alternative, CEF's external begin frames driven by Slint's renders; it is
-//! opt-in (`--begin-frames`) because it measured worse here (TODO.md
-//! "Measured").
+//! Two pacings ([`Pacing`]): CEF paints on its own timer at `windowless_frame_rate`, which
+//! wubble sets to the display refresh rate, or the shell paces it with CEF's external begin
+//! frames, one per Slint render ([`BeginFrames`]). Which one a platform ships is
+//! [`PLATFORM_PACING`] (decisions.md "Frame pacing"); `--begin-frames` and `--no-begin-frames`
+//! override it for a run.
 
 use std::time::Duration;
 
@@ -39,6 +39,42 @@ pub fn view_frame_rate(display: u32, shown: bool) -> u32 {
     }
 }
 
+/// Who decides when CEF paints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pacing {
+    /// CEF's own timer, at the view's `windowless_frame_rate`.
+    CefTimer,
+    /// External begin frames from the shell: one per render of the window showing the page.
+    Shell,
+}
+
+impl Pacing {
+    /// How `--measure` names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CefTimer => "cef-timer",
+            Self::Shell => "shell",
+        }
+    }
+}
+
+/// The pacing each platform ships, by `std::env::consts::OS`. macOS: the shell's (the owner's
+/// Mac, measurements.md "frame runs in Low Power Mode": 58 to 59 page frames a second against
+/// 35 to 56 on CEF's timer); elsewhere CEF's timer, which measured as well or better on Linux.
+pub const PLATFORM_PACING: &[(&str, Pacing)] = &[
+    ("macos", Pacing::Shell),
+    ("linux", Pacing::CefTimer),
+    ("windows", Pacing::CefTimer),
+];
+
+/// The shipped pacing of platform `os` (CEF's timer for one the table does not name).
+pub fn platform_pacing(os: &str) -> Pacing {
+    PLATFORM_PACING
+        .iter()
+        .find_map(|&(name, pacing)| (name == os).then_some(pacing))
+        .unwrap_or(Pacing::CefTimer)
+}
+
 /// Unanswered begin frames after which the driver idles.
 pub const IDLE_AFTER: u8 = 4;
 
@@ -53,7 +89,7 @@ pub const IDLE_INTERVAL: Duration = Duration::from_millis(33);
 /// slow timer once the page stops answering.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BeginFrames {
-    /// No view to drive yet.
+    /// Not started: no render of the window and no wake yet.
     #[default]
     Off,
     /// Begin frames sent since the last frame arrived.
@@ -97,7 +133,11 @@ pub fn transition(
         }
     };
     match (state, event) {
-        (Off | Idle, Wake) | (Active { unanswered: 0 }, Vsync | Wake) => send(1),
+        // A window's first render starts its driver: its pages may have opened before the
+        // window existed, when no Wake could reach it.
+        (Off | Idle, Wake)
+        | (Off | Active { unanswered: 0 }, Vsync)
+        | (Active { unanswered: 0 }, Wake) => send(1),
         (Active { unanswered }, Timer) => send(unanswered.saturating_add(1)),
         (Idle, Timer) => (Idle, vec![Send, ArmTimer(IDLE_INTERVAL)]),
         (Active { .. } | Idle, FrameArrived) => (Active { unanswered: 0 }, vec![]),
@@ -182,6 +222,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_mac_ships_shell_pacing_and_the_rest_cefs_timer() {
+        assert_eq!(platform_pacing("macos"), Pacing::Shell);
+        assert_eq!(platform_pacing("linux"), Pacing::CefTimer);
+        assert_eq!(platform_pacing("windows"), Pacing::CefTimer);
+        assert_eq!(platform_pacing("freebsd"), Pacing::CefTimer);
+    }
+
+    #[test]
     fn frame_rate_follows_the_display() {
         assert_eq!(frame_rate_for(None), DEFAULT_FRAME_RATE);
         assert_eq!(frame_rate_for(Some(0)), DEFAULT_FRAME_RATE);
@@ -201,8 +249,8 @@ mod tests {
         let fast = vec![Send, ArmTimer(p)];
         let slow = vec![Send, ArmTimer(IDLE_INTERVAL)];
         let cases = [
-            // Nothing runs before the first view.
-            (Off, Vsync, Off, vec![]),
+            // Nothing runs before the window's first render or wake.
+            (Off, Vsync, Active { unanswered: 1 }, fast.clone()),
             (Off, Timer, Off, vec![]),
             (Off, FrameArrived, Off, vec![]),
             (Off, Wake, Active { unanswered: 1 }, fast.clone()),

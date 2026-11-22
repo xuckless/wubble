@@ -142,7 +142,7 @@ Open, to build or check:
 ## M0: Frame path
 - [ ] Spring spike: a per-frame spring (k 300 / c 15) with no missed frames while a page scrolls
 - [ ] Transparent window with compositor blur per platform (macOS vibrancy, KDE blur; GNOME stays opaque)
-- [ ] Re-measure `--begin-frames` on a 120 Hz display; on the Mac `--begin-frames`, `video`, `typing`, `resize`
+- [ ] Re-measure `--begin-frames` on a 120 Hz (and the 300 Hz) display on Linux: it was left off there in b2 for a worse video render interval at 240 Hz
 - [ ] Mac console hand checks: ProMotion, window, Cmd keys, IME, popups, Keychain, file chooser, media keys, fullscreen
 - [ ] macOS: CEF does not finish shutting down after a windowless run over ssh; find the commit and the cause
 - [ ] Windows CI green (then drop the job's `continue-on-error`); the D3D11 shared-handle port after
@@ -255,7 +255,7 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] macOS releases ship without symbols, so a `sample` of the app shows addresses: keep the unstripped binary or a dSYM from `package-macos.sh` beside the archive (as Linux's `.debug.tar.xz`), so the next Mac profile names what the main thread does during video
 - [ ] Mac frame drops, reproduced 2026-11-21 in Low Power Mode (measurements.md "frame runs in Low Power Mode"), in this order:
   - [ ] the start page: its frames redraw only the page card (Linux: dirty share 1.0 to 0.78, 56 to 20 items a frame), and it settles 2 s after the last input and then draws nothing (owner, 2026-11-21); measure both on the Mac
-  - [ ] page frames 35 to 56 a second with CEF on its own timer, 58 to 59 with `--begin-frames`: make shell-paced begin frames the default on macOS after a Linux check (parity, video and scroll smokes, `--measure` on both), or find why it was left off
+  - [ ] shell-paced begin frames are the macOS default now (decisions.md "Frame pacing"): on the Mac, `--measure scroll`, `video`, `canvas`, `typing`, `resize` and `idle` with and without `--no-begin-frames`, and a PiP window on a display of another rate (the begin-frame timer follows the first display's rate)
   - [ ] the message pump was woken 33 to 55 ms late after each run that spent CEF's 10 ms slice (fixed, measurements.md "Why the pump woke late"): repeat the frame runs on the Mac, with Low Power Mode on and off, both pacings
   - [ ] a still page is redrawn 8.6 times a second on the Mac (0 to 2 in 4 s on Linux): find what invalidates it
   - [ ] resize holds the main process at 87 % with 428 stale frames in 10 s; typing shows a key 53 ms later (p95 88 ms): measure again after the three above

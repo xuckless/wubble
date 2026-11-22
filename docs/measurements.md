@@ -563,6 +563,24 @@ pump gap 33.05 / 33.14; scroll 59.8 frames /s, 9 missed refreshes, pump gap p50 
 14.6 / 16.8); video 60.0, 0 missed (before: 60.0, 1). The same within this machine's noise: Linux runs seldom spend
 the slice.
 
+## Shell pacing against CEF's timer, Linux (2026-11-21)
+
+Headless 1360x880@1, 60 Hz, RTX 5060, debug build of main (2372843), 10 s each (idle 4 s), one run each, load about 3.
+Linux numbers; why macOS now ships the shell's pacing is the Mac table above.
+
+| run | page frames /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | pump runs /s |
+|---|---|---|---|---|---|
+| scroll, CEF's timer | 60.0 | 3 | 16.67 / 17.67 / 34.3 | 14.6 / 16.8 | 112 |
+| scroll, `--begin-frames` | 59.9 | 0 | 16.65 / 17.37 / 21.4 | 0.4 / 16.0 | 230 |
+| video, CEF's timer | 60.0 | 1 | 16.65 / 17.50 / 32.4 | 15.7 / 16.8 | 117 |
+| video, `--begin-frames` | 60.0 | 0 | 16.66 / 17.43 / 22.3 | 15.9 / 17.2 | 105 |
+| idle, CEF's timer | 0 | 0 renders | | 33.0 / 33.2 | 33 |
+| idle, `--begin-frames` | 0 | 0 renders | | 33.0 / 33.1 | 47 |
+
+At 60 Hz the shell's pacing is as good or a little better on Linux (fewer missed refreshes, a shorter worst frame),
+at the cost of twice the pump runs in a scroll and a begin frame every 33 ms on a still page; the Linux default stays
+CEF's timer for the owner to decide (it was left off for a worse video render interval at 240 Hz, the first table).
+
 ## The start page's damage (Linux, 2026-11-21)
 
 `--measure idle --seconds 10 --measure-page wubble://start` under `scripts/headless.sh` (1360x880@1, 60 Hz, RTX

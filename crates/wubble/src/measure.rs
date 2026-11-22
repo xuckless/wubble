@@ -1372,9 +1372,10 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
         |m| format!("{:.3} Hz", f64::from(m) / 1000.0),
     );
     let header = format!(
-        "measure: scenario={} seconds={} refresh={refresh} window={} adapter={}\nmeasure: loadavg {}\n",
+        "measure: scenario={} seconds={} pacing={} refresh={refresh} window={} adapter={}\nmeasure: loadavg {}\n",
         session.scenario.name(),
         session.seconds,
+        crate::pacing().name(),
         session.window,
         adapter,
         load.trim()

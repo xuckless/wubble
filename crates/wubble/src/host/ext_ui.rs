@@ -395,7 +395,7 @@ impl Host {
             url: url.to_owned(),
             layout: self.popup_layout(&window),
             frame_rate,
-            begin_frames: self.pace.is_some(),
+            begin_frames: self.begin_frames(),
             gpu: self.w.presenters[0].context().clone(),
             container,
         };
