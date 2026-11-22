@@ -21,7 +21,7 @@
 //! until shutdown begins ([`Profiles::release`]); browsers hold their own
 //! reference meanwhile, so it outlives the last one to close.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -98,7 +98,9 @@ pub(crate) fn sweep(root: &Path) {
     }
 }
 
-/// Marks `container`'s storage for deletion at the next start.
+/// Marks `container`'s storage for deletion at the next start. Never called
+/// for an ephemeral container ([`Profiles::set_ephemeral`]): it has no
+/// directory, and a tombstone would name a disk container of that id.
 pub(crate) fn forget(root: &Path, container: ContainerId) {
     let marker = tombstone(root, container);
     let written = marker
@@ -297,6 +299,12 @@ pub(crate) fn copy_cookies(
 pub(crate) struct Profiles {
     root: PathBuf,
     open: BTreeMap<ContainerId, SharedProfile>,
+    /// The containers kept in memory only (private windows',
+    /// `wubble_core::space::Container::ephemeral`): opened without a directory,
+    /// which CEF's Chrome runtime makes an off-the-record profile
+    /// (`ChromeBrowserContext`: an empty `cache_path` is
+    /// `Profile::GetPrimaryOTRProfile`), and never given a tombstone.
+    ephemeral: BTreeSet<ContainerId>,
 }
 
 impl Profiles {
@@ -304,7 +312,20 @@ impl Profiles {
         Self {
             root,
             open: BTreeMap::new(),
+            ephemeral: BTreeSet::new(),
         }
+    }
+
+    /// `container` is kept in memory only: its context, when [`Self::get`]
+    /// first opens it, has no directory. Set before its first view opens; a
+    /// context already open keeps what it was opened as.
+    pub(crate) fn set_ephemeral(&mut self, container: ContainerId) {
+        self.ephemeral.insert(container);
+    }
+
+    /// Whether `container` is kept in memory only ([`Self::set_ephemeral`]).
+    pub(crate) fn is_ephemeral(&self, container: ContainerId) -> bool {
+        self.ephemeral.contains(&container)
     }
 
     /// `container`'s context, created and brought up on first use (CEF is
@@ -317,8 +338,9 @@ impl Profiles {
         if let Some(profile) = self.open.get(&container) {
             return Ok(profile.clone());
         }
-        let dir = container_dir(&self.root, container);
-        let profile = SharedProfile::new(runtime, Some(dir))
+        // an ephemeral container has no directory: CEF keeps it in memory
+        let dir = (!self.is_ephemeral(container)).then(|| container_dir(&self.root, container));
+        let profile = SharedProfile::new(runtime, dir)
             .map_err(|e| EngineError::View(format!("container {}: {e}", container.0)))?;
         let mut runs = 0;
         while !profile.is_ready() {
@@ -351,9 +373,12 @@ impl Profiles {
         &self.root
     }
 
-    /// Drops `container`'s context, so a later use opens it afresh.
+    /// Drops `container`'s context, so a later use opens it afresh. An
+    /// ephemeral one is forgotten as such: its id is never reused, and CEF
+    /// destroys the in-memory profile when its last browser has gone.
     pub(crate) fn close(&mut self, container: ContainerId) {
         self.open.remove(&container);
+        self.ephemeral.remove(&container);
     }
 }
 

@@ -1106,12 +1106,26 @@ impl Engine {
     /// `container` was deleted (its views are closing): its cookies go now,
     /// the rest of its storage at the next start, before CEF opens it (its
     /// files may still be open now).
+    /// An ephemeral container (a private window's, [`Self::set_ephemeral`])
+    /// has nothing on disk: its cookies go now and CEF drops the rest of the
+    /// in-memory profile with its last browser.
     pub fn forget_container(&mut self, container: ContainerId) {
         if let Some(profile) = self.profiles.open(container) {
             storage::clear(&profile.request_context(), container);
         }
+        let ephemeral = self.profiles.is_ephemeral(container);
         self.profiles.close(container);
-        storage::forget(self.profiles.root(), container);
+        if !ephemeral {
+            storage::forget(self.profiles.root(), container);
+        }
+    }
+
+    /// `container` is kept in memory only (a private window's,
+    /// `wubble_core::space::Container::ephemeral`): its context opens without a
+    /// directory, an off-the-record profile under CEF's Chrome runtime. The
+    /// host says so before the container's first view opens.
+    pub fn set_ephemeral(&mut self, container: ContainerId) {
+        self.profiles.set_ephemeral(container);
     }
 
     /// CEF's cache directory (the profile's, or the per-process smoke one).

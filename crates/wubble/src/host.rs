@@ -1055,18 +1055,23 @@ impl Host {
                 let opened = match self.adopted(&url) {
                     Some(id) => self.adopt_view(id, layout, frame_rate),
                     None => {
+                        // The tab's own cookies, storage and cache: its container's.
+                        let container = self
+                            .model
+                            .tabs
+                            .get(&tab)
+                            .map_or(ContainerId::DEFAULT, |t| t.container);
+                        // a private window's container is kept in memory only
+                        if self.model.is_ephemeral(container) {
+                            self.engine.set_ephemeral(container);
+                        }
                         let config = ViewConfig {
                             url: url.clone(),
                             layout,
                             frame_rate,
                             begin_frames: self.begin_frames(),
                             gpu: self.w.presenters[0].context().clone(),
-                            // The tab's own cookies, storage and cache: its container's.
-                            container: self
-                                .model
-                                .tabs
-                                .get(&tab)
-                                .map_or(ContainerId::DEFAULT, |t| t.container),
+                            container,
                         };
                         self.engine.open_view(config)
                     }
