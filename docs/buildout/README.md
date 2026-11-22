@@ -23,7 +23,7 @@ one by one. Copy open source first, build only what is left. Engine patches are 
 
 | Batch | Day | State |
 |---|---|---|
-| 1 | 2026-11-22 | running |
+| 1 | 2026-11-22 | done: 15 written, 1 partial; all 16 compile; no engine patch needed; nothing run or tested. Reports: [results-01.md](results-01.md) |
 | 2 | | waiting |
 | 3 | | waiting |
 | 4 | | waiting |
@@ -45,22 +45,22 @@ one by one. Copy open source first, build only what is left. Engine patches are 
 
 | Batch | Key | Feature | Area | Engine patch | State |
 |---|---|---|---|---|---|
-| 1 | `private-windows` | Private (incognito) windows with an in-memory container and a visible mark | tabs-windows |  | |
-| 1 | `multiple-profiles` | Multiple profiles, guest profile and a profile switcher | tabs-windows |  | |
-| 1 | `nav-history-capture` | Capture each tab's back/forward entries, and the back button history menu | tabs-windows |  | |
-| 1 | `recently-closed-full` | Recently closed windows, folders and Spaces, and a recently-closed list UI | tabs-windows |  | |
-| 1 | `startup-home-settings` | Startup, home page and quit settings | tabs-windows |  | |
-| 1 | `window-state-restore` | Window state in the session: maximized, fullscreen, display and popup windows | tabs-windows |  | |
-| 1 | `tear-off-fidelity` | Tab tear-off: new window at the drop point, drop into a window at a row | tabs-windows |  | |
-| 1 | `wayland-tab-drag` | Wayland: drag tabs between windows and live tear-off via the data device | tabs-windows |  | |
-| 1 | `tab-groups-parity` | Tab groups parity for folders: colour, new tab in group, move, save, keyboard | tabs-windows |  | |
-| 1 | `multi-select-tabs` | Select several tabs (Ctrl/Shift+click) and act on the selection | tabs-windows |  | |
-| 1 | `tab-search` | Tab search (Ctrl+Shift+A): all open and recently closed tabs in one list | tabs-windows |  | |
-| 1 | `site-sound-tab-menu` | Mute site, and the Chrome tab and link menu rows still missing | tabs-windows |  | |
-| 1 | `chrome-shortcut-gaps` | Chrome keyboard shortcuts wubble does not bind yet | tabs-windows |  | |
-| 1 | `omni-inline-autocomplete` | Command bar: inline autocomplete and Chrome's omnibox keys | navigation |  | |
-| 1 | `omni-calculator-units` | Command bar: local calculator and unit conversion answers | navigation |  | |
-| 1 | `search-engines-keywords` | Search engines: more built-ins, custom engines with keywords, management in Settings | navigation |  | |
+| 1 | `private-windows` | Private (incognito) windows with an in-memory container and a visible mark | tabs-windows |  | written, compiles, 10 commits |
+| 1 | `multiple-profiles` | Multiple profiles, guest profile and a profile switcher | tabs-windows |  | written, compiles, 4 commits |
+| 1 | `nav-history-capture` | Capture each tab's back/forward entries, and the back button history menu | tabs-windows |  | written, compiles, 5 commits |
+| 1 | `recently-closed-full` | Recently closed windows, folders and Spaces, and a recently-closed list UI | tabs-windows |  | written, compiles, 3 commits |
+| 1 | `startup-home-settings` | Startup, home page and quit settings | tabs-windows |  | written, compiles, 3 commits |
+| 1 | `window-state-restore` | Window state in the session: maximized, fullscreen, display and popup windows | tabs-windows |  | written, compiles, 3 commits |
+| 1 | `tear-off-fidelity` | Tab tear-off: new window at the drop point, drop into a window at a row | tabs-windows |  | written, compiles, 2 commits |
+| 1 | `wayland-tab-drag` | Wayland: drag tabs between windows and live tear-off via the data device | tabs-windows |  | written, compiles, 2 commits |
+| 1 | `tab-groups-parity` | Tab groups parity for folders: colour, new tab in group, move, save, keyboard | tabs-windows |  | partial, compiles, 6 commits |
+| 1 | `multi-select-tabs` | Select several tabs (Ctrl/Shift+click) and act on the selection | tabs-windows |  | written, compiles, 2 commits |
+| 1 | `tab-search` | Tab search (Ctrl+Shift+A): all open and recently closed tabs in one list | tabs-windows |  | written, compiles, 2 commits |
+| 1 | `site-sound-tab-menu` | Mute site, and the Chrome tab and link menu rows still missing | tabs-windows |  | written, compiles, 1 commits |
+| 1 | `chrome-shortcut-gaps` | Chrome keyboard shortcuts wubble does not bind yet | tabs-windows |  | written, compiles, 3 commits |
+| 1 | `omni-inline-autocomplete` | Command bar: inline autocomplete and Chrome's omnibox keys | navigation |  | written, compiles, 2 commits |
+| 1 | `omni-calculator-units` | Command bar: local calculator and unit conversion answers | navigation |  | written, compiles, 2 commits |
+| 1 | `search-engines-keywords` | Search engines: more built-ins, custom engines with keywords, management in Settings | navigation |  | written, compiles, 2 commits |
 | 2 | `x11-xdnd` | X11: page drags out to other apps and drops in of links, HTML and text (XDND) | page-interaction |  | |
 | 2 | `cross-window-page-drag` | Page drags between wubble windows, and an OS drag coming back in | page-interaction |  | |
 | 2 | `drag-custom-types-out` | An HTML draggable's custom dataTransfer types (and DownloadURL) reach other apps | page-interaction |  | |
