@@ -79,7 +79,7 @@ The change needed, from the author of feature ${f.key} (${f.title}):
 
 ${r.engine_patch}
 
-Read the real Chromium and CEF sources involved, write the change in the checkout, generate the patch file(s) as ${wt(f)}/patches/chromium/${50 + i}-<src|cef>-${f.key}.patch (number ${50 + i}; use ${50 + i}a/${50 + i}b if you need both a cef and a src patch), with the header, add rows to the table in ${wt(f)}/patches/README.md marked "Not yet built into any engine", check with git apply --check that each applies to the checkout as you found it, restore the checkout, and commit the patch files and README on feat/${f.key}. Make sure the marker or table entry the wubble side looks for is the one the patch exports.
+Read the real Chromium and CEF sources involved, write the change in the checkout, generate the patch file(s) as ${wt(f)}/patches/chromium/${50 + (f.n === undefined ? i : f.n)}-<src|cef>-${f.key}.patch (number ${50 + (f.n === undefined ? i : f.n)}; use ${50 + (f.n === undefined ? i : f.n)}a/${50 + (f.n === undefined ? i : f.n)}b if you need both a cef and a src patch), with the header, add rows to the table in ${wt(f)}/patches/README.md marked "Not yet built into any engine", check with git apply --check that each applies to the checkout as you found it, restore the checkout, and commit the patch files and README on feat/${f.key}. Make sure the marker or table entry the wubble side looks for is the one the patch exports.
 Return: the patch file names, what they change, and the before/after status counts of the checkout.`,
       { label: `patch:${f.key}`, phase: 'Engine patches', model: 'opus', effort: 'medium' })
       .then(p => ({ ...r, patch: p }))),
