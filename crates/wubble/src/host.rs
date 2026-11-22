@@ -44,6 +44,7 @@ mod pages;
 mod panes;
 mod parity;
 mod pinch;
+mod popups;
 mod preview;
 mod print;
 mod settings;
@@ -92,7 +93,7 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
-use wubble_core::site::{Permission, SitePermissions};
+use wubble_core::site::SitePermissions;
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
@@ -307,6 +308,8 @@ pub struct Checks {
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
+    /// `--smoke popup` (`host/popups.rs`).
+    pub popup_smoke: Option<crate::popup_smoke::PopupSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
     /// `--smoke media=probe`.
     pub media_probe: Option<crate::media_smoke::Probe>,
@@ -395,6 +398,7 @@ pub struct Host {
     /// `--smoke parity` passed: the known gaps that failed as expected.
     pub parity_passed: Option<Vec<&'static str>>,
     pub windows_passed: bool,
+    pub popup_passed: bool,
     pub settings_passed: bool,
     pub start_passed: bool,
     pub pages_passed: bool,
@@ -456,6 +460,9 @@ pub struct Host {
     /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
     /// until the page commits another URL; the address pill offers them.
     held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
+    /// A pop-up browser Chromium created, with its URL, while the command placing it runs: the
+    /// tab it creates shows this view instead of a new one (`host/popups.rs`).
+    adopting: Option<(String, ViewId)>,
     /// Where the pointer was at the tab drag's last event, window px.
     drag_at: wubble_core::tabdrag::Point,
     /// The window the drag started in: its pointer drives the drag, its ghost shows it.
@@ -670,6 +677,7 @@ impl Host {
             pinch_asked: pinch::Asked::default(),
             parity_passed: None,
             windows_passed: false,
+            popup_passed: false,
             settings_passed: false,
             start_passed: false,
             pages_passed: false,
@@ -709,6 +717,7 @@ impl Host {
             failure: None,
             surfaces: BTreeMap::new(),
             held_popups: BTreeMap::new(),
+            adopting: None,
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
             drag_window: WindowId(0),
             drag_timer: slint::Timer::default(),
@@ -1042,26 +1051,35 @@ impl Host {
                 if self.views.contains_key(&tab) {
                     return None;
                 }
-                let config = ViewConfig {
-                    url: url.clone(),
-                    layout: self.pane_layout(&window, tab),
-                    frame_rate,
-                    begin_frames: self.begin_frames(),
-                    gpu: self.w.presenters[0].context().clone(),
-                    // The tab's own cookies, storage and cache: its container's.
-                    container: self
-                        .model
-                        .tabs
-                        .get(&tab)
-                        .map_or(ContainerId::DEFAULT, |t| t.container),
+                let layout = self.pane_layout(&window, tab);
+                let opened = match self.adopted(&url) {
+                    Some(id) => self.adopt_view(id, layout, frame_rate),
+                    None => {
+                        let config = ViewConfig {
+                            url: url.clone(),
+                            layout,
+                            frame_rate,
+                            begin_frames: self.begin_frames(),
+                            gpu: self.w.presenters[0].context().clone(),
+                            // The tab's own cookies, storage and cache: its container's.
+                            container: self
+                                .model
+                                .tabs
+                                .get(&tab)
+                                .map_or(ContainerId::DEFAULT, |t| t.container),
+                        };
+                        self.engine.open_view(config)
+                    }
                 };
-                match self.engine.open_view(config) {
+                match opened {
                     Ok(id) => {
                         measure::mark(measure::Stage::FirstView);
                         self.views.insert(tab, id);
-                        // Page drags run inside the window (`drag.rs`).
+                        // Page drags run inside the window (`drag.rs`); a window its page opens
+                        // is a browser of its own (`host/popups.rs`).
                         if let Some(view) = self.engine.view(id) {
                             view.set_drag_source(true);
+                            view.allow_popup_browsers(true);
                         }
                         self.builtins_view_opened(tab, &url);
                         self.ax_view_opened(tab);
@@ -1408,6 +1426,7 @@ impl Host {
         self.smoke_step(SmokeInput::Worked);
         self.tabs_smoke_step();
         self.windows_smoke_step();
+        self.popup_smoke_step();
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
@@ -1695,6 +1714,7 @@ impl Host {
                 self.dispatch(Command::TitleChanged { tab, title });
             }
             WebEvent::PopupRequested(request) => self.popup_requested(tab, request),
+            WebEvent::PopupOpened { request, view } => self.place_opened(tab, request, Some(view)),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1725,54 +1745,6 @@ impl Host {
     }
 
     // ----- pop-ups
-
-    /// A page's `window.open` or `target=_blank`: what the policy table says (a tab, a Popup
-    /// window, or held back for the address pill).
-    fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
-        use wubble_core::popup::{self, Outcome};
-        // An agent session's page opens nothing off the web (wubble would load it as the
-        // browser, which the page itself may not).
-        if self.agent_popup_refused(tab, &request.url) {
-            return;
-        }
-        // A `target=_blank` mailto: link opens the app and no tab, as in Chromium.
-        if wubble_engine::page::is_external(&request.url) {
-            self.external_link(tab, request.url, Some(request.gesture));
-            return;
-        }
-        let site = self.site_of(tab);
-        let remembered = site
-            .as_deref()
-            .and_then(|o| self.site_permissions.get(o, Permission::Popups));
-        let glance = self.glance_enabled;
-        match popup::decide(request.opened, request.gesture, remembered, glance) {
-            Outcome::Tab { foreground: true } => self.dispatch(new_tab(request.url, Some(tab))),
-            Outcome::Glance => match self.model.window_of(tab) {
-                Some(window) => self.dispatch(Command::OpenGlance {
-                    window,
-                    opener: tab,
-                    url: request.url,
-                }),
-                None => self.dispatch(new_tab(request.url, Some(tab))),
-            },
-            Outcome::Tab { foreground: false } => self.dispatch(Command::BackgroundTab {
-                url: request.url,
-                opener: tab,
-            }),
-            Outcome::PopupWindow => self.dispatch(Command::OpenPopupWindow {
-                url: request.url,
-                opener: tab,
-                size: request.size,
-            }),
-            Outcome::Blocked => {
-                let held = self.held_popups.entry(tab).or_default();
-                if held.len() < MAX_HELD_POPUPS {
-                    held.push(request);
-                }
-                self.after_change();
-            }
-        }
-    }
 
     /// Opens what `tab`'s page asked for and the policy held back, as if it had been clicked.
     fn open_held_popups(&mut self, tab: TabId) {

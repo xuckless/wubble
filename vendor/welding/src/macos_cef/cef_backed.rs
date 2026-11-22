@@ -437,38 +437,74 @@ impl WeldClient {
 
 // ── Life-span handler: popup policy ───────────────────────────────────────
 
+/// wubble change 57: what the life-span handler needs for pop-up browsers:
+/// the host's factory, the device a new browser's frames are copied onto,
+/// the browser's own pop-ups waiting for the host, and (a pop-up's handler)
+/// its handover to its opener, taken in `OnAfterCreated`.
+pub(super) struct Popups {
+    pub(super) factory: Option<crate::opened::PopupFactory>,
+    pub(super) gpu: HostWgpuContext,
+    pub(super) children: Arc<crate::opened::Children<MacosCefProducer>>,
+    pub(super) adoption: Mutex<Option<(crate::opened::Adoption<MacosCefProducer>, super::Parts)>>,
+}
+
 cef::wrap_life_span_handler! {
     pub(super) struct WeldLifeSpanHandler {
         events: Arc<WebEventQueue>,
         scripts: Arc<crate::app::PendingScripts>,
         cookies: Arc<crate::cookies::CookieJar>,
         requests: Arc<crate::handlers::Requests>,
+        popups: Arc<Popups>,
     }
 
     impl LifeSpanHandler {
         // Popup browsers are denied and reported. welding renders one surface
         // per producer, so a second browser here would be invisible to the
         // host. The host decides what to do with the URL.
+        // wubble change 57: unless the host's factory gives it a config: then
+        // CEF creates it as a windowless browser with its own client (its
+        // producer waits for the host, `on_after_created`).
         #[allow(clippy::too_many_arguments)]
         fn on_before_popup(
             &self,
             _browser: Option<&mut cef::Browser>,
             _frame: Option<&mut cef::Frame>,
-            _popup_id: ::std::os::raw::c_int,
+            popup_id: ::std::os::raw::c_int,
             target_url: Option<&cef::CefString>,
-            _target_frame_name: Option<&cef::CefString>,
+            target_frame_name: Option<&cef::CefString>,
             target_disposition: cef::WindowOpenDisposition,
             user_gesture: ::std::os::raw::c_int,
             popup_features: Option<&cef::PopupFeatures>,
-            _window_info: Option<&mut cef::WindowInfo>,
-            _client: Option<&mut Option<cef::Client>>,
-            _settings: Option<&mut cef::BrowserSettings>,
+            window_info: Option<&mut cef::WindowInfo>,
+            client: Option<&mut Option<cef::Client>>,
+            settings: Option<&mut cef::BrowserSettings>,
             _extra_info: Option<&mut Option<cef::DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            let url = target_url.map(|u| u.to_string()).unwrap_or_default();
-            push_navigation(
-                &self.events,
+            let opened = crate::opened::opened_window(
+                popup_id,
+                target_url,
+                target_frame_name,
+                target_disposition,
+                user_gesture != 0,
+                popup_features,
+            );
+            if let (Some(factory), Some(window_info), Some(client), Some(settings)) =
+                (&self.popups.factory, window_info, client, settings)
+                && let Some(config) = factory.config(&opened)
+            {
+                crate::opened::make_windowless(&config, window_info, settings);
+                let adoption = crate::opened::Adoption {
+                    children: self.popups.children.clone(),
+                    events: self.events.clone(),
+                    opened,
+                };
+                let (_, child) = MacosCefProducer::client(&config, &self.popups.gpu, Some(adoption));
+                *client = Some(child);
+                return 0; // CEF creates it
+            }
+            let url = opened.url;
+            push_navigation(&self.events,
                 // wubble change 33: the disposition and size go with it.
                 crate::handlers::new_window_requested(
                     url,
@@ -480,12 +516,40 @@ cef::wrap_life_span_handler! {
             1 // cancel popup creation
         }
 
+        // wubble change 57: a pop-up given a config was not created after all.
+        fn on_before_popup_aborted(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            popup_id: ::std::os::raw::c_int,
+        ) {
+            push_navigation(&self.events,
+                crate::surface::NavigationEvent::PopupAborted { popup_id });
+        }
+
+        // wubble change 57: a pop-up's browser exists; its producer waits in
+        // the opener's children, or is closed when the opener is gone.
+        fn on_after_created(&self, browser: Option<&mut cef::Browser>) {
+            let Some(browser) = browser else { return };
+            let taken = self.popups.adoption.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            let Some((adoption, parts)) = taken else { return };
+            let producer = MacosCefProducer::with_browser(parts, browser.clone());
+            match adoption.children.put(adoption.opened.popup_id, producer) {
+                Ok(()) => push_navigation(&adoption.events,
+                    crate::surface::NavigationEvent::PopupBrowserCreated(adoption.opened)),
+                Err(mut orphan) => { let _ = orphan.close(); }
+            }
+        }
+
         fn on_before_close(&self, _browser: Option<&mut cef::Browser>) {
             log::debug!("CEF on_before_close");
             self.scripts.fail_all("browser closed");
             self.cookies.fail_active("browser closed");
             // wubble change: nothing waits on a host answer past the close.
             self.requests.drain_default();
+            // wubble change 57: pop-ups nobody took go with their opener.
+            for mut child in self.popups.children.close() {
+                let _ = child.close();
+            }
             // wubble change: tell the host, so it need not poll for the close.
             self.events.push(CefSurfaceEvent::BrowserClosed);
         }
@@ -498,8 +562,9 @@ impl WeldLifeSpanHandler {
         scripts: Arc<crate::app::PendingScripts>,
         cookies: Arc<crate::cookies::CookieJar>,
         requests: Arc<crate::handlers::Requests>,
+        popups: Popups,
     ) -> cef::LifeSpanHandler {
-        Self::new(events, scripts, cookies, requests)
+        Self::new(events, scripts, cookies, requests, Arc::new(popups))
     }
 }
 

@@ -81,7 +81,7 @@ pub(crate) fn new_window_requested(
     }
 }
 
-fn new_window_kind(d: cef::WindowOpenDisposition) -> crate::surface::NewWindowKind {
+pub(crate) fn new_window_kind(d: cef::WindowOpenDisposition) -> crate::surface::NewWindowKind {
     use crate::surface::NewWindowKind as K;
     use cef::WindowOpenDisposition as D;
     match d {
@@ -93,7 +93,7 @@ fn new_window_kind(d: cef::WindowOpenDisposition) -> crate::surface::NewWindowKi
     }
 }
 
-fn popup_size(f: &cef::PopupFeatures) -> Option<(u32, u32)> {
+pub(crate) fn popup_size(f: &cef::PopupFeatures) -> Option<(u32, u32)> {
     if f.width_set == 0 || f.height_set == 0 {
         return None;
     }

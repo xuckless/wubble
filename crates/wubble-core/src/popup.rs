@@ -79,6 +79,18 @@ pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: boo
     }
 }
 
+/// Whether the request becomes a browser Chromium creates beside its opener (a real pop-up:
+/// `window.opener`, the handle `window.open` returns, named targets, `postMessage` and
+/// `window.close()` all work), which the host then places: what the table opens at once, a tab
+/// or a Popup window. A peek, and anything held back, is opened by the host itself later, as a
+/// fresh page with no opener (Chromium's blocked pop-ups too reopen without one).
+pub fn creates_browser(opened: Opened, gesture: bool) -> bool {
+    matches!(
+        decide(opened, gesture, None, true),
+        Outcome::Tab { .. } | Outcome::PopupWindow
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +133,20 @@ mod tests {
         );
         for o in ALL {
             assert_eq!(decide(o, false, None, true), Outcome::Blocked, "{o:?}");
+        }
+    }
+
+    #[test]
+    fn only_what_opens_at_once_is_a_browser() {
+        assert!(creates_browser(Opened::PopupWindow, true));
+        assert!(creates_browser(Opened::ForegroundTab, true));
+        assert!(creates_browser(Opened::BackgroundTab, true));
+        assert!(!creates_browser(Opened::Window, true), "a peek");
+        for o in ALL {
+            assert!(
+                !creates_browser(o, false),
+                "{o:?} without a gesture is held"
+            );
         }
     }
 

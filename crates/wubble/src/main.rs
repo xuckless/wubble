@@ -47,6 +47,7 @@ mod perform;
 mod persist;
 mod pinch_smoke;
 mod pixels;
+mod popup_smoke;
 mod profile;
 mod prompt;
 mod quit_smoke;
@@ -398,6 +399,7 @@ fn main() -> ExitCode {
                 Smoke::Nav => Mode::Nav,
                 Smoke::Tabs => Mode::Tabs,
                 Smoke::Windows => Mode::Windows,
+                Smoke::Popup => Mode::Popup,
                 Smoke::Split => Mode::Split,
                 Smoke::Pinch => Mode::Pinch,
                 Smoke::Page => Mode::Page,
@@ -902,6 +904,8 @@ struct Outcome {
     parity_passed: Option<Vec<&'static str>>,
     /// `--smoke windows` reached its end.
     windows_passed: bool,
+    /// `--smoke popup` reached its end.
+    popup_passed: bool,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     /// `--smoke start` reached its end.
@@ -952,6 +956,8 @@ enum Mode {
     Pinch,
     /// `--smoke windows`.
     Windows,
+    /// `--smoke popup`.
+    Popup,
     /// `--smoke page`.
     Page,
     /// `--smoke parity`.
@@ -1631,7 +1637,13 @@ fn run(
     );
     let autofill_port = (matches!(
         mode,
-        Mode::Autofill { .. } | Mode::Block | Mode::Parity | Mode::Dnd | Mode::Mcp | Mode::Pinch
+        Mode::Autofill { .. }
+            | Mode::Block
+            | Mode::Parity
+            | Mode::Dnd
+            | Mode::Mcp
+            | Mode::Pinch
+            | Mode::Popup
     ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
@@ -1737,6 +1749,7 @@ fn run(
         gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
+        popup_smoke: None,
         media_smoke: None,
         media_probe: None,
         builtin_smoke: None,
@@ -1812,6 +1825,13 @@ fn run(
             Some(bundled()),
             Checks {
                 windows_smoke: Some(windows_smoke::WindowsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Popup => (
+            autofill_port.map(popup_smoke::opener_url),
+            Checks {
+                popup_smoke: Some(popup_smoke::PopupSmoke::default()),
                 ..none
             },
         ),
@@ -2273,6 +2293,7 @@ fn run(
         pinch_passed: host.pinch_passed.take(),
         parity_passed: host.parity_passed,
         windows_passed: host.windows_passed,
+        popup_passed: host.popup_passed,
         settings_passed: host.settings_passed,
         start_passed: host.start_passed,
         pages_passed: host.pages_passed,

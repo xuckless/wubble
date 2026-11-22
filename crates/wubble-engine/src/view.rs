@@ -257,6 +257,35 @@ pub struct View {
     devtools_client: cef::Client,
     /// Where the page may go ([`View::set_navigation_rule`]), read by welding's guard.
     rule: NavigationRule,
+    /// Which windows the page opens become CEF browsers ([`View::allow_popup_browsers`]).
+    popups: Popups,
+    /// Pop-up browsers adopted as views, until the engine takes them ([`View::take_opened`]).
+    opened: Vec<(View, crate::nav::PopupRequest)>,
+}
+
+/// A view's pop-up switch and, by CEF's pop-up id, the hooks its factory made for each pop-up
+/// CEF is creating: shared with its `welding::PopupFactory`, read on CEF's UI thread.
+#[derive(Clone, Default)]
+struct Popups {
+    on: Arc<std::sync::atomic::AtomicBool>,
+    pending: Arc<std::sync::Mutex<HashMap<i32, Pending>>>,
+}
+
+/// A pop-up CEF is creating: its navigation rule and pop-up switch, and its opener's layout
+/// when the factory answered.
+struct Pending {
+    rule: NavigationRule,
+    popups: Popups,
+    layout: Layout,
+}
+
+/// What a view's pop-ups inherit from it, for its `welding::PopupFactory`.
+#[derive(Clone)]
+struct PopupHooks {
+    layout: Layout,
+    pacing: (u32, bool),
+    request_filter: Option<welding::RequestFilter>,
+    response_observer: Option<welding::ResponseObserver>,
 }
 
 /// Where a view's page may go: a host's rule over a top-level navigation's URL, or none
@@ -302,32 +331,44 @@ impl View {
         devtools_client: cef::Client,
     ) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let request_filter = filter.clone().map(crate::filter::request_filter);
-        let response_observer = observer.map(crate::filter::response_observer);
-        let rule: NavigationRule = Arc::default();
-        let read = Arc::clone(&rule);
-        let guard = welding::NavigationGuard::new(move |url| {
-            let rule = read.read().unwrap_or_else(|e| e.into_inner());
-            rule.as_ref().is_none_or(|allows| allows(url))
-        });
-        let producer = new_producer(
-            runtime,
-            config.url,
+        let hooks = PopupHooks {
             layout,
-            (config.frame_rate, config.begin_frames),
-            &config.gpu,
-            profile,
-            (request_filter, response_observer, guard),
-        )?;
-        let mut producer = producer;
+            pacing: (config.frame_rate, config.begin_frames),
+            request_filter: filter.clone().map(crate::filter::request_filter),
+            response_observer: observer.map(crate::filter::response_observer),
+        };
+        let rule: NavigationRule = Arc::default();
+        let popups = Popups::default();
+        let mut surface =
+            surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &popups));
+        surface.initial_url = config.url;
+        surface.profile = Some(profile);
+        let mut producer = new_producer(runtime, surface, &config.gpu)?;
         if let Some(area) = layout.area {
             // The creation config has no screen area; CEF reads it later.
             if let Err(e) = producer.set_screen_area(area.to_welding()) {
                 eprintln!("wubble-engine: initial screen area failed: {e}");
             }
         }
+        Ok(Self::with_producer(
+            producer,
+            layout,
+            filter,
+            (rule, popups),
+            devtools_client,
+        ))
+    }
+
+    /// A view of `producer`'s browser: one the engine created, or a pop-up CEF created.
+    fn with_producer(
+        producer: PlatformCefProducer,
+        layout: Layout,
+        filter: Option<Arc<dyn ContentFilter>>,
+        (rule, popups): (NavigationRule, Popups),
+        devtools_client: cef::Client,
+    ) -> Self {
         let browser_id = producer.browser_id();
-        Ok(Self {
+        Self {
             producer,
             browser_id,
             filter,
@@ -357,7 +398,66 @@ impl View {
             nav_requests: cdp::NavRequests::default(),
             devtools_client,
             rule,
-        })
+            popups,
+            opened: Vec::new(),
+        }
+    }
+
+    /// Whether a window the page opens with a click (`window.open`, `target=_blank`) becomes
+    /// a browser Chromium creates beside this one (`wubble_core::popup::creates_browser`),
+    /// reported as [`WebEvent::PopupOpened`] with its view, or stays a request the host opens
+    /// itself ([`WebEvent::PopupRequested`]). Off for a new view.
+    pub fn allow_popup_browsers(&mut self, on: bool) {
+        self.popups
+            .on
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The pop-up browsers this view's page opened since the last call, as views, with what
+    /// the page asked for.
+    pub(crate) fn take_opened(&mut self) -> Vec<(View, crate::nav::PopupRequest)> {
+        std::mem::take(&mut self.opened)
+    }
+
+    /// CEF created the pop-up `opened` (its factory said yes): its producer becomes a view.
+    fn adopt_popup(&mut self, opened: welding::OpenedWindow) {
+        let pending = self
+            .popups
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&opened.popup_id);
+        let Some(producer) = self.producer.take_popup_browser(opened.popup_id) else {
+            return;
+        };
+        let Some(pending) = pending else {
+            // never asked of the factory: nothing to show it with
+            let mut producer = producer;
+            let _ = producer.close();
+            return;
+        };
+        // sized as its opener until the host lays it out
+        let layout = match self.state {
+            ViewState::Live { layout } | ViewState::Resizing { wanted: layout } => layout,
+            ViewState::Closing | ViewState::Closed => pending.layout,
+        };
+        let child = Self::with_producer(
+            producer,
+            Layout {
+                area: None,
+                ..layout
+            },
+            self.filter.clone(),
+            (pending.rule, pending.popups),
+            self.devtools_client.clone(),
+        );
+        let request = crate::nav::PopupRequest {
+            url: opened.url,
+            gesture: opened.user_gesture,
+            opened: popup_opened(opened.kind),
+            size: opened.size,
+        };
+        self.opened.push((child, request));
     }
 
     /// Where the page may go from now on: each top-level navigation (each hop of a redirect)
@@ -936,6 +1036,14 @@ impl View {
     fn apply_route(&mut self, routed: Route, mode: RequestMode) {
         match routed {
             Route::ScrollX(x) => self.scroll_x = x,
+            Route::PopupCreated(opened) => self.adopt_popup(opened),
+            Route::PopupAborted(id) => {
+                self.popups
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+            }
             Route::Crashed => {
                 eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
                 // A host that asks about requests draws its own crash page,
@@ -1761,6 +1869,10 @@ enum Route {
     PageCommitted,
     /// The root scroll offset's x.
     ScrollX(f64),
+    /// CEF created a window the page opened as a browser (`View::adopt_popup`).
+    PopupCreated(welding::OpenedWindow),
+    /// One the factory said yes to was not created after all.
+    PopupAborted(i32),
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1837,6 +1949,8 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             opened: popup_opened(kind),
             size,
         }))),
+        E::PopupBrowserCreated(opened) => one(Route::PopupCreated(opened)),
+        E::PopupAborted { popup_id } => one(Route::PopupAborted(popup_id)),
         E::ContentProcessTerminated { .. } => one(Route::Crashed),
         // ERR_ABORTED (-3) is a navigation replaced by another one.
         E::LoadError {
@@ -2102,42 +2216,90 @@ fn weld_modifiers(m: &Modifiers) -> welding::EventModifiers {
     }
 }
 
+/// The navigation guard reading `rule`.
+fn guard(rule: &NavigationRule) -> welding::NavigationGuard {
+    let read = Arc::clone(rule);
+    welding::NavigationGuard::new(move |url| {
+        let rule = read.read().unwrap_or_else(|e| e.into_inner());
+        rule.as_ref().is_none_or(|allows| allows(url))
+    })
+}
+
+/// A view's welding config but its URL and profile: the engine's views and their pop-ups'.
+fn surface_config(
+    hooks: &PopupHooks,
+    navigation_guard: welding::NavigationGuard,
+    popup_factory: welding::PopupFactory,
+) -> welding::CefSurfaceConfig {
+    let (frame_rate, begin_frames) = hooks.pacing;
+    welding::CefSurfaceConfig {
+        initial_size: dpi_size(hooks.layout.size),
+        scale_factor: hooks.layout.scale,
+        windowless_frame_rate: frame_rate,
+        external_begin_frame: begin_frames,
+        // Every request is held for the engine, which answers it with
+        // the host's answer or (RequestMode::DefaultNow) its default.
+        handle_permission_requests: true,
+        handle_auth_challenges: true,
+        ask_download_path: true,
+        request_filter: hooks.request_filter.clone(),
+        navigation_guard: Some(navigation_guard),
+        // CDP: `View::set_frozen`, `View::cdp` (page dark mode, screenshots).
+        devtools_protocol: true,
+        response_observer: hooks.response_observer.clone(),
+        popup_factory: Some(popup_factory),
+        ..welding::CefSurfaceConfig::default()
+    }
+}
+
+/// Answers each window the page opens, on CEF's UI thread: while the view allows it and
+/// `wubble_core::popup::creates_browser` says so, CEF creates it as a browser of its own with a
+/// view's config, whose navigation rule starts as its opener's (an agent session's pop-up is
+/// held to the session's sites from its first navigation). Its hooks wait in `popups` for
+/// [`View::adopt_popup`]. A link to another app stays a request (the host hands it over).
+fn popup_factory(
+    hooks: &PopupHooks,
+    opener_rule: &NavigationRule,
+    popups: &Popups,
+) -> welding::PopupFactory {
+    let (hooks, opener_rule, popups) = (hooks.clone(), Arc::clone(opener_rule), popups.clone());
+    welding::PopupFactory::new(move |opened| {
+        let wanted = popups.on.load(std::sync::atomic::Ordering::Relaxed)
+            && wubble_core::popup::creates_browser(popup_opened(opened.kind), opened.user_gesture)
+            && !crate::page::is_external(&opened.url);
+        if !wanted {
+            return None;
+        }
+        let inherited = opener_rule
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let rule: NavigationRule = Arc::new(std::sync::RwLock::new(inherited));
+        let own = Popups::default();
+        let config = surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &own));
+        popups
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                opened.popup_id,
+                Pending {
+                    rule,
+                    popups: own,
+                    layout: hooks.layout,
+                },
+            );
+        Some(config)
+    })
+}
+
 #[cfg(not(windows))]
 fn new_producer(
     runtime: &CefRuntime,
-    url: String,
-    layout: Layout,
-    (frame_rate, begin_frames): (u32, bool),
+    surface: welding::CefSurfaceConfig,
     gpu: &HostWgpuContext,
-    profile: welding::SharedProfile,
-    (request_filter, response_observer, navigation_guard): (
-        Option<welding::RequestFilter>,
-        Option<welding::ResponseObserver>,
-        welding::NavigationGuard,
-    ),
 ) -> Result<PlatformCefProducer, EngineError> {
-    let config = welding::PlatformCefConfig {
-        surface: welding::CefSurfaceConfig {
-            initial_url: url,
-            initial_size: dpi_size(layout.size),
-            scale_factor: layout.scale,
-            windowless_frame_rate: frame_rate,
-            external_begin_frame: begin_frames,
-            // Every request is held for the engine, which answers it with
-            // the host's answer or (RequestMode::DefaultNow) its default.
-            handle_permission_requests: true,
-            handle_auth_challenges: true,
-            ask_download_path: true,
-            request_filter,
-            navigation_guard: Some(navigation_guard),
-            // CDP: `View::set_frozen`, `View::cdp` (page dark mode, screenshots).
-            devtools_protocol: true,
-            response_observer,
-            // The container's context, shared with its other views.
-            profile: Some(profile),
-            ..welding::CefSurfaceConfig::default()
-        },
-    };
+    let config = welding::PlatformCefConfig { surface };
     // Linux and macOS copy each frame inside the paint callback on `gpu`.
     PlatformCefProducer::new(runtime, config, gpu).map_err(|e| EngineError::View(e.to_string()))
 }
@@ -2147,16 +2309,8 @@ fn new_producer(
 #[cfg(windows)]
 fn new_producer(
     _runtime: &CefRuntime,
-    _url: String,
-    _layout: Layout,
-    _pacing: (u32, bool),
+    _surface: welding::CefSurfaceConfig,
     _gpu: &HostWgpuContext,
-    _profile: welding::SharedProfile,
-    _hooks: (
-        Option<welding::RequestFilter>,
-        Option<welding::ResponseObserver>,
-        welding::NavigationGuard,
-    ),
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),
@@ -2570,6 +2724,27 @@ mod tests {
         ] {
             assert_eq!(popup_opened(kind), opened);
         }
+    }
+
+    #[test]
+    fn a_created_popup_browser_is_adopted() {
+        let opened = welding::OpenedWindow {
+            popup_id: 7,
+            url: String::new(),
+            target: "signin".into(),
+            kind: welding::NewWindowKind::Popup,
+            user_gesture: true,
+            size: Some((500, 600)),
+            position: None,
+        };
+        assert_eq!(
+            route_one(NavigationEvent::PopupBrowserCreated(opened.clone())),
+            Route::PopupCreated(opened)
+        );
+        assert_eq!(
+            route_one(NavigationEvent::PopupAborted { popup_id: 7 }),
+            Route::PopupAborted(7)
+        );
     }
 
     #[test]

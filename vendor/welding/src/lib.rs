@@ -81,6 +81,9 @@ mod ime;
 mod permissions;
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
 mod popup;
+// wubble change 57: pop-up browsers CEF creates.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+mod opened;
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
 mod view;
 
@@ -143,6 +146,7 @@ pub use native_frame::{
     CopiedFrame, Damage, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
     NativeFrameKind, NativeFramePixelFormat, WgpuTextureImporter,
 };
+pub use opened::{OpenedWindow, PopupFactory};
 pub use permissions::{PermissionId, PermissionKind};
 #[cfg(all(feature = "cef-runtime", target_os = "windows"))]
 pub use runtime::CefWindowsSandboxContext;

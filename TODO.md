@@ -152,7 +152,6 @@ Open, to build or check:
 - [ ] Per platform: view lifecycle on the Mac and Windows; GPU process watch on macOS and Windows; macOS and Windows popup frame
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
-- [ ] Real CEF popup browsers for `window.opener` / `window.close()` (popup sign-ins need it)
 - [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
 - [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
 - [ ] Drag out on Windows (the stub: `wl::Null`)

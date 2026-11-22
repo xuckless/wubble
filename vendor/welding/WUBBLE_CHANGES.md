@@ -516,6 +516,31 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     nothing to undo from a page with no field focused (undo close tab). The
     surface test checks it travels.
 
+57. **Pop-up browsers CEF creates.** New `opened.rs`: `OpenedWindow` (what the
+    page asked for: CEF's popup id, URL, target name, disposition, gesture,
+    the `width`/`height` and `left`/`top` features), `PopupFactory` (a
+    `Fn(&OpenedWindow) -> Option<CefSurfaceConfig>`, re-exported from
+    `lib.rs`) and `Children`. `surface.rs`: `CefSurfaceConfig::popup_factory`
+    (default `None`: every pop-up is cancelled and reported as
+    `NewWindowRequested`, as before), `NavigationEvent::PopupBrowserCreated`
+    and `PopupAborted`, `CefSurfaceProducer::take_popup_browser` (default
+    `None`). Linux and macOS (`*_cef/mod.rs`, `*_cef/cef_backed.rs`): the
+    producer's construction splits into `client` (the callback state, `Parts`,
+    and the client) and `with_browser`; `WeldLifeSpanHandler::on_before_popup`
+    asks the factory and, given a config, makes the pop-up windowless with its
+    own client and returns false, so Chromium creates it beside its opener
+    (same request context and browsing-context group: `window.opener`, the
+    `window.open` handle, named targets, `postMessage`, `window.close()`);
+    the new browser's `on_after_created` puts its producer in the opener's
+    `Children` and pushes `PopupBrowserCreated` on the opener's queue (or
+    closes it if the opener is gone); `on_before_popup_aborted` pushes
+    `PopupAborted`; the opener's close and `on_before_close` close the ones
+    nobody took. Shape from cefclient's OSR path (`ClientHandler::OnBeforePopup`,
+    `RootWindowManager::CreateRootWindowAsPopup`, chromiumembedded/cef,
+    BSD-3-Clause); no code copied. Windows is unchanged (it has no views).
+    `handlers.rs`: `new_window_kind` and `popup_size` are crate-visible.
+    Test: `opened::tests`; wubble's `--smoke popup` drives it in CEF.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
