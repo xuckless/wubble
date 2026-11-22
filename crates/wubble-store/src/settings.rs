@@ -18,6 +18,7 @@ use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
 use wubble_core::shot::ShotOutput;
+use wubble_core::startup::StartupMode;
 use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
@@ -106,6 +107,7 @@ word_codec!(
     ReaderFont,
     ReaderTheme,
     ShotOutput,
+    StartupMode,
 );
 
 /// A word of a choice the store has no type for (the core table checks it).
@@ -243,6 +245,16 @@ settings! {
     ArchiveAfterSetting: ArchiveAfter = defs::ARCHIVE_AFTER;
     /// `host -> Space[, Container]` entries (`wubble_core::routing`).
     RoutingRules: Vec<String> = defs::ROUTING_RULES;
+    /// What wubble opens (`wubble_core::startup`): read when it opens.
+    StartupModeSetting: StartupMode = defs::STARTUP_MODE;
+    /// The addresses "Specific pages" opens.
+    StartupPages: Vec<String> = defs::STARTUP_PAGES;
+    /// Empty: Home is the start page.
+    HomeUrl: String = defs::HOME_URL;
+    /// The quit keys quit only when pressed twice or held.
+    QuitWarn: bool = defs::QUIT_WARN;
+    /// "0" while wubble runs, "1" after it quit in order (`Store::begin_run`).
+    SessionExitedCleanly: bool = defs::SESSION_EXITED_CLEANLY;
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;
@@ -339,6 +351,19 @@ impl Store {
 
     pub async fn set_setting<S: Setting>(&mut self, value: S::Value) -> Result<()> {
         self.set_raw(S::DEF.key, &Codec::encode(&value)).await
+    }
+
+    /// A run starts: whether the last one quit in order (Chrome's `exited_cleanly` pref,
+    /// `ExitTypeService`), and the flag is down until [`Store::end_run`].
+    pub async fn begin_run(&mut self) -> Result<bool> {
+        let clean = self.setting::<SessionExitedCleanly>().await?;
+        self.set_setting::<SessionExitedCleanly>(false).await?;
+        Ok(clean)
+    }
+
+    /// The run quit in order: the next start offers nothing.
+    pub async fn end_run(&mut self) -> Result<()> {
+        self.set_setting::<SessionExitedCleanly>(true).await
     }
 
     /// Every stored row that is a setting of the table, `key -> text`, as stored (the page and

@@ -793,7 +793,12 @@ pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
         SettingKind::List if def.key == settings::ROUTING_RULES.key => {
             &["Site", "Space", "Container"]
         }
-        SettingKind::List if def.key == settings::BLOCKER_CUSTOM_LISTS.key => &["Address"],
+        SettingKind::List
+            if def.key == settings::BLOCKER_CUSTOM_LISTS.key
+                || def.key == settings::STARTUP_PAGES.key =>
+        {
+            &["Address"]
+        }
         SettingKind::List if settings::SITE_LISTS.contains(&def.key) => &["Site"],
         SettingKind::List => &["Entry"],
         SettingKind::Map if def.key == settings::BLOCKER_LISTS.key => &["List", "Switched"],
@@ -963,7 +968,7 @@ pub fn settings_page_from(
         .filter_map(|&section| {
             let rows: Vec<SettingRow> = defs
                 .iter()
-                .filter(|d| d.section == section)
+                .filter(|d| d.section == section && shown(d, stored))
                 .map(|d| {
                     let value = crate::apply::value_of(d, stored);
                     SettingRow {
@@ -991,6 +996,17 @@ pub fn settings_page_from(
         .collect()
 }
 
+/// Whether the page shows `def` now: a row of `settings::SHOWN_WHEN` only while the row it
+/// follows has its value (the startup pages while "Specific pages" is chosen).
+fn shown(def: &settings::SettingDef, stored: &HashMap<String, String>) -> bool {
+    settings::SHOWN_WHEN
+        .iter()
+        .filter(|(key, _, _)| *key == def.key)
+        .all(|(_, after, value)| {
+            settings::find(after).is_none_or(|a| crate::apply::value_of(a, stored) == *value)
+        })
+}
+
 /// The words of a settings search, lower-cased (the design's `words`).
 fn query_words(query: &str) -> Vec<String> {
     query.split_whitespace().map(str::to_lowercase).collect()
@@ -1014,13 +1030,16 @@ fn row_text(section: settings::Section, row: &SettingRow) -> String {
         text.push_str(label);
     }
     if let Control::Segmented(words) = row.control {
+        let labels = settings::select_labels(row.key).unwrap_or(&[]);
         for word in words {
             text.push(' ');
             text.push_str(
                 crate::engines::ENGINES
                     .iter()
                     .find(|e| e.id == *word)
-                    .map_or(word, |e| e.name),
+                    .map(|e| e.name)
+                    .or_else(|| labels.iter().find(|(w, _)| w == word).map(|(_, l)| *l))
+                    .unwrap_or(*word),
             );
         }
     }

@@ -164,7 +164,10 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
                         ));
                     }
                 }
-                Control::Segmented(words) if key == "search.engine" => {
+                Control::Segmented(words)
+                    if key == "search.engine"
+                        || wubble_core::settings::select_labels(key).is_some() =>
+                {
                     // the dropdown has its own test
                     let _ = words;
                     if find(&app, label, AccessibleRole::Combobox).len() != 1 {

@@ -415,6 +415,8 @@ pub enum Refusal {
     NotASite,
     /// `blocker.custom_lists`: not an `https://` address (the only kind fetched).
     NotAnAddress,
+    /// `startup.pages`: not an address a tab can open (`startup::page_address`).
+    NotAPage,
     Duplicate,
     /// `search.custom`: the engine does not check out (`search::check`).
     Engine(crate::search::Problem),
@@ -428,6 +430,7 @@ impl Refusal {
             Refusal::NotARule => "Needs a site and a Space, a container or both",
             Refusal::NotASite => "Needs a site, such as example.com",
             Refusal::NotAnAddress => "Needs an address that starts with https://",
+            Refusal::NotAPage => "Needs an address, such as example.com",
             Refusal::Duplicate => "Already in the list",
             Refusal::Engine(problem) => problem.note(),
         }
@@ -487,6 +490,9 @@ pub fn put_entry(
     let site = settings::SITE_LISTS.contains(&key);
     let entry = if site {
         crate::routing::site_host(entry).ok_or(Refusal::NotASite)?
+    } else if key == settings::STARTUP_PAGES.key {
+        // kept as the address it loads, so a typed `example.com` opens and dedupes as the page
+        crate::startup::page_address(entry).ok_or(Refusal::NotAPage)?
     } else {
         entry.to_owned()
     };

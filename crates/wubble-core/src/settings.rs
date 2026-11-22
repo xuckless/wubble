@@ -395,6 +395,74 @@ pub const ROUTING_RULES: SettingDef = SettingDef {
     section: Section::General,
     restart: false,
 };
+/// What wubble opens when it starts (`startup::StartupMode`): the last session, a start page in
+/// each window, or the pages of [`STARTUP_PAGES`]. Read when wubble opens, so a change applies
+/// at the next start (as Chrome's "On startup" does, without a restart note).
+pub const STARTUP_MODE: SettingDef = SettingDef {
+    key: "startup.mode",
+    kind: SettingKind::Choice(&crate::startup::MODE_WORDS),
+    default: "last-session",
+    label: "When wubble opens",
+    section: Section::General,
+    restart: false,
+};
+/// The pages "Specific pages" opens, as addresses (`startup::page_address`); shown only while
+/// that mode is chosen ([`SHOWN_WHEN`]).
+pub const STARTUP_PAGES: SettingDef = SettingDef {
+    key: "startup.pages",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Pages to open",
+    section: Section::General,
+    restart: false,
+};
+/// Where Home goes (Alt+Home, Cmd+Shift+H): empty for the start page (`startup::home_url`).
+pub const HOME_URL: SettingDef = SettingDef {
+    key: "home.url",
+    kind: SettingKind::Text,
+    default: "",
+    label: "Home page (empty: the start page)",
+    section: Section::General,
+    restart: false,
+};
+/// The quit keys quit only when pressed twice or held (`quit::QuitGuard`); on by default on
+/// macOS, as Chrome's "Warn Before Quitting".
+pub const QUIT_WARN: SettingDef = SettingDef {
+    key: "quit.warn",
+    kind: SettingKind::Bool,
+    default: if cfg!(target_os = "macos") { "1" } else { "0" },
+    label: "Warn before quitting (press the quit keys twice or hold them)",
+    section: Section::General,
+    restart: false,
+};
+/// Written "0" as wubble opens and "1" once it has quit in order: a "0" at start means the last
+/// run crashed or was killed (the "Restore pages?" offer, `startup::Offer`).
+pub const SESSION_EXITED_CLEANLY: SettingDef = SettingDef {
+    key: "session.exited_cleanly",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "The last run quit in order",
+    section: Section::Hidden,
+    restart: false,
+};
+
+/// Rows the page shows only while another row has a value: (row, the row it follows, value).
+pub const SHOWN_WHEN: [(&str, &str, &str); 1] =
+    [(STARTUP_PAGES.key, STARTUP_MODE.key, "pages")];
+
+/// Choice rows the page shows as a Select (a menu of labels) rather than segments, with the
+/// label of each stored word.
+pub const SELECT_ROWS: [(&str, &[(&str, &str)]); 1] =
+    [(STARTUP_MODE.key, &crate::startup::MODE_LABELS)];
+
+/// The Select labels of a choice row ([`SELECT_ROWS`]); `None` for a segmented row.
+pub fn select_labels(key: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    SELECT_ROWS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, labels)| *labels)
+}
+
 /// Which glass levels the scene's governor may use (`apply::GlassSetting`).
 pub const GLASS_QUALITY: SettingDef = SettingDef {
     key: "glass.quality",
@@ -966,6 +1034,11 @@ pub const ALL: &[&SettingDef] = &[
     &SLEEP_NEVER_SITES,
     &ARCHIVE_AFTER,
     &ROUTING_RULES,
+    &STARTUP_MODE,
+    &STARTUP_PAGES,
+    &HOME_URL,
+    &QUIT_WARN,
+    &SESSION_EXITED_CLEANLY,
     &GLASS_QUALITY,
     &GLASS_SCENE,
     &PAGE_LAYER,

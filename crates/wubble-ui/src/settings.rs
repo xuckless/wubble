@@ -5,7 +5,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
 use wubble_core::engines::ENGINES;
 use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
-use wubble_core::settings::{Section, SettingKind};
+use wubble_core::settings::{self, Section, SettingKind};
 
 use crate::{BindingItem, EntryItem, MenuEntry, PageLinkItem, SettingControl, SettingItem};
 
@@ -22,12 +22,18 @@ pub fn section_title(section: Section) -> &'static str {
     section.title()
 }
 
-/// What a segment shows for a stored word: an engine's name, or the word capitalised.
-fn word_label(kind: SettingKind, word: &str) -> String {
+/// What a segment shows for a stored word: an engine's name, a Select row's label
+/// (`settings::SELECT_ROWS`), or the word capitalised.
+fn word_label(key: &str, kind: SettingKind, word: &str) -> String {
     if kind == SettingKind::SearchEngine
         && let Some(e) = ENGINES.iter().find(|e| e.id == word)
     {
         return e.name.to_owned();
+    }
+    if let Some((_, label)) = settings::select_labels(key)
+        .and_then(|labels| labels.iter().find(|(w, _)| *w == word))
+    {
+        return (*label).to_owned();
     }
     let mut chars = word.chars();
     chars
@@ -81,15 +87,18 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
             } else {
                 (
                     words.iter().map(|w| (*w).to_owned()).collect(),
-                    words.iter().map(|w| word_label(row.kind, w)).collect(),
+                    words.iter().map(|w| word_label(row.key, row.kind, w)).collect(),
                 )
             };
             item.selected = words
                 .iter()
                 .position(|w| *w == row.value)
                 .map_or(-1, |i| i as i32);
-            if row.kind == SettingKind::SearchEngine {
-                item.placeholder = "Ask on first search".into();
+            // A Select row of the table (the startup mode) has a menu of its labels too.
+            if row.kind == SettingKind::SearchEngine || settings::select_labels(row.key).is_some() {
+                if row.kind == SettingKind::SearchEngine {
+                    item.placeholder = "Ask on first search".into();
+                }
                 item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
                     labels
                         .iter()
@@ -276,7 +285,11 @@ mod tests {
         assert_eq!(engine.placeholder, "Ask on first search");
         let archive = items
             .iter()
-            .find(|i| i.control == SettingControl::Segmented && i.key != "search.engine")
+            .find(|i| {
+                i.control == SettingControl::Segmented
+                    && i.key != "search.engine"
+                    && settings::select_labels(&i.key).is_none()
+            })
             .expect("a segmented row");
         assert_eq!(
             archive.options.row_count(),

@@ -47,10 +47,11 @@ pub use settings::{
     PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ProcessRendererLimit,
     ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
     ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
-    SearchCustom, SearchDiscoverSites, SearchDiscovered, SearchEngineChoice, Setting,
-    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SearchCustom, SearchDiscoverSites, SearchDiscovered, SearchEngineChoice, SessionExitedCleanly,
+    Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
     SleepKeepPinned, SleepNeverSites, SoundMutedSites, SponsorActions, SponsorAsked,
-    SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed, VideoControls,
+    SponsorEnabled, StartupModeSetting, StartupPages, HomeUrl, QuitWarn, TouchSizing,
+    UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed, VideoControls,
     VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
 
