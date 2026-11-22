@@ -537,6 +537,32 @@ resize: 428 stale frames, longest run 90.)
   holds the main process at 51 % of a core.
 - A still page was redrawn 8.6 times a second (whole window each time); the rule on Linux is 0 to 2 in 4 s.
 
+## Why the pump woke late on the Mac (2026-11-21)
+
+From the owner's frame runs above (the CSVs in `~/Dev/wubble-wt/notes/mac-bench-3/`), the gap from each run of CEF
+work to the next, split by how long the run took (CEF's time slice is 10 ms):
+
+| run | runs | of them 10 ms or longer | gap after one, p50 / p90 ms | gap after a shorter one, p50 / p90 ms |
+|---|---|---|---|---|
+| scroll (34.9 frames /s) | 789 | 158 | 49.0 / 51.2 | 2.0 / 14.5 |
+| scroll, second run (56.1) | 1653 | 47 | 16.0 / 50.0 | 3.2 / 13.6 |
+| scroll, `--begin-frames` (58.1) | 2129 | 30 | 11.3 / 46.4 | 4.2 / 10.0 |
+| canvas (49.6) | 1290 | 71 | 45.0 / 50.7 | 3.6 / 13.9 |
+| canvas, `--begin-frames` (58.9) | 1516 | 24 | 11.1 / 18.7 | 7.5 / 12.9 |
+| typing | 1078 | 158 | 44.8 / 51.2 | 2.7 / 14.0 |
+| idle | 337 | 7 | 44.1 / 48.1 | 33.8 / 34.3 |
+
+A run that spent the slice was followed by the 33 ms fallback (the run itself plus 33 ms: 45 to 50), because CEF
+stops there with work left and asks for nothing (decisions.md "Pump after a spent slice"); the more such runs, the
+fewer frames. On the Mac a run is long when a paint callback waits for the GPU (`callback_copy_wait` 4 to 14 ms; on
+Linux 0.03 to 1 ms, so Linux never showed it). The idle gap of 33 ms is cefclient's fallback by design, the same on
+Linux (33.04). Not yet measured on the Mac after the fix.
+
+Linux, after the fix (headless 1360x880@1, 60 Hz, RTX 5060, debug, load 3.5, one run each): idle 4 s 0 renders,
+pump gap 33.05 / 33.14; scroll 59.8 frames /s, 9 missed refreshes, pump gap p50 / p95 2.0 / 16.7 (before: 60.0, 3,
+14.6 / 16.8); video 60.0, 0 missed (before: 60.0, 1). The same within this machine's noise: Linux runs seldom spend
+the slice.
+
 ## The start page's damage (Linux, 2026-11-21)
 
 `--measure idle --seconds 10 --measure-page wubble://start` under `scripts/headless.sh` (1360x880@1, 60 Hz, RTX

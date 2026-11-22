@@ -256,7 +256,7 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] Mac frame drops, reproduced 2026-11-21 in Low Power Mode (measurements.md "frame runs in Low Power Mode"), in this order:
   - [ ] the start page: its frames redraw only the page card (Linux: dirty share 1.0 to 0.78, 56 to 20 items a frame), and it settles 2 s after the last input and then draws nothing (owner, 2026-11-21); measure both on the Mac
   - [ ] page frames 35 to 56 a second with CEF on its own timer, 58 to 59 with `--begin-frames`: make shell-paced begin frames the default on macOS after a Linux check (parity, video and scroll smokes, `--measure` on both), or find why it was left off
-  - [ ] the message pump is woken 33 to 55 ms late in every run: find the cause (pump timer tolerance, Low Power Mode coalescing, App Nap: `NSProcessInfo beginActivity` while a page animates or input is in flight) and repeat the runs with Low Power Mode off
+  - [ ] the message pump was woken 33 to 55 ms late after each run that spent CEF's 10 ms slice (fixed, measurements.md "Why the pump woke late"): repeat the frame runs on the Mac, with Low Power Mode on and off, both pacings
   - [ ] a still page is redrawn 8.6 times a second on the Mac (0 to 2 in 4 s on Linux): find what invalidates it
   - [ ] resize holds the main process at 87 % with 428 stale frames in 10 s; typing shows a key 53 ms later (p95 88 ms): measure again after the three above
   - [ ] add a tab-switch scenario to `--measure` (the tester's first complaint has no number yet)

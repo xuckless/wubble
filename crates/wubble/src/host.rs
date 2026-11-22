@@ -3621,13 +3621,21 @@ impl Host {
         }
     }
 
+    /// The display's refresh period, once the frame rate is known.
+    pub(crate) fn refresh(&self) -> Option<Duration> {
+        self.frame_rate
+            .map(|rate| Duration::from_secs_f64(1.0 / f64::from(rate)))
+    }
+
     /// Steps the begin-frame driver, if this run uses external begin frames
     /// (views open only once the frame rate is known).
     pub fn pace(&mut self, event: PaceEvent) {
-        let (Some(pace), Some(rate)) = (self.pace.as_mut(), self.frame_rate) else {
+        let Some(period) = self.refresh() else {
             return;
         };
-        let period = Duration::from_secs_f64(1.0 / f64::from(rate));
+        let Some(pace) = self.pace.as_mut() else {
+            return;
+        };
         let (state, effects) = pacing::transition(pace.state, event, period);
         pace.state = state;
         for effect in effects {
