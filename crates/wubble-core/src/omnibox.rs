@@ -12,6 +12,7 @@
 use ::url::{Host, Url};
 
 use crate::action::{Action, PALETTE};
+use crate::answer::{self, AnswerKind};
 use crate::tab::TabId;
 use crate::url::percent_encode_into;
 
@@ -307,6 +308,8 @@ pub enum Kind {
     Action,
     /// A recently closed tab (tab search only, `tab_search`).
     ClosedTab,
+    /// A calculator or unit conversion result, computed on the device (`answer`).
+    Answer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,6 +324,8 @@ pub enum Target {
         url: String,
         closed_at_ms: i64,
     },
+    /// Put this text on the clipboard (an answer row's result).
+    Copy(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,8 +343,9 @@ const DAY_MS: i64 = 86_400_000;
 
 /// Ranks `cands` against `query`. The first row is the classified intent (a URL intent uses
 /// `Kind::Search` with `Target::Url`; the UI has no separate "go" kind), except that an action
-/// whose title the query's words name comes before a search intent. An empty query yields no
-/// rows.
+/// whose title the query's words name comes before a search intent. A local answer
+/// (`answer::answer`) to a searched query comes first when it is a calculation, second (under
+/// the intent) when it is a unit conversion. An empty query yields no rows.
 pub fn rank(
     query: &str,
     engine: SearchEngine,
@@ -434,6 +440,15 @@ pub fn rank(
     {
         let action = out.remove(i);
         out.insert(0, action);
+    }
+    if let Intent::Search(q) = &intent
+        && let Some(a) = answer::answer(q)
+    {
+        let at = match a.kind {
+            AnswerKind::Math => 0,
+            AnswerKind::Unit => 1.min(out.len()),
+        };
+        out.insert(at, row(Kind::Answer, &a.title, "Copy", Target::Copy(a.copy)));
     }
     out.truncate(limit);
     out
@@ -1010,6 +1025,27 @@ mod tests {
         };
         let r = run("reader mode", &c);
         assert_eq!(r[0].target, Target::Action(Action::ToggleReader));
+    }
+
+    #[test]
+    fn math_answers_lead_and_unit_answers_follow_the_search() {
+        let r = run("12*7+3", &Candidates::default());
+        assert_eq!(r[0].kind, Kind::Answer);
+        assert_eq!(r[0].target, Target::Copy("87".into()));
+        assert_eq!(r[1].target, Target::Search("12*7+3".into()));
+        let r = run("5 km in miles", &Candidates::default());
+        assert_eq!(r[0].target, Target::Search("5 km in miles".into()));
+        assert_eq!(r[1].kind, Kind::Answer);
+        assert_eq!(r[1].target, Target::Copy("3.10686 mi".into()));
+        // A bare number, a division by zero and a URL give no answer row.
+        for q in ["42", "1/0", "example.com"] {
+            assert!(
+                run(q, &Candidates::default())
+                    .iter()
+                    .all(|r| r.kind != Kind::Answer),
+                "{q}"
+            );
+        }
     }
 
     #[test]
