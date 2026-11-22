@@ -1169,7 +1169,13 @@ impl Host {
                 });
             }
             Call::Quit => quit(),
-            Call::ForgetContainer(c) => self.engine.forget_container(c),
+            Call::ForgetContainer(c) => {
+                // the private windows' container leaves no download rows behind
+                if self.engine.is_ephemeral(c) {
+                    self.forget_private_downloads(c);
+                }
+                self.engine.forget_container(c);
+            }
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
             Call::FocusWindow(id) => self.raise_window(id),
@@ -1310,6 +1316,7 @@ impl Host {
             return;
         }
         if !self.agent_drives(tab)
+            && !self.model.is_private_tab(tab)
             && let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone())
         {
             self.store.put_favicon(&url, &icon, now_ms());
@@ -1711,6 +1718,7 @@ impl Host {
             WebEvent::TitleChanged(title) => {
                 self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
                 if !self.agent_drives(tab)
+                    && !self.model.is_private_tab(tab)
                     && let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {
@@ -2346,8 +2354,11 @@ impl Host {
             self.drag_gone(tab);
         }
         let typed = self.typed_nav.committed(tab);
-        // an agent session's loads are none of the user's history
-        if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
+        // an agent session's loads, and a private window's, are none of the user's history
+        if persist::visit_to_record(previous.as_deref(), url)
+            && !self.agent_drives(tab)
+            && !self.model.is_private_tab(tab)
+        {
             let transition = if typed {
                 Transition::Typed
             } else {

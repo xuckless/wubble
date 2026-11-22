@@ -60,7 +60,8 @@ impl ArchiveAfter {
 /// A tab is due once `now_ms - last_active_ms >= after`. Never due: a tab on screen in any
 /// window, or in a Little or Popup window; a pinned tab; a loading or downloading tab; one
 /// playing sound (`audible`: the host owns it); an internal page; one without a URL; a pane of
-/// a split; a tab whose stamp is unknown (0) or in the future (the clock went back).
+/// a split; a private window's tab (nothing of it is stored); a tab whose stamp is unknown (0)
+/// or in the future (the clock went back).
 pub fn due(
     model: &Model,
     after: ArchiveAfter,
@@ -86,6 +87,7 @@ pub fn due(
                 && !model.is_internal(t.id)
                 && model.windowed(t.id).is_none()
                 && model.split_of(t.id).is_none()
+                && !model.is_private_tab(t.id)
         })
         .map(|t| t.id)
         .collect()

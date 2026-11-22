@@ -212,7 +212,10 @@ impl Host {
                         entry: None,
                     })
                     .entry = Some(entry.id);
-                self.store.add_download(&entry);
+                // a private window's download is listed for this run only (the file stays)
+                if !self.model.is_ephemeral(container) {
+                    self.store.add_download(&entry);
+                }
                 let text = format!("Downloading {}", entry.name);
                 self.downloads.list.insert(0, entry);
                 self.toast(window, &text);
@@ -407,6 +410,29 @@ impl Host {
         self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
+    /// The in-memory container `container` (the private windows') is gone with the last private
+    /// window: its downloads leave the list, as Chrome's off-the-record download manager goes
+    /// with its profile. Their files stay; none of them was stored.
+    pub(super) fn forget_private_downloads(&mut self, container: ContainerId) {
+        let gone: Vec<i64> = self
+            .downloads
+            .list
+            .iter()
+            .filter(|e| e.container == container)
+            .map(|e| e.id)
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        self.downloads.list.retain(|e| e.container != container);
+        for id in &gone {
+            self.downloads.unsaved.remove(id);
+        }
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_downloads(&window);
+        }
+    }
+
     /// A new running entry of the list (a media download from a tab of `container`), stored and
     /// shown; its id.
     pub(super) fn add_download_entry(
@@ -429,7 +455,10 @@ impl Host {
             container,
         };
         d.next_id += 1;
-        self.store.add_download(&entry);
+        // a private window's download is listed for this run only (the file stays)
+        if !self.model.is_ephemeral(container) {
+            self.store.add_download(&entry);
+        }
         let (id, text) = (entry.id, format!("Downloading {}", entry.name));
         self.downloads.list.insert(0, entry);
         if let Some(window) = self.w.window.upgrade() {

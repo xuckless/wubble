@@ -440,12 +440,16 @@ impl Host {
                 MenuEffect::Run(MenuCommand::AllowPopups(site)) => {
                     self.site_permissions
                         .set(&site, Permission::Popups, Decision::Allow);
-                    self.store.set_site_permission(
-                        &site,
-                        Permission::Popups,
-                        Decision::Allow,
-                        now_ms(),
-                    );
+                    // a private window's choice lasts this run only (Chrome's off-the-record
+                    // content settings are in memory)
+                    if !self.model.is_private_tab(tab) {
+                        self.store.set_site_permission(
+                            &site,
+                            Permission::Popups,
+                            Decision::Allow,
+                            now_ms(),
+                        );
+                    }
                     self.open_held_popups(tab);
                 }
                 MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
@@ -748,9 +752,16 @@ impl Host {
     /// `percent` (CEF zooms at once, so the view read it back in the same
     /// call): stored for the site and shown, even when a limit left it
     /// unchanged. The view's own zoom reports (CEF re-reading the level after
-    /// a load, the shell's corrections) are never stored.
+    /// a load, the shell's corrections) are never stored, nor is a private
+    /// window's zoom (it reads the stored levels and writes none, as Chrome's
+    /// off-the-record zoom map does).
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
-        let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
+        let url = self
+            .model
+            .tabs
+            .get(&tab)
+            .filter(|_| !self.model.is_private_tab(tab))
+            .map(|t| t.url.clone());
         if let Some(host) = url.as_deref().and_then(zoom::host_of) {
             let table = zoom::next_table(self.site_zoom.clone(), &host, percent, self.zoom_default);
             // Applied as the setting: the table becomes `site_zoom` there.

@@ -1128,6 +1128,11 @@ impl Engine {
         self.profiles.set_ephemeral(container);
     }
 
+    /// Whether `container` is kept in memory only ([`Self::set_ephemeral`]).
+    pub fn is_ephemeral(&self, container: ContainerId) -> bool {
+        self.profiles.is_ephemeral(container)
+    }
+
     /// CEF's cache directory (the profile's, or the per-process smoke one).
     pub fn cache_dir(&self) -> &Path {
         self.profiles.root()
