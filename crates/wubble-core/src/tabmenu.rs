@@ -177,7 +177,14 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                 }
             }
             Some(Row::MoveToSpace) => {
-                for s in model.spaces.iter().filter(|s| s.id != space) {
+                // a tab never crosses a private window's line: no private Space is a target, and
+                // a private window's tab has none
+                let private = model.is_private_space(space);
+                for s in model
+                    .spaces
+                    .iter()
+                    .filter(|s| s.id != space && !s.private && !private)
+                {
                     out.push(mk(
                         format!("Move to {}", s.name),
                         Run::Model(Command::MoveTab {

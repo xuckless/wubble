@@ -773,10 +773,14 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         danger: false,
     };
     let own = model.window_of(tab);
+    // a private window's tab moves only among private windows (a new one is private too), a
+    // normal tab only among normal ones
+    let private = model.is_private_tab(tab);
     let others = model.windows.iter().filter(|w| {
         w.kind() == WindowKind::Main
             && Some(w.id) != own
             && w.space() != model.location(tab).map(|l| l.0)
+            && model.is_private_window(w.id) == private
     });
     std::iter::once(entry("Move to New Window".into(), WindowTarget::New))
         .chain(others.filter_map(|w| {
@@ -804,23 +808,39 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
         shortcut: String::new(),
         danger: false,
     };
-    let active = model.active_space();
+    // a Little window's page is never a private window's: it goes to the last normal Space
+    let active = model.normal_space();
     match w.shown {
         Shown::Little(_) => std::iter::once(entry(
             "Open as Tab".into(),
             Command::PromoteLittle(window, active),
         ))
-        .chain(model.spaces.iter().filter(|s| s.id != active).map(|s| {
+        .chain(model.spaces.iter().filter(|s| s.id != active && !s.private).map(|s| {
             entry(
                 format!("Open in {}", s.name),
                 Command::PromoteLittle(window, s.id),
             )
         }))
         .collect(),
-        Shown::Popup(tab) => vec![entry(
-            "Open as Tab".into(),
-            Command::MoveToWindow(tab, WindowTarget::Existing(model.main_window())),
-        )],
+        // a private window's pop-up becomes a tab of the private window it came from, any other
+        // one a tab of the focused Main window, or of the last normal one when that is private
+        Shown::Popup(tab) => {
+            let main = model.main_window();
+            let to = if model.is_private_tab(tab) {
+                model
+                    .location(tab)
+                    .and_then(|(space, _)| model.space_window(space))
+                    .unwrap_or(main)
+            } else if model.is_private_window(main) {
+                model.space_window(model.normal_space()).unwrap_or(main)
+            } else {
+                main
+            };
+            vec![entry(
+                "Open as Tab".into(),
+                Command::MoveToWindow(tab, WindowTarget::Existing(to)),
+            )]
+        }
         // its controls are its way out
         Shown::Space(_) | Shown::Pip(_) => vec![],
     }
