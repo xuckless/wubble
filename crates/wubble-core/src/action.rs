@@ -21,6 +21,8 @@ pub enum Action {
     CloseWindow,
     /// Move the focused page into a new window.
     MoveTabToNewWindow,
+    /// Mod+Shift+A: the command bar on every open and recently closed tab (Chrome's Tab Search).
+    SearchTabs,
     FocusAddress,
     /// F6: keyboard focus to the next region of the window (`region`).
     NextRegion,
@@ -127,6 +129,7 @@ const FIXED: [(&str, Action); 69] = [
     ("new-private-window", Action::NewPrivateWindow),
     ("close-window", Action::CloseWindow),
     ("move-tab-to-new-window", Action::MoveTabToNewWindow),
+    ("search-tabs", Action::SearchTabs),
     ("focus-address", Action::FocusAddress),
     ("next-region", Action::NextRegion),
     ("prev-region", Action::PrevRegion),
@@ -308,6 +311,11 @@ pub const PALETTE: [ActionInfo; 32] = [
         action: Action::ReopenClosedTab,
         title: "Reopen closed tab",
         keywords: "undo restore",
+    },
+    ActionInfo {
+        action: Action::SearchTabs,
+        title: "Search tabs",
+        keywords: "find switch open closed recent tabs list",
     },
     ActionInfo {
         action: Action::UndoCloseTab,

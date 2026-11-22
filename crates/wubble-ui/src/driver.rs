@@ -724,6 +724,7 @@ fn command_step(
             chrome::CommandMode::Here => CommandMode::Here,
             chrome::CommandMode::New => CommandMode::New,
             chrome::CommandMode::Split => CommandMode::Split,
+            chrome::CommandMode::Tabs => CommandMode::Tabs,
         });
     }
     if let Some(at) = state.placement() {
@@ -915,13 +916,14 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             CommandMode::Here => chrome::CommandMode::Here,
             CommandMode::New => chrome::CommandMode::New,
             CommandMode::Split => chrome::CommandMode::Split,
+            CommandMode::Tabs => chrome::CommandMode::Tabs,
         };
         let from = chrome::Point {
             x: f64::from(from.x),
             y: f64::from(from.y),
         };
-        // the start page keeps the bar's field in its capsule
-        let at = chrome::Placement::for_page(w.get_page() == InternalPageKind::Start);
+        // the start page keeps the bar's field in its capsule (not tab search's)
+        let at = chrome::Placement::for_mode(mode, w.get_page() == InternalPageKind::Start);
         command_step(&d, &w, &t, CommandEvent::Open { mode, from, at });
     });
     let (d, w, t) = (Rc::clone(&driver), window.as_weak(), Rc::clone(&exit_timer));

@@ -2,7 +2,8 @@
 // The command bar's head (`.wb-cmd-head`): a bare row in the thick panel, no glass of its own:
 // padding 0 4 0 12, gap 10, the search icon (18, mist), and the input (`.wb-cmd-in`) 52 high at
 // 17 px in ink, its placeholder haze. The design's microphone and "Show code" buttons are not
-// wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape.
+// wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape, and
+// wubble's Shift+Delete (Delete in an empty field) to remove the selected row.
 
 import { BrowserCss } from "../gen/css.slint";
 import { Tsx } from "../gen/tokens.slint";
@@ -20,6 +21,9 @@ export component CommandHead inherits Rectangle {
     // Up (-1) / Down (+1)
     callback step(int);
     callback escaped();
+    // wubble: Shift+Delete, or Delete in an empty field: remove the selected row (tab search
+    // closes its tab, Chromium's omnibox removes a suggestion on Shift+Delete)
+    callback removed();
     public function take-focus() {
         input.focus();
         input.select-all();
@@ -73,6 +77,10 @@ export component CommandHead inherits Rectangle {
                     }
                     if (event.text == Key.Escape) {
                         root.escaped();
+                        return accept;
+                    }
+                    if (event.text == Key.Delete && (event.modifiers.shift || self.text == "")) {
+                        root.removed();
                         return accept;
                     }
                     return reject;

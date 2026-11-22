@@ -39,6 +39,8 @@ pub enum Plan {
     Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
+    /// Open the command bar on every open and recently closed tab (tab search).
+    SearchTabs,
     /// Add this Space (a `Command::NewSpace`), then show it.
     NewSpace(Command),
     /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
@@ -102,6 +104,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         // its key, unhandled by the page, goes to `Host::perform_unhandled` instead
         Action::UndoCloseTab => Plan::UndoClose,
         Action::FocusAddress => Plan::FocusAddress,
+        Action::SearchTabs => Plan::SearchTabs,
         Action::NextRegion => Plan::CycleRegion(false),
         Action::PrevRegion => Plan::CycleRegion(true),
         Action::Reload => view(ViewOp::Reload),

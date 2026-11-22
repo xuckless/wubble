@@ -1428,6 +1428,9 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
         }
     });
     window.on_command_result_chosen(move |index| with_host_in(win, |host| host.bar_chosen(index)));
+    window.on_command_result_closed(move |index| {
+        with_host_in(win, |host| host.bar_result_closed(index))
+    });
     window.on_tab_hovered(move |id, on, y| with_host_in(win, |host| host.tab_hovered(id, on, y)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
     window.on_sidebar_context(move |x, y| with_host_in(win, |host| host.sidebar_context(x, y)));
@@ -1440,6 +1443,12 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {
             with_host_in(win, |host| host.bar_for_beside(&window));
+        }
+    });
+    let weak = window.as_weak();
+    window.on_tab_search_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host_in(win, |host| host.bar_for_tabs(&window));
         }
     });
     window.on_tab_mute_toggled(move |id| {

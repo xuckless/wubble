@@ -88,6 +88,9 @@ pub enum Event {
     Command,
     /// The store took its newest entry off the list: this one (its URL and close time), or none.
     Popped(Option<(String, i64)>),
+    /// Tab search took this entry (its URL and close time) off the list, whichever it was, or
+    /// found it gone: opened like a popped one, with no pop outstanding.
+    Taken(Option<(String, i64)>),
     /// History was deleted, and with it entries of the list: what is left is not known here.
     Forget,
 }
@@ -130,27 +133,31 @@ pub fn transition(mut state: Undo, event: Event) -> (Undo, Vec<Effect>) {
         Event::Command => vec![Effect::NothingToUndo],
         Event::Popped(entry) => {
             state.popping = state.popping.saturating_sub(1);
-            match entry {
-                None => vec![],
-                Some((url, at)) => {
-                    let this_run = state
-                        .closes
-                        .iter()
-                        .rposition(|c| c.url == url && c.closed_at_ms == at)
-                        .map(|i| state.closes.remove(i));
-                    vec![Effect::Restore {
-                        space: this_run.as_ref().map(|c| c.space),
-                        place: this_run.map(|c| c.place),
-                    }]
-                }
-            }
+            restore(&mut state, entry)
         }
+        Event::Taken(entry) => restore(&mut state, entry),
         Event::Forget => {
             state.closes.clear();
             vec![]
         }
     };
     (state, effects)
+}
+
+/// The restore of `entry`, just off the list: at its place when this run closed it.
+fn restore(state: &mut Undo, entry: Option<(String, i64)>) -> Vec<Effect> {
+    let Some((url, at)) = entry else {
+        return vec![];
+    };
+    let this_run = state
+        .closes
+        .iter()
+        .rposition(|c| c.url == url && c.closed_at_ms == at)
+        .map(|i| state.closes.remove(i));
+    vec![Effect::Restore {
+        space: this_run.as_ref().map(|c| c.space),
+        place: this_run.map(|c| c.place),
+    }]
 }
 
 #[cfg(test)]

@@ -118,6 +118,8 @@ export enum CommandKind {
     bookmark,
     search,
     action,
+    // wubble: a recently closed tab (tab search)
+    closed-tab,
 }
 
 export struct CommandResult {
@@ -127,6 +129,8 @@ export struct CommandResult {
     shortcut: string,
     // wubble: the site's favicon (history rows); an empty image shows the kind's glyph.
     icon: image,
+    // wubble: the row has a close button (an open tab in tab search); Shift+Delete closes it too.
+    closable: bool,
 }
 
 // Who holds the keys, by the host's surface store (`wubble_core::overlay::Ui::key_owner`): the
@@ -166,6 +170,8 @@ export enum CommandMode {
     here,
     new,
     split,
+    // wubble: tab search (Mod+Shift+A)
+    tabs,
 }
 
 // Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.

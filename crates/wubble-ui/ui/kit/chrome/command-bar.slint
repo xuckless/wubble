@@ -6,7 +6,8 @@
 // ease-out from .95 (clear and blurred 5 until 60 % of the way), and shrinks back on
 // `wb-pop-out` .176 s (to .95, clear, blurred 4): the kit CommandPanel. Under the head the
 // kit CommandList (command-list.slint); Up / Down move its selection, Enter picks it. The
-// placeholder follows the mode.
+// placeholder follows the mode. wubble's tab search (`CommandMode.tabs`) scrolls its list and
+// reports a row's close (`result-closed`) without closing the bar.
 // Its life is wubble_core::chrome::CommandBar, run by the host: `state`, `mode` and `origin` are
 // its outputs; this file only shows them and reports what the user did.
 
@@ -33,6 +34,8 @@ export component CommandBar inherits Rectangle {
     callback query-changed(string);
     // a row was picked (Enter or a click): the host runs it and the bar goes at once
     callback result-chosen(int);
+    // wubble: tab search closed a row's tab (its button, Shift+Delete); the bar stays
+    callback result-closed(int);
     // Escape or the scrim: the bar closes
     callback dismissed();
     // the keys went back after the bar closed (it held them)
@@ -61,12 +64,18 @@ export component CommandBar inherits Rectangle {
     out property <int> selected-row: list.current;
     property <bool> open: root.state == CommandBarState.open;
     out property <string> placeholder: root.mode == CommandMode.split ? "Open beside this page"
+        : root.mode == CommandMode.tabs ? "Search tabs"
         : root.mode == CommandMode.here && root.here-host != "" ? root.here-host : "Search or type an address";
     out property <bool> empty-shown: list.empty-shown;
 
     function choose(i: int) {
-        if (root.open && i >= 0 && i < list.count) {
+        if (root.open && i >= 0 && i < list.reach) {
             root.result-chosen(i);
+        }
+    }
+    function close-row(i: int) {
+        if (root.open && i >= 0 && i < list.reach) {
+            root.result-closed(i);
         }
     }
     function dismiss() {
@@ -136,6 +145,9 @@ export component CommandBar inherits Rectangle {
                 step(d) => {
                     list.step(d);
                 }
+                removed => {
+                    list.close-current();
+                }
                 escaped => {
                     root.dismiss();
                 }
@@ -145,8 +157,12 @@ export component CommandBar inherits Rectangle {
             list := CommandList {
                 results: root.results;
                 shown: root.open;
+                scrolls: root.mode == CommandMode.tabs;
                 chosen(i) => {
                     root.choose(i);
+                }
+                close-requested(i) => {
+                    root.close-row(i);
                 }
             }
         }

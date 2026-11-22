@@ -430,6 +430,8 @@ export component AppWindow inherits Window {
     in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
     callback command-result-chosen(int);
+    // tab search closed the tab of a row; the bar stays open on the new rows
+    callback command-result-closed(int);
     callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
@@ -459,6 +461,13 @@ export component AppWindow inherits Window {
     public function request-beside() {
         root.command-open(CommandMode.split, sidebar.address-origin);
         root.beside-requested();
+    }
+
+    // Tab search (Mod+Shift+A): the bar opens on every open and recently closed tab.
+    callback tab-search-requested();
+    public function request-tab-search() {
+        root.command-open(CommandMode.tabs, sidebar.address-origin);
+        root.tab-search-requested();
     }
 
     // F6 and Shift+F6 (wubble_core::region, run by the host): keyboard focus to a region. The
@@ -1590,6 +1599,9 @@ export component AppWindow inherits Window {
                 result-chosen(i) => {
                     root.command-result-chosen(i);
                     root.command-pick();
+                }
+                result-closed(i) => {
+                    root.command-result-closed(i);
                 }
                 dismissed => {
                     root.command-dismissed();

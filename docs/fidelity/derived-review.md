@@ -274,6 +274,7 @@ from properties (Slint fallback glass, no scene; `crates/wubble-ui/examples/over
 | Command bar head (`command-head.slint`) | the design's head without its microphone and "Show code" buttons (wubble has no voice and no Source panel); a new small kit part, not the settings page's SearchCapsule (the web head has no capsule, ring or clear button) | `.wb-cmd-head`, `.wb-cmd-in` | command/07 |
 | Command bar empty line | wubble's wording "Nothing matches. Press Enter to search." (the engine is a setting, not "the web") in the design's `.wb-cmd-empty` look | `.wb-cmd-empty` | (no results) |
 | Command bar rows | at most 7 rows (`CMD.rows`), as the design slices; wubble's old list scrolled past them | command.tsx `slice(0, CMD.rows)` | command/07 |
+| Tab search (`command-bar.slint` mode `tabs`, `command-list.slint` `scrolls`) | Chrome's Tab Search in the command bar: placeholder "Search tabs"; the 7 rows shown slide with the selection past either end so every tab is reachable (no scroll bar); an open tab's row ends in the list row's close RowAction (`Glyph.close`, revealed on hover or selection); a recently closed row wears `Glyph.clock` and reads "Recently closed · site" as its hint instead of a section header; Shift+Delete (Delete in an empty field) closes the selected tab | `.wb-cmd-row`, `.wb-tab-x`, `.st-row-ctl` | (to shoot) |
 
 Overlays B, seen while shooting, not the lane's to fix (kit Button, `kit/controls/button.slint`
 `PressableButton.mix`): Slint's `color.alpha` is an int 0..255, so `b.with-alpha(b.alpha * t)`

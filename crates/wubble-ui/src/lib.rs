@@ -80,6 +80,7 @@ mod tests {
             subtitle: "".into(),
             shortcut: "".into(),
             icon: Default::default(),
+            closable: false,
         }
     }
 

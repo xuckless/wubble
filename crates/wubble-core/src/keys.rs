@@ -263,6 +263,8 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+W", ALL, Action::CloseTab, Shell;
     "Ctrl+F4", LW, Action::CloseTab, Shell;
     "Mod+Shift+T", ALL, Action::ReopenClosedTab, Shell;
+    // Chromium's Tab Search (Ctrl+Shift+A, Cmd+Shift+A on macOS)
+    "Mod+Shift+A", ALL, Action::SearchTabs, Shell;
     "Mod+N", ALL, Action::NewWindow, Shell;
     "Mod+Shift+N", ALL, Action::NewPrivateWindow, Shell;
     "Mod+Shift+W", ALL, Action::CloseWindow, Shell;

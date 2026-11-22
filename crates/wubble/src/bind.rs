@@ -209,10 +209,13 @@ pub fn render_bar(
     rows: &[BarRow],
     icons: &HashMap<String, wubble_store::Favicon>,
     tab_icons: &BTreeMap<TabId, slint::Image>,
+    // tab search: an open tab's row has its close button
+    closable: bool,
 ) {
     let rows = rows
         .iter()
         .map(|r| CommandResult {
+            closable: closable && r.icon_tab().is_some(),
             kind: r.kind,
             title: r.title.as_str().into(),
             subtitle: r.subtitle.as_str().into(),

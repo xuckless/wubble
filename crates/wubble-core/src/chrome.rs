@@ -26,12 +26,15 @@ pub const PEEK_IN_MS: u32 = 60;
 pub const PEEK_OUT_MS: u32 = 260;
 
 /// What the command bar opens for (command.tsx `cmd.mode`): `Here` replaces the shown page (the
-/// address pill), `New` opens a tab (New tab), `Split` opens beside the focused page.
+/// address pill), `New` opens a tab (New tab), `Split` opens beside the focused page. `Tabs` is
+/// wubble's: tab search (Mod+Shift+A, Chrome's Tab Search), the bar listing every open and
+/// recently closed tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandMode {
     Here,
     New,
     Split,
+    Tabs,
 }
 
 /// Where it was opened from, window px: the panel grows from there (`cmd.from`).
@@ -59,6 +62,15 @@ impl Placement {
             Placement::InPage
         } else {
             Placement::Overlay
+        }
+    }
+
+    /// Where a bar opened in `mode` goes: tab search is always the overlay (Chrome's popover;
+    /// the start page's capsule is for addresses), any other as [`Placement::for_page`].
+    pub fn for_mode(mode: CommandMode, start_page: bool) -> Self {
+        match mode {
+            CommandMode::Tabs => Placement::Overlay,
+            _ => Placement::for_page(start_page),
         }
     }
 }
