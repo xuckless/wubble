@@ -12,7 +12,7 @@ use wubble_core::quit::{self, QuitEffect};
 use wubble_core::settings as defs;
 use wubble_core::space::ContainerId;
 use wubble_core::startup::{self, LastSession, Offer, OfferEffect, OfferEvent, StartupMode};
-use wubble_store::ClosedTab;
+use wubble_core::closed::{ClosedTab, Entry};
 
 use super::{Host, now_ms};
 use crate::persist::{Loaded, StoreClient};
@@ -30,13 +30,13 @@ pub(crate) fn open_session(loaded: &mut Loaded, store: &StoreClient, opening: bo
     loaded.model = opened.model;
     let at = now_ms();
     for d in &opened.last.tabs {
-        store.push_closed(ClosedTab {
+        store.push_closed(Entry::Tab(ClosedTab {
             url: d.url.clone(),
             title: d.title.clone(),
             container: d.container,
             space: Some(d.space),
             closed_at_ms: at,
-        });
+        }));
     }
     loaded.startup = Offer::at_start(opened.last, loaded.clean_exit);
 }

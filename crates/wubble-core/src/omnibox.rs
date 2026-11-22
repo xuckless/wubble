@@ -259,11 +259,11 @@ pub enum Target {
     Url(String),
     Search(String),
     Action(Action),
-    /// An entry of the recently-closed list (tab search only): its URL and close time name it,
-    /// as they name it to the store and to `closed`.
+    /// An entry of the recently-closed list, by its store id (`closed::Listed::id`); `url` is
+    /// the page whose icon the row shows ("" for none).
     ClosedTab {
+        id: i64,
         url: String,
-        closed_at_ms: i64,
     },
     /// Put this text on the clipboard (an answer row's result).
     Copy(String),
@@ -462,12 +462,14 @@ pub struct SearchTab {
     pub last_active_ms: i64,
 }
 
-/// A recently closed tab as tab search lists it (the store's list, newest first).
+/// A recently-closed entry as tab search lists it (the store's list, newest first): a tab, or a
+/// window, folder or Space by its title and first page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchClosed {
+    /// The store's id of the entry.
+    pub id: i64,
     pub title: String,
     pub url: String,
-    pub closed_at_ms: i64,
 }
 
 /// What the closed rows say beside their site (Chrome's Tab Search section title).
@@ -514,8 +516,8 @@ pub fn tab_search(
         };
         let class = match_class(&terms, site_text(&c.url), title, "");
         let target = Target::ClosedTab {
+            id: c.id,
             url: c.url.clone(),
-            closed_at_ms: c.closed_at_ms,
         };
         let subtitle = format!("{RECENTLY_CLOSED} \u{b7} {site}");
         (class, row(Kind::ClosedTab, title, &subtitle, target))

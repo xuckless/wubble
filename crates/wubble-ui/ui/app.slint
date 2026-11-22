@@ -15,7 +15,7 @@ import { PageHoleSource } from "kit/material/page-hole.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, FieldEdit, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, FieldEdit, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, ClosedLineItem, ClosedKind, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -68,7 +68,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind, CommandInline }
+export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, ClosedLineItem, ClosedKind, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind, CommandInline }
 
 export component AppWindow inherits Window {
     // A private window's title says so (Chrome's "(Incognito)" suffix).
@@ -571,6 +571,11 @@ export component AppWindow inherits Window {
     callback history-query-changed(string);
     callback history-deleted(string);
     callback history-more();
+    // The history page's "Recently closed" rows (tabs, windows, folders, Spaces), each reopened
+    // or deleted by its entry's id.
+    in property <[ClosedLineItem]> closed-lines;
+    callback closed-reopened(int);
+    callback closed-deleted(int);
     // The archive page: the same lines, restored or deleted by id.
     in property <[HistoryLineItem]> archive-lines;
     in property <bool> archive-searching;
@@ -1214,10 +1219,17 @@ export component AppWindow inherits Window {
                 history-ui := HistoryPage {
                     open: root.page == InternalPageKind.history;
                     lines: root.history-lines;
+                    closed: root.closed-lines;
                     searching: root.history-searching;
                     has-more: root.history-has-more;
                     query-changed(q) => {
                         root.history-query-changed(q);
+                    }
+                    closed-opened(id) => {
+                        root.closed-reopened(id);
+                    }
+                    closed-deleted(id) => {
+                        root.closed-deleted(id);
                     }
                     opened(u, k) => {
                         root.page-opened(u);

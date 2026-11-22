@@ -5,7 +5,7 @@
 // intent through a callback; the host acts and redraws. Compose only: the kit draws.
 
 import { Shell } from "../kit/derived.slint";
-import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentLogItem } from "model.slint";
+import { HistoryLineItem, ClosedLineItem, ClosedKind, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentLogItem } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { Button, PressableButton, ButtonKind } from "../kit/controls/button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
@@ -35,7 +35,12 @@ export component HistoryPage inherits Rectangle {
     // A search is running: the empty note says no match.
     in property <bool> searching;
     in property <bool> has-more;
+    // The history page's "Recently closed" block, above the visits (empty: none shown).
+    in property <[ClosedLineItem]> closed;
     callback query-changed(string);
+    // A "Recently closed" row: reopen its entry, or delete it (the entry's id).
+    callback closed-opened(int);
+    callback closed-deleted(int);
     // (address, the row's key: the visit's or archived tab's id)
     callback opened(string, int);
     callback opened-new-tab(string, int);
@@ -71,7 +76,37 @@ export component HistoryPage inherits Rectangle {
                 }
             }
         }
-        if root.lines.length == 0: ListEmpty {
+        if root.closed.length > 0: ListGroup {
+            text: "Recently closed";
+        }
+        if root.closed.length > 0: ListCard {
+            for gone[i] in root.closed: closed-row := ListRow {
+                title: gone.title;
+                note: gone.note;
+                mono-note: gone.kind == ClosedKind.tab;
+                // a tab's page icon; a window, folder or Space shows its glyph
+                favicon: gone.favicon;
+                icon-path: gone.kind == ClosedKind.window ? Glyph.sidebar : gone.kind == ClosedKind.folder ? Glyph.folder : gone.kind == ClosedKind.space ? Glyph.stack : Glyph.globe;
+                shown: root.open;
+                index: i;
+                opened => {
+                    root.closed-opened(gone.id);
+                }
+                opened-new-tab => {
+                    root.closed-opened(gone.id);
+                }
+                RowAction {
+                    icon-path: Glyph.trash;
+                    label: "Delete";
+                    danger: true;
+                    reveal: closed-row.reveal;
+                    clicked => {
+                        root.closed-deleted(gone.id);
+                    }
+                }
+            }
+        }
+        if root.lines.length == 0 && root.closed.length == 0: ListEmpty {
             text: root.searching ? root.empty-search-text : root.empty-text;
         }
         for line[i] in root.lines: VerticalLayout {

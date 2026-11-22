@@ -165,8 +165,9 @@ export component CommandBar inherits Rectangle {
                     list.step(d);
                 }
                 removed => {
-                    // a history row is forgotten (Chromium's Shift+Delete on a suggestion)
-                    if (list.count > 0 && root.results[list.current].kind == CommandKind.history) {
+                    // a history row is forgotten (Chromium's Shift+Delete on a suggestion), a
+                    // recently-closed one leaves the list
+                    if (list.count > 0 && (root.results[list.current].kind == CommandKind.history || root.results[list.current].kind == CommandKind.closed-tab)) {
                         root.close-row(list.current);
                     } else {
                         list.close-current();

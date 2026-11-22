@@ -1655,6 +1655,8 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_history_query_changed(move |q| with_host_in(win, |host| host.history_query(&q)));
     window.on_history_deleted(move |url| with_host_in(win, |host| host.history_deleted(&url)));
     window.on_history_more(move || with_host_in(win, Host::history_more));
+    window.on_closed_reopened(move |id| with_host_in(win, |host| host.closed_reopened(id)));
+    window.on_closed_deleted(move |id| with_host_in(win, |host| host.closed_deleted(i64::from(id))));
     window.on_history_cleared(move |range| with_host_in(win, |host| host.history_cleared(range)));
     window.on_archive_query_changed(move |q| with_host_in(win, |host| host.archive_query(&q)));
     window.on_archive_deleted(move |id| with_host_in(win, |host| host.archive_deleted(id)));

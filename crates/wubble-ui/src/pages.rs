@@ -5,12 +5,14 @@
 use std::collections::HashSet;
 
 use slint::Image;
+use wubble_core::closed::{Entry, Listed};
 use wubble_core::pages::{
     self, BookmarkRow, FlatBookmark, FolderChoice, HistoryLine, LoginView, VaultStatus,
 };
 
 use crate::{
-    BookmarkLineItem, FolderChoiceItem, HistoryLineItem, LoginItem, PasswordsView, VaultState,
+    BookmarkLineItem, ClosedKind, ClosedLineItem, FolderChoiceItem, HistoryLineItem, LoginItem,
+    PasswordsView, VaultState,
 };
 
 /// The history page's lines. When `tz_offset_min` is `Some`, each visit carries its local `HH:MM`
@@ -51,6 +53,29 @@ pub fn history_items(
                     .into(),
                 favicon: icon(&row.url),
             },
+        })
+        .collect()
+}
+
+/// The history page's "Recently closed" rows: a tab with its page icon, a window, folder or
+/// Space with its glyph (no icon).
+pub fn closed_items(entries: &[&Listed], icon: impl Fn(&str) -> Image) -> Vec<ClosedLineItem> {
+    entries
+        .iter()
+        .map(|l| {
+            let (kind, favicon) = match &l.entry {
+                Entry::Tab(t) => (ClosedKind::Tab, icon(&t.url)),
+                Entry::Window(_) => (ClosedKind::Window, Image::default()),
+                Entry::Folder(_) => (ClosedKind::Folder, Image::default()),
+                Entry::Space(_) => (ClosedKind::Space, Image::default()),
+            };
+            ClosedLineItem {
+                id: id32(l.id),
+                kind,
+                title: l.entry.title().into(),
+                note: l.entry.note().into(),
+                favicon,
+            }
         })
         .collect()
 }

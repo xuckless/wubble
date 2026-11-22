@@ -729,6 +729,24 @@ export struct HistoryLineItem {
     favicon: image,
 }
 
+// What a recently-closed row stands for (wubble_core::closed::Entry): its glyph.
+export enum ClosedKind {
+    tab,
+    window,
+    folder,
+    space,
+}
+
+// One row of the history page's "Recently closed" block: a closed tab, window, folder or Space.
+export struct ClosedLineItem {
+    // The entry's store id (reopened or deleted by it).
+    id: int,
+    kind: ClosedKind,
+    title: string,
+    note: string,
+    favicon: image,
+}
+
 // One visible line of the bookmark tree (or a search hit: `path` names its folder).
 export struct BookmarkLineItem {
     id: int,

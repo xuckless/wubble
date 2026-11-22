@@ -208,6 +208,7 @@ pub fn render_bar(
     window: &AppWindow,
     rows: &[BarRow],
     icons: &HashMap<String, wubble_store::Favicon>,
+    closed_icons: &HashMap<String, wubble_store::Favicon>,
     tab_icons: &BTreeMap<TabId, slint::Image>,
     // tab search: an open tab's row has its close button
     closable: bool,
@@ -225,7 +226,7 @@ pub fn render_bar(
                 .and_then(|t| tab_icons.get(&t).cloned())
                 .or_else(|| {
                     r.icon_url()
-                        .and_then(|u| icons.get(u))
+                        .and_then(|u| icons.get(u).or_else(|| closed_icons.get(u)))
                         .map(|f| favicon_image(f.width, f.height, &f.rgba))
                 })
                 .unwrap_or_default(),

@@ -37,12 +37,13 @@ use wubble_core::omnibox::HistoryEntry;
 use wubble_core::pages::{BookmarkEdit, BookmarkRow, HistoryRow, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
+use wubble_core::closed::{Entry, Listed};
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
     ArchivedTab, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled, BlockerExceptions,
-    BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, ClosedTab, Favicon, HistoryDeleted,
+    BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, Favicon, HistoryDeleted,
     Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 use wubble_vault::keyring::KeyRingError;
@@ -240,14 +241,6 @@ pub struct Hits {
     pub bookmarks: Vec<wubble_core::omnibox::Bookmark>,
 }
 
-/// The recently-closed list for tab search, newest first, with the icon of each entry's origin
-/// that has one (keyed by the entry's URL).
-#[derive(Debug, Default)]
-pub struct ClosedList {
-    pub entries: Vec<ClosedTab>,
-    pub icons: HashMap<String, Favicon>,
-}
-
 /// What the store thread hands over at start.
 #[derive(Debug)]
 pub struct Loaded {
@@ -312,7 +305,7 @@ enum Request {
         icon: Favicon,
         now_ms: i64,
     },
-    PushClosed(ClosedTab),
+    PushClosed(Entry),
     /// One agent session's call for the activity log (`agent_log`).
     PushAgentLog(wubble_core::agent::log::Entry),
     /// The newest activity log entries, oldest first (the agent activity page).
@@ -320,15 +313,12 @@ enum Request {
         limit: usize,
         reply: Reply<Vec<wubble_core::agent::log::Entry>>,
     },
-    PopClosed(Reply<Option<ClosedTab>>),
-    /// The whole recently-closed list with its icons (tab search).
-    ListClosed(Reply<ClosedList>),
-    /// Removes the entry `url` closed at `closed_at_ms` and replies with it (tab search's reopen).
-    TakeClosed {
-        url: String,
-        closed_at_ms: i64,
-        reply: Reply<Option<ClosedTab>>,
-    },
+    PopClosed(Reply<Option<Entry>>),
+    /// Removes one entry of the recently-closed list and replies with it (a row reopened).
+    TakeClosed(i64, Reply<Option<Entry>>),
+    DeleteClosed(i64),
+    /// The whole recently-closed list, newest first, with its pages' icons.
+    ListClosed(Reply<ClosedPage>),
     /// Files a tab in the Archive; replies with its archive id when the store kept it (only then may the tab close).
     PushArchive(ArchivedTab, Reply<Option<i64>>),
     /// One page of the archive page's rows, shaped as history rows (`visit_id` is the archive id).
@@ -408,6 +398,13 @@ pub enum HistoryClear {
 #[derive(Debug, Default)]
 pub struct VisitsPage {
     pub rows: Vec<HistoryRow>,
+    pub icons: HashMap<String, Favicon>,
+}
+
+/// The recently-closed list, newest first, with the icons of the pages its rows show.
+#[derive(Debug, Default)]
+pub struct ClosedPage {
+    pub entries: Vec<Listed>,
     pub icons: HashMap<String, Favicon>,
 }
 
@@ -520,8 +517,8 @@ impl StoreClient {
         });
     }
 
-    pub fn push_closed(&self, tab: ClosedTab) {
-        self.send(Request::PushClosed(tab));
+    pub fn push_closed(&self, entry: Entry) {
+        self.send(Request::PushClosed(entry));
     }
 
     pub fn push_agent_log(&self, entry: wubble_core::agent::log::Entry) {
@@ -541,27 +538,22 @@ impl StoreClient {
     }
 
     /// `reply` runs on the store thread.
-    pub fn pop_closed(&self, reply: impl FnOnce(Option<ClosedTab>) + Send + 'static) {
+    pub fn pop_closed(&self, reply: impl FnOnce(Option<Entry>) + Send + 'static) {
         self.send(Request::PopClosed(Box::new(reply)));
     }
 
     /// `reply` runs on the store thread.
-    pub fn recently_closed(&self, reply: impl FnOnce(ClosedList) + Send + 'static) {
-        self.send(Request::ListClosed(Box::new(reply)));
+    pub fn take_closed(&self, id: i64, reply: impl FnOnce(Option<Entry>) + Send + 'static) {
+        self.send(Request::TakeClosed(id, Box::new(reply)));
     }
 
-    /// Takes one entry off the recently-closed list; `reply` runs on the store thread.
-    pub fn take_closed(
-        &self,
-        url: &str,
-        closed_at_ms: i64,
-        reply: impl FnOnce(Option<ClosedTab>) + Send + 'static,
-    ) {
-        self.send(Request::TakeClosed {
-            url: url.into(),
-            closed_at_ms,
-            reply: Box::new(reply),
-        });
+    pub fn delete_closed(&self, id: i64) {
+        self.send(Request::DeleteClosed(id));
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn recently_closed(&self, reply: impl FnOnce(ClosedPage) + Send + 'static) {
+        self.send(Request::ListClosed(Box::new(reply)));
     }
 
     /// `reply` runs on the store thread: whether the tab is safely filed.
@@ -1085,34 +1077,25 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 }
             }
         }
-        Request::ListClosed(reply) => {
-            let entries = match store.recently_closed().await {
-                Ok(entries) => entries,
-                Err(e) => {
-                    reply(ClosedList::default());
-                    return Err(e);
-                }
-            };
-            let urls: Vec<&str> = entries.iter().map(|c| c.url.as_str()).collect();
-            match store.favicons_for(&urls).await {
-                Ok(icons) => reply(ClosedList { entries, icons }),
-                Err(e) => {
-                    reply(ClosedList {
-                        entries,
-                        icons: HashMap::new(),
-                    });
-                    return Err(e);
-                }
-            }
-        }
-        Request::TakeClosed {
-            url,
-            closed_at_ms,
-            reply,
-        } => match store.take_closed(&url, closed_at_ms).await {
-            Ok(tab) => reply(tab),
+        Request::TakeClosed(id, reply) => match store.take_closed(id).await {
+            Ok(entry) => reply(entry),
             Err(e) => {
                 reply(None);
+                return Err(e);
+            }
+        },
+        Request::DeleteClosed(id) => store.delete_closed(id).await?,
+        Request::ListClosed(reply) => match store.recently_closed().await {
+            Ok(entries) => {
+                let urls: Vec<&str> = entries
+                    .iter()
+                    .filter_map(|l| l.entry.icon_url())
+                    .collect();
+                let icons = store.favicons_for(&urls).await.unwrap_or_default();
+                reply(ClosedPage { entries, icons });
+            }
+            Err(e) => {
+                reply(ClosedPage::default());
                 return Err(e);
             }
         },
@@ -1253,6 +1236,7 @@ mod tests {
     use wubble_core::sleep::Pressure;
     use wubble_core::space::ContainerId;
     use wubble_core::tab::{Liveness, TabId};
+    use wubble_store::ClosedTab;
 
     use super::*;
 
@@ -1410,11 +1394,15 @@ mod tests {
 
     #[test]
     fn only_the_newest_queued_save_runs() {
-        let batch = vec![save_of("a"), Request::PushClosed(closed("x")), save_of("b")];
+        let batch = vec![
+            save_of("a"),
+            Request::PushClosed(closed("x").into()),
+            save_of("b"),
+        ];
         let kept: Vec<String> = latest_save_only(batch)
             .map(|r| match r {
                 Request::Save { model, .. } => model.tabs.values().next().unwrap().url.clone(),
-                Request::PushClosed(t) => format!("closed {}", t.url),
+                Request::PushClosed(t) => format!("closed {}", t.urls().concat()),
                 _ => "other".into(),
             })
             .collect();
@@ -1465,7 +1453,7 @@ mod tests {
         assert!(!client.set_setting("no.such", "1"));
         client.record_visit("https://a.test/", "", 5, Transition::Typed);
         client.update_title("https://a.test/", "A");
-        client.push_closed(closed("https://gone.test/"));
+        client.push_closed(closed("https://gone.test/").into());
         client.set_site_permission("https://a.test", Permission::Camera, Decision::Allow, 5);
         let running = DownloadEntry {
             id: 1,
@@ -1528,7 +1516,10 @@ mod tests {
         );
         let (pop_tx, pop_rx) = mpsc::channel();
         client.pop_closed(move |tab| pop_tx.send(tab).unwrap());
-        assert_eq!(pop_rx.recv().unwrap(), Some(closed("https://gone.test/")));
+        assert_eq!(
+            pop_rx.recv().unwrap(),
+            Some(closed("https://gone.test/").into())
+        );
         client.shutdown();
     }
 

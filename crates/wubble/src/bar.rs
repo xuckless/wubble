@@ -7,6 +7,7 @@
 
 use wubble_core::action::Action;
 use wubble_core::answer;
+use wubble_core::closed::Listed;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
@@ -67,7 +68,7 @@ impl BarRow {
             (RowTarget::Omni(Target::Url(u)), CommandKind::History | CommandKind::Bookmark) => {
                 Some(u)
             }
-            (RowTarget::Omni(Target::ClosedTab { url, .. }), _) => Some(url),
+            (RowTarget::Omni(Target::ClosedTab { url, .. }), _) if !url.is_empty() => Some(url),
             _ => None,
         }
     }
@@ -105,11 +106,8 @@ pub enum Choice {
     Perform(Action),
     /// Store the search engine (first run), by its id.
     SetEngine(String),
-    /// Take this entry off the recently-closed list and open it (tab search).
-    ReopenClosed {
-        url: String,
-        closed_at_ms: i64,
-    },
+    /// Reopen this recently-closed entry (by its store id) and take it off the list.
+    ReopenClosed(i64),
     /// Shift+Enter: a new window, then this URL in a new tab there.
     NewWindow(String),
     /// Put the text on the clipboard (an answer row).
@@ -270,6 +268,50 @@ pub fn removable_url(row: &BarRow) -> Option<&str> {
     }
 }
 
+/// Recently-closed rows a typed query adds at most.
+const CLOSED_HITS: usize = 3;
+
+/// `rows` with the recently-closed list's rows (Chrome's tab search and History menu list
+/// "Recently closed" with titles): on a blank query every entry, newest first; on a typed one
+/// the entries it finds, after the ranked rows. Not for a bar that puts a page beside another.
+pub fn with_closed(
+    mut rows: Vec<BarRow>,
+    closed: &[Listed],
+    query: &str,
+    mode: BarMode,
+) -> Vec<BarRow> {
+    if mode == BarMode::Beside {
+        return rows;
+    }
+    let query = query.trim().to_lowercase();
+    // a blank query lists every entry the rows above leave room for (the first-run choice
+    // stays); a typed one adds its few hits
+    let room = if query.is_empty() {
+        MAX_ROWS.saturating_sub(rows.len())
+    } else {
+        CLOSED_HITS
+    };
+    let found: Vec<BarRow> = closed
+        .iter()
+        .filter(|l| l.entry.matches(&query))
+        .take(room)
+        .map(|l| BarRow {
+            kind: CommandKind::ClosedTab,
+            title: l.entry.title(),
+            subtitle: format!("{} \u{b7} {}", omnibox::RECENTLY_CLOSED, l.entry.note()),
+            shortcut: String::new(),
+            target: RowTarget::Omni(Target::ClosedTab {
+                id: l.id,
+                url: l.entry.icon_url().unwrap_or_default().to_owned(),
+            }),
+        })
+        .collect();
+    rows.truncate(MAX_ROWS.saturating_sub(found.len()).max(1));
+    rows.extend(found);
+    rows.truncate(MAX_ROWS);
+    rows
+}
+
 /// What choosing `target` in a bar opened in `mode` does, with the keys Enter was pressed with
 /// (`omnibox::disposition`): Alt+Enter loads in a new tab, Shift+Enter in a new window, whatever
 /// the bar was opened for. A bar choosing a page beside the focused one keeps doing that; a switch
@@ -299,10 +341,7 @@ pub fn target_command_as(
             _ => Command::ActivateTab(*tab),
         }),
         RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
-        RowTarget::Omni(Target::ClosedTab { url, closed_at_ms }) => Choice::ReopenClosed {
-            url: url.clone(),
-            closed_at_ms: *closed_at_ms,
-        },
+        RowTarget::Omni(Target::ClosedTab { id, .. }) => Choice::ReopenClosed(*id),
         RowTarget::Omni(Target::Copy(text)) => Choice::Copy(text.clone()),
         RowTarget::PickEngine(id) => Choice::SetEngine(id.clone()),
     })
