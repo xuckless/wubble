@@ -2450,11 +2450,7 @@ impl Host {
                 .and_then(|t| self.model.tabs.get(&t))
                 .map(|t| t.title.clone())
                 .unwrap_or_default(),
-            settled: self.w.window.upgrade().is_some_and(|w| {
-                w.get_page_enter() >= 1.0
-                    && w.get_exit_t() >= 1.0
-                    && w.get_exit_page().size().width == 0
-            }),
+            settled: self.w.window.upgrade().is_some_and(|w| page_at_rest(&w)),
             shown_index: visible.and_then(|v| order.iter().position(|&t| t == v)),
         }
     }
@@ -2521,7 +2517,8 @@ impl Host {
         }) && self.engine.visible_views() == visible.len();
         self.record_geometry();
         let newest = self.model.windows.iter().map(|w| w.id).max();
-        let (mut framed, mut bars, mut start_in_newest, mut ghosts) = (true, 0, false, 0);
+        let (mut framed, mut bars, mut ghosts, mut entering) = (true, 0, 0, 0);
+        let (mut start_in_newest, mut capsule_in_newest) = (false, false);
         for id in self.window_ids() {
             if self.enter(id) {
                 let tabs = self.model.window_tabs(id);
@@ -2529,12 +2526,20 @@ impl Host {
                     .iter()
                     .filter(|t| web(t))
                     .all(|t| self.w.frames.contains_key(t));
-                start_in_newest |=
-                    Some(id) == newest && self.shown_page() == Some(InternalPage::Start);
+                let start = self.shown_page() == Some(InternalPage::Start);
+                start_in_newest |= Some(id) == newest && start;
                 if let Some(window) = self.w.window.upgrade() {
-                    let open = window.get_command_bar_state() != CommandBarState::Closed;
-                    bars += usize::from(open);
+                    let (state, placement) = (
+                        window.get_command_bar_state(),
+                        window.get_command_placement(),
+                    );
+                    bars += usize::from(crate::windows_smoke::is_bar(state, placement, start));
+                    capsule_in_newest |= Some(id) == newest
+                        && start
+                        && state == CommandBarState::Open
+                        && placement == wubble_ui::CommandPlacement::InPage;
                     ghosts += usize::from(!window.get_drag_ghost().is_empty());
+                    entering += usize::from(!page_at_rest(&window));
                 }
             }
         }
@@ -2553,7 +2558,9 @@ impl Host {
             shown: shown.len(),
             bars,
             start_in_newest,
+            capsule_in_newest,
             ghosts,
+            entering,
             geometry: self.model.windows.iter().all(|w| w.geometry.is_some()),
         }
     }
@@ -3919,6 +3926,14 @@ fn wheel_burst(window: slint::Weak<AppWindow>, left: u32) {
     slint::Timer::single_shot(settings_smoke::TICK_EVERY, move || {
         wheel_burst(window, left - 1)
     });
+}
+
+/// The page a tab switch showed has finished entering and the one it hid has left (the
+/// driver's `step_page`): what a smoke checks the pixels of is drawn at rest.
+fn page_at_rest(window: &AppWindow) -> bool {
+    window.get_page_enter() >= 1.0
+        && window.get_exit_t() >= 1.0
+        && window.get_exit_page().size().width == 0
 }
 
 fn snapshot(window: &AppWindow) -> Result<Snapshot, String> {
