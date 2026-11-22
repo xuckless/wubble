@@ -14,6 +14,7 @@ the lanes into one integration branch and runs the full check round.
 - Each stage uses the cheapest model that can do it: Sonnet medium by default, Opus medium for items marked `hard`, per-stage overrides (including Haiku) via the item's `models`.
 - Research runs for every item unless it sets `research: false`, and is copy-first: it looks for code to reuse before designing anything.
 - Lanes build through one shared cargo wrapper script: one build at a time (a lock), each worktree with its own target directory, so a lane never picks up another lane's crates.
+- Memory is enforced by the OS, not by care (the lead machine froze on 2026-11-21): every build goes through the cargo wrapper and every window run, smoke or measurement through the run wrapper; both put the work in one systemd slice with a hard memory limit and no swap, so the kernel kills what outgrows it. A bare `cargo` in a lane is refused. Temporary files go to disk, never to a RAM-backed `/tmp`, and are removed when the step ends. One building agent at a time; the lead audits for processes outside the slice and stops them.
 
 ## Rules (2026-11-19)
 
