@@ -146,6 +146,13 @@ pub enum WebEvent {
     /// `window.open` or a `target=_blank` link. CEF opened nothing itself; the host's
     /// policy (`wubble_core::popup::decide`) says what opens.
     PopupRequested(PopupRequest),
+    /// A window the page opened with a click that Chromium created beside this view
+    /// (`View::allow_popup_browsers`): `view` shows it, with its opener relation. The host
+    /// places it as the request says, or closes it.
+    PopupOpened {
+        request: PopupRequest,
+        view: crate::app::ViewId,
+    },
     /// The renderer process died. Unless the host draws its own crash page
     /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
     /// itself.

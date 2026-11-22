@@ -166,6 +166,7 @@ enum SmokeArg {
     Autofill,
     AutofillProbe,
     Windows,
+    Popup,
     Media,
     MediaProbe,
     Builtins,
@@ -214,6 +215,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "autofill" => Ok(SmokeArg::Autofill),
         Some(("autofill", "probe")) => Ok(SmokeArg::AutofillProbe),
         None if value == "windows" => Ok(SmokeArg::Windows),
+        None if value == "popup" => Ok(SmokeArg::Popup),
         None if value == "media" => Ok(SmokeArg::Media),
         Some(("media", "probe")) => Ok(SmokeArg::MediaProbe),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
@@ -276,6 +278,8 @@ pub enum Smoke {
     Tabs,
     /// A second window: a tab moved into it, both windows' pixels, the window closed.
     Windows,
+    /// Pages opening pop-up windows and tabs through `window.open` (`popup_smoke.rs`).
+    Popup,
     /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
     /// pixels, then unsplit.
     Split,
@@ -554,6 +558,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Data), None, None) => Smoke::Data,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
+            (Some(SmokeArg::Popup), None, None) => Smoke::Popup,
             (Some(SmokeArg::Media), None, None) => Smoke::Media { probe: None },
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
             (Some(SmokeArg::Video), None, None) => Smoke::Video,

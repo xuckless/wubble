@@ -94,6 +94,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         Mode::Nav => ("nav", o.nav_title.as_ref().map(|t| format!("ok {t}"))),
         Mode::Tabs => ("tabs", ok(o.tabs_passed)),
         Mode::Windows => ("windows", ok(o.windows_passed)),
+        Mode::Popup => ("popup", ok(o.popup_passed)),
         Mode::Split => ("split", ok(o.split_passed)),
         Mode::Pinch => ("pinch", o.pinch_passed.as_ref().map(|s| format!("ok {s}"))),
         Mode::Page => ("page", o.page_zoom.map(|z| format!("ok zoom={z}%"))),

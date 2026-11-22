@@ -1342,10 +1342,12 @@ impl Engine {
         let mut events = Vec::new();
         let before = self.views.len();
         let mut gone_cpu = 0;
+        let mut opened = Vec::new();
         let (mode, page_events) = (self.requests, &mut self.page_events);
         self.views.retain_mut(|(id, view)| {
             let (new, page, closed) = view.drain_events(mode);
             events.extend(new.into_iter().map(|event| (*id, event)));
+            opened.extend(view.take_opened().into_iter().map(|(v, r)| (*id, v, r)));
             for event in page {
                 page_events.push(*id, event);
             }
@@ -1357,6 +1359,14 @@ impl Engine {
         self.closed_cpu_fallback += gone_cpu;
         for _ in self.views.len()..before {
             self.apply(Event::BrowserClosed);
+        }
+        // pop-up browsers CEF created: views of their own, counted like the rest
+        for (opener, view, request) in opened {
+            let id = ViewId(self.next_view);
+            self.next_view += 1;
+            self.views.push((id, view));
+            self.apply(Event::BrowserOpened);
+            events.push((opener, WebEvent::PopupOpened { request, view: id }));
         }
         events
     }

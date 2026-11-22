@@ -896,6 +896,11 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         "/parity/frame" => crate::parity::FRAME_PAGE.to_owned(),
         // `--smoke pinch`'s page (`?prevent` read by the page itself).
         "/pinch" => crate::PINCH_PAGE.to_owned(),
+        // `--smoke popup`'s opener and the pages it opens (from `localhost`, another origin).
+        "/popup" => crate::popup_smoke::OPENER_PAGE.replace("{PORT}", &port.to_string()),
+        "/popup/signin" => crate::popup_smoke::SIGNIN_PAGE.to_owned(),
+        "/popup/child" => crate::popup_smoke::CHILD_PAGE.to_owned(),
+        "/popup/named" => crate::popup_smoke::NAMED_PAGE.to_owned(),
         // `--smoke spell`'s textarea.
         "/spell" => crate::SPELL_PAGE.to_owned(),
         "/dnd" => crate::DND_PAGE.to_owned(),
