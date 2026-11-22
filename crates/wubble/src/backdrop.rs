@@ -492,10 +492,15 @@ impl Glass {
         }
     }
 
-    /// A window event that changes when the scene draws (`run_state::event_of`).
+    /// A window event that changes when the scene draws (`run_state::event_of`). Input and the
+    /// window shown again also wake a settled start page, on this same frame.
     pub fn run_event(&mut self, event: RunEvent, window: &AppWindow) {
         if let Glass::Scene(s) = self {
+            let woke = matches!(event, RunEvent::Activity | RunEvent::Shown) && s.start.wake();
             s.run.on(event, window);
+            if woke {
+                s.run.wake_if_still(window);
+            }
         }
     }
 

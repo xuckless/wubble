@@ -862,9 +862,14 @@ impl Renderer {
     }
 
     /// Whether the scene moves on its own beyond the ambient drift ([`Scene::animating`]); a
-    /// shown start page always does (its liquid and bubble live).
+    /// shown start page does until it has settled ([`StartDraw::rest`]) and its liquid's
+    /// ripples, light and palette have come to rest.
     pub fn animating(&self) -> bool {
-        self.scene.animating() || self.start.is_some()
+        self.scene.animating()
+            || self
+                .start
+                .as_ref()
+                .is_some_and(|l| !l.draw.rest || l.scene.animating())
     }
 
     /// What the frames since the last call changed in the output and overlay images
@@ -1870,6 +1875,8 @@ impl Renderer {
         };
         let pace = pace * l.draw.pace.clamp(0.0, 1.0);
         l.scene.advance(dt, pace);
+        // a living liquid has no still work: its flags would keep `animating` up for ever
+        let _ = l.scene.take_still_work();
         if let Some(dt) = l.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
             let f = &mut sz.fluid;
             for op in l.scene.fluid_ops(dt) {

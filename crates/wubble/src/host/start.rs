@@ -169,7 +169,8 @@ pub fn pop_draw(u: &PopUniforms) -> PopDraw {
 }
 
 /// The frame the scene draws for `l` in `card`: its bubbles (the web's skips left out), its
-/// pops, its time; the liquid at the web's pace (slowed while reduced, held by `frozen`).
+/// pops, its time; the liquid at the web's pace (slowed while reduced, held by `frozen`), times
+/// the settle's scale (`calm`: to 0 as the page comes to rest).
 pub fn draw_of(l: &Living<Rng>, card: StartCard, frozen: bool) -> StartDraw {
     let f = l.frame();
     StartDraw {
@@ -189,10 +190,11 @@ pub fn draw_of(l: &Living<Rng>, card: StartCard, frozen: bool) -> StartDraw {
         pace: if frozen {
             0.0
         } else if l.still {
-            K::still_time as f32
+            (K::still_time * l.calm.scale()) as f32
         } else {
-            1.0
+            l.calm.scale() as f32
         },
+        rest: l.calm.resting(),
     }
 }
 
@@ -268,6 +270,16 @@ impl StartHost {
         out_of(&fx)
     }
 
+    /// Input elsewhere in the window, or the window shown again: a settled page wakes.
+    /// Whether a start page is shown (and so woken).
+    pub fn wake(&mut self) -> bool {
+        let Some(tab) = self.shown else {
+            return false;
+        };
+        self.event_for(tab, Event::Wake);
+        true
+    }
+
     /// The stage's pointer, for the shown start page.
     pub fn pointer(&mut self, p: StagePointer, now: Instant) -> Out {
         let Some(tab) = self.shown else {
@@ -317,12 +329,15 @@ impl StartHost {
     /// 1/120 s ticks up to the scene time `at`, then held there (a `Tick` of 0), however many
     /// frames the display renders before the shot.
     pub fn frame_frozen(&mut self, size: (f64, f64), reduced: bool, at: f64) -> Out {
+        // the harness shoots the web's motion, which never settles (`calm`): kept awake
+        let _ = self.wake();
         let mut out = self.frame(size, reduced, 0.0);
         let per_tick = FROZEN_STEP * if reduced { K::still_time } else { 1.0 };
         let ticks = self
             .living()
             .map_or(0.0, |l| ((at - l.time) / per_tick).round().max(0.0));
         for _ in 0..ticks as usize {
+            let _ = self.wake();
             let tick = self.frame(size, reduced, FROZEN_STEP);
             out.fx.extend(tick.fx);
             out.grabbing = tick.grabbing.or(out.grabbing);
@@ -464,6 +479,7 @@ impl Host {
                 seen.waves = l.body.state.waves.len();
                 seen.mini = l.minis.list.first().map(|m| (m.x, m.y));
                 seen.pops = l.pops.len();
+                seen.resting = l.calm.resting() || crate::shot::frozen_backdrop();
             }
             if state.wants_pixels()
                 && let (Some(((cx, cy), r)), Some((w, _, rgba))) = (seen.body, glass.readback())

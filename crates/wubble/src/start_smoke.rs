@@ -38,6 +38,9 @@ pub struct Seen {
     pub mini: Option<(f64, f64)>,
     /// Pops being drawn.
     pub pops: usize,
+    /// The page has settled and draws nothing (`wubble_core::start::calm`), or is kept awake
+    /// (`--frozen-backdrop`): the poke after it wakes it.
+    pub resting: bool,
     /// Bright scene pixels inside the body (read only when [`StartSmoke::wants_pixels`]).
     pub bright: usize,
     /// A hash of the scene's pixels over the body (likewise).
@@ -67,7 +70,7 @@ pub enum Stage {
     Pinning,
     /// A start tab asked for; waiting for its bubble.
     Opening,
-    /// The bubble is drawn; letting it settle, then checking its pixels.
+    /// The bubble is drawn; letting it settle until it rests, then checking its pixels.
     Rest,
     /// Poked; waiting for the wave and the change.
     Poked {
@@ -148,7 +151,7 @@ pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
         Pinning if seen.pinned => Some((Opening, vec![Action::OpenStart])),
         // the new tab's capsule holds the keys
         Opening if seen.start && seen.body.is_some() && focused => Some((Rest, vec![])),
-        Rest if s.wants_pixels() => match seen.body {
+        Rest if s.wants_pixels() && seen.resting => match seen.body {
             Some((c, _)) if seen.bright >= BRIGHT_MIN && seen.sites >= 1 => Some((
                 Poked {
                     rest: seen.body_pixels,
@@ -277,7 +280,11 @@ mod tests {
         assert!(!s.wants_pixels());
         seen.bright = BRIGHT_MIN;
         seen.body_pixels = 1;
+        // the poke waits for the page to rest: it wakes it
         let (s, a) = run(s, &seen, SETTLE_RUNS + 1);
+        assert!(a.is_empty() && s.stage == Stage::Rest);
+        seen.resting = true;
+        let (s, a) = run(s, &seen, 1);
         assert_eq!(a, [Action::Shoot("rest"), Action::Click(400.0, 300.0)]);
         assert_eq!(s.stage, Stage::Poked { rest: 1 });
         // the same pixels: not poked yet
@@ -347,6 +354,7 @@ mod tests {
             start: true,
             sites: 1,
             body: Some(((1.0, 1.0), 1.0)),
+            resting: true,
             ..Seen::default()
         };
         let s = StartSmoke {

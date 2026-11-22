@@ -78,7 +78,11 @@ pub struct StartDraw {
     /// `scene.time` of the living bubble, seconds (`uTime`)
     pub time: f32,
     /// the layer's liquid runs at `pace` of real time: living.ts `scene.frame(still ? dt * .3 : dt)`
+    /// (wubble: times the settle's scale, `wubble_core::start::calm`)
     pub pace: f32,
+    /// The page has settled (wubble's, the owner's): nothing of it moves, so it asks for no
+    /// frames ([`super::Renderer::animating`]) once its liquid's own ripples and light are done.
+    pub rest: bool,
 }
 
 /// What the start page does to its liquid (`wubble_core::start::living::Effect`), page-local

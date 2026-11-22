@@ -5,6 +5,7 @@
 //! `slint/wfield.rs`). Pure: fixed steps of `dt`, pointer times passed in, no clocks.
 //!
 //! - `living`: the one machine the host drives (`transition(Living, Event) -> (Living, Vec<Effect>)`).
+//! - `calm`: when it settles and rests (wubble's, the owner's), part of `Living`.
 //! - `softbody`, `grab`, `minis`: what it is made of (integrators, and the pointer's hold).
 //! - `frame`: what the scene's bubble and pop passes draw, as plain uniforms.
 //! - `wfield`: the W's distance-field texture, computed once.
@@ -13,6 +14,7 @@
 //! from the web by `tools/fidelity/extract.mjs`); the tests replay trajectories sampled from the
 //! web (`tools/fidelity/sample-start.mjs`).
 
+pub mod calm;
 pub mod frame;
 pub mod grab;
 pub mod living;

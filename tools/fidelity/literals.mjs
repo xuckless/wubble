@@ -181,6 +181,8 @@ export const LITERALS = [
   ['living', 'spawn_x_range', LI, 'scene.w * (0.12 + Math.random() * ⟦0.76⟧)'],
   ['living', 'spawn_below', LI, 'scene.h + ⟦20⟧, 1);'],
   ['living', 'still_time', LI, 'scene.frame(still ? dt * ⟦0.3⟧ : dt);'],
+  // the web's own idle span (its `auto` mode starts after it); wubble's start page settles after it
+  ['living', 'idle_after', LI, 'if (o.auto && idle > ⟦2⟧) {'],
 
   // ── pages/start.tsx, pages/start.css: the start page's own numbers the CSS tables miss ──
   ['start', 'size', ST, 'mountLiving(stage.current!, { size: ⟦0.1⟧'],

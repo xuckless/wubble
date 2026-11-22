@@ -553,3 +553,13 @@ that is as small as the region gets without changing the motion. `SLINT_SKIA_PAR
 in the window; 1 px on the first (whole) frame, as on main.
 Browser CPU is noisy on this shared machine: the table is one pair at load 6; two more pairs at load 12 to 18 gave
 24.3 and 26.3 % before against 19.3 and 15.9 % after (renders fell to 48 and 36 a second under that load).
+
+After the settle (owner, 2026-11-21: 2 s without input, then 2 s to a stop), the same run, same machine:
+
+| `--measure-page wubble://start` | slint renders /s | scene renders /s | dirty share | Browser % |
+|---|---|---|---|---|
+| `--warmup 1` (awake, settling, then at rest) | 14.4 | 12.8 | 0.697 | 3.5 |
+| `--warmup 8` (at rest) | 2.0 | 0 | 0.018 | 0.8 |
+
+At rest the scene draws nothing; the 2 renders a second left are the search capsule's blinking caret (Slint's
+`TextInput`, the start page's focused field), 17 items in 1.8 % of the window each.

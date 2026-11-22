@@ -654,6 +654,7 @@ fn the_start_page_lives_inside_its_card_and_nowhere_else() {
         pops: vec![],
         time: 0.0,
         pace: 1.0,
+        rest: false,
     };
     let mut plain = still(&device, &queue);
     let mut live = still(&device, &queue);
@@ -784,4 +785,15 @@ fn a_start_page_frame_redraws_only_its_card_and_draws_what_a_whole_frame_draws()
     assert_eq!(partial.take_damage(), Damage::Whole, "the card leaves");
     frame(&mut partial, &device, &queue);
     assert_eq!(partial.take_damage(), Damage::Nothing);
+    // a settled start page asks for no frames; awake, it does
+    let mut r = still(&device, &queue);
+    r.start_frame(StartDraw {
+        rest: true,
+        pace: 0.0,
+        ..draw.clone()
+    });
+    frame(&mut r, &device, &queue);
+    assert!(!r.animating(), "a page at rest");
+    r.start_frame(draw.clone());
+    assert!(r.animating(), "woken");
 }
