@@ -31,6 +31,7 @@ export component Select inherits Rectangle {
     property <bool> via-key;
     property <bool> up;
     out property <bool> is-open: root.open;
+    out property <bool> mounted: root.open || menu.mounted;
     out property <bool> opens-up: root.up;
     property <int> current: root.value >= 0 && root.value < root.options.length ? root.value : 0;
     property <length> menu-height: root.options.length * TouchCss.wb-tp-mrow--height + 2 * TouchCss.tp-menu--padding;

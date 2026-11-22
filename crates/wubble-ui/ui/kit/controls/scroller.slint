@@ -41,6 +41,7 @@ export component Thumb inherits Rectangle {
             easing: root.shown ? BrowserCss.wb-thumb-on--transition-opacity-easing : BrowserCss.wb-thumb--transition-opacity-easing;
         }
         ta := TouchArea {
+            enabled: root.shown;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) { root.down(self.absolute-position.y + self.mouse-y); }
                 if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.up(); }

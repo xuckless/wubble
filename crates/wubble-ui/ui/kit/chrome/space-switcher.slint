@@ -12,6 +12,7 @@
 // The Space's name over the tabs (`.wb-space-name`): 18 high, padding 2 10 0, 12 / 500 mist,
 // entering with the Overlap (`wb-in`) when the Space changes.
 
+import { Space } from "../gen/tokens.slint";
 import { BrowserCss, WubbleCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
@@ -106,22 +107,27 @@ export component SpaceName inherits Rectangle {
     height: BrowserCss.wb-space-name--height;
     Entering {
         e: root.enter;
-        KitText {
-            x: BrowserCss.wb-space-name--padding-left;
-            y: BrowserCss.wb-space-name--padding-top;
-            width: parent.width - BrowserCss.wb-space-name--padding-left - BrowserCss.wb-space-name--padding-right;
-            height: parent.height - BrowserCss.wb-space-name--padding-top;
-            role: Role.wb-space-name;
-            text: root.text;
-            color: BrowserCss.wb-space-name--color;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        if root.agent: AgentMark {
-            x: parent.width - self.width - BrowserCss.wb-space-name--padding-right;
-            y: (parent.height - self.height) / 2;
-            stopped => {
-                root.agent-stop();
+        HorizontalLayout {
+            padding-left: BrowserCss.wb-space-name--padding-left;
+            padding-right: BrowserCss.wb-space-name--padding-right;
+            padding-top: BrowserCss.wb-space-name--padding-top;
+            spacing: Space.s1;
+            KitText {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                role: Role.wb-space-name;
+                text: root.text;
+                color: BrowserCss.wb-space-name--color;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            if root.agent: VerticalLayout {
+                alignment: center;
+                AgentMark {
+                    stopped => {
+                        root.agent-stop();
+                    }
+                }
             }
         }
     }

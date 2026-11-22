@@ -600,6 +600,7 @@ export component MenuTrigger inherits Rectangle {
             spacing: TouchCss.wb-tp-btn-body--gap;
             HorizontalLayout {
                 horizontal-stretch: 1;
+                min-width: 0px;
                 spacing: TouchCss.tp-menu-done--gap * mark.t;
                 VerticalLayout {
                     alignment: center;
@@ -613,6 +614,7 @@ export component MenuTrigger inherits Rectangle {
                 }
                 CrossfadeText {
                     horizontal-stretch: 1;
+                    min-width: 0px;
                     text: root.text;
                     role: Role.wb-tp-btn-body;
                     ink: root.done ? TouchCss.tp-menu-done--color : TouchCss.wb-tp-btn-body--color;
