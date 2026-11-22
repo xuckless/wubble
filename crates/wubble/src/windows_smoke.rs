@@ -6,6 +6,7 @@
 //! by a count of CEF work runs, never by time.
 
 use crate::nav_smoke::MAX_WORK_RUNS;
+use wubble_ui::{CommandBarState, CommandPlacement};
 
 /// What the host sees after a run of CEF work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -22,10 +23,14 @@ pub struct Seen {
     pub framed: bool,
     /// Tabs on screen in any window.
     pub shown: usize,
-    /// Windows whose command bar is open (or still closing).
+    /// Windows whose command bar is open (or still closing), the capsule of a shown start page
+    /// aside ([`is_bar`]).
     pub bars: usize,
     /// The newest window shows a start page (`wubble://start`).
     pub start_in_newest: bool,
+    /// The newest window's start page is up and its capsule holds the keys: the bar is open in
+    /// the page (`CommandPlacement::InPage`).
+    pub capsule_in_newest: bool,
     /// Windows still drawing a drag ghost.
     pub ghosts: usize,
     /// Every model window has its size recorded.
@@ -43,6 +48,15 @@ impl Seen {
             && self.bars == 0
             && self.geometry
     }
+}
+
+/// Whether a window's command bar counts as open: open or closing, unless it is the capsule of
+/// the start page the window shows. That capsule is the address field and takes the keys once
+/// the page's stage is built (`StartStage`'s `init`), which opens the bar in it; the host's
+/// model says "start page" a few runs before that, so a new window's start page is seen first
+/// without and then with it. A bar in the page still closing after the page left counts.
+pub fn is_bar(state: CommandBarState, placement: CommandPlacement, start_shown: bool) -> bool {
+    state != CommandBarState::Closed && !(placement == CommandPlacement::InPage && start_shown)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,11 +116,13 @@ pub fn next(s: WindowsSmoke, seen: &Seen) -> (WindowsSmoke, Option<Action>) {
         Stage::Titles if seen.titled == 2 && seen.settled(1, 1) => {
             Some((Stage::Opened, Action::NewWindow))
         }
+        // the start page fully up there: its capsule has the keys, no other bar opened
         Stage::Opened
             if seen.model_windows == 2
                 && seen.open_windows == 2
                 && seen.bars == 0
-                && seen.start_in_newest =>
+                && seen.start_in_newest
+                && seen.capsule_in_newest =>
         {
             Some((Stage::Moved, Action::MoveTab))
         }
@@ -153,6 +169,7 @@ mod tests {
             shown,
             bars: 0,
             start_in_newest: false,
+            capsule_in_newest: false,
             ghosts: 0,
             geometry: true,
         }
@@ -167,8 +184,17 @@ mod tests {
         assert_eq!(a, Some(Action::NewWindow));
         let (s, a) = next(s, &seen(2, 1));
         assert_eq!(a, None, "no start page in the new window yet");
+        let (s, a) = next(
+            s,
+            &Seen {
+                start_in_newest: true,
+                ..seen(2, 2)
+            },
+        );
+        assert_eq!(a, None, "the start page's stage is not built yet");
         let in_newest = Seen {
             start_in_newest: true,
+            capsule_in_newest: true,
             ..seen(2, 2)
         };
         let (s, a) = next(
@@ -207,6 +233,32 @@ mod tests {
         assert_eq!(a, Some(Action::Promote));
         let (s, a) = next(s, &seen(1, 1));
         assert_eq!((s.stage, a), (Stage::Done, Some(Action::Pass)));
+    }
+
+    #[test]
+    fn a_start_pages_capsule_is_not_a_bar() {
+        use CommandBarState::{Closed, Closing, Open};
+        use CommandPlacement::{InPage, Overlay};
+        // (state, placement, a start page shown, counted)
+        let cases = [
+            (Closed, Overlay, false, false),
+            (Closed, InPage, true, false),
+            // the new window's start page: its capsule took the keys
+            (Open, InPage, true, false),
+            (Closing, InPage, true, false),
+            // the page left (a tab moved in): the bar in it is still closing
+            (Closing, InPage, false, true),
+            (Open, InPage, false, true),
+            (Open, Overlay, true, true),
+            (Closing, Overlay, false, true),
+        ];
+        for (state, placement, start, counted) in cases {
+            assert_eq!(
+                is_bar(state, placement, start),
+                counted,
+                "{state:?} {placement:?} start={start}"
+            );
+        }
     }
 
     #[test]
