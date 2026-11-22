@@ -22,7 +22,7 @@ STANDING RULES (the owner's; breaking them froze this machine once):
 - Follow AGENTS.md's code principles (one enum + pure transition per lifecycle, effects at the edge, wubble-core pure, UI only from kit components). Do NOT edit TODO.md or docs/decisions.md (they conflict across branches): put what you would have written there in your final report instead.
 `
 
-// args: the batch's entries of docs/buildout/features.json
+// args: [{key, title, batch, n}] for one batch of docs/buildout/features.json (n: its index there); the spec is read from batch-NN.md
 const features = args
 log(`${features.length} features in this batch`)
 
@@ -50,7 +50,7 @@ const results = await pipeline(features,
 ${RULES}
 FEATURE ${f.key}: ${f.title}
 
-${f.spec}
+${f.spec || `Your spec is the section headed \`${f.key}\` in ~/Dev/wubble-wt/main-int/docs/buildout/batch-${String(f.batch).padStart(2, '0')}.md (read that file there; never edit anything in main-int).`}
 
 Set up (exactly this, once):
   mkdir -p ~/Dev/wubble-wt/feat/${f.key} && git -C ~/Dev/wubble-wt/main-int worktree add ${wt(f)} -b feat/${f.key} main
