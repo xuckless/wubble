@@ -574,7 +574,7 @@ pub(super) struct Agents {
     /// secrets shows).
     sheet_vault: SheetVault,
     /// The tabs whose DevTools session was asked to intercept file choosers
-    /// (`Page.setInterceptFileChooserDialog`): those with an `upload_file` clicked
+    /// (`Page.setInterceptFileChooserDialog`): those with an `upload_file` in flight
     /// ([`Host::agent_intercept`]).
     intercepting: std::collections::BTreeSet<TabId>,
     /// The values `fill_secret` typed, per session: redacted from every reply it gets.
@@ -2909,17 +2909,6 @@ impl Host {
     fn agent_input(&mut self, reply: Reply, tab: TabId, x: f64, y: f64, act: Act) {
         let now = self.input.now();
         let before = self.agent_document(tab);
-        // an upload's chooser is caught by DevTools, which names the input that opened it
-        if matches!(act, Act::Upload { .. }) && !self.agents.intercepting.contains(&tab) {
-            let params = json!({ "enabled": true });
-            if let Some(id) = self
-                .tab_view(tab)
-                .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params))
-            {
-                self.agents.ignored.push(id.0);
-                self.agents.intercepting.insert(tab);
-            }
-        }
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
         };
@@ -3963,38 +3952,76 @@ impl Host {
         }
     }
 
-    /// Each tab's DevTools session intercepts file choosers exactly while an `upload_file` is
-    /// clicked there (asked for just before its click, [`Host::agent_input`]).
-    fn agent_intercept(&mut self) {
-        let wanted: std::collections::BTreeSet<TabId> = self
-            .agents
+    /// The tabs with an `upload_file` in flight.
+    fn agent_uploading_tabs(&self) -> std::collections::BTreeSet<TabId> {
+        self.agents
             .pending
             .iter()
-            .filter(|p| stage(&p.wait) == Stage::UploadClicked)
+            .filter(|p| upload::upload_in_flight(&[stage(&p.wait)]))
             .filter_map(|p| wait_tab(&p.wait))
+            .collect()
+    }
+
+    /// Each tab's DevTools session intercepts file choosers while an `upload_file` is in flight
+    /// there: asked for as the call begins, so it is in place well before its click (asked for
+    /// with the click, the renderer was seen to take the click first and the chooser reached
+    /// CEF's `OnFileDialog`). It ends after the turn its call ended in, never between two steps
+    /// of the call (each takes the call out of the waiting list and puts it back).
+    fn agent_intercept(&mut self) {
+        let wanted = self.agent_uploading_tabs();
+        let on: Vec<TabId> = wanted
+            .difference(&self.agents.intercepting)
+            .copied()
             .collect();
-        let off: Vec<TabId> = self
+        for tab in on {
+            self.agent_set_intercept(tab, true);
+        }
+        if self
             .agents
             .intercepting
             .difference(&wanted)
-            .copied()
-            .collect();
-        for tab in off {
-            self.agents.intercepting.remove(&tab);
-            let params = json!({ "enabled": false });
-            if let Some(id) = self
-                .tab_view(tab)
-                .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params))
-            {
-                self.agents.ignored.push(id.0);
-            }
+            .next()
+            .is_some()
+        {
+            slint::Timer::single_shot(Duration::ZERO, || {
+                with_host(|host| {
+                    let wanted = host.agent_uploading_tabs();
+                    let off: Vec<TabId> = host
+                        .agents
+                        .intercepting
+                        .difference(&wanted)
+                        .copied()
+                        .collect();
+                    for tab in off {
+                        host.agent_set_intercept(tab, false);
+                    }
+                })
+            });
         }
     }
 
-    /// A file chooser the page opened in `tab` ([`upload::chooser`]): the owner's goes on to
-    /// the OS dialog (false); a clicked `upload_file`'s is answered with its files; any other in
-    /// a session's tab is cancelled, logged, and the calls whose input or script may have
-    /// opened it fail with the advice to use `upload_file`.
+    /// `Page.setInterceptFileChooserDialog` on `tab`'s page.
+    fn agent_set_intercept(&mut self, tab: TabId, enabled: bool) {
+        let params = json!({ "enabled": enabled });
+        let sent = self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params));
+        if let Some(id) = sent {
+            self.agents.ignored.push(id.0);
+        }
+        // a tab without a page has no session to ask (or to keep asking)
+        if enabled && sent.is_some() {
+            self.agents.intercepting.insert(tab);
+        } else {
+            self.agents.intercepting.remove(&tab);
+        }
+    }
+
+    /// A file chooser CEF shows in `tab` (`OnFileDialog`: DevTools did not catch it), as
+    /// [`upload::chooser`] decides: the owner's goes on to the OS dialog (false); any other in a
+    /// session's tab is cancelled, logged, and the calls whose input or script may have opened
+    /// it fail (a clicked `upload_file` with [`upload::CHOOSER_UNREACHED`], the others with the
+    /// advice to use `upload_file`).
     pub(super) fn agent_chooser(
         &mut self,
         tab: TabId,
