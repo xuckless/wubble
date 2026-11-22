@@ -240,6 +240,14 @@ pub struct Hits {
     pub bookmarks: Vec<wubble_core::omnibox::Bookmark>,
 }
 
+/// The recently-closed list for tab search, newest first, with the icon of each entry's origin
+/// that has one (keyed by the entry's URL).
+#[derive(Debug, Default)]
+pub struct ClosedList {
+    pub entries: Vec<ClosedTab>,
+    pub icons: HashMap<String, Favicon>,
+}
+
 /// What the store thread hands over at start.
 #[derive(Debug)]
 pub struct Loaded {
@@ -306,6 +314,14 @@ enum Request {
         reply: Reply<Vec<wubble_core::agent::log::Entry>>,
     },
     PopClosed(Reply<Option<ClosedTab>>),
+    /// The whole recently-closed list with its icons (tab search).
+    ListClosed(Reply<ClosedList>),
+    /// Removes the entry `url` closed at `closed_at_ms` and replies with it (tab search's reopen).
+    TakeClosed {
+        url: String,
+        closed_at_ms: i64,
+        reply: Reply<Option<ClosedTab>>,
+    },
     /// Files a tab in the Archive; replies with its archive id when the store kept it (only then may the tab close).
     PushArchive(ArchivedTab, Reply<Option<i64>>),
     /// One page of the archive page's rows, shaped as history rows (`visit_id` is the archive id).
@@ -520,6 +536,25 @@ impl StoreClient {
     /// `reply` runs on the store thread.
     pub fn pop_closed(&self, reply: impl FnOnce(Option<ClosedTab>) + Send + 'static) {
         self.send(Request::PopClosed(Box::new(reply)));
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn recently_closed(&self, reply: impl FnOnce(ClosedList) + Send + 'static) {
+        self.send(Request::ListClosed(Box::new(reply)));
+    }
+
+    /// Takes one entry off the recently-closed list; `reply` runs on the store thread.
+    pub fn take_closed(
+        &self,
+        url: &str,
+        closed_at_ms: i64,
+        reply: impl FnOnce(Option<ClosedTab>) + Send + 'static,
+    ) {
+        self.send(Request::TakeClosed {
+            url: url.into(),
+            closed_at_ms,
+            reply: Box::new(reply),
+        });
     }
 
     /// `reply` runs on the store thread: whether the tab is safely filed.
@@ -1034,6 +1069,37 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 }
             }
         }
+        Request::ListClosed(reply) => {
+            let entries = match store.recently_closed().await {
+                Ok(entries) => entries,
+                Err(e) => {
+                    reply(ClosedList::default());
+                    return Err(e);
+                }
+            };
+            let urls: Vec<&str> = entries.iter().map(|c| c.url.as_str()).collect();
+            match store.favicons_for(&urls).await {
+                Ok(icons) => reply(ClosedList { entries, icons }),
+                Err(e) => {
+                    reply(ClosedList {
+                        entries,
+                        icons: HashMap::new(),
+                    });
+                    return Err(e);
+                }
+            }
+        }
+        Request::TakeClosed {
+            url,
+            closed_at_ms,
+            reply,
+        } => match store.take_closed(&url, closed_at_ms).await {
+            Ok(tab) => reply(tab),
+            Err(e) => {
+                reply(None);
+                return Err(e);
+            }
+        },
         Request::PushArchive(tab, reply) => {
             let pushed = store.push_archive(&tab).await;
             reply(pushed.as_ref().ok().copied());
