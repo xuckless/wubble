@@ -293,6 +293,8 @@ pub enum HostCheck {
     /// The primary selection holds this text.
     Primary(&'static str),
     BarOpen(bool),
+    /// The command bar is closed and gone: while it closes its panel still takes clicks.
+    BarGone,
     FindOpen(bool),
     /// The visible page's zoom is above (true) or at (false) 100 %.
     Zoomed(bool),
@@ -384,9 +386,10 @@ use Step::*;
 
 /// Clears what earlier items left, each part waited for by count: other tabs, the view at its
 /// full size (the window settles after start), zoom (until the page shows it), a page navigated away from (reloaded); menus, bars, held buttons, an autoscroll, click series and
-/// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click and the host
-/// runs neither an autoscroll nor a page drag; then the page's records, focus, selection and scroll.
-pub const RESET: [Step; 8] = [
+/// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click, the host
+/// runs neither an autoscroll nor a page drag and the command bar has gone; then the page's
+/// records, focus, selection and scroll.
+pub const RESET: [Step; 9] = [
     Restore,
     Until(H(C::PageEntered)),
     Until(J("parity.sized()")),
@@ -397,8 +400,26 @@ pub const RESET: [Step; 8] = [
     ),
     Until(H(C::Autoscroll(None))),
     Until(H(C::Drag(false))),
+    Until(H(C::BarGone)),
     Js("parity.reset()"),
 ];
+
+/// Waits until the page has had `n` presses since `parity.reset()` (RESET's own neutral
+/// clicks have reached it by then). A key sent right behind a click can overtake it: on a page
+/// with out-of-process frames (parity.html's two) Chromium's input router may first ask the
+/// renderer where a press lands (`RenderWidgetTargeter`'s asynchronous hit test, tens of ms
+/// while the frames load), while keys go straight to the focused frame. Those keys then reach
+/// whatever had the focus before the click. A person's key comes long after; the smoke's come
+/// in the same turn, so a key step waits for every press before it (a test holds the table
+/// to that).
+pub const fn took(n: u8) -> Step {
+    Until(J(match n {
+        1 => "parity.took(1)",
+        2 => "parity.took(2)",
+        3 => "parity.took(3)",
+        _ => panic!("took: 1 to 3 presses"),
+    }))
+}
 
 macro_rules! item {
     (@gap $gap:literal, $name:literal, [$($step:expr),* $(,)?], [$($expect:expr),* $(,)?]) => {
@@ -406,6 +427,7 @@ macro_rules! item {
             name: $name,
             steps: &[
                 RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], RESET[7],
+                RESET[8],
                 $($step),*
             ],
             expect: &[$($expect),*],
@@ -424,9 +446,27 @@ macro_rules! gap {
 /// The checklist, A (keyboard) to F (page features), in the order they run.
 pub const ITEMS: &[Item] = &[
     // A. Keyboard in the page.
+    // Keys sent in the same turn as a click, as no person types ([`took`]): first, while the
+    // page's frames still load and Chromium most often asks the renderer where the press lands.
+    // Either way no key is lost: each reaches the page, those that overtook the click where the
+    // focus was before it, the rest in the field.
+    item!(
+        "A.keys-behind-a-click",
+        [Click(Left, NONE, at::INP), Type("Hi"), took(1)],
+        [
+            J("eq(seen.keys.filter((k) => /\\/Key[HI]$/.test(k)).join(), 'Shift+H/KeyH,i/KeyI')"),
+            J("'Hi'.endsWith($('inp').value) || `field holds ${$('inp').value}`")
+        ]
+    ),
     item!(
         "A.type-input",
-        [Click(Left, NONE, at::INP), Type("Hello, World!")],
+        [
+            // emptied, not focused: the click gives it the keys
+            Js("$('inp').value = ''"),
+            Click(Left, NONE, at::INP),
+            took(1),
+            Type("Hello, World!")
+        ],
         [J("eq($('inp').value, 'Hello, World!')")]
     ),
     item!(
@@ -465,12 +505,12 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         "A.pagedown-scrolls",
-        [Click(Left, NONE, at::BLANK), Keys("PageDown")],
+        [Click(Left, NONE, at::BLANK), took(1), Keys("PageDown")],
         [J("scrollY > 100 || 'scrollY ' + scrollY")]
     ),
     item!(
         "A.space-scrolls",
-        [Click(Left, NONE, at::BLANK), Keys("Space")],
+        [Click(Left, NONE, at::BLANK), took(1), Keys("Space")],
         [J("scrollY > 100 || 'scrollY ' + scrollY")]
     ),
     // A video site's player keys (YouTube): Space toggles play on its keyup and, held, runs
@@ -481,6 +521,7 @@ pub const ITEMS: &[Item] = &[
         [
             Click(Left, NONE, at::BLANK),
             Js("parity.grabSpace()"),
+            took(1),
             Keys("Space"),
             Hold("Space", 3)
         ],
@@ -494,6 +535,7 @@ pub const ITEMS: &[Item] = &[
         [
             Click(Left, NONE, at::BLANK),
             Js("parity.grabSpace()"),
+            took(1),
             Hold("Space", 2)
         ],
         [J("eq(seen.spaceRepeat.join(), 'false,true,true')")]
@@ -702,7 +744,7 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         "A.contenteditable",
-        [Click(Left, NONE, at::CE), Type("Edit me")],
+        [Click(Left, NONE, at::CE), took(1), Type("Edit me")],
         [J("eq($('ce').textContent, 'Edit me')")]
     ),
     item!(
@@ -710,6 +752,7 @@ pub const ITEMS: &[Item] = &[
         [
             Click(Left, NONE, at::BLANK),
             Js("seen.grab = true"),
+            took(1),
             Keys("Ctrl+F"),
             Settle(20)
         ],
@@ -720,7 +763,7 @@ pub const ITEMS: &[Item] = &[
     ),
     item!(
         "A.ctrl-f-find",
-        [Click(Left, NONE, at::BLANK), Keys("Ctrl+F")],
+        [Click(Left, NONE, at::BLANK), took(1), Keys("Ctrl+F")],
         [H(C::FindOpen(true))]
     ),
     item!(
@@ -728,6 +771,7 @@ pub const ITEMS: &[Item] = &[
         [
             Host(HostOp::CloseFind),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+T")
         ],
         [H(C::BarOpen(true))]
@@ -737,6 +781,7 @@ pub const ITEMS: &[Item] = &[
         [
             Host(HostOp::CloseBar),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L")
         ],
         [H(C::BarOpen(true))]
@@ -746,13 +791,14 @@ pub const ITEMS: &[Item] = &[
         [
             Host(HostOp::CloseBar),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+=")
         ],
         [H(C::Zoomed(true))]
     ),
     item!(
         "A.zoom-reset",
-        [Click(Left, NONE, at::BLANK), Keys("Ctrl+0")],
+        [Click(Left, NONE, at::BLANK), took(1), Keys("Ctrl+0")],
         [H(C::Zoomed(false))]
     ),
     item!(
@@ -761,13 +807,14 @@ pub const ITEMS: &[Item] = &[
             Js("history.pushState(null, '', '#one')"),
             Js("history.pushState(null, '', '#two')"),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Alt+Left")
         ],
         [J("eq(location.hash, '#one')")]
     ),
     item!(
         "A.alt-right-forward",
-        [Click(Left, NONE, at::BLANK), Keys("Alt+Right")],
+        [Click(Left, NONE, at::BLANK), took(1), Keys("Alt+Right")],
         [J("eq(location.hash, '#two')")]
     ),
     // The print sheet opens; Save writes the PDF and lists it as a finished download.
@@ -775,6 +822,7 @@ pub const ITEMS: &[Item] = &[
         "A.ctrl-p-print",
         [
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+P"),
             Until(H(C::PrintSheet(true))),
             Host(HostOp::AnswerPrint),
@@ -1297,6 +1345,7 @@ pub const ITEMS: &[Item] = &[
             MoveTo(at::BLANK),
             Click(Middle, NONE, at::BLANK),
             Until(H(C::Autoscroll(Some(None)))),
+            took(1),
             Keys("a")
         ],
         [H(C::Autoscroll(None))]
@@ -1372,6 +1421,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("pasted")),
             Until(H(C::Clipboard("pasted"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Keys("Ctrl+V")
@@ -1384,6 +1434,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("stale")),
             Until(H(C::Clipboard("stale"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Type("copied"),
@@ -1398,6 +1449,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("stale")),
             Until(H(C::Clipboard("stale"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Type("cutout"),
@@ -1410,6 +1462,7 @@ pub const ITEMS: &[Item] = &[
         "G.bar-undo-redo",
         [
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Keys("BackSpace"),
@@ -1429,6 +1482,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::BookmarksTab),
             Until(H(C::Tabs(2))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Keys("BackSpace"),
@@ -1447,6 +1501,7 @@ pub const ITEMS: &[Item] = &[
         "G.bar-to-page",
         [
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Type("shell text"),
@@ -1458,6 +1513,7 @@ pub const ITEMS: &[Item] = &[
             Js("parity.field('inp', '')"),
             // the page takes the keys back
             Click(Left, NONE, at::INP),
+            took(2),
             Keys("Ctrl+V")
         ],
         [J("eq($('inp').value, 'shell text')")]
@@ -1469,6 +1525,7 @@ pub const ITEMS: &[Item] = &[
             Keys("Ctrl+A Ctrl+C"),
             Until(H(C::Clipboard("page text"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+L"),
             Until(H(C::BarOpen(true))),
             Keys("Ctrl+V")
@@ -1482,6 +1539,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("capsule")),
             Until(H(C::Clipboard("capsule"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+T"),
             Until(H(C::CapsuleFocused)),
             Keys("Ctrl+V")
@@ -1494,6 +1552,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("needle")),
             Until(H(C::Clipboard("needle"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+F"),
             Until(H(C::FindOpen(true))),
             Keys("Ctrl+V")
@@ -1506,6 +1565,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("zoom")),
             Until(H(C::Clipboard("zoom"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+,"),
             Until(H(C::SettingsShown)),
             Keys("Ctrl+V")
@@ -1519,6 +1579,7 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("pasted bookmark")),
             Until(H(C::Clipboard("pasted bookmark"))),
             Click(Left, NONE, at::BLANK),
+            took(1),
             Keys("Ctrl+D"),
             Until(H(C::BookmarkSheet(true))),
             Keys("Ctrl+A Ctrl+V Enter"),
@@ -2270,6 +2331,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// No key step goes out while a press before it may still be on its way to the page
+    /// ([`took`]): a page menu shown for a press (Choose, MenuHas) also says it arrived. The
+    /// presses are counted on the page RESET left shown, until an op shows another tab (whose
+    /// page counts its own).
+    #[test]
+    fn a_key_step_waits_for_the_presses_before_it() {
+        let mut early = vec![];
+        // the one item that sends keys behind a click on purpose
+        for item in ITEMS.iter().filter(|i| i.name != "A.keys-behind-a-click") {
+            let (mut presses, mut taken) = (0u8, 0u8);
+            for step in &item.steps[RESET.len()..] {
+                match *step {
+                    Step::Host(
+                        HostOp::CloseBar
+                        | HostOp::CloseFind
+                        | HostOp::SetClipboard(_)
+                        | HostOp::HoverFile(_)
+                        | HostOp::DropFile(_)
+                        | HostOp::SecondTab
+                        | HostOp::BookmarksTab
+                        | HostOp::Shot(_)
+                        | HostOp::ZoomReset
+                        | HostOp::AnswerPrint
+                        | HostOp::AnswerPrompt(_),
+                    ) => {}
+                    Step::Host(_) | Step::Restore => break,
+                    Step::Click(..) | Step::Press(_) => presses += 1,
+                    Step::Clicks(n, _) => presses += n,
+                    Step::PressAt(Spot::Pane(..) | Spot::Drawn(_)) => presses += 1,
+                    Step::Choose(_) | Step::MenuHas(_) => taken = presses,
+                    Step::Keys(_) | Step::Type(_) | Step::Hold(..) if taken < presses => {
+                        early.push(format!("{} before took({presses})", item.name));
+                    }
+                    s => {
+                        if let Some(n) = (1..=3).find(|&n| took(n) == s) {
+                            taken = n;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(early.is_empty(), "{early:#?}");
     }
 
     #[test]

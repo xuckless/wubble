@@ -429,3 +429,110 @@ build of main before pf/perf was merged. Speedometer 3.1: 3 runs each, interleav
 
 The pass does not move Speedometer (score and CPU within 2 %): its 17 % gap to Chromium is not the shell's redraw.
 MotionMark: 9 % less CPU than before for the same score within noise; 2 % behind Chromium for 13 % more CPU (was 17 %).
+
+## The owner's Mac, preview.5 (2026-11-21)
+
+Taken by the owner on their Mac (Apple silicon, a 5K external display, 120 Hz) with 0.1.0-preview.5, by hand; the
+method and tools are the owner's and were not recorded here. CPU is a share of one core; "Tabs" is the page processes
+together.
+
+| Step | Main process | GPU process | Tabs | Total CPU (peak) | GPU busy |
+|---|---|---|---|---|---|
+| Idle, 1 blank tab | 2 % | 0 % | 2 % | 4 % (5 %) | 9 % |
+| Opening 10 sites | 53 % | 10 % | 45 % | 123 % (156 %) | 42 % |
+| Scrolling through them | 26 % | 6 % | 18 % | 51 % (65 %) | 50 % |
+| 10 tabs open, nothing happening | 10 % | 2 % | 13 % | 26 % (33 %) | 4 % |
+| 1 video, 1080p60 AV1, on screen | 26 % | 10 % | 57 % | 94 % (115 %) | 61 % |
+| Same video, fullscreen | 29 % | 10 % | 54 % | 92 % (117 %) | 68 % |
+| 3 videos playing (1 on screen) | 26 % | 12 % | 69 % | 107 % (133 %) | 71 % |
+| 3 videos, switching between them | 28 % | 14 % | 66 % | 108 % (131 %) | 78 % |
+| 3 videos in background, browsing in front | 24 % | 13 % | 76 % | 114 % (136 %) | 49 % |
+| 14 tabs, videos paused | 10 % | 2 % | 16 % | 28 % (37 %) | 2 % |
+| Everything closed | 2 % | 0 % | 5 % | 7 % | 4 % |
+
+Also noted: 9 of 10 sites loaded in 0.4 to 1.0 s (The Verge 2.4 s); the on-screen 60 fps AV1 video dropped 4 frames in
+about 2 minutes (fullscreen included), the 30 fps one 3; a background 60 fps VP9 video (hardware decode) dropped 130 of
+about 10,300 frames, more on tab switches; pausing the videos freed about 2 GB in the GPU process; the main process's
+footprint went from about 850 MB at the start to 1.18 GB after everything closed. The main process's 26 % for one video
+was 37 to 40 % on preview.1 by the same hand. What follows from it: TODO.md, "From the owner's Mac run of preview.5".
+
+## The owner's Mac, preview.5, Low Power Mode, with stack samples (2026-11-21)
+
+The same workflow (`tools/mcp-bench` on branch `bench/mcp-workflow`, about 9 minutes), run over ssh through the
+owner's MCP bridge, the Mac in Low Power Mode on its adapter (80 to 88 %, charging by the end), one run. Beside the
+sampler, `sample` took 5 s of the main process and of the GPU process 8 s into each phase (1 ms interval; under load
+it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo).
+
+| phase | main CPU % | GPU proc % | tabs % | total % (p95) | main MB | GPU proc MB | GPU util % |
+|---|---|---|---|---|---|---|---|
+| 1-idle | 1 | 0 | 6 | 8 (16) | 1030 | 363 | 10 |
+| 2-browse-open | 61 | 11 | 39 | 126 (135) | 1377 | 2208 | 53 |
+| 2-browse-scroll | 29 | 7 | 24 | 60 (91) | 1214 | 2151 | 62 |
+| 2-browse-idle | 9 | 2 | 15 | 26 (54) | 1235 | 2199 | 15 |
+| 3-video1-play | 30 | 10 | 54 | 95 (111) | 1574 | 3102 | 63 |
+| 3-video1-fullscreen | 29 | 10 | 50 | 89 (110) | 1671 | 2873 | 60 |
+| 4-video3-play | 29 | 14 | 76 | 121 (160) | 1554 | 2758 | 55 |
+| 4-video3-switch | 32 | 16 | 72 | 121 (157) | 1517 | 2757 | 63 |
+| 5-mixed | 25 | 15 | 72 | 114 (140) | 1440 | 2817 | 50 |
+| 6-paused | 11 | 2 | 22 | 35 (65) | 1321 | 469 | 4 |
+| 7-recovered | 2 | 0 | 11 | 13 (49) | 1256 | 522 | 3 |
+
+Within a few points of the owner's own run on mains power: Low Power Mode did not change the picture.
+
+The main thread, from the stack samples (share of the samples in which it was not waiting):
+
+| phase | busy | in wubble's own code | in CEF | the accessibility mirror |
+|---|---|---|---|---|
+| 1-idle (one blank tab) | 1.8 % | 0.1 % | 0.3 % | 0 |
+| 2-browse-idle (10 tabs, still) | 8.8 % | 6.6 % | 1.3 % | about 6.6 % |
+| 2-browse-scroll | 35.7 % | 20.7 % | 6.6 % | 7.7 % |
+| 3-video1-play | 33.8 % | 20.7 % | 5.4 % | 6.0 % |
+| 3-video1-fullscreen | 20.5 % | 11.3 % | 2.7 % | 4.1 % |
+| 4-video3-switch | 25.6 % | 14.0 % | 3.9 % | 2.7 % |
+
+What the samples show and do not:
+- The shipped Mac binary has no symbols (`strip = "symbols"`), so wubble's own code shows as addresses. One path was
+  identified from the strings its code refers to (B-tree assertions beside the accessibility tree's field names,
+  `childTreeId`, `tree_data`, `hierarchicalLevel`): the mirror of CEF's accessibility tree (`host/ax.rs`,
+  `wubble_ax::PageTree`). Every tab of an agent session has accessibility on (`wanted = on || agent_drives(tab)`),
+  and this benchmark drives all its tabs through an agent session. So "10 idle tabs keep the main process at 10 %"
+  is the mirror applying updates from pages that animate while hidden: a cost of agent sessions, and of the way the
+  benchmark is driven, not of ten tabs a person opened (not yet measured: needs tabs opened outside a session).
+  The same path is 3 to 8 points of every other phase's main thread.
+- Metal, IOSurface and the GPU driver are 1 to 2 % of the main thread during video: present is not where the main
+  thread's time goes. Most of it is in wubble's own stripped code (Slint and Skia are linked into it); naming it
+  needs a build with symbols.
+- Nothing here counts frames, so the paint rate during video (60 or 120) and the lag on a tab switch a tester
+  reported are not answered by this run.
+
+## The owner's Mac, preview.5: frame runs in Low Power Mode (2026-11-21)
+
+`--measure` runs of the installed app, started by the owner (`/Users/Shared/wubble-frames.sh`), 10 s each, Low
+Power Mode on, on the adapter, window 2560x1600@2, one run each (scroll twice). The first two runs reported a
+120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo).
+
+| run | page frames /s | shell renders /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | main % | GPU proc % |
+|---|---|---|---|---|---|---|---|
+| idle (still page) | 0 | 8.6 | 193 | 16.6 / 24.7 / 919 | 33.8 / 37.6 | 7.2 | 0.7 |
+| idle on the start page | 0 | 59.8 | 606 | 16.7 / 22.9 / 30 | 38.8 / 51.3 | 51.3 | 0.3 |
+| scroll | 34.9 | 48.1 | 246 | 16.7 / 48.6 / 65 | 2.2 / 50.1 | 33.6 | 18.9 |
+| scroll, second run | 56.1 | 58.5 | 36 | 16.7 / 24.0 / 48 | 3.4 / 14.4 | 33.2 | 11.6 |
+| scroll, `--begin-frames` | 58.1 | 59.4 | 12 | 16.7 / 20.2 / 33 | 4.5 / 11.9 | 37.1 | 10.0 |
+| canvas animation | 49.6 | 56.0 | 81 | 16.7 / 36.9 / 51 | 4.0 / 17.9 | 31.9 | 22.3 |
+| canvas, `--begin-frames` | 58.9 | 59.9 | 3 | 16.6 / 19.4 / 33 | 7.6 / 16.6 | 32.9 | 15.4 |
+| resize | 43.9 | 58.5 | 88 | 16.6 / 28.6 / 51 | 9.6 / 29.8 | 87.1 | 17.7 |
+| typing | 41.0 | 44.7 | 224 | 17.4 / 47.8 / 115 | 2.9 / 48.2 | 32.4 | 19.5 |
+
+(frame interval = `present_interval`; typing: key to pixels 53 / 88 / 103 ms, pointer to pixels 45 / 81 / 83 ms;
+resize: 428 stale frames, longest run 90.)
+
+- Frames are dropped: with CEF on its own timer, 35 to 56 page frames a second on a 60 Hz display and 36 to 246
+  missed refreshes in 10 s; the late frames come in steps of about 50 ms (three refreshes). The message pump
+  shows gaps of 33 to 55 ms in every run (idle too), so the main loop is being woken late; why (Low Power Mode's
+  timer coalescing, the pump's own delayed-work timer, App Nap) is not yet known, and no run was made with Low
+  Power Mode off.
+- With `--begin-frames` (one CEF frame per shell render) the same pages hold 58 to 59 frames a second with 3 to
+  12 missed refreshes, on less GPU-process time.
+- The start page redraws the whole window 60 times a second for ever (dirty share 1.0, no partial frames) and
+  holds the main process at 51 % of a core.
+- A still page was redrawn 8.6 times a second (whole window each time); the rule on Linux is 0 to 2 in 4 s.

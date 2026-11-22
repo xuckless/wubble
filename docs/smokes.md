@@ -135,9 +135,13 @@ each, three at once (each its own compositor):
 | page | 3/3 | pages | 3/3 | block | 3/3 |
 | parity | 3/3 (11/12 more) | | | | |
 
-Known flake: `--smoke parity` fails about one run in six on this display (7 of 40), always early in
-`A.type-input` (its first item) or `A.pagedown-scrolls`, and never with the keyboard left out (0 of
-18): the page sees every keydown but not its default action (no keypress, nothing typed; no
-scroll). Cause not found yet. Also fixed on the way: `--smoke autofill` failed about one
+Fixed flake: `--smoke parity` failed about one run in six (15 % to 20 %, at a49a1be as at main),
+almost always on its first item, `A.type-input` (once also `A.pagedown-scrolls`): the page saw
+every keydown, but at `<body>`, and the click on the field only after them. On a page with
+out-of-process frames (parity.html frames `localhost`) Chromium's input router may ask the
+renderer where a press lands (`RenderWidgetTargeter`, 6 to 50 ms while the frames load), while
+keys go straight to the focused frame; the smoke typed in the same turn as its click. Key steps
+now wait for the page to have had every press before them (`parity::took`, held by a unit test);
+`A.keys-behind-a-click` sends keys behind a click on purpose and checks none is lost. Also fixed on the way: `--smoke autofill` failed about one
 run in five (the submitting page's own load report read as a failed sign-in), and parallel
 `--smoke parity` runs stalled three minutes (the loopback server answered one connection at a time).

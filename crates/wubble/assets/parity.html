@@ -66,7 +66,7 @@ input, textarea, [contenteditable] { font: 16px monospace; }
 <script>
 const $ = (id) => document.getElementById(id);
 // What the page saw, for the smoke's checks.
-const seen = { keys: [], drops: [], files: [], custom: [], effect: '', dragstart: 0, grab: false, neutral: 0, space: [], spaceRepeat: [], grabSpace: false };
+const seen = { keys: [], drops: [], files: [], custom: [], effect: '', dragstart: 0, grab: false, neutral: 0, presses: 0, space: [], spaceRepeat: [], grabSpace: false };
 // The page's pixel ratio at 100 %: browser zoom scales it.
 const dpr = devicePixelRatio;
 const parity = {
@@ -112,8 +112,10 @@ const parity = {
   // Space as a video player takes it (YouTube): every keydown, keypress and keyup it gets,
   // its default action prevented.
   grabSpace() { seen.grabSpace = true; return true; },
+  // The page has had `n` presses since the reset (parity.rs `took`).
+  took(n) { return seen.presses >= n || `the page has had ${seen.presses} of ${n} presses`; },
   reset() {
-    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.ownUndo = false; seen.neutral = 0; seen.clip = {}; seen.copied = ''; seen.space = []; seen.spaceRepeat = []; seen.grabSpace = false;
+    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.ownUndo = false; seen.neutral = 0; seen.presses = 0; seen.clip = {}; seen.copied = ''; seen.space = []; seen.spaceRepeat = []; seen.grabSpace = false;
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
     scrollTo(0, 0);
@@ -122,6 +124,7 @@ const parity = {
 // Got `a`, wanted `b`: true, or what was seen.
 const eq = (a, b) => a === b || `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`;
 addEventListener('mousedown', (e) => {
+  if (e.isTrusted) seen.presses++;
   seen.down = `${e.target.id || e.target.tagName}@${e.clientX},${e.clientY}/${e.button}/${e.detail}`;
   // The reset's second neutral click (parity.rs `at::NEUTRAL`): nothing else is right of 720.
   if (e.isTrusted && e.button === 0 && e.clientX >= 720) seen.neutral++;
