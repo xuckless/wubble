@@ -111,7 +111,7 @@ Open, for the owner's eye:
 
 Open, to build or check:
 - [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on a playing YouTube tab (tests pass; not reproduced)
-- [ ] `--smoke parity` flakes about 1 in 6 on the test display: early key presses arrive without their default action
+- [ ] The command bar's panel still takes clicks while it shrinks away (176 ms): a click on the page under it then is lost; check the design's exit (pointer-events)
 - [ ] In-place rename for a new Space in the sidebar (needs a design); Linux alternates for the chords GNOME takes
 - [ ] Audible badge: the probe misses iframes, shadow DOM and WebAudio (a real signal needs the CEF patch, M6)
 - [ ] Page copy buttons carry text only (no image items)
