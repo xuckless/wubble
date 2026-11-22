@@ -14,6 +14,16 @@
 //! applied in the same transition instead of being posted again, and a
 //! re-entrant request only marks the running work (the outer `WorkDone` then
 //! re-runs it), which leaves the same state behind.
+//!
+//! And the longest wait ([`Tempo`]): CEF's `MessagePumpExternal`
+//! (`libcef/browser/browser_message_loop.cc`, `Run` and `DirectRunWork`) drops the delayed
+//! run time `DoWork` returns once it is past the 10 ms time slice, and Chromium tells the pump
+//! about a delayed task only when it is posted outside `DoWork`
+//! (`ThreadControllerWithMessagePumpImpl::SetNextDelayedDoWork`). So a delayed task posted
+//! while CEF works (a compositor deadline, a frame timer's next tick) is never announced: it
+//! runs at the next wake for any other reason, at the latest at cefclient's 30 Hz fallback. A
+//! page that paints keeps the fallback at one display refresh ([`Tempo::Painting`]) for
+//! [`PAINTING_HOLD`] runs after its last frame; a still page keeps cefclient's 33 ms.
 
 use std::time::Duration;
 
@@ -26,6 +36,47 @@ pub const TIMER_DELAY_PLACEHOLDER: i64 = i32::MAX as i64;
 /// of work (30 Hz), whatever delay CEF asks for.
 pub const MAX_TIMER_DELAY: Duration = Duration::from_millis(1000 / 30);
 
+/// CEF's `max_time_slice` for the external pump (`MessagePumpFactoryForUI`: `0.01f`): a run of
+/// work this long may have stopped with immediate work left.
+pub const CEF_TIME_SLICE: Duration = Duration::from_millis(10);
+
+/// Timer runs a [`Tempo::Painting`] lasts after the last page frame: a few refreshes, so the
+/// gaps between a page's frames keep it, and a page that stopped returns to 30 Hz soon.
+pub const PAINTING_HOLD: u8 = 8;
+
+/// The longest the host waits between two runs of work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tempo {
+    /// No page paints: [`MAX_TIMER_DELAY`].
+    #[default]
+    Still,
+    /// A page painted: one display refresh (`refresh`, never above [`MAX_TIMER_DELAY`]), for
+    /// `left` more timer runs unless another frame comes.
+    Painting { refresh: Duration, left: u8 },
+}
+
+impl Tempo {
+    /// The longest wait between two runs of work.
+    pub fn ceiling(self) -> Duration {
+        match self {
+            Self::Still => MAX_TIMER_DELAY,
+            Self::Painting { refresh, .. } => refresh.min(MAX_TIMER_DELAY),
+        }
+    }
+
+    /// After a timer run: one fewer left; the last one returns to [`Tempo::Still`].
+    fn timer_ran(self) -> Self {
+        match self {
+            Self::Painting { left, .. } if left <= 1 => Self::Still,
+            Self::Painting { refresh, left } => Self::Painting {
+                refresh,
+                left: left - 1,
+            },
+            Self::Still => Self::Still,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PumpState {
     /// A single-shot timer is armed and will report [`PumpEvent::TimerFired`].
@@ -35,6 +86,8 @@ pub struct PumpState {
     pub active: bool,
     /// Work was requested while `active`; it runs again on `WorkDone`.
     pub reentrant: bool,
+    /// The longest wait between runs.
+    pub tempo: Tempo,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,8 +96,11 @@ pub enum PumpEvent {
     Schedule(i64),
     /// The timer from the last [`PumpEffect::StartTimer`] fired.
     TimerFired,
-    /// The work from [`PumpEffect::RunWork`] has returned.
-    WorkDone,
+    /// The work from [`PumpEffect::RunWork`] has returned; `slice_spent`: it ran for at least
+    /// [`CEF_TIME_SLICE`], so CEF may hold work it will not ask for.
+    WorkDone { slice_spent: bool },
+    /// The host took a page frame; `refresh` is the display's refresh period.
+    Painted(Duration),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,15 +122,24 @@ pub fn transition(state: PumpState, event: PumpEvent) -> (PumpState, Vec<PumpEff
         PumpEvent::TimerFired => request_work(
             PumpState {
                 timer_pending: false,
+                tempo: state.tempo.timer_ran(),
                 ..state
             },
             &mut effects,
         ),
+        // Takes effect at the next timer (re)arm; the armed one stays.
+        PumpEvent::Painted(refresh) => PumpState {
+            tempo: Tempo::Painting {
+                refresh,
+                left: PAINTING_HOLD,
+            },
+            ..state
+        },
         // A WorkDone without work running is stale; ignore it.
-        PumpEvent::WorkDone if !state.active => state,
-        // DoWork after PerformMessageLoopWork: re-run re-entrant work now,
-        // else make sure CEF is pumped within the maximum delay.
-        PumpEvent::WorkDone => {
+        PumpEvent::WorkDone { .. } if !state.active => state,
+        // DoWork after PerformMessageLoopWork: re-run re-entrant work now, run again on the
+        // next pass after a spent slice, else make sure CEF is pumped within the maximum delay.
+        PumpEvent::WorkDone { slice_spent } => {
             let idle = PumpState {
                 active: false,
                 reentrant: false,
@@ -82,6 +147,15 @@ pub fn transition(state: PumpState, event: PumpEvent) -> (PumpState, Vec<PumpEff
             };
             if state.reentrant {
                 schedule(idle, 0, &mut effects)
+            } else if slice_spent {
+                if state.timer_pending {
+                    effects.push(PumpEffect::CancelTimer);
+                }
+                effects.push(PumpEffect::StartTimer(Duration::ZERO));
+                PumpState {
+                    timer_pending: true,
+                    ..idle
+                }
             } else if !state.timer_pending {
                 schedule(idle, TIMER_DELAY_PLACEHOLDER, &mut effects)
             } else {
@@ -107,7 +181,7 @@ fn schedule(state: PumpState, delay_ms: i64, effects: &mut Vec<PumpEffect>) -> P
     if delay_ms <= 0 {
         return request_work(state, effects);
     }
-    let delay = Duration::from_millis(delay_ms.unsigned_abs()).min(MAX_TIMER_DELAY);
+    let delay = Duration::from_millis(delay_ms.unsigned_abs()).min(state.tempo.ceiling());
     effects.push(PumpEffect::StartTimer(delay));
     PumpState {
         timer_pending: true,
@@ -141,6 +215,7 @@ mod tests {
             timer_pending,
             active,
             reentrant,
+            tempo: Tempo::Still,
         }
     }
 
@@ -150,7 +225,10 @@ mod tests {
             .collect()
     }
 
-    const EVENTS: [PumpEvent; 8] = [
+    const DONE: PumpEvent = WorkDone { slice_spent: false };
+    const SPENT: PumpEvent = WorkDone { slice_spent: true };
+
+    const EVENTS: [PumpEvent; 9] = [
         Schedule(i64::MIN),
         Schedule(-5),
         Schedule(0),
@@ -158,7 +236,8 @@ mod tests {
         Schedule(100),
         Schedule(TIMER_DELAY_PLACEHOLDER),
         TimerFired,
-        WorkDone,
+        DONE,
+        SPENT,
     ];
 
     /// The cefclient rules restated per case, independent of the helpers above.
@@ -167,6 +246,7 @@ mod tests {
             timer_pending: t,
             active: a,
             reentrant: r,
+            ..
         } = s;
         let cancel = || if t { vec![CancelTimer] } else { vec![] };
         let with = |mut v: Vec<PumpEffect>, e| {
@@ -186,10 +266,15 @@ mod tests {
             Schedule(_) => (st(false, true, r), with(cancel(), RunWork)),
             TimerFired if a => (st(false, true, true), vec![]),
             TimerFired => (st(false, true, r), vec![RunWork]),
-            WorkDone if !a => (s, vec![]),
-            WorkDone if r => (st(false, true, false), with(cancel(), RunWork)),
-            WorkDone if t => (st(true, false, false), vec![]),
-            WorkDone => (st(true, false, false), vec![StartTimer(MAX)]),
+            WorkDone { .. } if !a => (s, vec![]),
+            WorkDone { .. } if r => (st(false, true, false), with(cancel(), RunWork)),
+            WorkDone { slice_spent: true } => (
+                st(true, false, false),
+                with(cancel(), StartTimer(Duration::ZERO)),
+            ),
+            WorkDone { .. } if t => (st(true, false, false), vec![]),
+            WorkDone { .. } => (st(true, false, false), vec![StartTimer(MAX)]),
+            Painted(_) => (s, vec![]),
         }
     }
 
@@ -253,7 +338,7 @@ mod tests {
     #[test]
     fn work_done_reruns_reentrant_work() {
         assert_eq!(
-            transition(st(false, true, true), WorkDone),
+            transition(st(false, true, true), DONE),
             (st(false, true, false), vec![RunWork])
         );
     }
@@ -261,11 +346,11 @@ mod tests {
     #[test]
     fn work_done_arms_the_placeholder_only_without_a_pending_timer() {
         assert_eq!(
-            transition(st(false, true, false), WorkDone),
+            transition(st(false, true, false), DONE),
             (st(true, false, false), vec![StartTimer(MAX)])
         );
         assert_eq!(
-            transition(st(true, true, false), WorkDone),
+            transition(st(true, true, false), DONE),
             (st(true, false, false), vec![])
         );
     }
@@ -284,7 +369,7 @@ mod tests {
             for event in EVENTS {
                 let (_, effects) = transition(state, event);
                 let runs = effects.iter().filter(|e| **e == RunWork).count();
-                let allowed = if state.active && event != WorkDone {
+                let allowed = if state.active && !matches!(event, WorkDone { .. }) {
                     0
                 } else {
                     1
@@ -297,20 +382,7 @@ mod tests {
     /// Runs `events` like the engine does: every RunWork is followed by its
     /// WorkDone before the next host event.
     fn drive(events: &[PumpEvent]) -> (PumpState, Vec<PumpEffect>) {
-        let mut state = PumpState::default();
-        let mut all = vec![];
-        for &event in events {
-            let mut queue = vec![event];
-            while let Some(event) = queue.pop() {
-                let (next, effects) = transition(state, event);
-                state = next;
-                if effects.contains(&RunWork) {
-                    queue.push(WorkDone);
-                }
-                all.extend(effects);
-            }
-        }
-        (state, all)
+        drive_from(PumpState::default(), events)
     }
 
     /// The steady state: each run of work leaves the 33 ms timer armed, so a
@@ -326,5 +398,105 @@ mod tests {
             assert_eq!(state, st(true, false, false), "{path:?}");
             assert_eq!(effects.last(), Some(&StartTimer(MAX)), "{path:?}");
         }
+    }
+
+    #[test]
+    fn a_run_that_spent_the_slice_runs_again_on_the_next_pass() {
+        // not at once: the window draws first
+        assert_eq!(
+            transition(st(false, true, false), SPENT),
+            (st(true, false, false), vec![StartTimer(Duration::ZERO)])
+        );
+        // instead of the armed timer, which may be the 33 ms fallback
+        assert_eq!(
+            transition(st(true, true, false), SPENT),
+            (
+                st(true, false, false),
+                vec![CancelTimer, StartTimer(Duration::ZERO)]
+            )
+        );
+        // the zero timer then runs the work CEF did not ask for
+        assert_eq!(
+            drive_from(st(true, false, false), &[TimerFired]).1,
+            vec![RunWork, StartTimer(MAX)]
+        );
+    }
+
+    const REFRESH: Duration = Duration::from_micros(16_667);
+
+    fn painting(left: u8) -> Tempo {
+        Tempo::Painting {
+            refresh: REFRESH,
+            left,
+        }
+    }
+
+    #[test]
+    fn a_painted_page_brings_the_fallback_to_one_refresh() {
+        let (state, effects) = transition(st(false, true, false), Painted(REFRESH));
+        assert_eq!(effects, vec![]);
+        assert_eq!(state.tempo, painting(PAINTING_HOLD));
+        // the next run's fallback and CEF's own longer delays wait one refresh at most
+        assert_eq!(transition(state, DONE).1, vec![StartTimer(REFRESH)]);
+        let idle = PumpState {
+            tempo: painting(3),
+            ..PumpState::default()
+        };
+        assert_eq!(transition(idle, Schedule(100)).1, vec![StartTimer(REFRESH)]);
+        assert_eq!(
+            transition(idle, Schedule(5)).1,
+            vec![StartTimer(Duration::from_millis(5))]
+        );
+    }
+
+    #[test]
+    fn a_refresh_longer_than_the_maximum_keeps_the_maximum() {
+        let slow = PumpState {
+            tempo: Tempo::Painting {
+                refresh: Duration::from_millis(100),
+                left: 2,
+            },
+            active: true,
+            ..PumpState::default()
+        };
+        assert_eq!(transition(slow, DONE).1, vec![StartTimer(MAX)]);
+    }
+
+    #[test]
+    fn painting_ends_after_the_hold_without_a_frame() {
+        let (mut state, _) = transition(PumpState::default(), Painted(REFRESH));
+        for left in (1..PAINTING_HOLD).rev() {
+            state = drive_from(state, &[TimerFired]).0;
+            assert_eq!(state.tempo, painting(left));
+        }
+        let (state, effects) = drive_from(state, &[TimerFired]);
+        assert_eq!(state.tempo, Tempo::Still);
+        assert_eq!(effects.last(), Some(&StartTimer(MAX)));
+        // a frame meanwhile starts the hold again; immediate work does not count it down
+        let (state, _) = drive_from(
+            PumpState {
+                tempo: painting(1),
+                ..PumpState::default()
+            },
+            &[Painted(REFRESH), Schedule(0)],
+        );
+        assert_eq!(state.tempo, painting(PAINTING_HOLD));
+    }
+
+    /// Runs `events` from `state` like the engine does.
+    fn drive_from(mut state: PumpState, events: &[PumpEvent]) -> (PumpState, Vec<PumpEffect>) {
+        let mut all = vec![];
+        for &event in events {
+            let mut queue = vec![event];
+            while let Some(event) = queue.pop() {
+                let (next, effects) = transition(state, event);
+                state = next;
+                if effects.contains(&RunWork) {
+                    queue.push(DONE);
+                }
+                all.extend(effects);
+            }
+        }
+        (state, all)
     }
 }

@@ -537,6 +537,61 @@ resize: 428 stale frames, longest run 90.)
   holds the main process at 51 % of a core.
 - A still page was redrawn 8.6 times a second (whole window each time); the rule on Linux is 0 to 2 in 4 s.
 
+## Why the pump woke late on the Mac (2026-11-21)
+
+From the owner's frame runs above (the CSVs in `~/Dev/wubble-wt/notes/mac-bench-3/`), the gap from each run of CEF
+work to the next, split by how long the run took (CEF's time slice is 10 ms):
+
+| run | runs | of them 10 ms or longer | gap after one, p50 / p90 ms | gap after a shorter one, p50 / p90 ms |
+|---|---|---|---|---|
+| scroll (34.9 frames /s) | 789 | 158 | 49.0 / 51.2 | 2.0 / 14.5 |
+| scroll, second run (56.1) | 1653 | 47 | 16.0 / 50.0 | 3.2 / 13.6 |
+| scroll, `--begin-frames` (58.1) | 2129 | 30 | 11.3 / 46.4 | 4.2 / 10.0 |
+| canvas (49.6) | 1290 | 71 | 45.0 / 50.7 | 3.6 / 13.9 |
+| canvas, `--begin-frames` (58.9) | 1516 | 24 | 11.1 / 18.7 | 7.5 / 12.9 |
+| typing | 1078 | 158 | 44.8 / 51.2 | 2.7 / 14.0 |
+| idle | 337 | 7 | 44.1 / 48.1 | 33.8 / 34.3 |
+
+A run that spent the slice was followed by the 33 ms fallback (the run itself plus 33 ms: 45 to 50), because CEF
+stops there with work left and asks for nothing (decisions.md "Pump after a spent slice"); the more such runs, the
+fewer frames. On the Mac a run is long when a paint callback waits for the GPU (`callback_copy_wait` 4 to 14 ms; on
+Linux 0.03 to 1 ms, so Linux never showed it). The idle gap of 33 ms is cefclient's fallback by design, the same on
+Linux (33.04). Not yet measured on the Mac after the fix.
+
+Linux, after the fix (headless 1360x880@1, 60 Hz, RTX 5060, debug, load 3.5, one run each): idle 4 s 0 renders,
+pump gap 33.05 / 33.14; scroll 59.8 frames /s, 9 missed refreshes, pump gap p50 / p95 2.0 / 16.7 (before: 60.0, 3,
+14.6 / 16.8); video 60.0, 0 missed (before: 60.0, 1). The same within this machine's noise: Linux runs seldom spend
+the slice.
+
+## The still page the Mac redrew (2026-11-21)
+
+`idle.txt` of the Mac runs above, from its CSV (in arrival order, so the pump gaps give a clock): all 86 renders came
+in two runs, about 2.5 to 3.5 s and 4.5 to 4.9 s into the 10 s recording, at 30 to 60 a second; nothing after.
+`run_state_changes` 8 (four wakes of the still scene and four settles), `cef_frames` 0 (no page frame: not an
+occlusion and show, which repaints the page), every render a whole-window scene frame. Linux: 0 renders, 0 changes.
+What woke it is not in that output; `--measure idle` now counts each wake by cause (`scene_wake_*`, smokes.md). The
+likeliest from the code, not confirmed: the pointer moving over the window (macOS sends winit `CursorEntered` and
+`CursorMoved` to a window that is not key; the light then catches up for about a second); the headless Linux runs
+never move the pointer.
+
+## Shell pacing against CEF's timer, Linux (2026-11-21)
+
+Headless 1360x880@1, 60 Hz, RTX 5060, debug build of main (2372843), 10 s each (idle 4 s), one run each, load about 3.
+Linux numbers; why macOS now ships the shell's pacing is the Mac table above.
+
+| run | page frames /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | pump runs /s |
+|---|---|---|---|---|---|
+| scroll, CEF's timer | 60.0 | 3 | 16.67 / 17.67 / 34.3 | 14.6 / 16.8 | 112 |
+| scroll, `--begin-frames` | 59.9 | 0 | 16.65 / 17.37 / 21.4 | 0.4 / 16.0 | 230 |
+| video, CEF's timer | 60.0 | 1 | 16.65 / 17.50 / 32.4 | 15.7 / 16.8 | 117 |
+| video, `--begin-frames` | 60.0 | 0 | 16.66 / 17.43 / 22.3 | 15.9 / 17.2 | 105 |
+| idle, CEF's timer | 0 | 0 renders | | 33.0 / 33.2 | 33 |
+| idle, `--begin-frames` | 0 | 0 renders | | 33.0 / 33.1 | 47 |
+
+At 60 Hz the shell's pacing is as good or a little better on Linux (fewer missed refreshes, a shorter worst frame),
+at the cost of twice the pump runs in a scroll and a begin frame every 33 ms on a still page; the Linux default stays
+CEF's timer for the owner to decide (it was left off for a worse video render interval at 240 Hz, the first table).
+
 ## The start page's damage (Linux, 2026-11-21)
 
 `--measure idle --seconds 10 --measure-page wubble://start` under `scripts/headless.sh` (1360x880@1, 60 Hz, RTX

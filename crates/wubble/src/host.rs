@@ -103,7 +103,7 @@ use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, KeyInput, Point};
 use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
-use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
+use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent, Pacing};
 use wubble_gfx::scene::run::RunEvent;
 use wubble_store::{ArchivedTab, ClosedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, FocusRegion, GlassKeys, SidebarMode};
@@ -350,8 +350,9 @@ impl PaneFrame {
     }
 }
 
-/// The external begin-frame driver's state and its timer.
-struct Pace {
+/// One window's external begin-frame driver (`Pacing::Shell`): its state and its timer.
+#[derive(Default)]
+pub(crate) struct Pace {
     state: BeginFrames,
     timer: slint::Timer,
 }
@@ -509,7 +510,12 @@ pub struct Host {
     downloads: downloads::Downloads,
     /// The media downloader: each tab's streams and the download jobs (`host/media.rs`).
     media: media::Media,
-    pace: Option<Pace>,
+    /// Who paces CEF's frames; with the shell's, each window drives the pages it shows
+    /// (`WindowHost::pace`) and [`Host::unshown`] the agents' pages no window shows.
+    pacing: Pacing,
+    /// `Pacing::Shell`: the begin frames of agent pages no window shows, at
+    /// [`pacing::UNSHOWN_FRAME_RATE`], running while there is one.
+    unshown: slint::Timer,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
     /// Auto-archive: how long a tab may go unvisited (`archive.after`).
@@ -736,10 +742,12 @@ impl Host {
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
             media: media::Media::new(media_observer),
-            pace: begin_frames.then(|| Pace {
-                state: BeginFrames::Off,
-                timer: slint::Timer::default(),
-            }),
+            pacing: if begin_frames {
+                Pacing::Shell
+            } else {
+                Pacing::CefTimer
+            },
+            unshown: slint::Timer::default(),
             clipboard,
             archive_after: ArchiveAfter::Off,
             archiving: HashMap::new(),
@@ -1051,7 +1059,7 @@ impl Host {
                             url: url.clone(),
                             layout,
                             frame_rate,
-                            begin_frames: self.pace.is_some(),
+                            begin_frames: self.begin_frames(),
                             gpu: self.w.presenters[0].context().clone(),
                             // The tab's own cookies, storage and cache: its container's.
                             container: self
@@ -1077,6 +1085,7 @@ impl Host {
                         self.ax_view_opened(tab);
                         self.agent_rules();
                         self.pace(PaceEvent::Wake);
+                        self.pace_unshown();
                     }
                     Err(e) => {
                         eprintln!("wubble: tab {}: {e}; closing it", tab.0);
@@ -1127,7 +1136,14 @@ impl Host {
                         view.set_frame_rate(pacing::view_frame_rate(frame_rate, visible));
                     }
                 }
+                // the driver of the window that shows it
+                let back = self.w.id;
+                if let Some(id) = self.model.window_of(tab) {
+                    self.enter(id);
+                }
                 self.pace(PaceEvent::Wake);
+                self.enter(back);
+                self.pace_unshown();
             }
             Call::SetFrozen { tab, frozen } => {
                 if let Some(view) = self.tab_view(tab) {
@@ -2614,6 +2630,31 @@ impl Host {
         }
     }
 
+    /// `--measure tabs`: opens `pages` as tabs after the window's one, once, and shows the
+    /// first again.
+    pub(crate) fn measure_open_tabs(&mut self, pages: &[String]) {
+        let order = self.model.order(self.model.active_space());
+        if order.len() != 1 {
+            return;
+        }
+        for url in pages {
+            self.dispatch(new_tab(url.clone(), None));
+        }
+        self.dispatch(Command::ActivateTab(order[0]));
+    }
+
+    /// `--measure tabs`: shows the next tab of the window's Space (the first after the last).
+    pub(crate) fn measure_next_tab(&mut self) {
+        let order = self.model.order(self.model.active_space());
+        let next = self
+            .shown()
+            .and_then(|t| order.iter().position(|&o| o == t))
+            .map_or(0, |i| (i + 1) % order.len().max(1));
+        if let Some(&tab) = order.get(next) {
+            self.dispatch(Command::ActivateTab(tab));
+        }
+    }
+
     fn tabs_smoke_step(&mut self) {
         let Some(heard) = self.checks.tabs_smoke.as_ref().map(|s| &s.heard) else {
             return;
@@ -3337,7 +3378,10 @@ impl Host {
                 .with_winit_window(|w| w.is_minimized())
                 .flatten()
         }) {
-            self.w.glass.borrow_mut().run_event(e, &window);
+            self.w
+                .glass
+                .borrow_mut()
+                .run_event(e, crate::run_state::wake_of(event), &window);
             match e {
                 RunEvent::Hidden => self.occlusion(true),
                 RunEvent::Shown => self.occlusion(false),
@@ -3593,15 +3637,28 @@ impl Host {
         }
     }
 
-    /// Steps the begin-frame driver, if this run uses external begin frames
+    /// Views open on external begin frames (`Pacing::Shell`).
+    pub(super) fn begin_frames(&self) -> bool {
+        self.pacing == Pacing::Shell
+    }
+
+    /// The display's refresh period, once the frame rate is known.
+    pub(crate) fn refresh(&self) -> Option<Duration> {
+        self.frame_rate
+            .map(|rate| Duration::from_secs_f64(1.0 / f64::from(rate)))
+    }
+
+    /// Steps this window's begin-frame driver, if this run uses external begin frames
     /// (views open only once the frame rate is known).
     pub fn pace(&mut self, event: PaceEvent) {
-        let (Some(pace), Some(rate)) = (self.pace.as_mut(), self.frame_rate) else {
+        if !self.begin_frames() {
+            return;
+        }
+        let Some(period) = self.refresh() else {
             return;
         };
-        let period = Duration::from_secs_f64(1.0 / f64::from(rate));
-        let (state, effects) = pacing::transition(pace.state, event, period);
-        pace.state = state;
+        let (state, effects) = pacing::transition(self.w.pace.state, event, period);
+        self.w.pace.state = state;
         for effect in effects {
             match effect {
                 // Every page on screen (the panes of a split) paints.
@@ -3613,12 +3670,55 @@ impl Host {
                     }
                 }
                 PaceEffect::ArmTimer(delay) => {
-                    if let Some(pace) = &self.pace {
-                        pace.timer.start(slint::TimerMode::SingleShot, delay, || {
-                            with_host(|host| host.pace(PaceEvent::Timer))
+                    let id = self.w.id;
+                    self.w
+                        .pace
+                        .timer
+                        .start(slint::TimerMode::SingleShot, delay, move || {
+                            crate::with_host_in(id, |host| host.pace(PaceEvent::Timer))
                         });
-                    }
                 }
+            }
+        }
+    }
+
+    /// `Pacing::Shell`: the pages that paint with no window showing them (an agent session's,
+    /// `pacing::view_frame_rate`), which no window's driver reaches.
+    fn unshown_painting(&self) -> Vec<ViewId> {
+        let shown: Vec<TabId> = self
+            .model
+            .windows
+            .iter()
+            .flat_map(|w| self.model.window_tabs(w.id))
+            .collect();
+        self.views
+            .iter()
+            .filter(|&(&tab, _)| !shown.contains(&tab) && self.agent_drives(tab))
+            .map(|(_, &id)| id)
+            .collect()
+    }
+
+    /// `Pacing::Shell`: begins the clock of the pages no window shows, if there is one; it
+    /// stops itself once there is none.
+    fn pace_unshown(&mut self) {
+        if !self.begin_frames() || self.unshown.running() || self.unshown_painting().is_empty() {
+            return;
+        }
+        let every = Duration::from_secs_f64(1.0 / f64::from(pacing::UNSHOWN_FRAME_RATE));
+        self.unshown.start(slint::TimerMode::Repeated, every, || {
+            with_host(Host::unshown_tick)
+        });
+    }
+
+    /// One begin frame for each page no window shows; the clock stops when there is none.
+    fn unshown_tick(&mut self) {
+        let views = self.unshown_painting();
+        if views.is_empty() {
+            self.unshown.stop();
+        }
+        for id in views {
+            if let Some(view) = self.engine.view(id) {
+                view.send_begin_frame();
             }
         }
     }

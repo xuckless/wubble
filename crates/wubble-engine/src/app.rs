@@ -17,7 +17,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use extra::ExtraBrowsers;
 use state::{Effect, Event, State};
@@ -986,6 +986,14 @@ impl Engine {
         self.pump(PumpEvent::TimerFired)
     }
 
+    /// The host took a page frame; `refresh` is the display's refresh period. While pages
+    /// paint the pump waits at most one refresh between runs (`wubble_core::pump::Tempo`), from
+    /// the next timer it arms.
+    pub fn page_painted(&mut self, refresh: Duration) {
+        // A state change only: `Painted` has no effects to run.
+        self.pump = pump::transition(self.pump, PumpEvent::Painted(refresh)).0;
+    }
+
     /// Runs CEF's pending work now, for callers without an event loop
     /// (`--smoke boot`, the shutdown drain). Timer requests are dropped: the
     /// caller simply ticks again.
@@ -1274,9 +1282,10 @@ impl Engine {
                     PumpEffect::StartTimer(delay) => outcome.timer = Some(PumpTimer::Start(delay)),
                     PumpEffect::CancelTimer => outcome.timer = Some(PumpTimer::Cancel),
                     PumpEffect::RunWork => {
-                        outcome.events.extend(self.run_work());
+                        let (events, slice_spent) = self.run_work();
+                        outcome.events.extend(events);
                         outcome.worked = true;
-                        next = Some(PumpEvent::WorkDone);
+                        next = Some(PumpEvent::WorkDone { slice_spent });
                     }
                 }
             }
@@ -1286,15 +1295,18 @@ impl Engine {
 
     /// One `do_message_loop_work`, then the callbacks it produced: extra
     /// browsers' first, so one created in this run counts before a view's
-    /// close could end a shutdown.
-    fn run_work(&mut self) -> Vec<(ViewId, WebEvent)> {
+    /// close could end a shutdown. Also whether CEF worked for its whole time slice
+    /// (`pump::CEF_TIME_SLICE`).
+    fn run_work(&mut self) -> (Vec<(ViewId, WebEvent)>, bool) {
+        let at = Instant::now();
         if let Some(runtime) = &self.runtime {
             runtime.do_message_loop_work();
         }
+        let slice_spent = at.elapsed() >= pump::CEF_TIME_SLICE;
         self.apply_extra();
         let events = self.reap_closed_views();
         self.sync_ext();
-        events
+        (events, slice_spent)
     }
 
     /// Reports the extra browsers created or closed to the lifecycle.

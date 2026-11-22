@@ -55,6 +55,12 @@ pub const TICK: Duration = Duration::from_millis(16);
 /// in its idle state.
 const IDLE_WARMUP: Duration = Duration::from_secs(4);
 
+/// `tabs`' warm-up: the other two tabs open and load behind the first.
+const TABS_WARMUP: Duration = Duration::from_secs(2);
+
+/// Ticks between two tab switches in `tabs` (about a second).
+const TICKS_PER_SWITCH: u32 = 60;
+
 /// `idle`'s tick: it only ends the run, and is itself a wake-up (counted).
 const IDLE_TICK: Duration = Duration::from_secs(1);
 
@@ -104,6 +110,10 @@ pub enum Scenario {
     /// The process tree's memory with no tab, 1, 10 and 50 tabs, then frozen and discarded
     /// by the sleep policy (`memory.rs`).
     Memory,
+    /// Three bundled pages in tabs (the first animating: `video`'s), the next one shown every
+    /// [`TICKS_PER_SWITCH`]: per switch the time to the new tab's first frame on screen and
+    /// the frame intervals while the shell's switch animation runs.
+    Tabs,
 }
 
 impl Scenario {
@@ -118,13 +128,14 @@ impl Scenario {
             Self::Startup => "startup",
             Self::Load => "load",
             Self::Memory => "memory",
+            Self::Tabs => "tabs",
         }
     }
 
     pub fn page(self) -> &'static str {
         match self {
             Self::Scroll => include_str!("../assets/measure-scroll.html"),
-            Self::Video => include_str!("../assets/measure-video.html"),
+            Self::Video | Self::Tabs => include_str!("../assets/measure-video.html"),
             Self::Resize => include_str!("../assets/measure-resize.html"),
             Self::Typing => include_str!("../assets/measure-typing.html"),
             Self::Idle | Self::Startup | Self::Load => include_str!("../assets/measure-idle.html"),
@@ -139,9 +150,18 @@ impl Scenario {
         self == Self::Typing
     }
 
+    /// `tabs`: the pages of the tabs opened behind the first ([`Scenario::page`]), still ones.
+    pub fn tab_pages() -> [&'static str; 2] {
+        [
+            include_str!("../assets/measure-idle.html"),
+            include_str!("../assets/measure-typing.html"),
+        ]
+    }
+
     fn warmup(self) -> Duration {
         match self {
             Self::Idle => IDLE_WARMUP,
+            Self::Tabs => TABS_WARMUP,
             _ => WARMUP,
         }
     }
@@ -184,10 +204,23 @@ pub enum Count {
     MeasureTick,
     /// The scene's run state changed.
     RunChange,
+    /// What woke a still or paused scene (`run_state::Runner::on`): the pointer moving,
+    /// pressing or scrolling; the pointer coming in; a key or the IME; a touch; the window
+    /// shown, focused or resized; the address beam or a Space's palette; the ambience; the start
+    /// page; a frame drawn for a change (glass list, size, page blur) that left something moving.
+    WakePointer,
+    WakeEntered,
+    WakeKey,
+    WakeTouch,
+    WakeShown,
+    WakeBeam,
+    WakeAmbience,
+    WakeStart,
+    WakeChange,
 }
 
 impl Count {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 21] = [
         Self::CefFrame,
         Self::CefFrameDamaged,
         Self::SlintRender,
@@ -200,6 +233,15 @@ impl Count {
         Self::Lifecycle,
         Self::MeasureTick,
         Self::RunChange,
+        Self::WakePointer,
+        Self::WakeEntered,
+        Self::WakeKey,
+        Self::WakeTouch,
+        Self::WakeShown,
+        Self::WakeBeam,
+        Self::WakeAmbience,
+        Self::WakeStart,
+        Self::WakeChange,
     ];
 
     pub fn name(self) -> &'static str {
@@ -216,6 +258,15 @@ impl Count {
             Self::MeasureTick => "measure_ticks",
             Self::RunChange => "run_state_changes",
             Self::CefFrameDamaged => "cef_frames_damaged",
+            Self::WakePointer => "scene_wake_pointer",
+            Self::WakeEntered => "scene_wake_entered",
+            Self::WakeKey => "scene_wake_key",
+            Self::WakeTouch => "scene_wake_touch",
+            Self::WakeShown => "scene_wake_shown",
+            Self::WakeBeam => "scene_wake_beam",
+            Self::WakeAmbience => "scene_wake_ambience",
+            Self::WakeStart => "scene_wake_start",
+            Self::WakeChange => "scene_wake_change",
         }
     }
 
@@ -257,10 +308,15 @@ pub enum Metric {
     /// Slint's `BeforeRendering` to `AfterRendering`: the shell step, the
     /// scene, Skia's draw and submit and the surface acquire.
     SlintRender,
+    /// `tabs`: a tab switch to the render that showed the new tab's first frame from CEF.
+    SwitchToFrame,
+    /// `tabs`: between two renders while the shell's switch animation runs (the page's
+    /// entrance or the hidden page's exit).
+    SwitchInterval,
 }
 
 impl Metric {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::TakenInterval,
         Self::Copy,
         Self::CopyWait,
@@ -274,6 +330,8 @@ impl Metric {
         Self::Blit,
         Self::Scene,
         Self::SlintRender,
+        Self::SwitchToFrame,
+        Self::SwitchInterval,
     ];
 
     pub fn name(self) -> &'static str {
@@ -291,6 +349,8 @@ impl Metric {
             Self::Blit => "blit",
             Self::Scene => "scene_cpu",
             Self::SlintRender => "slint_render",
+            Self::SwitchToFrame => "switch_to_frame",
+            Self::SwitchInterval => "switch_interval",
         }
     }
 }
@@ -348,6 +408,10 @@ pub enum Event {
         kind: InputKind,
     },
     ResizeRequested,
+    /// `tabs` showed another tab.
+    Switched(Instant),
+    /// The render about to start draws the shell's switch animation, or not.
+    Switching(bool),
     /// One shell frame (the panes' step), what it laid out.
     Shell(Shell),
     /// Something counted happened once.
@@ -397,6 +461,17 @@ pub struct Counts {
     pub unanswered: u64,
 }
 
+/// Where the last tab switch is on its way to the screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SwitchWait {
+    #[default]
+    None,
+    /// Switched at this time; no frame of the new tab taken yet.
+    Frame(Instant),
+    /// Its first frame is taken, the render showing it is next.
+    Render(Instant),
+}
+
 /// Folds events into samples and counts. Pure: every time comes in an event.
 #[derive(Debug, Default)]
 pub struct Recorder {
@@ -418,6 +493,10 @@ pub struct Recorder {
     input: Option<(Instant, InputKind, Option<[u8; 4]>)>,
     /// An input a taken frame shows, waiting for that frame's render.
     shown: Option<(Instant, InputKind)>,
+    /// The last tab switch, until its new tab's first frame is rendered.
+    switch: SwitchWait,
+    /// The render under way draws the switch animation.
+    switching: bool,
     /// Per [`Count`], in [`Count::ALL`] order.
     counted: [u64; Count::ALL.len()],
 }
@@ -447,6 +526,8 @@ impl Recorder {
                 self.input = Some((at, kind, self.last_probe));
             }
             Event::ResizeRequested => self.counts.resizes += 1,
+            Event::Switched(at) => self.switch = SwitchWait::Frame(at),
+            Event::Switching(on) => self.switching = on,
             Event::Shell(shell) => {
                 let c = &mut self.counts;
                 c.shell_frames += 1;
@@ -488,6 +569,9 @@ impl Recorder {
             c.longest_stale_run = c.longest_stale_run.max(self.stale_run);
         }
         self.new_frame = true;
+        if let SwitchWait::Frame(at) = self.switch {
+            self.switch = SwitchWait::Render(at);
+        }
         let arrived = frame.timing.map(|t| t.arrived);
         self.awaiting_render = Some(arrived);
         if let Some(t) = frame.timing {
@@ -523,9 +607,19 @@ impl Recorder {
         }
         if let Some(last) = self.last_render {
             self.push(Metric::PresentInterval, at.saturating_duration_since(last));
+            if self.switching {
+                self.push(Metric::SwitchInterval, at.saturating_duration_since(last));
+            }
             if !self.new_frame {
                 self.counts.repeats += 1;
             }
+        }
+        if let SwitchWait::Render(switched) = self.switch {
+            self.push(
+                Metric::SwitchToFrame,
+                at.saturating_duration_since(switched),
+            );
+            self.switch = SwitchWait::None;
         }
         self.last_render = Some(at);
         self.new_frame = false;
@@ -1202,9 +1296,14 @@ pub fn rendered() {
     });
 }
 
-/// Rendering-notifier hook: Slint is about to render (`BeforeRendering`, stamped `at`).
-pub fn render_began(at: Instant) {
+/// Rendering-notifier hook: Slint is about to render (`BeforeRendering`, stamped `at`) in
+/// `window`; `tabs` notes whether this render draws the shell's switch animation.
+pub fn render_began(at: Instant, window: &AppWindow) {
     record(at, Event::RenderBegan(at));
+    if with_session(|s| s.scenario == Scenario::Tabs) == Some(true) {
+        let switching = window.get_page_enter() < 1.0 || window.get_exit_t() < 1.0;
+        record(at, Event::Switching(switching));
+    }
 }
 
 /// Host hook: a run of CEF work started at `at` and ended now.
@@ -1248,6 +1347,10 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
     }
     count(Count::MeasureTick);
     let now = Instant::now();
+    // `tabs` opens its other tabs as soon as its first page has painted
+    if with_session(|s| s.scenario == Scenario::Tabs && s.first_frame.is_some()) == Some(true) {
+        host.measure_open_tabs(&Scenario::tab_pages().map(crate::page_url));
+    }
     let Some((scenario, step, base)) = with_session(|s| {
         if s.finished(now) {
             s.end_samples();
@@ -1291,6 +1394,11 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
                 .window()
                 .set_size(slint::LogicalSize::new(width, height));
             with_session(|s| s.recorder.record(Event::ResizeRequested));
+        }
+        Scenario::Tabs if step.is_multiple_of(TICKS_PER_SWITCH) => {
+            let at = Instant::now();
+            host.measure_next_tab();
+            with_session(|s| s.recorder.record(Event::Switched(at)));
         }
         Scenario::Typing if step.is_multiple_of(TICKS_PER_INPUT) => {
             let kind = if (step / TICKS_PER_INPUT).is_multiple_of(2) {
@@ -1372,9 +1480,10 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
         |m| format!("{:.3} Hz", f64::from(m) / 1000.0),
     );
     let header = format!(
-        "measure: scenario={} seconds={} refresh={refresh} window={} adapter={}\nmeasure: loadavg {}\n",
+        "measure: scenario={} seconds={} pacing={} refresh={refresh} window={} adapter={}\nmeasure: loadavg {}\n",
         session.scenario.name(),
         session.seconds,
+        crate::pacing().name(),
         session.window,
         adapter,
         load.trim()
@@ -1683,6 +1792,36 @@ mod tests {
         assert_eq!(r.values(Metric::PumpGap), vec![5.0]);
         assert_eq!(r.values(Metric::Scene), vec![1.0]);
         assert_eq!(r.values(Metric::SlintRender), vec![3.0]);
+    }
+
+    #[test]
+    fn a_switch_is_timed_to_the_render_of_its_first_frame() {
+        let t0 = Instant::now();
+        let mut r = Recorder::default();
+        let taken = |ms| Event::Taken {
+            at: at(t0, ms),
+            frame: frame(7, Some(at(t0, ms)), 10, 10),
+            probe: None,
+        };
+        for e in [
+            Event::Rendered(at(t0, 0)),
+            Event::Switched(at(t0, 2)),
+            // the animation's renders before the new tab's frame
+            Event::Switching(true),
+            Event::Rendered(at(t0, 16)),
+            taken(20),
+            Event::Rendered(at(t0, 33)),
+            Event::Switching(false),
+            Event::Rendered(at(t0, 50)),
+            // a later frame is not the switch's
+            taken(60),
+            Event::Rendered(at(t0, 66)),
+        ] {
+            r.record(e);
+        }
+        assert_eq!(r.values(Metric::SwitchToFrame), vec![31.0]);
+        assert_eq!(r.values(Metric::SwitchInterval), vec![16.0, 17.0]);
+        assert_eq!(r.values(Metric::PresentInterval).len(), 4);
     }
 
     #[test]

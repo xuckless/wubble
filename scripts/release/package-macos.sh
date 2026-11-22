@@ -7,7 +7,16 @@
 # writes into dist/:
 #   wubble-<V>-macos-<arch>.tar.xz   the update archive: the signed, notarised, stapled wubble.app
 #   wubble-<V>-macos-<arch>.dmg      the disk image for a manual install, signed and notarised
+#   wubble-<V>-macos-<arch>.debug.tar.xz   the symbols (wubble.dSYM, wubble-helper.dSYM; not shipped)
 #   *.sha256
+#
+# Symbols: the build keeps them (`strip = "none"`, line tables, a packed dSYM from dsymutil,
+# overriding the dist profile's `strip = "symbols"` for this build only); the binaries in the app
+# are stripped here as the profile would (`strip` with no options: every symbol but those the
+# dynamic linker needs, as rustc's `strip = "symbols"` does to an executable), so the app ships
+# what it did, and each dSYM's UUID is checked against its binary. A `sample` read with the dSYM
+# (`atos -o wubble.dSYM/Contents/Resources/DWARF/wubble -l <load address> <addresses>`, or the
+# dSYM beside the app for `sample` itself) names wubble's own frames.
 #
 # The identity and the notary profile come only from the environment (store the profile once
 # with `xcrun notarytool store-credentials <name> --apple-id ... --team-id ...`). Nothing edits
@@ -42,7 +51,7 @@ die() {
 [ -n "${WUBBLE_SIGN_IDENTITY:-}" ] || die "set WUBBLE_SIGN_IDENTITY to a \"Developer ID Application: ...\" identity"
 [ -n "${WUBBLE_NOTARY_PROFILE:-}" ] || die "set WUBBLE_NOTARY_PROFILE to a notarytool keychain profile"
 [ -n "${CEF_PATH:-}" ] || die "set CEF_PATH to the codec CEF build (docs/research/cef-codec-build.md)"
-for tool in cargo codesign xcrun hdiutil ditto shasum tar git; do
+for tool in cargo codesign xcrun hdiutil ditto shasum tar git strip dwarfdump; do
     command -v "$tool" >/dev/null 2>&1 || die "needs $tool"
 done
 
@@ -65,13 +74,30 @@ say "CEF: $cef_dir"
 target=${CARGO_TARGET_DIR:-$repo/target}
 bin=$target/dist
 if [ "$build" = 1 ]; then
-    say "building wubble $version (profile dist)"
-    cargo build --locked --profile dist -p wubble -p wubble-helper -p wubble-bundle
+    say "building wubble $version (profile dist, with symbols kept for the dSYMs)"
+    CARGO_PROFILE_DIST_STRIP=none CARGO_PROFILE_DIST_DEBUG=line-tables-only \
+        CARGO_PROFILE_DIST_SPLIT_DEBUGINFO=packed \
+        cargo build --locked --profile dist -p wubble -p wubble-helper -p wubble-bundle
 fi
+for b in wubble wubble-helper; do
+    [ -d "$bin/$b.dSYM" ] || die "$bin/$b.dSYM is missing (a build without symbols: drop --no-build)"
+done
 rm -rf "$bin/bundle"
 app=$("$bin/wubble-bundle")
 [ -d "$app" ] || die "wubble-bundle made no app ($app)"
 say "bundled $app"
+
+uuids() { dwarfdump --uuid "$1" | awk '{print $2}' | sort; }
+say "stripping the app's own executables, keeping the dSYMs"
+frameworks=$app/Contents/Frameworks
+strip "$app/Contents/MacOS/wubble"
+[ "$(uuids "$app/Contents/MacOS/wubble")" = "$(uuids "$bin/wubble.dSYM")" ] ||
+    die "wubble.dSYM does not match the app's wubble"
+for helper in "$frameworks"/*.app/Contents/MacOS/*; do
+    strip "$helper"
+    [ "$(uuids "$helper")" = "$(uuids "$bin/wubble-helper.dSYM")" ] ||
+        die "wubble-helper.dSYM does not match $(basename "$helper")"
+done
 
 say "ffmpeg for stream copy (scripts/release/build-ffmpeg.sh; downloads the pinned source once)"
 "$repo/scripts/release/build-ffmpeg.sh" --out "$repo/dist/ffmpeg"
@@ -113,7 +139,6 @@ sign() {
 say "signing Contents/MacOS/wubble-ffmpeg"
 codesign --force --timestamp --options runtime --sign "$WUBBLE_SIGN_IDENTITY" "$app/Contents/MacOS/wubble-ffmpeg"
 # Inside out: the framework's libraries, the framework, each helper app, then the app.
-frameworks=$app/Contents/Frameworks
 find "$frameworks" -name '*.dylib' -type f | while read -r lib; do sign "$lib"; done
 for fw in "$frameworks"/*.framework; do sign "$fw"; done
 for helper in "$frameworks"/*.app; do sign "$helper"; done
@@ -147,6 +172,12 @@ codesign --force --timestamp --sign "$WUBBLE_SIGN_IDENTITY" "$dist/$name.dmg"
 notarise "$dist/$name.dmg"
 xcrun stapler staple "$dist/$name.dmg"
 
-(cd "$dist" && shasum -a 256 "$name.tar.xz" >"$name.tar.xz.sha256" && shasum -a 256 "$name.dmg" >"$name.dmg.sha256")
+say "packing the symbols"
+mkdir -p "$work/$name.debug"
+for b in wubble wubble-helper; do ditto "$bin/$b.dSYM" "$work/$name.debug/$b.dSYM"; done
+(cd "$work" && COPYFILE_DISABLE=1 tar --no-mac-metadata -cJf "$dist/$name.debug.tar.xz" "$name.debug")
+
+(cd "$dist" && shasum -a 256 "$name.tar.xz" >"$name.tar.xz.sha256" && shasum -a 256 "$name.dmg" >"$name.dmg.sha256" &&
+    shasum -a 256 "$name.debug.tar.xz" >"$name.debug.tar.xz.sha256")
 say "done:"
 (cd "$dist" && ls -l "$name".*)

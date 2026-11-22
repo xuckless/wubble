@@ -189,7 +189,7 @@ impl Host {
             url,
             layout,
             frame_rate,
-            begin_frames: self.pace.is_some(),
+            begin_frames: self.begin_frames(),
             gpu: self.w.presenters[0].context().clone(),
             // The front end is wubble's own page; it keeps its settings in the default store.
             container: wubble_core::space::ContainerId::DEFAULT,

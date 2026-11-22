@@ -2,6 +2,7 @@
 //! [`RunEvent`]s and executes the [`RunEffect`]s (frame requests).
 //! The rule itself, and what each platform reports, is documented in that module.
 
+use crate::measure::Count;
 use slint::ComponentHandle;
 use slint::winit_030::winit::event::WindowEvent;
 use wubble_gfx::scene::run::{self, Needs, RunEffect, RunEvent, RunState};
@@ -41,6 +42,19 @@ pub fn event_of(event: &WindowEvent, minimised: impl FnOnce() -> Option<bool>) -
     }
 }
 
+/// What `--measure` counts when `event` wakes a still or paused scene.
+pub fn wake_of(event: &WindowEvent) -> Count {
+    match event {
+        WindowEvent::CursorEntered { .. } => Count::WakeEntered,
+        WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => Count::WakeKey,
+        WindowEvent::Touch(_) => Count::WakeTouch,
+        WindowEvent::Occluded(_) | WindowEvent::Resized(_) | WindowEvent::Focused(_) => {
+            Count::WakeShown
+        }
+        _ => Count::WakePointer,
+    }
+}
+
 impl Runner {
     pub fn state(&self) -> RunState {
         self.state
@@ -52,7 +66,7 @@ impl Runner {
             scene_animating,
             glass_changed,
         };
-        self.on(needs.event(), window);
+        self.on(needs.event(), Count::WakeChange, window);
     }
 
     /// Whether the state changed since the last call: the first frame after a change follows a
@@ -79,16 +93,22 @@ impl Runner {
     }
 
     /// The scene's own motion started (a beam lap, a palette change) while it is still, and no
-    /// input event says so: wakes it for the frame about to be drawn.
-    pub fn wake_if_still(&mut self, window: &AppWindow) {
+    /// input event says so: wakes it for the frame about to be drawn. `cause` is counted.
+    pub fn wake_if_still(&mut self, window: &AppWindow, cause: Count) {
         if self.state == RunState::Still {
-            self.on(RunEvent::Activity, window);
+            self.on(RunEvent::Activity, cause, window);
         }
     }
 
-    /// Runs one event and executes its effect.
-    pub fn on(&mut self, event: RunEvent, window: &AppWindow) {
-        match self.step(event) {
+    /// Runs one event and executes its effect. A wake (into Running) counts `cause`, so
+    /// `--measure idle` names what keeps drawing a still window.
+    pub fn on(&mut self, event: RunEvent, cause: Count, window: &AppWindow) {
+        let before = self.state;
+        let effect = self.step(event);
+        if before != RunState::Running && self.state == RunState::Running {
+            crate::measure::count(cause);
+        }
+        match effect {
             RunEffect::None => {}
             RunEffect::RequestFrame => window.window().request_redraw(),
         }
@@ -120,6 +140,25 @@ mod tests {
         assert!(!r.take_changed());
         assert_eq!(r.step(RunEvent::Activity), RunEffect::RequestFrame);
         assert!(r.take_changed());
+    }
+
+    #[test]
+    fn a_wake_names_its_window_event() {
+        let id = DeviceId::dummy();
+        assert_eq!(
+            wake_of(&WindowEvent::CursorEntered { device_id: id }),
+            Count::WakeEntered
+        );
+        assert_eq!(wake_of(&WindowEvent::Occluded(false)), Count::WakeShown);
+        assert_eq!(wake_of(&WindowEvent::Focused(true)), Count::WakeShown);
+        assert_eq!(
+            wake_of(&WindowEvent::MouseWheel {
+                device_id: id,
+                delta: MouseScrollDelta::LineDelta(0.0, 1.0),
+                phase: TouchPhase::Moved,
+            }),
+            Count::WakePointer
+        );
     }
 
     #[test]

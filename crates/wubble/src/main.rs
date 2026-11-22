@@ -98,7 +98,7 @@ use wubble_core::seam::Seam;
 use wubble_engine::app::{self, Engine, EngineConfig, EngineError, ProfileKind, PumpScheduler};
 use wubble_engine::input::Point;
 use wubble_engine::view::Layout;
-use wubble_gfx::pacing::FrameStats;
+use wubble_gfx::pacing::{self, FrameStats, Pacing};
 use wubble_gfx::{FrameSize, GpuContext};
 use wubble_ui::AppWindow;
 use wubble_ui::glass::GlassRegistry;
@@ -164,14 +164,29 @@ const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
 use wubble_core::model::Command as Cmd;
 use wubble_core::window::{WindowId, WindowKind};
 
+/// The command line's pacing (`cli::parse_with_shot`), if it named one. Set once, before any
+/// window.
+static PACING: std::sync::OnceLock<Pacing> = std::sync::OnceLock::new();
+
+/// This run's pacing: the command line's, else the platform's.
+pub fn pacing() -> Pacing {
+    PACING
+        .get()
+        .copied()
+        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
+}
+
 fn main() -> ExitCode {
     // `--measure startup` counts from here.
     measure::process_started();
     // Before anything touches the OS's application object (winit, CEF).
     app::prepare_process();
     let command = match cli::parse_with_shot(std::env::args_os()) {
-        Ok((command, shot)) => {
+        Ok((command, shot, pacing)) => {
             shot::request(shot);
+            if let Some(pacing) = pacing {
+                let _ = PACING.set(pacing);
+            }
             command
         }
         Err(e) => e.exit(),
@@ -369,7 +384,6 @@ fn main() -> ExitCode {
             }
             let mode = Mode::Measure {
                 scenario: m.scenario,
-                begin_frames: m.begin_frames,
                 out: m.out,
                 load,
                 page: m.page,
@@ -457,7 +471,7 @@ fn install_shell_driver(
         window,
         seam,
         move |window, now, items| {
-            measure::render_began(now);
+            measure::render_began(now, window);
             if let Ok(mut glass) = glass.try_borrow_mut() {
                 let at = Instant::now();
                 if glass.frame(window, now, items) {
@@ -475,11 +489,12 @@ fn install_shell_driver(
                 window.window().request_redraw();
             }
         },
-        || {
+        move || {
             measure::rendered();
-            // Queued: the render may run while the host is busy (snapshots).
-            let _ = slint::invoke_from_event_loop(|| {
-                with_host(|host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+            // Queued: the render may run while the host is busy (snapshots). This window's
+            // driver: each window paces the pages it shows.
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host_in(id, |host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
             });
         },
     )?;
@@ -981,12 +996,10 @@ enum Mode {
     Passwords(passwords_smoke::VaultPhase),
     /// One run of `--smoke data`, ending as given.
     Data(data_smoke::Ending),
-    /// `--measure`: the scenario's bundled page, measured until it ends;
-    /// CEF paced by external begin frames if `begin_frames`; the samples
+    /// `--measure`: the scenario's bundled page, measured until it ends; the samples
     /// also go to `out` as CSV.
     Measure {
         scenario: measure::Scenario,
-        begin_frames: bool,
         out: Option<PathBuf>,
         /// `--measure load`: the pages' server and what the engine hooks requests with.
         load: Option<(Arc<load_server::LoadServer>, load_run::Variant)>,
@@ -1745,7 +1758,7 @@ fn run(
         mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
-        begin_frames: false,
+        begin_frames: pacing() == Pacing::Shell,
     };
     let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);
@@ -1998,20 +2011,12 @@ fn run(
                 ..none
             },
         ),
-        Mode::Measure {
-            scenario,
-            begin_frames,
-            page,
-            ..
-        } => (
+        Mode::Measure { scenario, page, .. } => (
             // `--measure load` navigates from here to its own pages; the memory run starts on
             // an empty window and opens its tabs itself.
             (*scenario != measure::Scenario::Memory)
                 .then(|| page.clone().unwrap_or_else(|| page_url(scenario.page()))),
-            Checks {
-                begin_frames: *begin_frames,
-                ..none
-            },
+            none,
         ),
     };
     // A database that cannot be opened or loaded is left alone: the

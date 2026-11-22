@@ -261,7 +261,6 @@ mod tests {
         );
         let measure = Mode::Measure {
             scenario: crate::measure::Scenario::Scroll,
-            begin_frames: false,
             out: None,
             load: None,
             page: None,
