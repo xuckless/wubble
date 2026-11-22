@@ -234,10 +234,147 @@ pub(super) fn pop_u(p: &PopDraw, g: Globals) -> PopU {
     }
 }
 
+/// What one scene frame changed in the window's image (`out`) and the overlay layers' images,
+/// for the shell's partial rendering: Slint cannot see a texture written in place, so the host
+/// marks this region dirty ([`super::Frame::damage`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Damage {
+    /// Everything may have changed: Slint redraws the whole window.
+    Whole,
+    /// Only the start page's card, logical window px: its liquid and bubble moved, nothing under
+    /// or around it did.
+    Card(Rect),
+    /// Nothing changed.
+    Nothing,
+}
+
+impl Damage {
+    /// Two frames' damage drawn before Slint shows either (headless renders, tests).
+    pub fn and(self, later: Damage) -> Damage {
+        match (self, later) {
+            (Damage::Nothing, d) | (d, Damage::Nothing) => d,
+            (Damage::Card(a), Damage::Card(b)) if a == b => Damage::Card(a),
+            _ => Damage::Whole,
+        }
+    }
+}
+
+/// A frame's image with no damage told: all of it.
+impl Default for Damage {
+    fn default() -> Self {
+        Damage::Whole
+    }
+}
+
+/// What [`damage`] decides from: this frame against the last one drawn.
+#[derive(Clone, Copy, Debug)]
+pub struct DamageIn<'a> {
+    /// The output or an overlay layer's texture is new or gone (first frame, resize, a layer's
+    /// glass appearing or leaving).
+    pub new_targets: bool,
+    /// The window's backdrop (its `bg` and blur levels) was rendered again.
+    pub backdrop: bool,
+    /// The page-inclusive pyramid was built again (the ambience, overlay glass over a pane).
+    pub page_built: bool,
+    /// Everything the glass draws reads (each surface's uniforms and inputs: render.rs `glass_key`), this frame and the
+    /// last (`None`: no frame drawn yet).
+    pub glass: &'a [u8],
+    pub last_glass: Option<&'a [u8]>,
+    /// The start page's card this frame and the last (`None`: no start page drawn).
+    pub card: Option<StartCard>,
+    pub last_card: Option<StartCard>,
+}
+
+/// The region a scene frame changed. Outside the start page's card the output is the window's
+/// backdrop and its glass: drawn again from the same textures and the same uniforms it is the
+/// same image, so only the card, drawn anew every frame, changed. Anything else that moved (the
+/// backdrop, the page blur, a glass rect, its light, wave, film, beam or alpha, a texture, the
+/// card's own place) changes all of it.
+pub fn damage(d: &DamageIn) -> Damage {
+    let same = !d.new_targets
+        && !d.backdrop
+        && !d.page_built
+        && d.last_glass == Some(d.glass)
+        && d.card == d.last_card;
+    match d.card {
+        _ if !same => Damage::Whole,
+        Some(c) => Damage::Card(c.rect),
+        None => Damage::Nothing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scene::SceneOptions;
+
+    #[test]
+    fn a_start_page_frame_changes_only_its_card_while_nothing_else_moves() {
+        let card = StartCard {
+            rect: Rect::new(268.0, 8.0, 1084.0, 864.0),
+            radius: 12.0,
+        };
+        let glass = [1u8, 2, 3];
+        let still = DamageIn {
+            new_targets: false,
+            backdrop: false,
+            page_built: false,
+            glass: &glass,
+            last_glass: Some(&glass),
+            card: Some(card),
+            last_card: Some(card),
+        };
+        assert_eq!(damage(&still), Damage::Card(card.rect));
+        // no start page and nothing moved: nothing to redraw
+        let none = DamageIn {
+            card: None,
+            last_card: None,
+            ..still
+        };
+        assert_eq!(damage(&none), Damage::Nothing);
+        // anything else that moved: the whole window
+        let moved = [9u8, 2, 3];
+        let cases = [
+            DamageIn {
+                new_targets: true,
+                ..still
+            },
+            DamageIn {
+                backdrop: true,
+                ..still
+            },
+            DamageIn {
+                page_built: true,
+                ..still
+            },
+            DamageIn {
+                glass: &moved,
+                ..still
+            },
+            DamageIn {
+                last_glass: None,
+                ..still
+            },
+            DamageIn {
+                last_card: None,
+                ..still
+            },
+            DamageIn {
+                card: None,
+                ..still
+            },
+            DamageIn {
+                last_card: Some(StartCard {
+                    radius: 0.0,
+                    ..card
+                }),
+                ..still
+            },
+        ];
+        for c in cases {
+            assert_eq!(damage(&c), Damage::Whole, "{c:?}");
+        }
+    }
 
     fn sized() -> Scene {
         let mut s = Scene::new(SceneOptions::default(), 7);

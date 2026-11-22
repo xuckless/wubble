@@ -86,7 +86,9 @@ pub use render::{
     AMBIENCE_HZ, AMBIENCE_LEVEL, AMBIENCE_STRENGTH, BLUR_SIGMA, DPR_MAX, Frame, GLASS_PAD,
     Material, PYRAMID_DIV, PagePane, Renderer, ambience_every, out_size, readback_rgba8, view_of,
 };
-pub use start::{BubbleDraw, PopDraw, RING_N, StartCard, StartDraw, StartFx};
+pub use start::{
+    BubbleDraw, Damage, DamageIn, PopDraw, RING_N, StartCard, StartDraw, StartFx, damage,
+};
 pub use state::{
     Backdrop, Beam, Blob, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, STILL_DYE,
     Scene, SceneOptions, Tier, film_level, hex, still_blobs, surface_of,

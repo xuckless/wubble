@@ -707,3 +707,81 @@ fn the_start_page_lives_inside_its_card_and_nowhere_else() {
     );
     assert!(!live.animating());
 }
+
+#[test]
+fn a_start_page_frame_redraws_only_its_card_and_draws_what_a_whole_frame_draws() {
+    use wubble_gfx::scene::{Damage, GlassRect, Rect, StartCard, StartDraw, Tier};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let card = StartCard {
+        rect: Rect::new(120.0, 20.0, 180.0, 160.0),
+        radius: 12.0,
+    };
+    let draw = StartDraw {
+        card,
+        pace: 1.0,
+        ..StartDraw::default()
+    };
+    // a glass panel beside the card and under its rounded corner
+    let panel = GlassRect {
+        rect: Rect::new(8.0, 8.0, 140.0, 60.0),
+        radius: 20.0,
+        tier: Tier::Regular,
+        pressed: false,
+        hover: false,
+        focus: false,
+        tint: [0.0; 3],
+        shadow: 0.6,
+        beam: false,
+        layer: None,
+        alpha: 1.0,
+    };
+    // two windows on the same start page, frame for frame
+    let mut partial = still(&device, &queue);
+    let mut whole = still(&device, &queue);
+    for r in [&mut partial, &mut whole] {
+        r.scene.set_glass(&[panel]);
+        r.start_frame(draw.clone());
+        frame(r, &device, &queue);
+        assert_eq!(r.take_damage(), Damage::Whole, "the first frame is whole");
+    }
+    for n in 0..3 {
+        partial.start_frame(draw.clone());
+        whole.start_frame(draw.clone());
+        whole.draw_whole_next();
+        let (_, a) = frame(&mut partial, &device, &queue);
+        let (_, b) = frame(&mut whole, &device, &queue);
+        // the liquid moved and nothing else: only the card is redrawn, for the scene and Slint
+        assert_eq!(partial.take_damage(), Damage::Card(card.rect), "frame {n}");
+        assert_eq!(whole.take_damage(), Damage::Whole);
+        assert!(
+            a == b,
+            "frame {n}: the card's frame holds the whole frame's pixels"
+        );
+    }
+    // the glass changed: whole
+    partial.scene.set_glass(&[GlassRect {
+        alpha: 0.5,
+        ..panel
+    }]);
+    partial.start_frame(draw.clone());
+    frame(&mut partial, &device, &queue);
+    assert_eq!(partial.take_damage(), Damage::Whole);
+    // the card's place changed: whole again; no start page and nothing moving: nothing
+    partial.start_frame(StartDraw {
+        card: StartCard {
+            radius: 0.0,
+            ..card
+        },
+        ..draw.clone()
+    });
+    frame(&mut partial, &device, &queue);
+    assert_eq!(partial.take_damage(), Damage::Whole);
+    partial.start_end();
+    frame(&mut partial, &device, &queue);
+    assert_eq!(partial.take_damage(), Damage::Whole, "the card leaves");
+    frame(&mut partial, &device, &queue);
+    assert_eq!(partial.take_damage(), Damage::Nothing);
+}
