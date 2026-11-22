@@ -328,6 +328,7 @@ impl Store {
             (from_ms, to_ms),
         )
         .await?;
+        crate::closed::prune_closed(&tx).await?;
         tx.commit().await?;
         self.prune_unreferenced_favicons().await?;
         Ok(out)
@@ -340,6 +341,10 @@ impl Store {
         let out = delete_urls(&tx, &found).await?;
         tx.execute("DELETE FROM recently_closed WHERE url = ?1", [url])
             .await?;
+        // a window's, folder's or Space's tab on that page goes too; an entry left empty with it
+        tx.execute("DELETE FROM recently_closed_tabs WHERE url = ?1", [url])
+            .await?;
+        crate::closed::prune_closed(&tx).await?;
         tx.commit().await?;
         self.prune_unreferenced_favicons().await?;
         Ok(out)
@@ -380,6 +385,21 @@ impl Store {
             tx.execute("DELETE FROM recently_closed WHERE id = ?1", [id])
                 .await?;
         }
+        let mut tab_rows = tx
+            .query("SELECT id, url FROM recently_closed_tabs", ())
+            .await?;
+        let mut tab_ids = Vec::new();
+        while let Some(r) = tab_rows.next().await? {
+            if on_site(&url_key(&r.get::<String>(1)?), host_key) {
+                tab_ids.push(r.get::<i64>(0)?);
+            }
+        }
+        drop(tab_rows);
+        for id in tab_ids {
+            tx.execute("DELETE FROM recently_closed_tabs WHERE id = ?1", [id])
+                .await?;
+        }
+        crate::closed::prune_closed(&tx).await?;
         tx.commit().await?;
         self.prune_unreferenced_favicons().await?;
         Ok(out)
@@ -508,13 +528,16 @@ mod tests {
             s.add_bookmark(None, "Kept", "https://kept.test/", 1)
                 .await
                 .unwrap();
-            s.push_closed(&ClosedTab {
-                url: "https://seen.test/".into(),
-                title: "T".into(),
-                container: ContainerId::DEFAULT,
-                space: None,
-                closed_at_ms: 50,
-            })
+            s.push_closed(
+                &ClosedTab {
+                    url: "https://seen.test/".into(),
+                    title: "T".into(),
+                    container: ContainerId::DEFAULT,
+                    space: None,
+                    closed_at_ms: 50,
+                }
+                .into(),
+            )
             .await
             .unwrap();
             // One page forgotten: its closed tab and its icon go, the others stay.
@@ -549,20 +572,23 @@ mod tests {
                     .await
                     .unwrap();
                 s.put_favicon(url, &icon(url), 1).await.unwrap();
-                s.push_closed(&ClosedTab {
-                    url: url.into(),
-                    title: "T".into(),
-                    container: ContainerId::DEFAULT,
-                    space: None,
-                    closed_at_ms: 20,
-                })
+                s.push_closed(
+                    &ClosedTab {
+                        url: url.into(),
+                        title: "T".into(),
+                        container: ContainerId::DEFAULT,
+                        space: None,
+                        closed_at_ms: 20,
+                    }
+                    .into(),
+                )
                 .await
                 .unwrap();
             }
             s.delete_history_site("example.com").await.unwrap();
             let closed = s.recently_closed().await.unwrap();
             assert_eq!(closed.len(), 1);
-            assert_eq!(closed[0].url, sibling);
+            assert_eq!(closed[0].entry.urls(), [sibling]);
             let icons = s.favicons_for(&[target, sibling]).await.unwrap();
             assert!(!icons.contains_key(target));
             assert!(icons.contains_key(sibling));

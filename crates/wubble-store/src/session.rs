@@ -25,12 +25,12 @@ use wubble_core::window::{Geometry, Shown, Window, WindowId, WindowState};
 
 use crate::*;
 
-fn tint_text(c: Rgb) -> String {
+pub(crate) fn tint_text(c: Rgb) -> String {
     format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2)
 }
 
 /// `#rrggbb`; anything else is `None`.
-fn parse_tint(s: &str) -> Option<Rgb> {
+pub(crate) fn parse_tint(s: &str) -> Option<Rgb> {
     let hex = s
         .strip_prefix('#')
         .filter(|h| h.len() == 6 && h.is_ascii())?;

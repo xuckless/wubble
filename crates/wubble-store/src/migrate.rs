@@ -21,6 +21,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (15, include_str!("../sql/015_agent_spaces.sql")),
     (16, include_str!("../sql/016_download_containers.sql")),
     (17, include_str!("../sql/017_window_state.sql")),
+    (18, include_str!("../sql/018_recently_closed_entries.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -91,6 +92,7 @@ mod tests {
                 "bookmarks",
                 "settings",
                 "recently_closed",
+                "recently_closed_tabs",
                 "logins",
                 "import_marks",
                 "site_permissions",
