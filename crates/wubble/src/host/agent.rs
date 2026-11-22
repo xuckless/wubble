@@ -2110,6 +2110,8 @@ impl Host {
             self.agent_let_go(&p.wait);
             self.agent_send(p.reply, ToolResult::error(why.clone()), Outcome::Failed);
         }
+        // its calls' deadlines and a kept tab's chooser interception go with them
+        self.agent_arm();
         let tabs = &self.model.tabs;
         self.agents.refs.retain(|t, _| tabs.contains_key(t));
         self.agent_log(id, "session_stopped", None, Outcome::Done);
