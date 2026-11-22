@@ -61,6 +61,10 @@ impl Host {
             let location = matches!(event, PageEvent::AxLocation(_));
             return self.ax_event(tab, json, location);
         }
+        // A file chooser DevTools caught for an agent's upload (`host/agent.rs`).
+        if let PageEvent::ChooserIntercepted(opened) = &event {
+            return self.agent_intercepted(tab, opened);
+        }
         // The built-ins' answers (`host/builtins.rs`, `host/videos.rs`).
         if matches!(
             event,
@@ -349,6 +353,9 @@ impl Host {
 
     /// Shows the OS file dialog; its answer comes back on the event loop.
     fn run_chooser(&mut self, window: &AppWindow, tab: TabId, id: RequestId, spec: DialogSpec) {
+        if self.agent_chooser(tab, id) {
+            return;
+        }
         let dialog = chooser::dialog(&spec, Some(window.window()));
         let task = slint::spawn_local(async move {
             let picked = chooser::pick(spec, dialog).await;

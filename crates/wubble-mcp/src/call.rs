@@ -137,6 +137,12 @@ pub enum AgentCall {
         text: String,
         submit: bool,
     },
+    Select {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        option: String,
+    },
     PressKey {
         session: SessionId,
         tab: TabId,
@@ -183,6 +189,12 @@ pub enum AgentCall {
         target: ElementRef,
         secret: String,
     },
+    UploadFile {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        paths: Vec<String>,
+    },
 }
 
 impl AgentCall {
@@ -201,6 +213,7 @@ impl AgentCall {
             AgentCall::ReadPage { .. } => "read_page",
             AgentCall::Click { .. } => "click",
             AgentCall::Type { .. } => "type",
+            AgentCall::Select { .. } => "select",
             AgentCall::PressKey { .. } => "press_key",
             AgentCall::Screenshot { .. } => "screenshot",
             AgentCall::ListTabs { .. } => "list_tabs",
@@ -209,6 +222,7 @@ impl AgentCall {
             AgentCall::WaitFor { .. } => "wait_for",
             AgentCall::Evaluate { .. } => "evaluate",
             AgentCall::FillSecret { .. } => "fill_secret",
+            AgentCall::UploadFile { .. } => "upload_file",
         }
     }
 
@@ -227,6 +241,7 @@ impl AgentCall {
             | AgentCall::ReadPage { session, .. }
             | AgentCall::Click { session, .. }
             | AgentCall::Type { session, .. }
+            | AgentCall::Select { session, .. }
             | AgentCall::PressKey { session, .. }
             | AgentCall::Screenshot { session, .. }
             | AgentCall::ListTabs { session }
@@ -234,7 +249,8 @@ impl AgentCall {
             | AgentCall::CloseTab { session, .. }
             | AgentCall::WaitFor { session, .. }
             | AgentCall::Evaluate { session, .. }
-            | AgentCall::FillSecret { session, .. } => Some(session),
+            | AgentCall::FillSecret { session, .. }
+            | AgentCall::UploadFile { session, .. } => Some(session),
         }
     }
 
@@ -250,12 +266,14 @@ impl AgentCall {
             | AgentCall::ReadPage { tab, .. }
             | AgentCall::Click { tab, .. }
             | AgentCall::Type { tab, .. }
+            | AgentCall::Select { tab, .. }
             | AgentCall::PressKey { tab, .. }
             | AgentCall::Screenshot { tab, .. }
             | AgentCall::CloseTab { tab, .. }
             | AgentCall::WaitFor { tab, .. }
             | AgentCall::Evaluate { tab, .. }
-            | AgentCall::FillSecret { tab, .. } => Some(tab),
+            | AgentCall::FillSecret { tab, .. }
+            | AgentCall::UploadFile { tab, .. } => Some(tab),
             AgentCall::StartSession { .. }
             | AgentCall::StopSession { .. }
             | AgentCall::RequestMore { .. }

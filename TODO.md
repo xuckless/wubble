@@ -57,7 +57,7 @@ Built as planned in the research, each as its own pass; nothing downloads or ask
 - [ ] Live text in images, on-device OCR: the pipeline in [docs/research/ocr.md](docs/research/ocr.md)
 
 ## MCP server
-Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). Released in `0.1.0-preview.2`: 20 tools, sessions in their own Space and container held to their sites, the approval sheet, live hosting and agent-app registration from Settings, off by default.
+Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). Released in `0.1.0-preview.2`: 20 tools (22 since, with `select` and `upload_file`), sessions in their own Space and container held to their sites, the approval sheet, live hosting and agent-app registration from Settings, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
 - [ ] An element inside a frame is still placed from the accessibility mirror's boxes, which a scrolled page leaves behind (the top document uses the live layout); the mirror's coordinates are wrong after a scroll for the screen-reader pane too (Chromium sends no root scroll offset)
 - [ ] a tab moved into an agent session's Space keeps its back-forward cache and any prerender made before: activating either runs no navigation throttle, so the guard is not asked and only the commit backstop takes the tab back (after the page showed); drop those for a tab that joins a session (or disable the cache and prerender for session tabs) and add a smoke probe
@@ -66,6 +66,12 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] Windows: the agent apps' paths (`agent::harness` lists Linux and macOS only) and the manifest's runtime dir
 - [ ] `scroll` with a direction over a nested scroller (an `overflow: auto` pane): the wheel event reaches the pane but in most `--smoke mcp` runs the document takes the scroll; a user's wheel goes the same path (`View::wheel`): check by hand, then fix (the smoke checks the page only)
 - [ ] `wait_for load` does not follow an in-page (history API) navigation's fetches (documented in the tool; `url` and `navigation` cover the address change): network idle would need DevTools' network events through the engine
+- [ ] `read_page` lists no `<option>`, list box or `<select multiple>`/`size` (a collapsed select's options are AX-invisible; `listBox` and its options are no `wubble_ax` item kind): `select` takes an option's ref and a multiple list, but no ref reaches one yet
+- [ ] `select` on a `<select multiple>` sets one choice (the others cleared); adding a choice is not offered
+- [ ] `type`'s focus check runs in the top document: focus moving between fields inside one frame is not seen (a frame counts as editable), and a custom element whose shadow root is closed counts as editable once focus moved to it
+- [ ] `upload_file` into a frame of another site (its own process): the top target's DevTools session neither reaches its input (`DOM.setFileInputFiles`) nor intercepts its chooser, so the click's chooser is cancelled and the call fails; reaching it needs `Target.setAutoAttach` with flattened sessions through the engine
+- [ ] `upload_file`'s path check runs on a thread of its own per call: a path on a hung mount fails the call at 5 s, but its thread stays blocked until the file system answers
+- [ ] `evaluate`'s object group is shared by a tab's calls and not released when one times out or its session goes (`select`'s is per call and always released)
 - [ ] `drag` drives pointer events only: an HTML `draggable` drag runs in the window's own drag loop (dropped with nothing, the reply says so)
 - [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Later (owner, 2026-11-20): "Move tab to" in a tab's right-click menu, a two-level menu: hovering the row (with its ">") opens the list of user-created Spaces; moving a tab out of an agent Space makes it an ordinary tab of that Space

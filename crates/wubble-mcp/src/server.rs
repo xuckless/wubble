@@ -518,9 +518,15 @@ mod tests {
                 };
                 args.insert(a.name.into(), v);
             }
-            // The first of an exactly-one group is a string argument in every row.
+            // The first of an exactly-one group is a string argument in every row (a path is
+            // absolute).
             if let Some(first) = t.one_of.first() {
-                args.insert((*first).into(), json!("x"));
+                let v = match *first {
+                    "path" if cfg!(windows) => "C:\\x",
+                    "path" => "/x",
+                    _ => "x",
+                };
+                args.insert((*first).into(), json!(v));
             }
             // an optional ref outside such a group (`scroll` needs a ref or a direction)
             if t.args.iter().any(|a| a.name == "ref") && !t.one_of.contains(&"ref") {
@@ -607,6 +613,18 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            parsed(
+                "select",
+                json!({"session": "s", "tab": "t", "ref": "e1.7", "option": "Toronto, ON"})
+            ),
+            AgentCall::Select {
+                session: SessionId("s".into()),
+                tab: TabId("t".into()),
+                target: crate::call::ElementRef("e1.7".into()),
+                option: "Toronto, ON".into(),
+            }
+        );
         let c = parsed("start_session", json!({"purpose": "p", "secrets": ["GH"]}));
         assert!(matches!(
             c,

@@ -2171,7 +2171,11 @@ fn run(
                 host.fail(format!("hosting on: {e}"));
             }
         });
-        mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
+        mcp_smoke::start(
+            socket,
+            format!("http://127.0.0.1:{port}/mcp"),
+            profile.to_owned(),
+        );
     }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {

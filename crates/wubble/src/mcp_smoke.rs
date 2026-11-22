@@ -106,6 +106,49 @@ document.getElementById('src').addEventListener('mousedown', () => { from = 'Sou
 document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' on ' + (e.target.id || e.target.tagName)); from = null; });
 </script></body></html>"##;
 
+/// The form tools' page: a `<select>` (a label with a no-break space, a disabled option, two equal
+/// labels), one in a disabled fieldset, a popup button, a plain field, an editor stand-in that
+/// focuses an off-screen textarea beside it on mousedown (as Monaco, CodeMirror 5 and Ace do),
+/// two custom widgets: one that takes focus itself, one that takes none (focus stays where it
+/// was), file inputs (a bare one, a visually hidden one, a transparent `multiple` one, each
+/// counting its `change` events) and a custom upload button that clicks a hidden one.
+const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title></head>
+<body style="font:16px sans-serif">
+<label for="city">City</label>
+<select id="city" oninput="window.ev=(window.ev||'')+'i'" onchange="window.ev=(window.ev||'')+'c';document.getElementById('picked').textContent='picked '+this.value">
+<option value="">Pick one</option>
+<option value="yyz">Toronto,&nbsp;ON</option>
+<option value="yul">Montreal</option>
+<option value="sold" disabled>Sold out</option>
+<option value="par1">Paris</option>
+<option value="par2">Paris</option>
+</select>
+<p id="picked">nothing picked</p>
+<fieldset disabled><legend>Locked</legend><label for="locked">Size</label> <select id="locked"><option>One</option><option>Two</option></select></fieldset>
+<button aria-haspopup="listbox">Colour</button>
+<p><label for="a">Field A</label> <input id="a"></p>
+<div style="position:relative">
+<div id="ed" role="textbox" aria-label="Editor" style="width:300px;height:40px;border:1px solid #000">code</div>
+<textarea id="hidden" aria-hidden="true" tabindex="-1" style="position:absolute;left:-9999px;top:0;width:1px;height:1px"></textarea>
+</div>
+<div id="w1" tabindex="0" role="button" aria-label="Widget" style="width:120px;height:30px;border:1px solid #000">Widget</div>
+<div id="w2" role="button" aria-label="Chooser" style="width:120px;height:30px;border:1px solid #000">Chooser</div>
+<label for="resume">Resume</label>
+<input id="resume" type="file" accept=".pdf" onchange="window.changes=(window.changes||'')+'r'">
+<label for="photo">Photo</label>
+<input id="photo" type="file" onchange="window.changes=(window.changes||'')+'p'" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);border:0">
+<label for="docs">Documents</label>
+<input id="docs" type="file" multiple onchange="window.changes=(window.changes||'')+'d'" style="opacity:0">
+<input id="hidden-file" type="file" style="display:none" onchange="document.getElementById('custom-out').textContent='attached '+Array.from(this.files).map(f=>f.name).join(',')">
+<button id="custom-btn" type="button" onclick="document.getElementById('hidden-file').click()">Upload cover</button>
+<p id="custom-out">no cover</p>
+<script>
+const hidden = document.getElementById('hidden');
+document.getElementById('ed').addEventListener('mousedown', e => { e.preventDefault(); hidden.focus(); });
+// takes no focus: a press leaves it where it was
+document.getElementById('w2').addEventListener('mousedown', e => e.preventDefault());
+</script></body></html>"##;
+
 /// The site whose sign-ins the owner shares with a session, and one the owner is signed in to
 /// that the session's sites leave out (`.localhost`: loopback).
 pub const SIGNIN_HOST: &str = "signin.localhost";
@@ -157,6 +200,7 @@ pub fn route(path: &str, port: u16, cookie: &str) -> Option<Route> {
         "/mcp/next" => page(NEXT),
         "/mcp/sticky" => page(STICKY),
         "/mcp/tools" => page(TOOLS),
+        "/mcp/forms" => page(FORMS),
         // a server's redirect off the web: Chromium must not follow it for a session
         "/mcp/to-file" => Some(Route::Redirect("file:///etc/passwd".into())),
         "/mcp/to-chrome" => Some(Route::Redirect("chrome://version".into())),
@@ -277,13 +321,13 @@ pub const SHEETS: &[Sheet] = &[
 const TYPED: &str = "wubble";
 
 /// Runs the client on its own thread; its result goes to the host, which ends the run.
-pub fn start(socket: PathBuf, page: String) {
+pub fn start(socket: PathBuf, page: String, profile: PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("mcp-smoke".into())
         .spawn(move || {
             // The connection stays open to the end, so the quit, not a disconnect, ends the
             // second session.
-            let result = run(&socket, &page).map(|(done, client)| {
+            let result = run(&socket, &page, &profile).map(|(done, client)| {
                 std::mem::forget(client);
                 done
             });
@@ -347,6 +391,38 @@ impl Client {
         } else {
             Ok(r)
         })
+    }
+
+    /// Calls sent all at once, before any answer is read: each one's result or error text, in
+    /// the order sent.
+    fn tools_at_once(
+        &mut self,
+        calls: &[(&str, Value)],
+    ) -> Result<Vec<Result<Value, String>>, String> {
+        let mut ids = vec![];
+        for (name, args) in calls {
+            self.next += 1;
+            ids.push(self.next);
+            let message = json!({"jsonrpc": "2.0", "id": self.next, "method": "tools/call",
+                "params": {"name": name, "arguments": args}});
+            self.stream
+                .write_all(wubble_mcp::encode_line(&message).as_bytes())
+                .map_err(|e| format!("send {name}: {e}"))?;
+        }
+        let mut answers: Vec<Option<Result<Value, String>>> = vec![None; ids.len()];
+        while answers.iter().any(Option::is_none) {
+            let line = self.line()?;
+            let v: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            if let Some(i) = ids.iter().position(|id| v["id"] == *id) {
+                let r = &v["result"];
+                answers[i] = Some(if r["isError"] == true {
+                    Err(text(r))
+                } else {
+                    Ok(r.clone())
+                });
+            }
+        }
+        Ok(answers.into_iter().flatten().collect())
     }
 
     /// A tool that must succeed.
@@ -463,7 +539,7 @@ pub struct Done {
     pub kept: u64,
 }
 
-fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
+fn run(socket: &Path, page: &str, profile: &Path) -> Result<(Done, Client), String> {
     let name = socket
         .to_fs_name::<GenericFilePath>()
         .map_err(|e| e.to_string())?;
@@ -606,6 +682,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     keys(&mut c, &s, page)?;
     shots(&mut c, &s, &base)?;
     pointer(&mut c, &s, &base)?;
+    forms(&mut c, &s, &base, &profile.join("mcp-uploads"))?;
     reading(&mut c, &s, &base)?;
     safety(&mut c, &s, &session, page, &base)?;
 
@@ -1184,6 +1261,260 @@ fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(),
     Ok(())
 }
 
+/// `select`, `type` and `upload_file` on form fields ([`FORMS`]).
+fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str, dir: &Path) -> Result<(), String> {
+    c.ok("navigate", s(json!({"url": format!("{base}/mcp/forms")})))?;
+    let read = text(&c.ok("read_page", s(json!({})))?);
+    let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
+    let js = |c: &mut Client, script: &str| -> Result<String, String> {
+        Ok(text(&c.ok("evaluate", s(json!({"script": script})))?))
+    };
+    let city = find("- comboBoxSelect \"City\"")?;
+    let pick =
+        |c: &mut Client, option: &str| c.tool("select", s(json!({"ref": city, "option": option})));
+    let value = |c: &mut Client| {
+        js(
+            c,
+            "document.getElementById('city').value + ' ' + document.getElementById('picked').textContent",
+        )
+    };
+    // by label, by value, a label's no-break space as a plain one, without case
+    for (option, want) in [
+        ("Montreal", "\"yul picked yul\""),
+        ("yyz", "\"yyz picked yyz\""),
+        ("Pick one", "\" picked \""),
+        ("Toronto, ON", "\"yyz picked yyz\""),
+        ("MONTREAL", "\"yul picked yul\""),
+    ] {
+        pick(c, option)?.map_err(|e| format!("select {option:?}: {e}"))?;
+        if option == "Montreal" && js(c, "window.ev")? != "\"ic\"" {
+            return Err(format!(
+                "select fired {}, not input then change",
+                js(c, "window.ev")?
+            ));
+        }
+        let got = value(c)?;
+        if got != want {
+            return Err(format!("select {option:?}: {got}, not {want}"));
+        }
+    }
+    // equal labels: the first, said
+    let both = pick(c, "Paris")?.map(|r| text(&r));
+    if !matches!(&both, Ok(t) if t.contains("2 options match"))
+        || value(c)? != "\"par1 picked par1\""
+    {
+        return Err(format!("select of two equal labels: {both:?}"));
+    }
+    match pick(c, "Ottawa")? {
+        Err(e)
+            if e.contains("no option matches \"Ottawa\"")
+                && e.contains("\"Montreal\" (value=\"yul\")") => {}
+        r => return Err(format!("select with no match: {r:?}")),
+    }
+    match pick(c, "sold out")? {
+        Err(e) if e.contains("option \"Sold out\" is disabled") => {}
+        r => return Err(format!("select of a disabled option: {r:?}")),
+    }
+    let locked = find("- comboBoxSelect \"Size\"")?;
+    match c.tool("select", s(json!({"ref": locked, "option": "Two"})))? {
+        Err(e) if e.contains("this <select> dropdown is disabled") => {}
+        r => return Err(format!("select in a disabled fieldset: {r:?}")),
+    }
+    let colour = find("- popUpButton \"Colour\"")?;
+    match c.tool("type", s(json!({"ref": colour, "text": "x"})))? {
+        Err(e) if e.contains("click it") && !e.contains("select tool") => {}
+        r => return Err(format!("type on a popup button: {r:?}")),
+    }
+    match c.tool("select", s(json!({"ref": colour, "option": "x"})))? {
+        Err(e) if e.contains("<button> is not a native <select>") && e.contains("click it") => {}
+        r => return Err(format!("select on a popup button: {r:?}")),
+    }
+    c.step(
+        "select",
+        "by label, value, a no-break space, without case; the first of two equal labels, said; no match lists the options; a disabled option, a disabled fieldset refused; a popup button sent to click by type and select",
+    );
+
+    let field = find("- textField \"Field A\"")?;
+    c.ok("type", s(json!({"ref": field, "text": TYPED})))?;
+    let a = |c: &mut Client| js(c, "document.getElementById('a').value");
+    if a(c)? != format!("{TYPED:?}") {
+        return Err(format!("type into Field A: {}", a(c)?));
+    }
+    // an editor that focuses a hidden textarea beside what shows: taken, the text arrives
+    let editor = find("- textField \"Editor\"")?;
+    c.ok("type", s(json!({"ref": editor, "text": "fn main() {}"})))
+        .map_err(|e| format!("type into the editor stand-in: {e}"))?;
+    let code = js(c, "document.getElementById('hidden').value")?;
+    if code != "\"fn main() {}\"" {
+        return Err(format!("the editor's hidden textarea holds {code}"));
+    }
+    // Field A focused again, then custom widgets: one takes focus itself (not editable), one
+    // takes none (focus stays on Field A, unrelated): both refused, Field A untouched
+    for (name, why) in [
+        ("Widget", "is not editable"),
+        ("Chooser", "stayed on an earlier <input>"),
+    ] {
+        let widget = find(&format!("- button \"{name}\""))?;
+        c.ok("type", s(json!({"ref": field, "text": TYPED})))?;
+        match c.tool("type", s(json!({"ref": widget, "text": "overwritten"})))? {
+            Err(e) if e.contains(why) => {}
+            r => return Err(format!("type on the {name} widget: {r:?}")),
+        }
+        if a(c)? != format!("{TYPED:?}") {
+            return Err(format!(
+                "Field A after type on the {name} widget: {}",
+                a(c)?
+            ));
+        }
+    }
+    c.step(
+        "type (forms)",
+        "a plain field; an editor stand-in's hidden textarea took the text; a widget that takes focus and one that leaves it on Field A refused, Field A unchanged",
+    );
+
+    uploads(c, s, &find, dir)
+}
+
+/// `upload_file` on [`FORMS`]' file inputs: set directly (a bare input, a visually hidden one,
+/// two files into a transparent `multiple` one: `change` once each, the names in the input and
+/// in `read_page`), through a custom button's chooser; refused for two files into a single
+/// input and for a second upload while one is in flight; a `click` on a file input and a
+/// chooser opened by `evaluate`'s script cancelled with the advice to use `upload_file`.
+fn uploads(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    find: &dyn Fn(&str) -> Result<String, String>,
+    dir: &Path,
+) -> Result<(), String> {
+    let js = |c: &mut Client, script: &str| -> Result<String, String> {
+        Ok(text(&c.ok("evaluate", s(json!({"script": script})))?))
+    };
+    let resume = find("- button \"Resume")?;
+    let photo = find("- button \"Photo")?;
+    let docs = find("- button \"Documents")?;
+    let custom = find("- button \"Upload cover\"")?;
+    // the files, under the run's throwaway profile
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = |name: &str, body: &[u8]| -> Result<String, String> {
+        let path = dir.join(name);
+        std::fs::write(&path, body).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    };
+    let resume_path = file("resume.pdf", b"%PDF-1.4\n%wubble-smoke\n")?;
+    let photo_path = file("photo.png", b"not a png")?;
+    let a_path = file("a.txt", b"a")?;
+    let b_path = file("b.txt", b"b")?;
+    let cover_path = file("cover.txt", b"hello cover")?;
+    let held = |c: &mut Client, id: &str| {
+        js(
+            c,
+            &format!(
+                "(f => f.files.length + ' ' + Array.from(f.files).map(x => x.name).join(','))(document.getElementById('{id}'))"
+            ),
+        )
+    };
+    // the input's own read_page line
+    let line_of = |c: &mut Client, label: &str| -> Result<String, String> {
+        let read = text(&c.ok("read_page", s(json!({})))?);
+        read.lines()
+            .find(|l| l.starts_with(&format!("- button \"{label}")))
+            .map(str::to_owned)
+            .ok_or(format!("no {label} line: {read}"))
+    };
+
+    // a click on a file input opens a chooser: cancelled, the advice given
+    match c.tool("click", s(json!({"ref": resume})))? {
+        Err(e) if e.contains("use upload_file") || e.contains("call upload_file") => {}
+        r => return Err(format!("click on a file input: {r:?}")),
+    }
+    // set directly: `change` once, the file in the input and in the tree at once
+    for (input, id, path, name, mark, label) in [
+        (&resume, "resume", &resume_path, "resume.pdf", "r", "Resume"),
+        (&photo, "photo", &photo_path, "photo.png", "p", "Photo"),
+    ] {
+        let up = text(&c.ok("upload_file", s(json!({"ref": input, "path": path})))?);
+        if up != format!("uploaded {name}") {
+            return Err(format!("upload_file into {label}: {up}"));
+        }
+        let got = held(c, id)?;
+        if got != format!("\"1 {name}\"") {
+            return Err(format!("{label} holds {got} after upload_file"));
+        }
+        let line = line_of(c, label)?;
+        if !line.contains(name) || line.contains("No file chosen") {
+            return Err(format!("read_page after upload_file into {label}: {line}"));
+        }
+        let changes = js(c, "window.changes")?;
+        if !changes.ends_with(&format!("{mark}\"")) || changes.matches(mark).count() != 1 {
+            return Err(format!("{label}'s change events: {changes}"));
+        }
+    }
+    // two files into a transparent `multiple` input
+    let up = text(&c.ok(
+        "upload_file",
+        s(json!({"ref": docs, "paths": [a_path, b_path]})),
+    )?);
+    let line = line_of(c, "Documents")?;
+    if up != "uploaded a.txt, b.txt"
+        || held(c, "docs")? != "\"2 a.txt,b.txt\""
+        || !line.contains("2 files")
+    {
+        return Err(format!("upload_file of two files: {up}; {line}"));
+    }
+    // two files into a single input: refused, it keeps its file
+    match c.tool(
+        "upload_file",
+        s(json!({"ref": resume, "paths": [a_path, b_path]})),
+    )? {
+        Err(e) if e.contains("takes one file") => {}
+        r => return Err(format!("two files into a single input: {r:?}")),
+    }
+    if held(c, "resume")? != "\"1 resume.pdf\"" {
+        return Err(format!(
+            "Resume after a refused upload: {}",
+            held(c, "resume")?
+        ));
+    }
+    // a custom button: clicked, its chooser caught by DevTools, the hidden input takes the file
+    let up = text(&c.ok("upload_file", s(json!({"ref": custom, "path": cover_path})))?);
+    let out = js(c, "document.getElementById('custom-out').textContent")?;
+    if up != "uploaded cover.txt" || out != "\"attached cover.txt\"" {
+        return Err(format!(
+            "upload_file by a custom button: {up}; the page: {out}"
+        ));
+    }
+    // a chooser a script opens (a click first gives the page the user activation it needs)
+    c.ok("click", s(json!({"ref": find("- textField \"Field A\"")?})))?;
+    match c.tool(
+        "evaluate",
+        s(json!({"script": "setTimeout(() => document.getElementById('photo').click(), 0); 'asked'"})),
+    )? {
+        Err(e) if e.contains("upload_file") => {}
+        r => return Err(format!("a chooser opened by evaluate's script: {r:?}")),
+    }
+    // two at once on one tab: one refused
+    let both = c.tools_at_once(&[
+        ("upload_file", s(json!({"ref": photo, "path": photo_path}))),
+        (
+            "upload_file",
+            s(json!({"ref": resume, "path": resume_path})),
+        ),
+    ])?;
+    let refused = both
+        .iter()
+        .filter(|r| matches!(r, Err(e) if e.contains("in flight")))
+        .count();
+    if refused != 1 || both.iter().filter(|r| r.is_ok()).count() != 1 {
+        return Err(format!("two upload_file calls at once: {both:?}"));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    c.step(
+        "upload_file",
+        "a bare, a visually hidden and a transparent multiple file input set directly (change once each, the names in the input and read_page); a custom button's chooser answered; two files into a single input refused; a click on a file input and a chooser opened by evaluate cancelled with the advice; of two at once, one refused",
+    );
+    Ok(())
+}
+
 /// `read_text`: an article's prose, capped with a note, and one element's text.
 fn reading(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
     c.ok("navigate", s(json!({"url": format!("{base}/memory")})))?;
@@ -1387,6 +1718,8 @@ pub struct McpSmoke {
     pub signin_container: Option<wubble_core::space::ContainerId>,
     /// The activity log's copy line was written.
     pub copy_logged: bool,
+    /// The activity log's `upload_file` lines (target, outcome), in order.
+    pub uploads_logged: Vec<(String, wubble_core::agent::log::Outcome)>,
     /// The origins a session's tab offered the owner's logins on (the key chip).
     pub key_chips: std::collections::BTreeSet<String>,
     /// A [`Press::ShareBindAllow`] sheet waits for the vault's list before it is answered.
