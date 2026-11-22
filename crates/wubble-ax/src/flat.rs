@@ -157,10 +157,14 @@ impl PageTree {
             return;
         }
         let Some(root) = doc.root else { return };
+        let mut visited = std::collections::BTreeSet::new();
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
             if out.len() >= cap {
                 return;
+            }
+            if !visited.insert(id) {
+                continue;
             }
             let Some(node) = doc.nodes.get(&id) else {
                 continue;

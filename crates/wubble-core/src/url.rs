@@ -2,9 +2,13 @@
 
 /// Only web pages are history and bookmarks; internal and file URLs never are.
 pub fn is_recordable(url: &str) -> bool {
-    ["http://", "https://"]
-        .iter()
-        .any(|p| url.len() > p.len() && url[..p.len()].eq_ignore_ascii_case(p))
+    ["http://", "https://"].iter().any(|p| {
+        url.len() > p.len()
+            && url
+                .as_bytes()
+                .get(..p.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(p.as_bytes()))
+    })
 }
 
 /// Match key: lowercase, scheme and a leading `www.` removed (Places autofill idea), so
@@ -152,6 +156,10 @@ mod tests {
         assert!(!is_recordable("https://"));
         assert!(!is_recordable("wubble://history"));
         assert!(!is_recordable("about:blank"));
+        // Multi-byte UTF-8 whose byte 7/8 falls inside a character must not panic.
+        assert!(!is_recordable("éééé"));
+        assert!(!is_recordable("日本語"));
+        assert!(!is_recordable("🦀🦀🦀"));
     }
 
     #[test]

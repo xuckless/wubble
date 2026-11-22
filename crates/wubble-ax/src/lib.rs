@@ -148,6 +148,9 @@ impl PageTree {
                 .cloned()
                 .collect();
             self.trees.retain(|t, _| keep.contains(t));
+            if self.focus.as_ref().is_some_and(|(t, _)| !keep.contains(t)) {
+                self.focus = None;
+            }
         }
         for change in &updates.changes {
             if let (Some(tree), Some(id)) = (&change.focused_tree, change.focus_id) {
@@ -206,7 +209,7 @@ impl PageTree {
             .trees
             .values()
             .find(|t| tree_id_of(&t.tree_id) == request.target_tree)?;
-        let id = i32::try_from(request.target_node.0).ok()?;
+        let id = u32::try_from(request.target_node.0).ok()? as i32;
         let found = doc.nodes.get(&id)?;
         let (tree, node) = (doc.tree_id.clone(), id);
         match request.action {
@@ -456,7 +459,7 @@ impl DocTree {
 }
 
 fn node_id(id: i32) -> NodeId {
-    NodeId(u64::from(id.unsigned_abs()))
+    NodeId(u64::from(id as u32))
 }
 
 #[cfg(test)]

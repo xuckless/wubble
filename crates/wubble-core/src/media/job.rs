@@ -173,7 +173,7 @@ pub fn transition(job: Job, event: JobEvent) -> (Job, Vec<JobEffect>) {
         }
         (Job::Resolving { .. }, E::Pause) => (Job::Resolving { paused: true }, vec![]),
         (Job::Resolving { .. }, E::Resume) => (Job::Resolving { paused: false }, vec![]),
-        (Job::Resolving { .. }, E::Refused(why)) => (Job::Failed(why), vec![]),
+        (Job::Resolving { .. }, E::Refused(why)) => (Job::Failed(why), vec![Fx::StopFetches]),
         (Job::Fetching(_) | Job::Paused(_) | Job::Interrupted(..), E::Refused(why)) => {
             (Job::Failed(why), vec![Fx::StopFetches, Fx::Discard])
         }
@@ -221,7 +221,7 @@ pub fn transition(job: Job, event: JobEvent) -> (Job, Vec<JobEffect>) {
         (Job::Joining { .. }, E::Cancel) => (Job::Joining { cancelled: true }, vec![]),
         (Job::Joining { cancelled: true }, E::Joined(_)) => (Job::Cancelled, vec![Fx::Discard]),
         (Job::Joining { .. }, E::Joined(Ok(()))) => (Job::Done, vec![]),
-        (Job::Joining { .. }, E::Joined(Err(why))) => (Job::Failed(why), vec![]),
+        (Job::Joining { .. }, E::Joined(Err(why))) => (Job::Failed(why), vec![Fx::Discard]),
         // Late answers of stopped fetches, and anything else out of place.
         (job, _) => (job, vec![]),
     }
@@ -389,7 +389,10 @@ mod tests {
         );
         assert_eq!(
             (job.clone(), fx),
-            (Job::Failed("Protected, cannot be saved".into()), vec![])
+            (
+                Job::Failed("Protected, cannot be saved".into()),
+                vec![Fx::StopFetches]
+            )
         );
         assert_eq!(
             list_event(&job),
@@ -424,11 +427,12 @@ mod tests {
                 vec![Fx::CloseTrack(0), Fx::CloseTrack(1), Fx::Join]
             )
         );
-        let (failed, _) = transition(
+        let (failed, fx) = transition(
             Job::Joining { cancelled: false },
             E::Joined(Err("ffmpeg failed".into())),
         );
         assert_eq!(failed, Job::Failed("ffmpeg failed".into()));
+        assert_eq!(fx, vec![Fx::Discard]);
     }
 
     #[test]

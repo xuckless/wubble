@@ -235,7 +235,7 @@ fn media(m: &MediaPlaylist, base: &str) -> Result<Plan, Refusal> {
                 len: r.length,
             }
         });
-        last_end = range.map(|r| (url.clone(), r.start + r.len));
+        last_end = range.map(|r| (url.clone(), r.start.saturating_add(r.len)));
         let aes = match key {
             Some(k) if k.method == KeyMethod::AES128 => {
                 let uri = k
@@ -245,7 +245,7 @@ fn media(m: &MediaPlaylist, base: &str) -> Result<Plan, Refusal> {
                 let iv = match k.iv.as_deref() {
                     Some(text) => parse_iv(text)
                         .ok_or_else(|| Refusal::Failed("an AES-128 key with a bad IV".into()))?,
-                    None => sequence_iv(m.media_sequence + i as u64),
+                    None => sequence_iv(m.media_sequence.saturating_add(i as u64)),
                 };
                 Some(AesKey {
                     uri: join_url(base, uri),
@@ -457,5 +457,22 @@ other.mp4
         assert_eq!(decrypt(&key, &iv, &sealed).unwrap(), plain);
         assert!(decrypt(&key[..8], &iv, &sealed).is_err());
         assert!(decrypt(&[9u8; 16], &iv, &sealed).is_err());
+    }
+
+    #[test]
+    fn huge_byterange_and_media_sequence_do_not_overflow() {
+        let m3u8 = "#EXTM3U\n\
+            #EXT-X-TARGETDURATION:2\n\
+            #EXT-X-MEDIA-SEQUENCE:18446744073709551615\n\
+            #EXT-X-KEY:METHOD=AES-128,URI=\"k\"\n\
+            #EXT-X-BYTERANGE:18446744073709551615@10\n\
+            #EXTINF:2,\n\
+            a.ts\n\
+            #EXTINF:2,\n\
+            b.ts\n\
+            #EXT-X-ENDLIST\n";
+        let plan = parse_media(m3u8, BASE).unwrap();
+        assert_eq!(plan.segments.len(), 2);
+        assert_eq!(plan.segments[1].key.as_ref().unwrap().iv, sequence_iv(u64::MAX));
     }
 }

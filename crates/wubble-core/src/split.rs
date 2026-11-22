@@ -345,6 +345,10 @@ impl Split {
             self.closing = Some(Closing { k: j + 1, s: j });
             return;
         }
+        // wubble change: guard zero/negative width so stops never become NaN/inf.
+        if self.width <= 0.0 {
+            return;
+        }
         self.stops[j] = clamp(
             self.c[j].x,
             lo + SPLIT::gap + SPLIT::minPane,
@@ -355,6 +359,10 @@ impl Split {
 
     /// Keyboard: move a seam a step, with a twang.
     pub fn nudge(&mut self, j: usize, dir: f64) {
+        // wubble change: ignore out-of-range seams or unmeasured widths.
+        if j >= self.c.len() || self.width <= 0.0 {
+            return;
+        }
         let (lo, hi) = (self.left(j as isize - 1), self.right(j as isize + 1));
         self.stops[j] = clamp(
             self.stops[j] * self.width + dir * SPLIT::keyStep,
@@ -912,5 +920,18 @@ mod tests {
             s.nudge(-1.0, 700.0);
         }
         assert_eq!(s.want, 320.0);
+    }
+
+    #[test]
+    fn nudge_and_release_guard_oob_and_zero_width() {
+        let mut s = Split::new();
+        s.sync(&[1, 2], &[0.5]);
+        // width is still 0.0: neither nudge nor release may panic or produce NaN stops.
+        s.nudge(0, 1.0);
+        s.nudge(5, 1.0);
+        s.grab(0, 200.0, 200.0);
+        s.release();
+        assert_eq!(s.stops, vec![0.5]);
+        assert!(s.stops[0].is_finite());
     }
 }

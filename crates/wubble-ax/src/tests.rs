@@ -693,3 +693,95 @@ fn file_input_name_and_value_update_when_files_are_attached() {
     assert_eq!(items[0].name, "Resume: resume.pdf");
     assert_eq!(items[0].value, "resume.pdf");
 }
+
+#[test]
+fn navigation_clears_stale_focus_from_previous_document() {
+    let mut tree = PageTree::default();
+    let doc1 = json!({
+        "ax_tree_id": "doc-1",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "doc-1", "focused_tree_id": "doc-1", "focus_id": 2 },
+            "root_id": 1,
+            "nodes": [
+                { "id": 1, "role": "rootWebArea", "child_ids": [2] },
+                { "id": 2, "role": "button", "attributes": { "name": "Old" } }
+            ]
+        }]
+    });
+    first(&mut tree, doc1);
+    assert!(tree.flatten(10)[0].focused);
+
+    // Navigate to a new root document whose update sets doc.focus without focused_tree_id.
+    let doc2 = json!({
+        "ax_tree_id": "doc-2",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "doc-2", "focus_id": 5 },
+            "root_id": 4,
+            "nodes": [
+                { "id": 4, "role": "rootWebArea", "child_ids": [5] },
+                { "id": 5, "role": "button", "attributes": { "name": "New" } }
+            ]
+        }]
+    });
+    first(&mut tree, doc2);
+    let items = tree.flatten(10);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].focused, "new document focus must not be shadowed by dead tree");
+}
+
+#[test]
+fn flatten_terminates_on_container_cycle() {
+    let mut tree = PageTree::default();
+    let cyclic = json!({
+        "ax_tree_id": "doc-cycle",
+        "updates": [{
+            "root_id": 1,
+            "nodes": [
+                { "id": 1, "role": "rootWebArea", "child_ids": [2] },
+                { "id": 2, "role": "genericContainer", "child_ids": [3] },
+                { "id": 3, "role": "genericContainer", "child_ids": [2, 4] },
+                { "id": 4, "role": "button", "attributes": { "name": "Ok" } }
+            ]
+        }]
+    });
+    first(&mut tree, cyclic);
+    let items = tree.flatten(100);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "Ok");
+}
+
+#[test]
+fn negative_and_positive_node_ids_do_not_collide() {
+    let mut tree = PageTree::default();
+    let doc = json!({
+        "ax_tree_id": "doc-neg",
+        "updates": [{
+            "root_id": 1,
+            "nodes": [
+                { "id": 1, "role": "rootWebArea", "child_ids": [-5, 5] },
+                { "id": -5, "role": "button", "attributes": { "name": "Neg" } },
+                { "id": 5, "role": "button", "attributes": { "name": "Pos" } }
+            ]
+        }]
+    });
+    let update = first(&mut tree, doc);
+    let ids: Vec<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+    assert_ne!(node_id(-5), node_id(5));
+    assert!(ids.contains(&node_id(-5)));
+    assert!(ids.contains(&node_id(5)));
+    let req = ActionRequest {
+        action: Action::Focus,
+        target_tree: tree_id_of("doc-neg"),
+        target_node: node_id(-5),
+        data: None,
+    };
+    assert_eq!(
+        tree.action(&req),
+        Some(PageAction::Focus {
+            tree: "doc-neg".into(),
+            node: -5
+        })
+    );
+}
