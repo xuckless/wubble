@@ -21,7 +21,7 @@ use wubble_core::space::{
     SplitGroup,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
-use wubble_core::window::{Geometry, Window, WindowId};
+use wubble_core::window::{Geometry, Shown, Window, WindowId, WindowState};
 
 use crate::*;
 
@@ -215,9 +215,9 @@ impl Store {
             }
             None => spaces[0].id,
         };
-        let windows = self.load_windows(&space_at, active_space).await?;
-        // The model keeps the shown tabs (each pane of a shown split, in every window) Active;
-        // every other tab has no renderer yet.
+        let windows = self.load_windows(&spaces, &space_at, active_space).await?;
+        // The model keeps the shown tabs (each pane of a shown split, in every window, and each
+        // Popup window's tab) Active; every other tab has no renderer yet.
         let shown: Vec<TabId> = windows
             .iter()
             .filter_map(|w| spaces.iter().find(|s| Some(s.id) == w.space()))
@@ -228,6 +228,7 @@ impl Store {
                     _ => a.into_iter().collect(),
                 }
             })
+            .chain(windows.iter().filter_map(Window::tab))
             .collect();
         for t in tabs.iter_mut().filter(|t| shown.contains(&t.id)) {
             t.lifecycle.liveness = Liveness::Active;
@@ -235,18 +236,22 @@ impl Store {
         Model::from_parts(spaces, containers, tabs, windows, now).map_err(Error::Corrupt)
     }
 
-    /// The stored Main windows, focused last. A row on an unknown Space or on a Space an
-    /// earlier row shows is dropped, not an error; with none left (every session before v11)
-    /// one window shows `active_space`.
+    /// The stored Main and Popup windows, focused last. A row on an unknown Space or on a
+    /// Space an earlier row shows, and a Popup row whose tab is not an unshown tab of its
+    /// Space, is dropped, not an error (the tab stays a tab of its Space); without a Main
+    /// window left (every session before v11) one window shows `active_space`, focused below
+    /// the Popup windows.
     async fn load_windows(
         &self,
+        spaces: &[Space],
         space_at: &HashMap<SpaceId, usize>,
         active_space: SpaceId,
     ) -> Result<Vec<Window>> {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, space_id, width, height, x, y FROM windows ORDER BY position",
+                "SELECT id, space_id, width, height, x, y, state, monitor, tab_id FROM windows \
+                 ORDER BY position",
                 (),
             )
             .await?;
@@ -254,13 +259,20 @@ impl Store {
         while let Some(r) = rows.next().await? {
             let id = WindowId(narrow(r.get(0)?, "window id")?);
             let space = SpaceId(narrow(r.get(1)?, "space id")?);
-            if !space_at.contains_key(&space)
-                || windows
-                    .iter()
-                    .any(|w| w.id == id || w.space() == Some(space))
-            {
+            let tab: Option<i64> = r.get(8)?;
+            let tab = tab.map(|t| narrow(t, "tab id").map(TabId)).transpose()?;
+            let Some(&si) = space_at.get(&space) else {
+                continue;
+            };
+            if windows.iter().any(|w| w.id == id) {
                 continue;
             }
+            let shown = match tab {
+                None if windows.iter().any(|w| w.space() == Some(space)) => continue,
+                None => Shown::Space(space),
+                Some(t) if !popup_fits(&spaces[si], t, &windows) => continue,
+                Some(t) => Shown::Popup(t),
+            };
             let int = |v: Option<i64>| v.and_then(|v| i32::try_from(v).ok());
             let size = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
             let (w, h, x, y) = (
@@ -269,18 +281,27 @@ impl Store {
                 int(r.get(4)?),
                 int(r.get(5)?),
             );
+            let state: String = r.get(6)?;
+            let monitor: Option<String> = r.get(7)?;
             let geometry = w.zip(h).map(|(width, height)| Geometry {
                 width,
                 height,
                 pos: x.zip(y),
+                state: WindowState::from_id(&state).unwrap_or_default(),
+                monitor,
             });
             windows.push(Window {
+                id,
+                shown,
                 geometry,
-                ..Window::main(id, space)
             });
         }
-        if windows.is_empty() {
-            windows.push(Window::main(WindowId(0), active_space));
+        if !windows.iter().any(|w| w.space().is_some()) {
+            let id = (0..)
+                .map(WindowId)
+                .find(|id| windows.iter().all(|w| w.id != *id))
+                .expect("a free window id");
+            windows.insert(0, Window::main(id, active_space));
         }
         Ok(windows)
     }
@@ -299,18 +320,30 @@ impl Store {
     }
 }
 
+/// Whether `tab` is placed in `space` (pinned, top level or in a folder).
+fn space_has(space: &Space, tab: TabId) -> bool {
+    space.pinned.contains(&tab)
+        || space.items.iter().any(|i| match i {
+            Item::Tab(x) => *x == tab,
+            Item::Folder(f) => f.tabs.contains(&tab),
+        })
+}
+
+/// Whether a stored Popup window can show `tab` of `space`: the tab is placed there and is not
+/// on screen otherwise (the Space's active tab, a pane of its split, an earlier window's).
+fn popup_fits(space: &Space, tab: TabId, windows: &[Window]) -> bool {
+    space_has(space, tab)
+        && space.active != Some(tab)
+        && !space.split.as_ref().is_some_and(|g| g.tabs.contains(&tab))
+        && windows.iter().all(|w| w.tab() != Some(tab))
+}
+
 /// The split stored for `space`: its panes left to right and the stop after each (`None` on the
 /// last). `None` unless it is a valid split of the Space's tabs.
 fn split_group(space: &Space, tabs: Vec<TabId>, stops: Vec<Option<f64>>) -> Option<SplitGroup> {
     let (last, seams) = stops.split_last()?;
     let stops: Vec<f64> = seams.iter().copied().collect::<Option<_>>()?;
-    let in_space = |t: &TabId| {
-        space.pinned.contains(t)
-            || space.items.iter().any(|i| match i {
-                Item::Tab(x) => x == t,
-                Item::Folder(f) => f.tabs.contains(t),
-            })
-    };
+    let in_space = |t: &TabId| space_has(space, *t);
     let fits = last.is_none()
         && (2..=MAX_PANES).contains(&tabs.len())
         && SplitGroup::stops_fit(&stops, tabs.len())
@@ -353,25 +386,38 @@ pub(crate) async fn write_model(
     Ok(())
 }
 
-/// The Main windows, in focus order (Little and Popup windows are not kept).
+/// The windows a session keeps, in focus order: Main windows on their Space, and Popup windows
+/// on their tab (Chrome restores `TYPE_POPUP` windows). A Little window is not kept: its tab is
+/// an ordinary tab of its Space; nor is a Pip window.
+fn kept_windows(m: &Model) -> impl Iterator<Item = (&Window, SpaceId, Option<TabId>)> {
+    m.windows.iter().filter_map(move |w| match w.shown {
+        Shown::Space(s) => Some((w, s, None)),
+        Shown::Popup(t) => Some((w, m.location(t)?.0, Some(t))),
+        Shown::Little(_) | Shown::Pip(_) => None,
+    })
+}
+
 async fn write_windows(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO windows(id, position, space_id, width, height, x, y) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO windows(id, position, space_id, width, height, x, y, state, monitor, \
+             tab_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .await?;
-    let mains = m.windows.iter().filter_map(|w| Some((w, w.space()?)));
-    for (i, (w, space)) in mains.enumerate() {
-        let g = w.geometry;
+    for (i, (w, space, tab)) in kept_windows(m).enumerate() {
+        let g = w.geometry.as_ref();
+        let pos = g.and_then(|g| g.pos);
         st.execute((
             i64::from(w.id.0),
             i as i64,
             space.0,
             g.map(|g| i64::from(g.width)),
             g.map(|g| i64::from(g.height)),
-            g.and_then(|g| g.pos).map(|p| i64::from(p.0)),
-            g.and_then(|g| g.pos).map(|p| i64::from(p.1)),
+            pos.map(|p| i64::from(p.0)),
+            pos.map(|p| i64::from(p.1)),
+            g.map_or(WindowState::Normal, |g| g.state).id(),
+            g.and_then(|g| g.monitor.as_deref()),
+            tab.map(tab_id).transpose()?,
         ))
         .await?;
     }
@@ -395,10 +441,14 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
              agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
+    let popups: Vec<TabId> = kept_windows(m).filter_map(|(_, _, t)| t).collect();
     for (i, s) in m.spaces.iter().enumerate() {
-        // A Space whose only tabs are in Little or Popup windows has no active tab; those
-        // windows are not kept, so its first tab is shown after a restart.
-        let active = s.active.or_else(|| m.order(s.id).first().copied());
+        // A Space whose only tabs are in Little or Popup windows has no active tab. Little
+        // windows are not kept, so its first tab not in a kept Popup window is shown after a
+        // restart.
+        let active = s
+            .active
+            .or_else(|| m.order(s.id).into_iter().find(|t| !popups.contains(t)));
         let active = active.map(tab_id).transpose()?;
         st.execute((
             s.id.0,
@@ -683,6 +733,7 @@ mod tests {
                 width: 800,
                 height: 600,
                 pos,
+                ..Geometry::default()
             };
             for (w, pos) in [(0, Some((10, -20))), (1, None)] {
                 m = ap(
