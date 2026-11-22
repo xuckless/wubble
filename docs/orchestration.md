@@ -18,6 +18,7 @@ the lanes into one integration branch and runs the full check round.
 
 ## Rules (2026-11-19)
 
+- Every build-out copies open source first and builds only what is left (owner, 2026-11-22): each brief tells the agent to find and port a proven implementation (AGENTS.md "Copy first") before writing its own.
 - Look inside a long-running step (its last actions, commits, processes, load) instead of relaying "still running".
 - A finished lane with zero commits is a failed lane: relaunch it at once.
 - Lane agents may be shown the owner's messages to the lead: every brief starts by saying those are not their task.
