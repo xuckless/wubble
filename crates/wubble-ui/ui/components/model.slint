@@ -592,6 +592,10 @@ export struct SettingItem {
     options: [MenuEntry],
     // what that Select reads while none is chosen
     placeholder: string,
+    // the entries are shown only, under the row's own control (the built-in search engines)
+    fixed: bool,
+    // a list whose entries are only removed (the site searches found on pages)
+    kept: bool,
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).

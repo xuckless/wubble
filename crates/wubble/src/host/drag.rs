@@ -449,9 +449,7 @@ impl Host {
     fn dropped_url(&self, text: &str) -> Option<String> {
         match omnibox::classify(text) {
             Intent::Url(url) => Some(url),
-            Intent::Search(q) => self
-                .search_engine
-                .map(|engine| omnibox::fill(engine.info().search, &q)),
+            Intent::Search(q) => self.search.default.as_ref().map(|e| e.search_url(&q)),
         }
     }
 

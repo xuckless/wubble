@@ -108,7 +108,8 @@ fn settings_page_scenarios() {
         // the engine picks from a Select, as the design's; the other choice is segmented
         ("SettingRow::segmented", 1),
         ("SettingRow::select", 1),
-        ("SettingRow::entries", 2),
+        // the list, the map, and the built-in engines under the engine's Select
+        ("SettingRow::entries", 3),
     ] {
         assert_eq!(count(&app, id), n, "{id}");
     }

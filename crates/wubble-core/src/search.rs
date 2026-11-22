@@ -43,6 +43,9 @@ pub struct EngineRef {
     /// The OpenSearch suggestions endpoint, with one `{q}`; `None`: the engine has none, and
     /// live suggestions stay off for it.
     pub suggest: Option<String>,
+    /// Search by image URL, with one `{q}` for the image's address (the page menu's "Search
+    /// <engine> for Image"); `None`: the engine has none.
+    pub image: Option<String>,
 }
 
 impl EngineRef {
@@ -53,6 +56,7 @@ impl EngineRef {
             keyword: e.keyword.to_owned(),
             search: e.search.to_owned(),
             suggest: Some(e.suggest.to_owned()),
+            image: e.image.map(str::to_owned),
         }
     }
 
@@ -154,6 +158,7 @@ impl EngineEntry {
                 .as_deref()
                 .filter(|s| check_template(s).is_ok())
                 .map(template),
+            image: None,
         }
     }
 }

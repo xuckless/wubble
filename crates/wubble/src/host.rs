@@ -50,6 +50,7 @@ mod preview;
 mod print;
 mod settings;
 mod shortcuts;
+mod site_search;
 mod snapshots;
 pub(crate) mod start;
 mod status;
@@ -93,7 +94,7 @@ use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
 use wubble_core::neterror::CertExceptions;
-use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
+use wubble_core::omnibox::{self, HistoryEntry, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, Stored};
@@ -470,7 +471,10 @@ pub struct Host {
     print_serial: i32,
     /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
     print_dir: Option<tempfile::TempDir>,
-    search_engine: Option<SearchEngine>,
+    /// The search engines and the default (`apply::Applied::SearchEngines`).
+    search: wubble_core::search::Engines,
+    /// Site searches found on pages (`host/site_search.rs`).
+    site_search: site_search::SiteSearch,
     live_suggestions: bool,
     /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
     suggest: crate::suggest_fx::SuggestFx,
@@ -753,7 +757,8 @@ impl Host {
             gestures: Default::default(),
             print_serial: 0,
             print_dir: None,
-            search_engine: None,
+            search: Default::default(),
+            site_search: Default::default(),
             live_suggestions: false,
             suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
                 let _ = slint::invoke_from_event_loop(move || {
@@ -1571,6 +1576,7 @@ impl Host {
         }
         self.ext_requests();
         self.media_pump();
+        self.site_search_pump();
         self.agent_check();
         self.enter_focused();
         self.agent_sheet_pump();
@@ -1823,6 +1829,7 @@ impl Host {
         self.parity_web(&event);
         let taken_back = self.agent_web(tab, &event);
         self.builtins_web(tab, &event);
+        self.site_search_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         if self.checks.video_smoke.is_some() {
             self.video_smoke_step(crate::video_smoke::Input::Web(&event));
@@ -2315,12 +2322,12 @@ impl Host {
     }
 
     /// What this window's bar consults: a private window's suggests from this machine only.
-    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings {
+    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings<'_> {
         wubble_core::suggest::SuggestSettings {
-            engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
+            engines: &self.search,
             live: wubble_core::suggest::LiveSuggestions::of(
                 self.live_suggestions,
-                self.search_engine.is_some(),
+                self.search.default.is_some(),
                 self.model.side_of_window(self.w.id),
             ),
         }
@@ -2357,7 +2364,7 @@ impl Host {
             tabs: &tabs,
             history: &self.bar.history,
             bookmarks: &self.bar.bookmarks,
-            engine: self.search_engine,
+            engines: &self.search,
             keymap: &self.keymap,
             suggestions: &self.bar.suggestions,
             now_ms: now_ms(),
@@ -2501,7 +2508,7 @@ impl Host {
     }
 
     fn choose_as(&mut self, target: &RowTarget, disposition: omnibox::Disposition) {
-        let choice = bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
+        let choice = bar::target_command_as(target, self.bar.mode, self.search.default.as_ref(), disposition);
         match choice {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
@@ -2531,7 +2538,7 @@ impl Host {
                 }
             }
             Some(Choice::SetEngine(engine)) => {
-                self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
+                self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, &engine);
                 // The text that offered the choice is searched with it.
                 if let omnibox::Intent::Search(q) = omnibox::classify(&self.bar.query)
                     && !q.is_empty()
@@ -2981,6 +2988,7 @@ impl Host {
         self.agents_quit();
         self.mcp_quit();
         self.media_shutdown();
+        self.site_search_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, &self.agents.spaces(), ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
@@ -3555,7 +3563,12 @@ impl Host {
                 &self.settings.stored,
             )
             .to_owned(),
-            engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
+            engine_applied: self
+                .search
+                .default
+                .as_ref()
+                .map_or("", |e| e.id.as_str())
+                .to_owned(),
             acted: self.settings_acted,
         };
         self.settings_scroll_seen = scroll;

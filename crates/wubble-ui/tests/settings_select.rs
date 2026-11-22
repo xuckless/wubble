@@ -113,17 +113,18 @@ fn the_search_engine_select_is_picked_by_pointer_and_by_key() {
     assert!(!open(), "Escape closes a list opened by key");
     assert!(changed.borrow().is_empty(), "and picks nothing");
 
-    // Down moves off the current row (the last: it wraps) and Enter picks the one it lands on
+    // Down moves off the current row (DuckDuckGo) to the next and Enter picks the one it
+    // lands on
     trigger(&app).invoke_accessible_default_action();
     pump(400);
     press(&app, Key::DownArrow);
     press(&app, Key::Return);
     assert_eq!(
         *changed.borrow(),
-        [("search.engine".to_string(), "google".to_string())]
+        [("search.engine".to_string(), "bing".to_string())]
     );
     assert!(!open(), "a pick by key closes the list");
-    assert_eq!(shown(&app), "Google");
+    assert_eq!(shown(&app), "Bing");
 
     // a list a click opened answers the keys too: Escape closes it
     changed.borrow_mut().clear();

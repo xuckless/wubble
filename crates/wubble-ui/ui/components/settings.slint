@@ -114,7 +114,7 @@ component SettingRow inherits VerticalLayout {
     callback entry-added(string, string);
     out property <bool> menu-mounted;
 
-    property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
+    property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map || root.setting.fixed;
     padding-bottom: root.listed ? Shell.row-pad-y : 0px;
     Row {
         tap: root.setting.control == SettingControl.toggle;
@@ -200,7 +200,8 @@ component SettingRow inherits VerticalLayout {
         }
     }
     // a list or map setting's entries in the list editor: a list adds and edits in place, a
-    // map only removes; the host answers each draft (`setting.answer`, `setting.note`)
+    // map (and a kept list) only removes, fixed entries only show; the host answers each draft
+    // (`setting.answer`, `setting.note`)
     if root.listed: HorizontalLayout {
         padding-left: Shell.row-pad-x;
         padding-right: Shell.row-pad-x;
@@ -210,8 +211,9 @@ component SettingRow inherits VerticalLayout {
             row-at(i) => {
                 return root.setting.entries[i];
             }
-            adds: root.setting.control == SettingControl.list ? ListEditorAdds.draft : ListEditorAdds.none;
-            editable: root.setting.control == SettingControl.list;
+            adds: root.setting.control == SettingControl.list && !root.setting.kept ? ListEditorAdds.draft : ListEditorAdds.none;
+            editable: root.setting.control == SettingControl.list && !root.setting.kept;
+            removes: !root.setting.fixed;
             answer: root.setting.answer;
             note: root.setting.note;
             label: root.setting.label;

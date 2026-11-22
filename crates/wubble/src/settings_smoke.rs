@@ -176,14 +176,14 @@ pub const SCRIPT: &[Step] = &[
     Then(Open(false)),
     Then(Engine("duckduckgo")),
     // the trigger's action opens it with the focus on the list: Down moves off the current
-    // row (DuckDuckGo, the last) and wraps to the first, Enter picks it
+    // row (DuckDuckGo) to the next, Enter picks it
     Act(ActivateTrigger),
     Then(Open(true)),
     Act(Press(Keys::Down)),
     Act(Press(Keys::Enter)),
-    Then(Engine("google")),
+    Then(Engine("bing")),
     Then(Open(false)),
-    Then(Shows("Google")),
+    Then(Shows("Bing")),
     // the Sidebar row follows the shell, and drives it
     Act(Goto("Appearance")),
     Then(Sidebar("extended")),
@@ -304,7 +304,7 @@ pub enum Action {
 }
 
 /// The engine the script ends on, as the store must hold it.
-pub const FINAL_ENGINE: &str = "google";
+pub const FINAL_ENGINE: &str = "bing";
 
 pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
     let to = |stage| SettingsSmoke { stage, runs: 0 };
@@ -744,7 +744,10 @@ mod tests {
         }
 
         fn press(&mut self, act: Do) {
-            const NAMES: [(&str, &str); 2] = [("google", "Google"), ("duckduckgo", "DuckDuckGo")];
+            let names: Vec<(&str, &str)> = wubble_core::omnibox::ENGINES
+                .iter()
+                .map(|e| (e.id, e.name))
+                .collect();
             let action_of = |label: &str| {
                 wubble_core::action::Action::all()
                     .into_iter()
@@ -754,20 +757,20 @@ mod tests {
             let pick = |id: &str, s: &mut Seen| {
                 s.engine_stored = id.into();
                 s.engine_applied = id.into();
-                s.select_shown = NAMES.iter().find(|n| n.0 == id).unwrap().1.into();
+                s.select_shown = names.iter().find(|n| n.0 == id).unwrap().1.into();
                 s.select_open = false;
             };
             match act {
                 Do::PressTrigger => s.select_open = true,
                 Do::ActivateTrigger => {
                     s.select_open = true;
-                    self.row = NAMES
+                    self.row = names
                         .iter()
                         .position(|n| n.0 == s.engine_stored)
                         .unwrap_or(0);
                 }
                 Do::PressRow(label) => {
-                    let id = NAMES.iter().find(|n| n.1 == label).unwrap().0;
+                    let id = names.iter().find(|n| n.1 == label).unwrap().0;
                     pick(id, s);
                 }
                 Do::ScrollTop => s.select_found = true,
@@ -793,8 +796,8 @@ mod tests {
                     self.record(keys::CaptureEvent::Cancel)
                 }
                 Do::Press(Keys::Escape) => s.select_open = false,
-                Do::Press(Keys::Down) => self.row = (self.row + 1) % NAMES.len(),
-                Do::Press(Keys::Enter) => pick(NAMES[self.row].0, s),
+                Do::Press(Keys::Down) => self.row = (self.row + 1) % names.len(),
+                Do::Press(Keys::Enter) => pick(names[self.row].0, s),
                 Do::PressBinding(label) => {
                     self.record(keys::CaptureEvent::Arm(action_of(label).unwrap()))
                 }

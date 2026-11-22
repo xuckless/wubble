@@ -185,13 +185,14 @@ pub struct Entry {
 
 /// What the menu needs besides the click: the page's navigation (from the
 /// view's `NavState`) and the search engine's name, if one is chosen.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
-    pub search: Option<&'static str>,
-    /// The chosen engine's search by image URL (`omnibox::EngineInfo::image`).
-    pub image: Option<&'static str>,
+    /// The default engine's name (a built-in's or the user's own).
+    pub search: Option<String>,
+    /// The default engine's search by image URL (`search::EngineRef::image`).
+    pub image: Option<String>,
     /// The page is a private window's: "Open Link in Private Window" is not offered there
     /// (Chrome's incognito window has no "Open link in incognito window").
     pub private: bool,
@@ -435,12 +436,12 @@ const ROWS: &[Row] = &[
     }),
     Row {
         group: 2,
-        label: |c| format!("Search {} for Image", c.nav.search.unwrap_or_default()),
+        label: |c| format!("Search {} for Image", c.nav.search.as_deref().unwrap_or_default()),
         show: |c| c.image_search(),
         enabled: always,
         command: |c| {
             Command::OpenInNewTab(omnibox::fill(
-                c.nav.image.unwrap_or_default(),
+                c.nav.image.as_deref().unwrap_or_default(),
                 &c.menu.media_url,
             ))
         },
@@ -575,7 +576,7 @@ const ROWS: &[Row] = &[
     ),
     Row {
         group: 7,
-        label: |c| search_label(c.nav.search, &c.menu.selection_text),
+        label: |c| search_label(c.nav.search.as_deref(), &c.menu.selection_text),
         show: |c| !c.menu.selection_text.trim().is_empty(),
         enabled: always,
         command: |c| Command::Search(c.menu.selection_text.clone()),
@@ -2355,7 +2356,7 @@ mod tests {
         };
         assert!(search(&e).is_some());
         let named = NavFlags {
-            search: Some("DuckDuckGo"),
+            search: Some("DuckDuckGo".into()),
             ..NavFlags::default()
         };
         let named = entries(&m, named);
@@ -2438,8 +2439,8 @@ mod tests {
     #[test]
     fn rows_follow_chromiums_groups() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let image = |url: &str| ContextMenu {
@@ -2593,8 +2594,8 @@ mod tests {
     #[test]
     fn the_new_rows_run_what_chrome_runs() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let command = |menu: &ContextMenu, label: &str| {

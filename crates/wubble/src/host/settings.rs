@@ -16,6 +16,7 @@ use wubble_core::apply::{self, Applied};
 use wubble_core::keys::{self, Capture, CaptureEvent, Chord, Override, Platform};
 use wubble_core::model::Command;
 use wubble_core::pages::{self, InternalPage};
+use wubble_core::search;
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
 use wubble_core::space::{Rgb, SpaceIcon, SpaceId, SpaceKind};
@@ -93,8 +94,9 @@ impl Host {
     /// The one place a setting takes effect while the app runs.
     fn apply_setting(&mut self, applied: Applied) {
         match applied {
-            Applied::SearchEngine(engine) => self.search_engine = engine,
+            Applied::SearchEngines(engines) => self.search = engines,
             Applied::LiveSuggestions(on) => self.live_suggestions = on,
+            Applied::DiscoverSites(on) => self.site_search_enabled(on),
             Applied::SidebarMode(mode) => {
                 if let Some(window) = self.w.window.upgrade()
                     && SidebarMode::from(window.get_sidebar_mode()) != mode
@@ -246,6 +248,37 @@ impl Host {
         }
         if let Some(text) = apply::without_entry(key, &self.settings.stored, entry) {
             self.write_setting(key, &text);
+            if key == defs::SEARCH_CUSTOM.key {
+                self.custom_engine_changed(entry, None);
+            }
+        }
+    }
+
+    /// One of the user's engines was edited (`new`) or removed: the default follows it (a
+    /// removed default asks again on the next search), and a site search found on pages with
+    /// the new one's keyword is no longer listed as inactive.
+    fn custom_engine_changed(&mut self, old: &str, new: Option<&str>) {
+        let default = apply::value_of(&defs::SEARCH_ENGINE, &self.settings.stored).to_owned();
+        if let Some(id) = search::default_after_edit(&default, old, new) {
+            self.write_setting(defs::SEARCH_ENGINE.key, &id);
+        }
+        if let Some(entry) = new.and_then(search::EngineEntry::parse) {
+            self.custom_engine_added(&entry.keyword);
+        }
+    }
+
+    /// A site search found on pages with `keyword` leaves the inactive list: the user's own
+    /// engine has it now.
+    fn custom_engine_added(&mut self, keyword: &str) {
+        let found: Vec<String> = serde_json::from_str(apply::value_of(
+            &defs::SEARCH_DISCOVERED,
+            &self.settings.stored,
+        ))
+        .unwrap_or_default();
+        if let Some(kept) = search::without_keyword(&found, keyword)
+            && let Ok(text) = serde_json::to_string(&kept)
+        {
+            self.write_setting(defs::SEARCH_DISCOVERED.key, &text);
         }
     }
 
@@ -268,8 +301,18 @@ impl Host {
             put.as_ref().err().map_or("", |r| r.note()),
         );
         match put {
-            Ok(text) => {
-                self.write_setting(key, &text);
+            Ok(stored) => {
+                self.write_setting(key, &stored);
+                if key == defs::SEARCH_CUSTOM.key {
+                    match draft.replacing {
+                        Some(old) => self.custom_engine_changed(old, Some(text.as_str())),
+                        None => {
+                            if let Some(entry) = search::EngineEntry::parse(&text) {
+                                self.custom_engine_added(&entry.keyword);
+                            }
+                        }
+                    }
+                }
             }
             Err(_) => self.render_settings(),
         }

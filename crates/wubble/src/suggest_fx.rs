@@ -159,9 +159,12 @@ mod tests {
         REPLIES.lock().unwrap().remove(0)
     }
 
-    fn on() -> SuggestSettings {
+    static DDG: std::sync::LazyLock<wubble_core::search::Engines> =
+        std::sync::LazyLock::new(|| wubble_core::search::Engines::resolve("duckduckgo", &[], &[]));
+
+    fn on() -> SuggestSettings<'static> {
         SuggestSettings {
-            engine: suggest::SearchEngine::DuckDuckGo,
+            engines: &DDG,
             live: suggest::LiveSuggestions::On,
         }
     }

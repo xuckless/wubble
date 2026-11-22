@@ -60,6 +60,8 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         selected: -1,
         entries: ModelRc::from(std::rc::Rc::new(VecModel::from(entry_items(&row.entries)))),
         columns: strings(row.columns.iter().copied()),
+        fixed: row.entries_fixed,
+        kept: row.remove_only,
         ..Default::default()
     };
     match row.control {
@@ -69,14 +71,23 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         }
         Control::Segmented(words) => {
             item.control = SettingControl::Segmented;
-            let labels: Vec<String> = words.iter().map(|w| word_label(row.kind, w)).collect();
+            // The engine is picked from a Select, as the design's, among the row's options (the
+            // built-ins and the user's own engines). None chosen yet (the stored default, "ask
+            // on first search") keeps `selected` at -1: the Select reads "Ask on first search",
+            // and picking any engine, the first too, stores it.
+            let (words, labels): (Vec<String>, Vec<String>) = if row.kind == SettingKind::SearchEngine
+            {
+                row.options.iter().cloned().unzip()
+            } else {
+                (
+                    words.iter().map(|w| (*w).to_owned()).collect(),
+                    words.iter().map(|w| word_label(row.kind, w)).collect(),
+                )
+            };
             item.selected = words
                 .iter()
                 .position(|w| *w == row.value)
                 .map_or(-1, |i| i as i32);
-            // The engine is picked from a Select, as the design's. None chosen yet (the stored
-            // default, "ask on first search") keeps `selected` at -1: the Select reads "Ask on
-            // first search", and picking any engine, the first too, stores it.
             if row.kind == SettingKind::SearchEngine {
                 item.placeholder = "Ask on first search".into();
                 item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
@@ -91,7 +102,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
                 )));
             }
             item.labels = strings(labels);
-            item.words = strings(words.iter().copied());
+            item.words = strings(words);
         }
         Control::Stepper { min, max } => {
             item.control = SettingControl::Stepper;
@@ -251,7 +262,10 @@ mod tests {
             "no engine chosen yet: none is selected, so picking the first stores it"
         );
         let labels: Vec<String> = engine.labels.iter().map(|s| s.to_string()).collect();
-        assert_eq!(labels, ["Google", "DuckDuckGo"]);
+        let names: Vec<&str> = ENGINES.iter().map(|e| e.name).collect();
+        assert_eq!(labels, names);
+        assert!(engine.fixed, "the built-ins are listed under the Select");
+        assert_eq!(engine.entries.row_count(), ENGINES.len());
         let options: Vec<String> = engine.options.iter().map(|o| o.label.to_string()).collect();
         assert_eq!(options, labels, "the engine's Select rows");
         assert_eq!(engine.placeholder, "Ask on first search");
