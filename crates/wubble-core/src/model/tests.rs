@@ -2583,7 +2583,7 @@ fn popup_and_little_windows_own_their_tab() {
         Some(Geometry {
             width: 400,
             height: 300,
-            pos: None
+            ..Geometry::default()
         })
     );
     assert_eq!(m.visible_tab(), Some(pt), "the popup has focus");
@@ -3268,12 +3268,13 @@ fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
         width: 480,
         height: 270,
         pos: Some((10, 20)),
+        ..Geometry::default()
     };
     let (m, _) = run(
         m,
         Command::ResizeWindow {
             window: p,
-            geometry: g,
+            geometry: g.clone(),
         },
     );
     let (m, fx) = run(m, Command::CloseTab(t[1]));
