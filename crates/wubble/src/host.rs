@@ -828,6 +828,26 @@ impl Host {
             self.open_window(id);
         }
         self.after_change();
+        // The native windows exist once the loop runs: then each is brought onto a display and
+        // to its monitor, and the last focused comes up on top (Chrome's session restore).
+        let _ = slint::invoke_from_event_loop(|| with_host(Host::settle_session_windows));
+    }
+
+    /// Brings every open window onto a current display (and a fullscreen one to its monitor,
+    /// a minimized one down), then raises the focused window.
+    pub fn settle_session_windows(&mut self) {
+        let here = self.w.id;
+        let focused = self.model.focused();
+        for id in self.window_ids() {
+            let Some(g) = self.model.window(id).and_then(|w| w.geometry.clone()) else {
+                continue;
+            };
+            if self.enter(id) {
+                settle_window(&self.w.handle, &g.restoring(id == focused));
+            }
+        }
+        self.enter(here);
+        self.raise_window(focused);
     }
 
     /// Opens model window `id`'s platform window, unless it has one: a Main window takes the
@@ -839,9 +859,10 @@ impl Host {
         if self.w.id == id || self.parked.contains_key(&id) {
             return;
         }
-        let (kind, geometry) = (w.kind(), w.geometry);
+        let focused = self.model.focused() == id;
+        let (kind, geometry) = (w.kind(), w.geometry.as_ref().map(|g| g.restoring(focused)));
         let ui = self.ui_state();
-        let opened = match self.factory.open(id, kind, ui, geometry) {
+        let opened = match self.factory.open(id, kind, ui, geometry.clone()) {
             Ok(opened) => opened,
             Err(e) => {
                 eprintln!("wubble: window {}: {e}", id.0);
@@ -852,6 +873,10 @@ impl Host {
         if let Err(e) = opened.handle.show() {
             eprintln!("wubble: window {}: {e}", id.0);
             return;
+        }
+        // a window opened while the loop runs exists now; a session window settles later
+        if let Some(g) = &geometry {
+            settle_window(&opened.handle, g);
         }
         self.parked.insert(id, opened);
     }
@@ -897,8 +922,9 @@ impl Host {
         ui
     }
 
-    /// Records every open window's size and (where the platform tells) position in the model,
-    /// for the session. Read on save rather than on each resize event.
+    /// Records every open window's size, (where the platform tells) position, show state and
+    /// monitor in the model, for the session. Read on save, and before a new window takes the
+    /// focused one's size, rather than on each resize event.
     pub fn record_geometry(&mut self) {
         let here = self.w.id;
         let mut changed = vec![];
@@ -907,11 +933,13 @@ impl Host {
                 continue;
             }
             let geometry = window_geometry(&self.w.handle);
-            if self
-                .model
-                .window(id)
-                .is_some_and(|w| w.geometry != Some(geometry))
-            {
+            if self.model.window(id).is_some_and(|w| {
+                let kept = wubble_core::window::Geometry::observed(
+                    w.geometry.as_ref(),
+                    geometry.clone(),
+                );
+                w.geometry.as_ref() != Some(&kept)
+            }) {
                 changed.push(Command::ResizeWindow {
                     window: id,
                     geometry,
@@ -953,6 +981,10 @@ impl Host {
         }
         if persist::changes_session(&command) {
             self.save = self.save.changed();
+        }
+        // a new window opens at the focused window's size, cascaded (`Geometry::cascaded`)
+        if matches!(command, Command::NewWindow { .. }) {
+            self.record_geometry();
         }
         let pre_close = matches!(
             command,
@@ -3864,29 +3896,128 @@ impl Host {
 /// What of the shell's state is saved with the session: the sidebar's mode
 /// (peeking is a separate property, so a peek saves as hidden) and the seam's
 /// saved width (the live width is 0 while the sidebar is hidden).
-/// A window's inner size in logical px and its outer position in physical px, where the
-/// platform tells it (not Wayland).
+/// A window's inner size in logical px, its outer position in physical px where the platform
+/// tells it (not Wayland), its show state and the name of the monitor it is on. While it is not
+/// normal the size and position are the screen's; the model keeps the last normal ones
+/// (`Geometry::observed`).
 pub fn window_geometry(window: &AppWindow) -> wubble_core::window::Geometry {
+    use wubble_core::window::WindowState;
     let win = window.window();
     let size = win.size().to_logical(win.scale_factor());
-    let pos = win
-        .with_winit_window(|w| w.outer_position().ok())
-        .flatten()
-        .map(|p| (p.x, p.y));
+    let (pos, minimized, monitor) = win
+        .with_winit_window(|w| {
+            (
+                w.outer_position().ok().map(|p| (p.x, p.y)),
+                w.is_minimized() == Some(true),
+                w.current_monitor().and_then(|m| m.name()),
+            )
+        })
+        .unwrap_or((None, false, None));
+    let state = if win.is_fullscreen() {
+        WindowState::Fullscreen
+    } else if win.is_maximized() {
+        WindowState::Maximized
+    } else if minimized {
+        WindowState::Minimized
+    } else {
+        WindowState::Normal
+    };
     wubble_core::window::Geometry {
         width: size.width.round() as u32,
         height: size.height.round() as u32,
         pos,
+        state,
+        monitor,
     }
 }
 
-/// Puts a window at its saved size and position, before it shows.
-pub fn place_window(window: &AppWindow, g: wubble_core::window::Geometry) {
+/// Puts a window at its saved size and position and in its show state, before it shows. A
+/// minimized one is minimized, and a fullscreen one moved to its monitor, by [`settle_window`]
+/// once the native window exists.
+pub fn place_window(window: &AppWindow, g: &wubble_core::window::Geometry) {
+    use wubble_core::window::WindowState;
     let win = window.window();
     win.set_size(slint::LogicalSize::new(g.width as f32, g.height as f32));
     if let Some((x, y)) = g.pos {
         win.set_position(slint::PhysicalPosition::new(x, y));
     }
+    match g.state {
+        WindowState::Maximized => win.set_maximized(true),
+        WindowState::Fullscreen => win.set_fullscreen(true),
+        WindowState::Normal | WindowState::Minimized => {}
+    }
+}
+
+/// Settles a shown window once its native window exists (nothing before): a normal window
+/// with a known position is brought back onto a current display if it is off every one
+/// (`window::visible_on`; on macOS fitted inside it, as Chrome does there); a fullscreen one goes
+/// to the monitor it was on, by name, if that is still there and it is not on it (on Wayland
+/// the only way to pick its output); a minimized one is minimized.
+pub fn settle_window(window: &AppWindow, g: &wubble_core::window::Geometry) {
+    use slint::winit_030::winit;
+    use wubble_core::window::{self as win, Display, Rect, WindowState};
+    window.window().with_winit_window(|w| {
+        let monitors: Vec<winit::monitor::MonitorHandle> = w.available_monitors().collect();
+        let displays: Vec<Display> = monitors
+            .iter()
+            .map(|m| Display {
+                name: m.name(),
+                area: Rect {
+                    x: m.position().x,
+                    y: m.position().y,
+                    width: crate::slint_int(m.size().width),
+                    height: crate::slint_int(m.size().height),
+                },
+            })
+            .collect();
+        match g.state {
+            WindowState::Normal if g.pos.is_some() => {
+                // where it landed (Wayland tells no position: nothing to do there)
+                let Ok(at) = w.outer_position() else {
+                    return;
+                };
+                let outer = w.outer_size();
+                let bounds = Rect {
+                    x: at.x,
+                    y: at.y,
+                    width: crate::slint_int(outer.width),
+                    height: crate::slint_int(outer.height),
+                };
+                let Some(d) = win::display_for(&bounds, g.monitor.as_deref(), &displays) else {
+                    return;
+                };
+                let fit = cfg!(target_os = "macos");
+                let to = win::visible_on(bounds, &d.area, fit);
+                if (to.x, to.y) != (bounds.x, bounds.y) {
+                    w.set_outer_position(winit::dpi::PhysicalPosition::new(to.x, to.y));
+                }
+                if fit && (to.width, to.height) != (bounds.width, bounds.height) {
+                    let inner = w.inner_size();
+                    let less = |by: i32| u32::try_from(by.max(0)).unwrap_or(0);
+                    let _ = w.request_inner_size(winit::dpi::PhysicalSize::new(
+                        inner.width.saturating_sub(less(bounds.width - to.width)),
+                        inner.height.saturating_sub(less(bounds.height - to.height)),
+                    ));
+                }
+            }
+            WindowState::Fullscreen => {
+                let Some(name) = g.monitor.as_deref() else {
+                    return;
+                };
+                let here = w.current_monitor().and_then(|m| m.name());
+                if here.as_deref() == Some(name) {
+                    return;
+                }
+                if let Some(m) = monitors.iter().find(|m| m.name().as_deref() == Some(name)) {
+                    w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(
+                        m.clone(),
+                    ))));
+                }
+            }
+            WindowState::Minimized => w.set_minimized(true),
+            WindowState::Normal | WindowState::Maximized => {}
+        }
+    });
 }
 
 pub fn ui_state(window: &AppWindow) -> UiState {
