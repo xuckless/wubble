@@ -57,7 +57,8 @@ struct Cli {
     /// renders, wake-ups, CPU and GPU), `startup` (start-up stages to the first
     /// page pixels), `blocker` (the content blocker, windowless) or `memory` (the
     /// process tree's memory with 0, 1, 10 and 50 tabs, then frozen and
-    /// discarded). Exits by itself.
+    /// discarded) or `tabs` (three tabs, one animating, switched every second: the time to the
+    /// new tab's first frame and the frames of the switch). Exits by itself.
     #[arg(long, value_name = "SCENARIO", value_enum, conflicts_with = "profile")]
     measure: Option<Scenario>,
     /// How long `--measure` runs.
@@ -1076,6 +1077,7 @@ mod tests {
             ("startup", Scenario::Startup),
             ("load", Scenario::Load),
             ("memory", Scenario::Memory),
+            ("tabs", Scenario::Tabs),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),

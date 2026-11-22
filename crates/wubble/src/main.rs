@@ -469,7 +469,7 @@ fn install_shell_driver(
         window,
         seam,
         move |window, now, items| {
-            measure::render_began(now);
+            measure::render_began(now, window);
             if let Ok(mut glass) = glass.try_borrow_mut() {
                 let at = Instant::now();
                 if glass.frame(window, now, items) {

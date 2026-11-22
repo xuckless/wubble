@@ -2658,6 +2658,31 @@ impl Host {
         }
     }
 
+    /// `--measure tabs`: opens `pages` as tabs after the window's one, once, and shows the
+    /// first again.
+    pub(crate) fn measure_open_tabs(&mut self, pages: &[String]) {
+        let order = self.model.order(self.model.active_space());
+        if order.len() != 1 {
+            return;
+        }
+        for url in pages {
+            self.dispatch(new_tab(url.clone(), None));
+        }
+        self.dispatch(Command::ActivateTab(order[0]));
+    }
+
+    /// `--measure tabs`: shows the next tab of the window's Space (the first after the last).
+    pub(crate) fn measure_next_tab(&mut self) {
+        let order = self.model.order(self.model.active_space());
+        let next = self
+            .shown()
+            .and_then(|t| order.iter().position(|&o| o == t))
+            .map_or(0, |i| (i + 1) % order.len().max(1));
+        if let Some(&tab) = order.get(next) {
+            self.dispatch(Command::ActivateTab(tab));
+        }
+    }
+
     fn tabs_smoke_step(&mut self) {
         let Some(heard) = self.checks.tabs_smoke.as_ref().map(|s| &s.heard) else {
             return;
