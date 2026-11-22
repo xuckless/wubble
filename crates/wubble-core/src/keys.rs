@@ -268,11 +268,22 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+N", ALL, Action::NewWindow, Shell;
     "Mod+Shift+N", ALL, Action::NewPrivateWindow, Shell;
     "Mod+Shift+W", ALL, Action::CloseWindow, Shell;
+    // macOS's window chords (Chromium's Window menu); Shift+` types `~`, so the back row names
+    // that. Linux and Windows leave window cycling to the window manager's Alt+Tab and Alt+F6,
+    // so wubble's own cycling takes the same key on Ctrl there, which no window manager claims.
+    "Cmd+M", MAC, Action::MinimizeWindow, Shell;
+    "Cmd+`", MAC, Action::NextWindow, Shell;
+    "Cmd+~", MAC, Action::PrevWindow, Shell;
+    "Ctrl+`", LW, Action::NextWindow, Shell;
+    "Ctrl+~", LW, Action::PrevWindow, Shell;
     "Mod+L", ALL, Action::FocusAddress, PageFirst;
     "Alt+D", LW, Action::FocusAddress, PageFirst;
     "F6", ALL, Action::NextRegion, Shell;
     "Shift+F6", ALL, Action::PrevRegion, Shell;
     "Mod+K", ALL, Action::FocusAddress, PageFirst;
+    // Chromium's IDC_FOCUS_SEARCH: Ctrl+E on Linux and Windows, Cmd+Alt+F on macOS
+    "Ctrl+E", LW, Action::FocusSearch, PageFirst;
+    "Cmd+Alt+F", MAC, Action::FocusSearch, PageFirst;
     "Mod+R", ALL, Action::Reload, PageFirst;
     "F5", LW, Action::Reload, PageFirst;
     "Mod+Shift+R", ALL, Action::HardReload, PageFirst;
@@ -292,6 +303,11 @@ pub const DEFAULTS: &[Binding] = rows![
     "Ctrl+PageDown", ALL, Action::NextTab, Shell;
     "Ctrl+Shift+Tab", ALL, Action::PrevTab, Shell;
     "Ctrl+PageUp", ALL, Action::PrevTab, Shell;
+    // Cmd+Shift+] and Cmd+Shift+[ type `}` and `{`; Cmd+Alt+Right/Left stay the Space keys
+    "Cmd+}", MAC, Action::NextTab, Shell;
+    "Cmd+{", MAC, Action::PrevTab, Shell;
+    "Ctrl+Shift+PageUp", ALL, Action::MoveTabUp, PageFirst;
+    "Ctrl+Shift+PageDown", ALL, Action::MoveTabDown, PageFirst;
     "Mod+1", ALL, Action::SelectTab(1), PageFirst;
     "Mod+2", ALL, Action::SelectTab(2), PageFirst;
     "Mod+3", ALL, Action::SelectTab(3), PageFirst;
@@ -340,6 +356,8 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+Alt+Shift+Right", ALL, Action::DockNarrower, Shell;
     "Ctrl+Shift+I", LW, Action::DevTools, PageFirst;
     "Cmd+Alt+I", MAC, Action::DevTools, PageFirst;
+    "Ctrl+Shift+J", LW, Action::DevToolsConsole, PageFirst;
+    "Cmd+Alt+J", MAC, Action::DevToolsConsole, PageFirst;
     "Ctrl+U", LW, Action::ViewSource, PageFirst;
     "Cmd+Alt+U", MAC, Action::ViewSource, PageFirst;
     "F11", LW, Action::Fullscreen, Shell;
@@ -347,6 +365,11 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+Shift+D", ALL, Action::TogglePinTab, PageFirst;
     "Mod+Shift+C", ALL, Action::CopyUrl, PageFirst;
     "Mod+P", ALL, Action::Print, PageFirst;
+    "Mod+S", ALL, Action::SavePage, PageFirst;
+    "Mod+O", ALL, Action::OpenFile, PageFirst;
+    "F7", ALL, Action::ToggleCaretBrowsing, PageFirst;
+    "Ctrl+Shift+Delete", LW, Action::ClearBrowsingData, PageFirst;
+    "Cmd+Shift+Backspace", MAC, Action::ClearBrowsingData, PageFirst;
     // Chromium's Edit menu. Blink runs Ctrl+C/V/X/A/Z itself on Linux and Windows, so there the
     // page takes the key; it leaves their Cmd forms on macOS to the browser's menu (Blink
     // `editing_behavior.cc`), so there the page declines it and the action runs it on the
@@ -358,6 +381,9 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+X", ALL, Action::Cut, PageFirst;
     "Mod+C", ALL, Action::Copy, PageFirst;
     "Mod+V", ALL, Action::Paste, PageFirst;
+    // Blink runs Ctrl+Shift+V itself on Linux and Windows; macOS's Cmd+Alt+Shift+V is the menu's
+    "Ctrl+Shift+V", LW, Action::PasteAndMatchStyle, PageFirst;
+    "Cmd+Alt+Shift+V", MAC, Action::PasteAndMatchStyle, PageFirst;
     "Mod+A", ALL, Action::SelectAll, PageFirst;
     // the design's split chord; Shift+\ types `|`, so the unsplit row names that
     "Mod+\\", ALL, Action::SplitNext, Shell;
@@ -883,7 +909,11 @@ mod tests {
             } else {
                 "Ctrl+S"
             };
-            assert_eq!(km.action_for(ch(save)), None, "{p:?}");
+            assert_eq!(
+                km.action_for(ch(save)).map(|r| r.0),
+                Some(Action::SavePage),
+                "{p:?}"
+            );
             assert_eq!(
                 km.action_for(ch(&expand("Mod+Alt+S", p))).map(|r| r.0),
                 Some(Action::ToggleSidebar)
@@ -990,16 +1020,17 @@ mod tests {
             Action::ScreenshotVisible,
             Action::ScreenshotFullPage,
             Action::NewBoost,
-            Action::ClearBrowsingData,
             // its key, Mod+Z, is undo close tab's, which runs it whenever a field has the keys
             Action::Undo,
         ];
+        // Chromium binds a minimize key on macOS only
+        let mac_only = [Action::MinimizeWindow];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {
                 assert_eq!(
                     km.shortcut_for(a).is_none(),
-                    unbound.contains(&a),
+                    unbound.contains(&a) || (p != Platform::Mac && mac_only.contains(&a)),
                     "{p:?} {a:?}"
                 );
             }

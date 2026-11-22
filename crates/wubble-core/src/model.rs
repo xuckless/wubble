@@ -769,6 +769,40 @@ impl Model {
         cycle(&self.order(self.active_space()), self.visible_tab(), delta)
     }
 
+    /// Where `tab` goes when moved `delta` places along its own list: the pinned row, its
+    /// folder, or the Space's top-level items (a folder counts as one place there). `None` at
+    /// the list's end, and for a tab shown in a window of its own. Chromium's
+    /// `TabStripModel::MoveTabNext` / `MoveTabPrevious` (Ctrl+Shift+PageDown / PageUp), which
+    /// keeps a tab inside the pinned tabs; nothing copied.
+    pub fn tab_shift(&self, tab: TabId, delta: isize) -> Option<Dest> {
+        if self.windowed(tab).is_some() {
+            return None;
+        }
+        let (si, place) = self.place_of(tab)?;
+        let s = &self.spaces[si];
+        let step = |i: usize, len: usize| i.checked_add_signed(delta).filter(|&j| j < len);
+        Some(match place {
+            Place::Pinned(i) => Dest::Pinned {
+                space: s.id,
+                index: step(i, s.pinned.len())?,
+            },
+            Place::Normal(i) => Dest::Normal {
+                space: s.id,
+                index: step(i, s.items.len())?,
+            },
+            Place::Folder(folder, i) => {
+                let len = s.items.iter().find_map(|item| match item {
+                    Item::Folder(f) if f.id == folder => Some(f.tabs.len()),
+                    _ => None,
+                })?;
+                Dest::Folder {
+                    folder,
+                    index: step(i, len)?,
+                }
+            }
+        })
+    }
+
     /// The active Space's tab at `index` (0-based) in its order, if there is one.
     pub fn nth_tab(&self, index: usize) -> Option<TabId> {
         self.order(self.active_space()).get(index).copied()

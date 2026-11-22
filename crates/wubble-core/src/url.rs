@@ -32,6 +32,13 @@ pub fn percent_encode_into(input: &str, out: &mut String) {
     }
 }
 
+/// The `file://` URL of a local file the user chose (Chromium's Open File, Ctrl+O, opens each
+/// as `net::FilePathToFileURL` makes it): the path percent-encoded, Windows' drive letters and
+/// backslashes as `file:///C:/...`. `None` for a relative path.
+pub fn file_url(path: &std::path::Path) -> Option<String> {
+    ::url::Url::from_file_path(path).ok().map(String::from)
+}
+
 /// Schemes kept as typed although no `//` follows them.
 const OPAQUE_SCHEMES: &[&str] = &["about", "data", "view-source", "mailto", "blob"];
 

@@ -12,6 +12,7 @@ pub mod beam;
 pub mod boost;
 pub mod bow;
 pub mod busy;
+pub mod caret;
 pub mod chrome;
 pub mod clipboard;
 pub mod closed;

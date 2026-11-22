@@ -631,6 +631,78 @@ fn history_bonus(h: &HistoryEntry, now_ms: i64) -> u32 {
     (points * weight).min(u64::from(MAX_HISTORY_BONUS)) as u32
 }
 
+// ------------------------------------------------------------- Enter keys
+
+/// Where Enter in the command bar opens what it chose: Chromium's `WindowOpenDisposition` for
+/// the omnibox (`OmniboxEditModel::AcceptInput`, `ui::DispositionFromEventFlags`), BSD-3-Clause;
+/// behaviour only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// As the bar was opened for: this tab (Ctrl+L) or a new one (Ctrl+T).
+    AsOpened,
+    /// Alt+Enter (Cmd+Enter on macOS): a new tab, shown.
+    NewTab,
+    /// Shift+Enter: a new window.
+    NewWindow,
+}
+
+/// The modifiers held when the bar's row was chosen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnterMods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub cmd: bool,
+}
+
+/// What Enter does on `platform` with `mods` held. Ctrl alone never changes the disposition:
+/// it is the `www.`/`.com` completion ([`with_desired_tld`]).
+pub fn disposition(mods: EnterMods, platform: crate::keys::Platform) -> Disposition {
+    let new_tab = match platform {
+        crate::keys::Platform::Mac => mods.cmd || mods.alt,
+        _ => mods.alt,
+    };
+    if mods.shift {
+        Disposition::NewWindow
+    } else if new_tab {
+        Disposition::NewTab
+    } else {
+        Disposition::AsOpened
+    }
+}
+
+/// Ctrl+Enter: `www.` and `.com` around a bare name (`example` opens `https://www.example.com/`),
+/// Chromium's desired TLD (`AutocompleteInput` with `desired_tld` "com", `url_formatter::FixupURL`
+/// adding the TLD to a host without one and `www.` before it). `None` when the text is not one
+/// bare host name, which then opens as typed.
+pub fn with_desired_tld(query: &str) -> Option<String> {
+    let s = query.trim();
+    let end = s.find(['/', '?', '#']).unwrap_or(s.len());
+    let (host, rest) = s.split_at(end);
+    let bare = !host.is_empty()
+        && !host.contains('.')
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-')
+        && !host.starts_with('-');
+    if !bare {
+        return None;
+    }
+    let url = Url::parse(&format!("https://www.{host}.com{rest}")).ok()?;
+    url.host()?;
+    Some(url.into())
+}
+
+/// Ctrl+E (Chromium's `IDC_FOCUS_SEARCH`): what the bar ranks and opens for `typed`, a search
+/// whatever it looks like, as the omnibox's `?` prefix makes it ([`classify`]).
+pub fn as_search(typed: &str) -> String {
+    if typed.trim().is_empty() || typed.trim_start().starts_with('?') {
+        typed.to_owned()
+    } else {
+        format!("?{typed}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -268,6 +268,22 @@ impl Model {
         self.shown_by(space).map(|i| self.windows[i].id)
     }
 
+    /// The window `delta` steps from the focused one in the order they were opened, wrapping:
+    /// what Cmd+` and Cmd+Shift+` focus (macOS cycles an app's windows in a fixed order, so
+    /// two presses do not just swap the last two). The Pip window takes no focus and is
+    /// skipped; `None` when no other window is there.
+    pub fn window_step(&self, delta: isize) -> Option<WindowId> {
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|w| w.kind() != WindowKind::Pip)
+            .map(|w| w.id)
+            .collect();
+        ids.sort();
+        let focused = self.focused();
+        super::cycle(&ids, Some(focused), delta).filter(|&w| w != focused)
+    }
+
     /// The index of the focused Main window.
     fn main_idx(&self) -> usize {
         self.windows
