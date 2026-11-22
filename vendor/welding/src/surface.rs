@@ -1059,6 +1059,11 @@ pub struct CefSurfaceConfig {
     /// Decides each top-level navigation before it starts. `None`, the
     /// default, allows all. wubble change 53, see `WUBBLE_CHANGES.md`.
     pub navigation_guard: Option<NavigationGuard>,
+    /// Which windows the page opens become CEF browsers of their own, with
+    /// what config. `None`, the default, cancels every one and reports it as
+    /// [`NavigationEvent::NewWindowRequested`]. wubble change 57, see
+    /// `WUBBLE_CHANGES.md`.
+    pub popup_factory: Option<crate::opened::PopupFactory>,
 }
 
 impl Default for CefSurfaceConfig {
@@ -1082,6 +1087,7 @@ impl Default for CefSurfaceConfig {
             request_filter: None,
             response_observer: None,
             navigation_guard: None,
+            popup_factory: None,
         }
     }
 }
@@ -1228,6 +1234,16 @@ pub trait CefSurfaceProducer {
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) -> Result<(), WeldError>;
+
+    /// The producer of a pop-up browser this one's page opened, announced by
+    /// [`NavigationEvent::PopupBrowserCreated`]; `None` once taken. The
+    /// caller owns it from then on, as one it created. wubble change 57.
+    fn take_popup_browser(&mut self, _popup_id: i32) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
 
     /// Follow the window's display scale, e.g. after it moves between a 1x and
     /// a 2x screen. Live rather than construction-time, because a window can
@@ -2128,6 +2144,15 @@ pub enum NavigationEvent {
         kind: NewWindowKind,
         /// The `width`/`height` window features, when both were given.
         size: Option<(u32, u32)>,
+    },
+    /// wubble change 57: CEF created the window the page opened as a
+    /// browser of its own ([`CefSurfaceConfig::popup_factory`] gave it a
+    /// config); take it with [`CefSurfaceProducer::take_popup_browser`].
+    PopupBrowserCreated(crate::opened::OpenedWindow),
+    /// wubble change 57: a pop-up the factory gave a config to was not
+    /// created after all (CEF `OnBeforePopupAborted`).
+    PopupAborted {
+        popup_id: i32,
     },
     /// A `print_to_pdf` finished. `ok` is false when Chromium could not write
     /// the file; the path is the one that was asked for either way.

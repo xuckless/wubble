@@ -112,6 +112,9 @@ pub struct LinuxCefProducer {
     events: Arc<WebEventQueue>,
     size: PhysicalSize<u32>,
     cpu_paints: Arc<AtomicU64>,
+    /// Pop-up browsers this page opened, until the host takes them (wubble change 57).
+    #[cfg(feature = "cef-runtime")]
+    children: Arc<crate::opened::Children<LinuxCefProducer>>,
 }
 
 // needless_return: cfg-dispatch bodies end in `return X;` because a cfg-gated
@@ -128,67 +131,8 @@ impl LinuxCefProducer {
     ) -> Result<Self, WeldError> {
         #[cfg(feature = "cef-runtime")]
         {
-            let initial_size = config.surface.initial_size;
-            let frame_slot = Arc::new(Mutex::new(PendingFrameSlot::default()));
-            let events = Arc::new(WebEventQueue::default());
-            let metrics = Arc::new(Mutex::new(crate::view::ViewMetrics::new(
-                initial_size,
-                config.surface.scale_factor,
-            )));
-
-            let popup_slot = Arc::new(Mutex::new(PendingFrameSlot::default()));
-            let popup = Arc::new(crate::popup::PopupState::default());
-            let cursor = Arc::new(crate::cursor::LatestCursor::default());
-            let ime = Arc::new(crate::ime::LatestComposition::default());
-            let cookies = Arc::new(crate::cookies::CookieJar::new(events.clone()));
-            let requests = Arc::new(crate::handlers::Requests::new(events.clone(), &config.surface));
-            let scripts = Arc::new(crate::app::PendingScripts::new(events.clone()));
-            let cpu_paints = Arc::new(AtomicU64::new(0));
-
-            let inner = WeldRenderHandlerInner {
-                frame_slot: frame_slot.clone(),
-                popup_slot: popup_slot.clone(),
-                popup: popup.clone(),
-                cursor: cursor.clone(),
-                ime: ime.clone(),
-                events: events.clone(),
-                metrics: metrics.clone(),
-                gpu: host_ctx.clone(),
-                cpu_paints: cpu_paints.clone(),
-                requests: requests.clone(),
-            };
-            let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
-            let load_handler = cef_backed::WeldLoadHandler::build(inner.clone());
-            let display_handler = cef_backed::WeldDisplayHandler::build(inner);
-            let life_span_handler = cef_backed::WeldLifeSpanHandler::build(
-                events.clone(),
-                scripts.clone(),
-                cookies.clone(),
-                requests.clone(),
-            );
-            let shared = crate::handlers::SharedHandlers::build(
-                events.clone(),
-                requests.clone(),
-                scripts.clone(),
-                metrics.clone(),
-                config.surface.request_filter.clone(), // wubble change
-                config.surface.response_observer.clone(), // wubble change 36
-                config.surface.navigation_guard.clone(), // wubble change 53
-            );
-            let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
-            devtools.set_enabled(config.surface.devtools_protocol);
-            let snapshots = Arc::new(crate::snapshot::SnapshotChannel::default());
-            let find_handler = cef_backed::WeldFindHandler::build(events.clone());
-            let mut client = cef_backed::WeldClient::build(
-                render_handler,
-                load_handler,
-                display_handler,
-                life_span_handler,
-                shared,
-                find_handler,
-                scripts.clone(),
-                events.clone(),
-            );
+            // wubble change 57: the callback state and client, shared with pop-ups.
+            let (parts, mut client) = Self::client(&config.surface, host_ctx, None);
 
             let window_info = cef::WindowInfo {
                 windowless_rendering_enabled: 1,
@@ -228,27 +172,7 @@ impl LinuxCefProducer {
                 WeldError::SurfaceCreation("browser_host_create_browser_sync returned None".into())
             })?;
 
-            let browser_id = browser.identifier();
-            return Ok(LinuxCefProducer {
-                browser_id,
-                browser,
-                metrics,
-                frame_slot,
-                popup_slot,
-                popup,
-                cursor,
-                ime,
-                cookies,
-                requests,
-                devtools,
-                snapshots,
-                _devtools_registration: None,
-                scripts,
-                next_snapshot_id: 1,
-                events,
-                size: initial_size,
-                cpu_paints,
-            });
+            return Ok(Self::with_browser(parts, browser));
         }
 
         #[cfg(not(feature = "cef-runtime"))]
@@ -259,6 +183,150 @@ impl LinuxCefProducer {
             ))
         }
     }
+
+    /// wubble change 57: one browser's callback state and its client, for a
+    /// browser welding creates or a pop-up CEF creates (`adoption`: its
+    /// opener's, handed over in `OnAfterCreated`).
+    #[cfg(feature = "cef-runtime")]
+    pub(super) fn client(
+        surface: &CefSurfaceConfig,
+        host_ctx: &HostWgpuContext,
+        adoption: Option<crate::opened::Adoption<LinuxCefProducer>>,
+    ) -> (Parts, cef::Client) {
+        let initial_size = surface.initial_size;
+        let frame_slot = Arc::new(Mutex::new(PendingFrameSlot::default()));
+        let events = Arc::new(WebEventQueue::default());
+        let metrics = Arc::new(Mutex::new(crate::view::ViewMetrics::new(
+            initial_size,
+            surface.scale_factor,
+        )));
+
+        let popup_slot = Arc::new(Mutex::new(PendingFrameSlot::default()));
+        let popup = Arc::new(crate::popup::PopupState::default());
+        let cursor = Arc::new(crate::cursor::LatestCursor::default());
+        let ime = Arc::new(crate::ime::LatestComposition::default());
+        let cookies = Arc::new(crate::cookies::CookieJar::new(events.clone()));
+        let requests = Arc::new(crate::handlers::Requests::new(events.clone(), surface));
+        let scripts = Arc::new(crate::app::PendingScripts::new(events.clone()));
+        let cpu_paints = Arc::new(AtomicU64::new(0));
+        let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
+        devtools.set_enabled(surface.devtools_protocol);
+        let snapshots = Arc::new(crate::snapshot::SnapshotChannel::default());
+        let parts = Parts {
+            metrics: metrics.clone(),
+            frame_slot: frame_slot.clone(),
+            popup_slot: popup_slot.clone(),
+            popup: popup.clone(),
+            cursor: cursor.clone(),
+            ime: ime.clone(),
+            cookies: cookies.clone(),
+            requests: requests.clone(),
+            devtools,
+            snapshots,
+            scripts: scripts.clone(),
+            events: events.clone(),
+            size: initial_size,
+            cpu_paints: cpu_paints.clone(),
+            children: Arc::default(),
+        };
+
+        let inner = WeldRenderHandlerInner {
+            frame_slot,
+            popup_slot,
+            popup,
+            cursor,
+            ime,
+            events: events.clone(),
+            metrics: metrics.clone(),
+            gpu: host_ctx.clone(),
+            cpu_paints,
+            requests: requests.clone(),
+        };
+        let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
+        let load_handler = cef_backed::WeldLoadHandler::build(inner.clone());
+        let display_handler = cef_backed::WeldDisplayHandler::build(inner);
+        let life_span_handler = cef_backed::WeldLifeSpanHandler::build(
+            events.clone(),
+            scripts.clone(),
+            cookies,
+            requests.clone(),
+            cef_backed::Popups {
+                factory: surface.popup_factory.clone(),
+                gpu: host_ctx.clone(),
+                children: parts.children.clone(),
+                adoption: Mutex::new(adoption.map(|a| (a, parts.clone()))),
+            },
+        );
+        let shared = crate::handlers::SharedHandlers::build(
+            events.clone(),
+            requests,
+            scripts.clone(),
+            metrics,
+            surface.request_filter.clone(), // wubble change
+            surface.response_observer.clone(), // wubble change 36
+            surface.navigation_guard.clone(), // wubble change 53
+        );
+        let find_handler = cef_backed::WeldFindHandler::build(events.clone());
+        let client = cef_backed::WeldClient::build(
+            render_handler,
+            load_handler,
+            display_handler,
+            life_span_handler,
+            shared,
+            find_handler,
+            scripts,
+            events,
+        );
+        (parts, client)
+    }
+
+    /// wubble change 57: the producer of `browser`, made with `parts`.
+    #[cfg(feature = "cef-runtime")]
+    pub(super) fn with_browser(parts: Parts, browser: cef::Browser) -> Self {
+        LinuxCefProducer {
+            browser_id: browser.identifier(),
+            browser,
+            metrics: parts.metrics,
+            frame_slot: parts.frame_slot,
+            popup_slot: parts.popup_slot,
+            popup: parts.popup,
+            cursor: parts.cursor,
+            ime: parts.ime,
+            cookies: parts.cookies,
+            requests: parts.requests,
+            devtools: parts.devtools,
+            snapshots: parts.snapshots,
+            _devtools_registration: None,
+            scripts: parts.scripts,
+            next_snapshot_id: 1,
+            events: parts.events,
+            size: parts.size,
+            cpu_paints: parts.cpu_paints,
+            children: parts.children,
+        }
+    }
+}
+
+/// wubble change 57: one browser's callback state, made before its browser
+/// exists (a pop-up's, in its opener's `OnBeforePopup`).
+#[cfg(feature = "cef-runtime")]
+#[derive(Clone)]
+pub(super) struct Parts {
+    metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+    frame_slot: Arc<Mutex<PendingFrameSlot>>,
+    popup_slot: Arc<Mutex<PendingFrameSlot>>,
+    popup: Arc<crate::popup::PopupState>,
+    cursor: Arc<crate::cursor::LatestCursor>,
+    ime: Arc<crate::ime::LatestComposition>,
+    cookies: Arc<crate::cookies::CookieJar>,
+    requests: Arc<crate::handlers::Requests>,
+    devtools: Arc<crate::devtools::DevToolsChannel>,
+    snapshots: Arc<crate::snapshot::SnapshotChannel>,
+    scripts: Arc<crate::app::PendingScripts>,
+    events: Arc<WebEventQueue>,
+    size: PhysicalSize<u32>,
+    cpu_paints: Arc<AtomicU64>,
+    children: Arc<crate::opened::Children<LinuxCefProducer>>,
 }
 
 // ── CefSurfaceProducer impl ───────────────────────────────────────────────────
@@ -1050,6 +1118,14 @@ impl CefSurfaceProducer for LinuxCefProducer {
         self.browser_id
     }
 
+    // wubble change 57.
+    fn take_popup_browser(&mut self, popup_id: i32) -> Option<Self> {
+        #[cfg(feature = "cef-runtime")]
+        return self.children.take(popup_id);
+        #[cfg(not(feature = "cef-runtime"))]
+        None
+    }
+
     fn close(&mut self) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]
         {
@@ -1057,6 +1133,10 @@ impl CefSurfaceProducer for LinuxCefProducer {
             self.cookies.fail_active("browser closed");
             if let Some(host) = self.browser.host() {
                 host.close_browser(true as _);
+            }
+            // wubble change 57: pop-ups nobody took go with their opener.
+            for mut child in self.children.close() {
+                let _ = child.close();
             }
             self.browser_id = 0;
             return Ok(());
