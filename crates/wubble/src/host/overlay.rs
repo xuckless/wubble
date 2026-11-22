@@ -70,7 +70,7 @@ impl Host {
                         window.get_content_x() + 40.0,
                         window.get_content_y() + window.get_content_height() * 0.34,
                     );
-                    let facts = wubble_core::tabmenu::Facts { muted: false };
+                    let facts = wubble_core::tabmenu::Facts::default();
                     let at = ((x * scale).round() as i32, (y * scale).round() as i32);
                     let entries = menu::tab_entries(&self.model, tab, facts, &self.keymap);
                     self.open_shell_menu(tab, at, entries, false);

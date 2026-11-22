@@ -2,7 +2,9 @@
 //! sound badge (the extended row's speaker, the rail's badge on the favicon's top-right corner).
 //!
 //! The shell only draws what [`Marks::of`] says and reports a press on the badge; one state
-//! (the page plays sound, the tab is muted) gives one badge on both layouts.
+//! (the page plays sound, the tab is muted) gives one badge on both layouts. A tab of a muted
+//! site (`sound.muted_sites`) that has no view to report its mute is muted too: its page will
+//! be when it loads.
 
 /// The sound badge's state: the page plays sound, or the tab is muted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,8 +36,10 @@ pub struct Marks {
 }
 
 impl Marks {
-    pub fn of(agent: bool, audible: bool, muted: bool) -> Marks {
-        let sound = if muted {
+    /// `muted` is the view's mute as it reported it; `site_muted`, the tab's site is muted and
+    /// no view reports for it.
+    pub fn of(agent: bool, audible: bool, muted: bool, site_muted: bool) -> Marks {
+        let sound = if muted || site_muted {
             Some(Sound::Muted)
         } else if audible {
             Some(Sound::Playing)
@@ -52,12 +56,12 @@ mod tests {
 
     #[test]
     fn a_quiet_tab_has_no_sound_badge() {
-        assert_eq!(Marks::of(false, false, false).sound, None);
+        assert_eq!(Marks::of(false, false, false, false).sound, None);
     }
 
     #[test]
     fn a_playing_tab_shows_the_badge_and_a_press_mutes_it() {
-        let s = Marks::of(false, true, false).sound.unwrap();
+        let s = Marks::of(false, true, false, false).sound.unwrap();
         assert_eq!(s, Sound::Playing);
         assert_eq!(s.press_label(), "Mute tab");
     }
@@ -65,7 +69,7 @@ mod tests {
     #[test]
     fn a_muted_tab_keeps_the_badge_playing_or_not_and_a_press_unmutes_it() {
         for audible in [false, true] {
-            let s = Marks::of(false, audible, true).sound.unwrap();
+            let s = Marks::of(false, audible, true, false).sound.unwrap();
             assert_eq!(s, Sound::Muted);
             assert_eq!(s.press_label(), "Unmute tab");
         }
@@ -73,8 +77,19 @@ mod tests {
 
     #[test]
     fn the_agent_mark_is_independent_of_the_sound() {
-        assert!(Marks::of(true, false, false).agent);
-        assert!(!Marks::of(false, true, true).agent);
-        assert_eq!(Marks::of(true, true, false).sound, Some(Sound::Playing));
+        assert!(Marks::of(true, false, false, false).agent);
+        assert!(!Marks::of(false, true, true, false).agent);
+        assert_eq!(
+            Marks::of(true, true, false, false).sound,
+            Some(Sound::Playing)
+        );
+    }
+
+    #[test]
+    fn a_muted_sites_tab_without_a_view_shows_muted() {
+        assert_eq!(
+            Marks::of(false, false, false, true).sound,
+            Some(Sound::Muted)
+        );
     }
 }

@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cef::{ImplBrowser, ImplBrowserHost, ImplFrame, ImplPreferenceManager, ImplValue};
+use cef::{
+    ImplBrowser, ImplBrowserHost, ImplFrame, ImplPreferenceManager, ImplRequestContext, ImplValue,
+};
 use welding::{
     CefRuntime, CefSurfaceEvent, CefSurfaceProducer, HostWgpuContext, NavigationEvent,
     PlatformCefProducer, WeldError,
@@ -936,6 +938,39 @@ impl View {
                 }
                 Ok(())
             })();
+        });
+        result
+    }
+
+    /// Chromium's sound content setting (`ContentSettingsType::SOUND`, what Chrome's "Mute
+    /// site" writes) for each of `urls` (`wubble_core::sitesound::origins`) on this view's
+    /// request context, its container's profile: blocked, or back to the default. Chrome's
+    /// `SoundContentSettingObserver` then mutes the profile's pages of the site on their next
+    /// commit; the host mutes the open ones itself (`set_muted`). `Err` when the view is not
+    /// open yet.
+    pub fn set_sound_blocked(&mut self, urls: &[String], blocked: bool) -> Result<(), String> {
+        let value = if blocked {
+            cef::ContentSettingValues::BLOCK
+        } else {
+            cef::ContentSettingValues::DEFAULT
+        };
+        let mut result = Err("sound setting: the view is not open".to_string());
+        self.send(|host| {
+            result = match host.request_context() {
+                Some(context) => {
+                    for url in urls {
+                        let url = cef::CefString::from(url.as_str());
+                        context.set_content_setting(
+                            Some(&url),
+                            Some(&url),
+                            cef::ContentSettingTypes::SOUND,
+                            value,
+                        );
+                    }
+                    Ok(())
+                }
+                None => Err("sound setting: no request context".to_string()),
+            };
         });
         result
     }

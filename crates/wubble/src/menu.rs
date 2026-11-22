@@ -115,6 +115,8 @@ pub enum Command {
     Model(TabCommand),
     /// Flip this tab's mute.
     ToggleMute(TabId),
+    /// Mute this tab's site, or unmute it (`sound.muted_sites`).
+    ToggleMuteSite(TabId),
     /// Reload this tab's page.
     ReloadTab(TabId),
     /// Ask for a sidebar folder's new name.
@@ -723,6 +725,7 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
                     String::new()
                 },
             ),
+            Run::ToggleMuteSite(t) => (Command::ToggleMuteSite(t), String::new()),
             Run::Model(c) => {
                 let shortcut = match &c {
                     ModelCommand::CloseTab(_) if visible => key(Action::CloseTab),
@@ -2435,6 +2438,9 @@ mod tests {
         );
         let mute = e.iter().find(|e| e.label == "Mute Tab").unwrap();
         assert_eq!(mute.command, Command::ToggleMute(visible));
+        let site = e.iter().find(|e| e.label == "Mute Site").unwrap();
+        assert_eq!(site.command, Command::ToggleMuteSite(visible));
+        assert!(labels.contains(&"New Tab Below"));
         // dividers never lead, trail or double
         assert!(e.first().unwrap().command != Command::Separator);
         assert!(e.last().unwrap().command != Command::Separator);

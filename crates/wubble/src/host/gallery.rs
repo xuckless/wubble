@@ -245,7 +245,7 @@ impl Host {
         match scene.overlay {
             Overlay::TabMenu | Overlay::Long(Long::TabMenu) => {
                 if let Some(tab) = shown {
-                    let facts = wubble_core::tabmenu::Facts { muted: false };
+                    let facts = wubble_core::tabmenu::Facts::default();
                     let menu = Menu::Shell {
                         at: at(TAB_MENU_AT),
                         entries: menu::tab_entries(&self.model, tab, facts, &self.keymap),

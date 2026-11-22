@@ -492,6 +492,8 @@ pub struct Host {
     ime: Ime,
     /// Sound per live tab, as its view reported it.
     audio: AudioMap,
+    /// Sites whose pages are muted (`settings::SOUND_MUTED_SITES`); applied on each commit.
+    muted_sites: Vec<String>,
     /// Each tab's page icon: the store's at start, then as its view last downloaded it (and
     /// filed in the store); shown on its row.
     favicons: BTreeMap<TabId, slint::Image>,
@@ -749,6 +751,7 @@ impl Host {
             drag_timer: slint::Timer::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
+            muted_sites: Vec::new(),
             favicons,
             site_zoom: ZoomTable::new(),
             zoom_default: wubble_core::zoom::DEFAULT_PERCENT,
@@ -1310,6 +1313,7 @@ impl Host {
         let blocked = self.blocked_counts();
         let mut view = crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked);
         self.agent_marks(&mut view);
+        self.site_sound_marks(&mut view);
         crate::bind::render(&window, &view, &self.favicons);
         crate::bind::render_spaces_menu(
             &window,
@@ -1807,6 +1811,7 @@ impl Host {
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
                 self.restore_zoom(tab, &url);
+                self.restore_site_sound(tab, &url);
                 self.dispatch(Command::UrlChanged { tab, url });
             }
             WebEvent::TitleChanged(title) => {
@@ -2268,6 +2273,10 @@ impl Host {
                     return;
                 };
                 self.typed_nav.ended(tab);
+                if matches!(op, ViewOp::ToggleMute) {
+                    self.toggle_mute(tab);
+                    return;
+                }
                 let zoom_default = self.zoom_default;
                 let Some(view) = self.tab_view(tab) else {
                     return;
@@ -2282,10 +2291,8 @@ impl Host {
                     ViewOp::ZoomOut => view.zoom_out(),
                     // To the user's default, which CEF's own reset (always 100 %) ignores.
                     ViewOp::ZoomReset => view.set_zoom_percent(zoom_default),
-                    ViewOp::ToggleMute => {
-                        let muted = view.is_muted();
-                        view.set_muted(!muted);
-                    }
+                    // the user's mute: `toggle_mute` above
+                    ViewOp::ToggleMute => {}
                     ViewOp::Edit(command) => view.edit(command),
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {

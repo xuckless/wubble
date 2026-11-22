@@ -43,6 +43,8 @@ pub struct TabRow {
     pub in_split: bool,
     /// An agent session drives the tab (`host/agent.rs` marks it).
     pub agent: bool,
+    /// The tab has no view and its site is muted (`host/surfaces.rs` marks it).
+    pub site_muted: bool,
 }
 
 /// Whether a tab's page is muted, as its view last reported (`PageEvent::MutedChanged`). Gone
@@ -50,6 +52,8 @@ pub struct TabRow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Audio {
     pub muted: bool,
+    /// Why it is muted: the user's own mute or its site's rule (`sitesound`).
+    pub why: wubble_core::sitesound::Mute,
 }
 
 pub type AudioMap = BTreeMap<TabId, Audio>;
@@ -481,7 +485,13 @@ mod tests {
                 on: true,
             },
         );
-        let audio = AudioMap::from([(b, Audio { muted: true })]);
+        let audio = AudioMap::from([(
+            b,
+            Audio {
+                muted: true,
+                ..Audio::default()
+            },
+        )]);
         let v = view_model(&m, m.focused(), &audio, &BlockedMap::new());
         let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
         assert_eq!(sound, [(true, false), (false, true)]);

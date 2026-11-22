@@ -17,6 +17,7 @@ use wubble_core::dnd;
 use wubble_core::model::Command;
 use wubble_core::overlay::{self, Cue, Key, Kind, Layer, Phase};
 use wubble_core::site::{Decision, Permission, SiteChange};
+use wubble_core::sitesound::{self, Mute, MuteEvent, Toggle};
 use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowTarget};
@@ -168,7 +169,13 @@ impl Host {
                 self.page_left(tab);
             }
             Routed::Muted(muted) => {
-                self.audio.entry(tab).or_default().muted = muted;
+                let audio = self.audio.entry(tab).or_default();
+                audio.muted = muted;
+                // muted or unmuted from elsewhere (CEF's own sound content setting, a page
+                // restored muted): the reason follows what the view says
+                if muted != audio.why.muted() {
+                    audio.why = if muted { Mute::ByUser } else { Mute::Unmuted };
+                }
                 self.after_change();
             }
             Routed::Audible(audible) => {
@@ -619,6 +626,7 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::Model(command)) => self.dispatch(command.0),
                 MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
+                MenuEffect::Run(MenuCommand::ToggleMuteSite(t)) => self.toggle_mute_site(t),
                 MenuEffect::Run(MenuCommand::ReloadTab(t)) => {
                     if let Some(view) = self.tab_view(t) {
                         view.reload();
@@ -1056,12 +1064,10 @@ impl Host {
         }
     }
 
-    /// The sidebar's speaker glyph.
+    /// The sidebar's speaker glyph, the tab menu's row and the key: the user's own mute, which
+    /// a site rule leaves alone (`sitesound::transition`).
     pub fn toggle_mute(&mut self, tab: TabId) {
-        if let Some(view) = self.tab_view(tab) {
-            let muted = view.is_muted();
-            view.set_muted(!muted);
-        }
+        self.site_sound(tab, MuteEvent::Toggled);
     }
 
     fn redraw_surfaces(&mut self) {
@@ -1100,6 +1106,86 @@ impl Host {
     }
 
     // ----- sound
+
+    /// Runs one mute event for a tab with a view: its reason moves (`sitesound::transition`)
+    /// and the view's mute follows when it says so.
+    fn site_sound(&mut self, tab: TabId, event: MuteEvent) {
+        if self.tab_view(tab).is_none() {
+            return;
+        }
+        let why = self.audio.get(&tab).map(|a| a.why).unwrap_or_default();
+        let (next, set) = sitesound::transition(why, event);
+        self.audio.entry(tab).or_default().why = next;
+        if let (Some(muted), Some(view)) = (set, self.tab_view(tab)) {
+            view.set_muted(muted);
+        }
+    }
+
+    /// A tab committed `url`: Chrome's `SoundContentSettingObserver::MuteOrUnmuteIfNecessary`.
+    /// The site's sound content setting on the tab's profile is written to match the list
+    /// first, so Chromium's own observer agrees with it.
+    pub(super) fn restore_site_sound(&mut self, tab: TabId, url: &str) {
+        let muted = sitesound::is_muted(&self.muted_sites, url);
+        if let Some(host) = sitesound::web_host(url)
+            && let Some(view) = self.tab_view(tab)
+            && let Err(e) = view.set_sound_blocked(&sitesound::origins(&host), muted)
+        {
+            eprintln!("wubble: sound setting for {host}: {e}");
+        }
+        self.site_sound(tab, MuteEvent::Site(muted));
+    }
+
+    /// The `sound.muted_sites` setting changed (or was read at start): each container's sound
+    /// content setting follows the entries that came and went, and every live page of a site
+    /// whose rule changed is muted or unmuted (Chrome's observer on `OnContentSettingChanged`).
+    pub(super) fn set_muted_sites(&mut self, sites: Vec<String>) {
+        let (added, removed) = sitesound::diff(&self.muted_sites, &sites);
+        self.muted_sites = sites;
+        let tabs: Vec<TabId> = self.views.keys().copied().collect();
+        // a container's profile is shared by its views: written through each, as CEF names
+        // no context without one
+        for &tab in &tabs {
+            if let Some(view) = self.tab_view(tab) {
+                for (list, blocked) in [(&added, true), (&removed, false)] {
+                    for site in list.iter() {
+                        if let Err(e) = view.set_sound_blocked(&sitesound::origins(site), blocked) {
+                            eprintln!("wubble: sound setting for {site}: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        for tab in tabs {
+            if let Some(url) = self.committed.get(&tab).cloned() {
+                self.restore_site_sound(tab, &url);
+            }
+        }
+        self.after_change();
+    }
+
+    /// The tab menu's "Mute Site" switch: the tab's site joins the list, or the entry covering
+    /// it leaves (the stored setting Settings > Privacy shows; applied through it).
+    pub(super) fn toggle_mute_site(&mut self, tab: TabId) {
+        let Some(url) = self.model.tabs.get(&tab).map(|t| t.url.clone()) else {
+            return;
+        };
+        let key = wubble_core::settings::SOUND_MUTED_SITES.key;
+        match sitesound::toggle(&self.muted_sites, &url) {
+            Some(Toggle::Remove(site)) => self.setting_entry_removed(key, &site),
+            Some(Toggle::Add(host)) => self.setting_entry_added(key, &host),
+            None => {}
+        }
+    }
+
+    /// Rows of tabs with no view (asleep, not loaded yet) whose site is muted show muted: their
+    /// page will be when it loads. A tab with a view shows what the view reports.
+    pub(super) fn site_sound_marks(&self, view: &mut crate::shell::ShellView) {
+        for row in view.pinned.iter_mut().chain(view.tabs.iter_mut()) {
+            row.site_muted = row.kind == crate::shell::RowKind::Tab
+                && crate::shell::tab_id(row.id).is_some_and(|t| !self.audio.contains_key(&t))
+                && sitesound::is_muted(&self.muted_sites, &row.url);
+        }
+    }
 
     /// Asks every live tab's page whether it plays sound.
     pub fn probe_audible(&mut self) {

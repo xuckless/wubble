@@ -48,9 +48,9 @@ pub use settings::{
     ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
     ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
     SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
-    SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked,
-    SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed, VideoControls,
-    VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
+    SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SoundMutedSites, SponsorActions,
+    SponsorAsked, SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed,
+    VideoControls, VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
 
 pub use settings::InstalledExtensions;

@@ -95,6 +95,13 @@ pub enum Command {
         container: Option<ContainerId>,
         opener: Option<TabId>,
     },
+    /// Chromium's "New Tab to the Right" (`TabStripModel::CommandNewTabToRight`): a tab on
+    /// `url` right under `tab` (in its folder; under a pinned tab, first of the unpinned ones),
+    /// in the Space's default container, no opener, shown.
+    NewTabBelow {
+        tab: TabId,
+        url: String,
+    },
     /// A link opened in the background (middle click, Ctrl+click): placed right after its
     /// `opener`, never shown, the opener relation kept.
     BackgroundTab {
@@ -1072,6 +1079,32 @@ impl Model {
             fx.push(Effect::ActivateTab(id));
         }
         fx
+    }
+
+    fn new_tab_below(&mut self, below: TabId, url: String) -> Vec<Effect> {
+        let Some((bi, place)) = self.place_of(below) else {
+            return vec![];
+        };
+        let space = self.spaces[bi].id;
+        let Some((id, si, create)) = self.place_new_tab(url, None, None, Some(space)) else {
+            return vec![];
+        };
+        // `place_new_tab` put it last; Chromium inserts it at the context tab's index + 1
+        let dest = match place {
+            Place::Pinned(_) => Dest::Normal { space, index: 0 },
+            Place::Normal(i) => Dest::Normal {
+                space,
+                index: i + 1,
+            },
+            Place::Folder(folder, i) => Dest::Folder {
+                folder,
+                index: i + 1,
+            },
+        };
+        self.detach(id);
+        self.attach(id, dest, si);
+        self.spaces[si].active = Some(id);
+        vec![create, Effect::ActivateTab(id)]
     }
 
     fn extension_tab(
@@ -2176,6 +2209,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             container,
             opener,
         } => m.new_tab(url, container, opener),
+        Command::NewTabBelow { tab, url } => m.new_tab_below(tab, url),
         Command::BackgroundTab { url, opener } => m
             .place_new_tab(url, None, Some(opener), None)
             .map(|(_, _, create)| create)

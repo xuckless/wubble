@@ -1073,6 +1073,9 @@ impl Host {
         } else if let Some(tab) = crate::shell::tab_id(id) {
             let facts = wubble_core::tabmenu::Facts {
                 muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+                site_muted: self.model.tabs.get(&tab).is_some_and(|t| {
+                    wubble_core::sitesound::is_muted(&self.muted_sites, &t.url)
+                }),
             };
             menu::tab_entries(&self.model, tab, facts, &self.keymap)
         } else {

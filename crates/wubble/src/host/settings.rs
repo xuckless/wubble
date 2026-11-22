@@ -139,6 +139,11 @@ impl Host {
                 self.never_sleep_sites = sites;
                 self.run_site_lists();
             }
+            Applied::MutedSites(sites) => {
+                if sites != self.muted_sites {
+                    self.set_muted_sites(sites);
+                }
+            }
             Applied::ArchiveAfter(after) => self.archive_after = after,
             Applied::RoutingRules(rules) => self.routing_rules = rules,
             Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),

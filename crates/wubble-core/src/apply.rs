@@ -131,6 +131,8 @@ pub enum Applied {
     Keymap(Vec<String>),
     Sleep(SleepPolicy),
     NeverSleepSites(Vec<String>),
+    /// The sites whose pages are muted (`sitesound`).
+    MutedSites(Vec<String>),
     ArchiveAfter(ArchiveAfter),
     /// The stored link-routing rules, as typed (`routing::Rule::parse`).
     RoutingRules(Vec<String>),
@@ -268,6 +270,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
             ))
         }
         k if k == s::SLEEP_NEVER_SITES.key => Applied::NeverSleepSites(list(def, stored)),
+        k if k == s::SOUND_MUTED_SITES.key => Applied::MutedSites(list(def, stored)),
         k if k == s::ARCHIVE_AFTER.key => Applied::ArchiveAfter(ArchiveAfter::from_id(v)?),
         k if k == s::ROUTING_RULES.key => Applied::RoutingRules(list(def, stored)),
         k if k == s::GLASS_QUALITY.key => Applied::Glass(GlassSetting::from_id(v)?),
@@ -686,6 +689,13 @@ mod tests {
                 &stored(&[("sleep.never_sites", r#"["a.test"]"#)])
             ),
             Some(Applied::NeverSleepSites(vec!["a.test".into()]))
+        );
+        assert_eq!(
+            effect_of(
+                "sound.muted_sites",
+                &stored(&[("sound.muted_sites", r#"["a.test"]"#)])
+            ),
+            Some(Applied::MutedSites(vec!["a.test".into()]))
         );
         assert_eq!(
             effect_of("routing.rules", &empty),

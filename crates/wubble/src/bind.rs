@@ -66,7 +66,7 @@ pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
 fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<TabItem> {
     rows.iter()
         .map(|r| {
-            let marks = Marks::of(r.agent, r.audible, r.muted);
+            let marks = Marks::of(r.agent, r.audible, r.muted, r.site_muted);
             let sound = match marks.sound {
                 None => TabSound::None,
                 Some(Sound::Playing) => TabSound::Playing,

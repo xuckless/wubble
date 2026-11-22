@@ -63,6 +63,7 @@ pub mod session;
 pub mod settings;
 pub mod shot;
 pub mod site;
+pub mod sitesound;
 pub mod sleep;
 pub mod snapshot;
 pub mod space;

@@ -217,6 +217,8 @@ settings! {
     BlockerLists: std::collections::BTreeMap<String, u32> = defs::BLOCKER_LISTS;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
+    /// Hosts whose pages are muted (`wubble_core::sitesound`).
+    SoundMutedSites: Vec<String> = defs::SOUND_MUTED_SITES;
     /// Per-site zoom (`wubble_core::zoom`): hosts at the default zoom are absent.
     SiteZoom: ZoomTable = defs::SITE_ZOOM;
     /// Percent; the zoom of sites without their own.
