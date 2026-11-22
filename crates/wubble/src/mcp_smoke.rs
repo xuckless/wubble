@@ -110,7 +110,8 @@ document.addEventListener('mouseup', e => { if (from) log('dropped ' + from + ' 
 /// labels), one in a disabled fieldset, a popup button, a plain field, an editor stand-in that
 /// focuses an off-screen textarea beside it on mousedown (as Monaco, CodeMirror 5 and Ace do),
 /// two custom widgets: one that takes focus itself, one that takes none (focus stays where it
-/// was), a bare file input and a custom upload button that clicks a hidden one.
+/// was), file inputs (a bare one, a visually hidden one, a transparent `multiple` one, each
+/// counting its `change` events) and a custom upload button that clicks a hidden one.
 const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title></head>
 <body style="font:16px sans-serif">
 <label for="city">City</label>
@@ -133,7 +134,11 @@ const FORMS: &str = r##"<!doctype html><html lang="en"><head><title>forms</title
 <div id="w1" tabindex="0" role="button" aria-label="Widget" style="width:120px;height:30px;border:1px solid #000">Widget</div>
 <div id="w2" role="button" aria-label="Chooser" style="width:120px;height:30px;border:1px solid #000">Chooser</div>
 <label for="resume">Resume</label>
-<input id="resume" type="file" accept=".pdf">
+<input id="resume" type="file" accept=".pdf" onchange="window.changes=(window.changes||'')+'r'">
+<label for="photo">Photo</label>
+<input id="photo" type="file" onchange="window.changes=(window.changes||'')+'p'" style="position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);border:0">
+<label for="docs">Documents</label>
+<input id="docs" type="file" multiple onchange="window.changes=(window.changes||'')+'d'" style="opacity:0">
 <input id="hidden-file" type="file" style="display:none" onchange="document.getElementById('custom-out').textContent='attached '+Array.from(this.files).map(f=>f.name).join(',')">
 <button id="custom-btn" type="button" onclick="document.getElementById('hidden-file').click()">Upload cover</button>
 <p id="custom-out">no cover</p>
@@ -316,13 +321,13 @@ pub const SHEETS: &[Sheet] = &[
 const TYPED: &str = "wubble";
 
 /// Runs the client on its own thread; its result goes to the host, which ends the run.
-pub fn start(socket: PathBuf, page: String) {
+pub fn start(socket: PathBuf, page: String, profile: PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("mcp-smoke".into())
         .spawn(move || {
             // The connection stays open to the end, so the quit, not a disconnect, ends the
             // second session.
-            let result = run(&socket, &page).map(|(done, client)| {
+            let result = run(&socket, &page, &profile).map(|(done, client)| {
                 std::mem::forget(client);
                 done
             });
@@ -386,6 +391,38 @@ impl Client {
         } else {
             Ok(r)
         })
+    }
+
+    /// Calls sent all at once, before any answer is read: each one's result or error text, in
+    /// the order sent.
+    fn tools_at_once(
+        &mut self,
+        calls: &[(&str, Value)],
+    ) -> Result<Vec<Result<Value, String>>, String> {
+        let mut ids = vec![];
+        for (name, args) in calls {
+            self.next += 1;
+            ids.push(self.next);
+            let message = json!({"jsonrpc": "2.0", "id": self.next, "method": "tools/call",
+                "params": {"name": name, "arguments": args}});
+            self.stream
+                .write_all(wubble_mcp::encode_line(&message).as_bytes())
+                .map_err(|e| format!("send {name}: {e}"))?;
+        }
+        let mut answers: Vec<Option<Result<Value, String>>> = vec![None; ids.len()];
+        while answers.iter().any(Option::is_none) {
+            let line = self.line()?;
+            let v: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            if let Some(i) = ids.iter().position(|id| v["id"] == *id) {
+                let r = &v["result"];
+                answers[i] = Some(if r["isError"] == true {
+                    Err(text(r))
+                } else {
+                    Ok(r.clone())
+                });
+            }
+        }
+        Ok(answers.into_iter().flatten().collect())
     }
 
     /// A tool that must succeed.
@@ -502,7 +539,7 @@ pub struct Done {
     pub kept: u64,
 }
 
-fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
+fn run(socket: &Path, page: &str, profile: &Path) -> Result<(Done, Client), String> {
     let name = socket
         .to_fs_name::<GenericFilePath>()
         .map_err(|e| e.to_string())?;
@@ -645,7 +682,7 @@ fn run(socket: &Path, page: &str) -> Result<(Done, Client), String> {
     keys(&mut c, &s, page)?;
     shots(&mut c, &s, &base)?;
     pointer(&mut c, &s, &base)?;
-    forms(&mut c, &s, &base)?;
+    forms(&mut c, &s, &base, &profile.join("mcp-uploads"))?;
     reading(&mut c, &s, &base)?;
     safety(&mut c, &s, &session, page, &base)?;
 
@@ -1225,7 +1262,7 @@ fn pointer(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(),
 }
 
 /// `select`, `type` and `upload_file` on form fields ([`FORMS`]).
-fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), String> {
+fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str, dir: &Path) -> Result<(), String> {
     c.ok("navigate", s(json!({"url": format!("{base}/mcp/forms")})))?;
     let read = text(&c.ok("read_page", s(json!({})))?);
     let find = |prefix: &str| ref_of(&read, prefix).ok_or(format!("no {prefix}: {read}"));
@@ -1335,54 +1372,145 @@ fn forms(c: &mut Client, s: &dyn Fn(Value) -> Value, base: &str) -> Result<(), S
         "a plain field; an editor stand-in's hidden textarea took the text; a widget that takes focus and one that leaves it on Field A refused, Field A unchanged",
     );
 
+    uploads(c, s, &find, dir)
+}
+
+/// `upload_file` on [`FORMS`]' file inputs: set directly (a bare input, a visually hidden one,
+/// two files into a transparent `multiple` one: `change` once each, the names in the input and
+/// in `read_page`), through a custom button's chooser; refused for two files into a single
+/// input and for a second upload while one is in flight; a `click` on a file input and a
+/// chooser opened by `evaluate`'s script cancelled with the advice to use `upload_file`.
+fn uploads(
+    c: &mut Client,
+    s: &dyn Fn(Value) -> Value,
+    find: &dyn Fn(&str) -> Result<String, String>,
+    dir: &Path,
+) -> Result<(), String> {
+    let js = |c: &mut Client, script: &str| -> Result<String, String> {
+        Ok(text(&c.ok("evaluate", s(json!({"script": script})))?))
+    };
     let resume = find("- button \"Resume")?;
+    let photo = find("- button \"Photo")?;
+    let docs = find("- button \"Documents")?;
     let custom = find("- button \"Upload cover\"")?;
-    // `click` on a file input must cancel the OS chooser and tell the agent to use `upload_file`.
+    // the files, under the run's throwaway profile
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = |name: &str, body: &[u8]| -> Result<String, String> {
+        let path = dir.join(name);
+        std::fs::write(&path, body).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    };
+    let resume_path = file("resume.pdf", b"%PDF-1.4\n%wubble-smoke\n")?;
+    let photo_path = file("photo.png", b"not a png")?;
+    let a_path = file("a.txt", b"a")?;
+    let b_path = file("b.txt", b"b")?;
+    let cover_path = file("cover.txt", b"hello cover")?;
+    let held = |c: &mut Client, id: &str| {
+        js(
+            c,
+            &format!(
+                "(f => f.files.length + ' ' + Array.from(f.files).map(x => x.name).join(','))(document.getElementById('{id}'))"
+            ),
+        )
+    };
+    // the input's own read_page line
+    let line_of = |c: &mut Client, label: &str| -> Result<String, String> {
+        let read = text(&c.ok("read_page", s(json!({})))?);
+        read.lines()
+            .find(|l| l.starts_with(&format!("- button \"{label}")))
+            .map(str::to_owned)
+            .ok_or(format!("no {label} line: {read}"))
+    };
+
+    // a click on a file input opens a chooser: cancelled, the advice given
     match c.tool("click", s(json!({"ref": resume})))? {
-        Err(e) if e.contains("upload_file") => {}
-        r => return Err(format!("click on file input: {r:?}")),
+        Err(e) if e.contains("use upload_file") || e.contains("call upload_file") => {}
+        r => return Err(format!("click on a file input: {r:?}")),
     }
-
-    // `upload_file` on a bare `<input type="file">` AND on a custom button; `read_page` must
-    // immediately reflect `resume.pdf` (never stale "No file chosen").
-    let dir = std::env::temp_dir().join(format!("wubble-mcp-upload-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let resume_path = dir.join("resume.pdf");
-    let cover_path = dir.join("cover.txt");
-    std::fs::write(&resume_path, b"%PDF-1.4\n%wubble-smoke\n").map_err(|e| e.to_string())?;
-    std::fs::write(&cover_path, b"hello cover").map_err(|e| e.to_string())?;
-
+    // set directly: `change` once, the file in the input and in the tree at once
+    for (input, id, path, name, mark, label) in [
+        (&resume, "resume", &resume_path, "resume.pdf", "r", "Resume"),
+        (&photo, "photo", &photo_path, "photo.png", "p", "Photo"),
+    ] {
+        let up = text(&c.ok("upload_file", s(json!({"ref": input, "path": path})))?);
+        if up != format!("uploaded {name}") {
+            return Err(format!("upload_file into {label}: {up}"));
+        }
+        let got = held(c, id)?;
+        if got != format!("\"1 {name}\"") {
+            return Err(format!("{label} holds {got} after upload_file"));
+        }
+        let line = line_of(c, label)?;
+        if !line.contains(name) || line.contains("No file chosen") {
+            return Err(format!("read_page after upload_file into {label}: {line}"));
+        }
+        let changes = js(c, "window.changes")?;
+        if !changes.ends_with(&format!("{mark}\"")) || changes.matches(mark).count() != 1 {
+            return Err(format!("{label}'s change events: {changes}"));
+        }
+    }
+    // two files into a transparent `multiple` input
     let up = text(&c.ok(
         "upload_file",
-        s(json!({"ref": resume, "path": resume_path.to_string_lossy()})),
+        s(json!({"ref": docs, "paths": [a_path, b_path]})),
     )?);
-    if !up.contains("resume.pdf") {
-        return Err(format!("upload_file bare input: {up}"));
+    let line = line_of(c, "Documents")?;
+    if up != "uploaded a.txt, b.txt"
+        || held(c, "docs")? != "\"2 a.txt,b.txt\""
+        || !line.contains("2 files")
+    {
+        return Err(format!("upload_file of two files: {up}; {line}"));
     }
-    let after_read = text(&c.ok("read_page", s(json!({})))?);
-    if !after_read.contains("resume.pdf") || after_read.contains("No file chosen") {
-        return Err(format!("read_page stale after upload_file: {after_read}"));
-    }
-
-    let up2 = text(&c.ok(
+    // two files into a single input: refused, it keeps its file
+    match c.tool(
         "upload_file",
-        s(json!({"ref": custom, "path": cover_path.to_string_lossy()})),
-    )?);
-    if !up2.contains("cover.txt") {
-        return Err(format!("upload_file custom button: {up2}"));
+        s(json!({"ref": resume, "paths": [a_path, b_path]})),
+    )? {
+        Err(e) if e.contains("takes one file") => {}
+        r => return Err(format!("two files into a single input: {r:?}")),
     }
-    let custom_out = text(&c.ok(
+    if held(c, "resume")? != "\"1 resume.pdf\"" {
+        return Err(format!(
+            "Resume after a refused upload: {}",
+            held(c, "resume")?
+        ));
+    }
+    // a custom button: clicked, its chooser caught by DevTools, the hidden input takes the file
+    let up = text(&c.ok("upload_file", s(json!({"ref": custom, "path": cover_path})))?);
+    let out = js(c, "document.getElementById('custom-out').textContent")?;
+    if up != "uploaded cover.txt" || out != "\"attached cover.txt\"" {
+        return Err(format!(
+            "upload_file by a custom button: {up}; the page: {out}"
+        ));
+    }
+    // a chooser a script opens (a click first gives the page the user activation it needs)
+    c.ok("click", s(json!({"ref": find("- textField \"Field A\"")?})))?;
+    match c.tool(
         "evaluate",
-        s(json!({"script": "document.getElementById('custom-out').textContent"})),
-    )?);
-    if custom_out != "\"attached cover.txt\"" {
-        return Err(format!("custom upload button result: {custom_out}"));
+        s(json!({"script": "setTimeout(() => document.getElementById('photo').click(), 0); 'asked'"})),
+    )? {
+        Err(e) if e.contains("upload_file") => {}
+        r => return Err(format!("a chooser opened by evaluate's script: {r:?}")),
     }
-    let _ = std::fs::remove_dir_all(&dir);
-
+    // two at once on one tab: one refused
+    let both = c.tools_at_once(&[
+        ("upload_file", s(json!({"ref": photo, "path": photo_path}))),
+        (
+            "upload_file",
+            s(json!({"ref": resume, "path": resume_path})),
+        ),
+    ])?;
+    let refused = both
+        .iter()
+        .filter(|r| matches!(r, Err(e) if e.contains("in flight")))
+        .count();
+    if refused != 1 || both.iter().filter(|r| r.is_ok()).count() != 1 {
+        return Err(format!("two upload_file calls at once: {both:?}"));
+    }
+    let _ = std::fs::remove_dir_all(dir);
     c.step(
         "upload_file",
-        "click on a file input refused with the advice; a bare input and a custom button attached, read_page fresh",
+        "a bare, a visually hidden and a transparent multiple file input set directly (change once each, the names in the input and read_page); a custom button's chooser answered; two files into a single input refused; a click on a file input and a chooser opened by evaluate cancelled with the advice; of two at once, one refused",
     );
     Ok(())
 }

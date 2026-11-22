@@ -5012,10 +5012,14 @@ impl Host {
                     .next()
                     .is_some_and(|paths| paths.split(", ").all(|p| Path::new(p).is_absolute()))
             };
-            let into_page = run.uploads_logged.iter().any(|(text, outcome)| {
-                *outcome == Outcome::Done && whole(text) && text.contains(" into http://127.0.0.1:")
-            });
-            if !into_page {
+            let logged = |done: bool| {
+                run.uploads_logged.iter().any(|(text, outcome)| {
+                    (*outcome == Outcome::Done) == done
+                        && whole(text)
+                        && text.contains(" into http://127.0.0.1:")
+                })
+            };
+            if !logged(true) || !logged(false) {
                 return self.fail(format!(
                     "upload_file's activity log lines: {:?}: want full paths and the page's origin",
                     run.uploads_logged
