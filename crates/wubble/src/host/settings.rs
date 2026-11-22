@@ -547,6 +547,8 @@ fn render_page(window: &AppWindow, host: &Host) {
         .model
         .spaces
         .iter()
+        // a private window's Space is no Space to manage: it goes with its window
+        .filter(|s| !s.private)
         .filter_map(|s| {
             Some(SpaceSetting {
                 id: i32::try_from(s.id.0).ok()?,

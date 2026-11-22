@@ -1800,6 +1800,12 @@ impl Host {
         use crate::menu::ClearData;
         let done = match what {
             ClearData::Containers(containers) => {
+                // a private window's container, if named, is brought up in memory, never on disk
+                for &c in &containers {
+                    if self.model.is_ephemeral(c) {
+                        self.engine.set_ephemeral(c);
+                    }
+                }
                 match self.engine.clear_browsing_data(&containers) {
                     Ok(()) => Some("Cookies and cached files deleted"),
                     Err(e) => {
