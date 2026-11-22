@@ -6,6 +6,7 @@
 //! free text chooses it.
 
 use wubble_core::action::Action;
+use wubble_core::answer;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
@@ -107,6 +108,8 @@ pub enum Choice {
     },
     /// Shift+Enter: a new window, then this URL in a new tab there.
     NewWindow(String),
+    /// Put the text on the clipboard (an answer row).
+    Copy(String),
 }
 
 /// The open tabs, active Space first, each Space in sidebar order. A private window lists its
@@ -179,6 +182,7 @@ fn kind(k: Kind) -> CommandKind {
         Kind::Search => CommandKind::Search,
         Kind::Action => CommandKind::Action,
         Kind::ClosedTab => CommandKind::ClosedTab,
+        Kind::Answer => CommandKind::Answer,
     }
 }
 
@@ -232,7 +236,14 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
     let mut rows: Vec<BarRow> = rows
         .filter(|r| !matches!(r.target, RowTarget::Omni(Target::Search(_))))
         .collect();
-    let at = usize::from(matches!(omnibox::classify(query), omnibox::Intent::Url(_)));
+    // The "open" row and a calculation's answer stay above the choice, as above a search.
+    let leads = match omnibox::classify(query) {
+        omnibox::Intent::Url(_) => true,
+        omnibox::Intent::Search(q) => {
+            answer::answer(&q).is_some_and(|a| a.kind == answer::AnswerKind::Math)
+        }
+    };
+    let at = usize::from(leads);
     let at = at.min(rows.len());
     rows.splice(at..at, engine_rows());
     rows.truncate(MAX_ROWS);
@@ -272,6 +283,7 @@ pub fn target_command_as(
             url: url.clone(),
             closed_at_ms: *closed_at_ms,
         },
+        RowTarget::Omni(Target::Copy(text)) => Choice::Copy(text.clone()),
         RowTarget::PickEngine(e) => Choice::SetEngine(*e),
     })
 }

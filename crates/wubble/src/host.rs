@@ -2488,6 +2488,12 @@ impl Host {
                     self.typed_nav.started(self.shown());
                 }
             }
+            Some(Choice::Copy(text)) => {
+                self.copy(&text);
+                if let Some(window) = self.w.window.upgrade() {
+                    self.toast(&window, &format!("Copied {text}"));
+                }
+            }
             Some(Choice::SetEngine(engine)) => {
                 self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
                 // The text that offered the choice is searched with it.

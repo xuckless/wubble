@@ -120,6 +120,8 @@ export enum CommandKind {
     action,
     // wubble: a recently closed tab (tab search)
     closed-tab,
+    // a calculator or unit conversion result, computed on the device (wubble_core::answer)
+    answer,
 }
 
 export struct CommandResult {
