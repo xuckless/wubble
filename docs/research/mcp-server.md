@@ -65,12 +65,13 @@ could not be changed, and its Secrets and Sites were not editable (they become t
 list editor, and what the owner leaves in the lists is the grant); an agent tab the owner switched to showed a
 blurred page. Still open from section 0: binding a secret's name to a saved login on the sheet.
 
-**Built after the tests (2026-11-20, `xm/sheet-fix`), the tool surface is 20 tools** (the table is data in
+**Built after the tests (2026-11-20, `xm/sheet-fix`), the tool surface is 22 tools** (the table is data in
 `wubble-mcp/src/tools.rs`; section 4 stays the plan): `start_session`, `stop_session` (`keep_tabs`: the Space and its
 tabs stay the owner's), `request_more` (sites, secret names; the sheet lists only what is new, every time),
 `navigate`, `read_page` (link targets, whole text, a note when cut), `read_text` (Readability's article or the page's
 text, or one element's; capped with a note), `click`, `hover`, `drag` (to a ref, or inside a canvas to a point),
-`scroll` (into view, or the wheel), `type` (`submit` waits as `navigate`), `press_key` (wubble's back, forward and
+`scroll` (into view, or the wheel), `type` (`submit` waits as `navigate`; refused where focus stayed on an unrelated field or is not editable), `select` (a native `<select>` by label or value), `upload_file` (absolute paths to a file input's ref, set directly, or to the
+chooser a button's click opens, caught by DevTools; owner's decision 2026-11-21: any readable file, no approval), `press_key` (wubble's back, forward and
 reload chords act on the tab; its window chords are refused, and the reply says so), `screenshot` (an element
 scrolled into view and cropped right at any scroll, or `full_page`), `list_tabs` (`active`, `shown`), `focus_tab`,
 `open_tab` (waits for its load), `close_tab`, `wait_for` (text, `text_gone`, ref, load, `url`, `navigation`;
@@ -411,7 +412,7 @@ them. Page tools take `session` and `tab` handles. 2026-07-28 requires `ttlMs`/`
 | `open_tab`, `close_tab` | url / tab | destructive | Closing a tab the session did not open |
 | `wait_for` | `tab`; text, ref, load or network idle; timeout | readOnly | |
 | `handle_dialog` | `tab`; accept / dismiss, prompt text | destructive | Answer a wubble prompt or airlock; leave-page dialogs answer only with the human present [I] |
-| `upload` | `tab`, `ref` of a file input; optional `{var: RESUME}` | destructive, openWorld | Name a path: a file variable was approved in the sheet, or the human picks in the native chooser |
+| `upload` (built as `upload_file`) | `tab`, `ref` of a file input or of a button that opens a chooser; `path` or `paths`, absolute | destructive, openWorld | Superseded by the owner's decision (2026-11-21, decisions.md "Agent file uploads"): any file the agent's process names is allowed, with no allow-list, deny-list, per-upload confirmation or sheet entry; the device's file permissions are the owner's, set up in their harness. A chooser whose page is off the session's sites is never answered |
 | `download_media` | `tab`, `ref` of a video | destructive | Bypass the download airlock (media downloader built-in [V decisions.md]) |
 | `request_human` | reason, optional `tab` | none | Ask for passwords, card numbers or codes |
 

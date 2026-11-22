@@ -16,16 +16,19 @@
 //! the page's events, or with an error at its deadline.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model};
 use wubble_ax::{AxItem, Bounds, PageTree, Reach};
+use wubble_core::agent::forms;
 use wubble_core::agent::keys::{KeyPlan, SessionNav};
 use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
 use wubble_core::agent::spot;
+use wubble_core::agent::upload::{self, Stage};
 use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
 use wubble_core::agent::{MoreAnswer, Refusal, StopReason, Token};
 use wubble_core::model::Command;
@@ -35,7 +38,7 @@ use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
-use wubble_engine::page::{EditCommand, PageEvent};
+use wubble_engine::page::{EditCommand, PageEvent, RequestId};
 use wubble_mcp::{
     AgentCall, ButtonKind, CallId, Direction, DragTo, NavTarget, Offset, ToolResult, WaitCondition,
 };
@@ -64,12 +67,26 @@ const BEAT: Duration = Duration::from_secs(5);
 /// How long an action that may start a navigation (a click, a key, a script) waits before it
 /// answers, so a navigation its page started and the session's sites refused is its error.
 const SETTLE: Duration = Duration::from_millis(300);
+/// The DevTools object group `upload_file` holds the node its files go to in, while it does
+/// (each call its own: `-<n>`).
+const UPLOAD_GROUP: &str = "wubble-agent-upload";
+/// How long `upload_file`'s paths may take to be checked (a hung network mount does not hang
+/// the browser: they are checked on a thread of their own, and the call fails at this).
+const UPLOAD_PATHS_WAIT: Duration = Duration::from_secs(5);
+/// How long after the click's input fence `upload_file` waits for the page to open a file chooser.
+const UPLOAD_CHOOSER_WAIT: Duration = Duration::from_millis(1500);
+/// How long after the files are in the input `upload_file` waits for the page's tree to show them.
+const UPLOAD_AX_WAIT: Duration = Duration::from_millis(1000);
+/// Minimum settle after answering a file chooser when an `AxTree` update arrived (e.g. a focus
 /// Steps a drag's pointer moves in between its press and its release.
 const DRAG_STEPS: u32 = 8;
 /// How long after a script's own `timeout_ms` the call gives up waiting for the page's answer.
 const EVAL_GRACE: Duration = Duration::from_millis(1000);
 /// The DevTools object group `evaluate`'s values are held in until answered.
 const EVAL_GROUP: &str = "wubble-agent";
+/// The start of the DevTools object group each `select` holds its resolved node in until
+/// answered (one per call: calls on one tab may overlap).
+const SELECT_GROUP: &str = "wubble-agent-select";
 /// Turns `evaluate`'s value into plain JSON (called on it with `returnByValue`): nodes and
 /// functions named, cycles and depth cut, maps and sets as objects and arrays.
 const SERIALISE: &str = "function(){const seen=new WeakSet();let n=0;\
@@ -151,15 +168,22 @@ enum Act {
         button: MouseButton,
         count: u32,
     },
+    /// `mark`: the key the element focused before the click is kept under in the page
+    /// ([`forms::type_mark_script`]).
     Type {
         text: Secret,
         submit: bool,
+        mark: u64,
     },
     /// `fill_secret`'s value for granted variable `name`: typed only once the page confirms
     /// the click focused the element there, in its own document, still on the login's site.
     Fill {
         text: Secret,
         name: String,
+    },
+    /// `upload_file`: click the element with these validated local files armed for the chooser.
+    Upload {
+        paths: Vec<PathBuf>,
     },
     Hover,
     /// Press here, then release at `to`.
@@ -219,6 +243,25 @@ fn field_takes(part: agent::Part, password_field: bool) -> Result<(), &'static s
 enum Locating {
     Revealing,
     Measuring,
+}
+
+/// Where `select` is: scrolling the `<select>` into view, resolving its DOM node, or picking the
+/// option in the page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Selecting {
+    Revealing,
+    Resolving,
+    Applying,
+}
+
+/// Where `upload_file` is with the node its files go to: resolving it (held in the call's object
+/// group from then on), reading it ([`upload::TARGET_SCRIPT`]), giving it the files
+/// (`DOM.setFileInputFiles`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Uploading {
+    Resolving,
+    Reading,
+    Setting,
 }
 
 /// Where `evaluate` is: the script as given, the script again as an async function body (it
@@ -343,6 +386,34 @@ enum Wait {
         text: Secret,
         name: String,
     },
+    /// `type`, before its click at `at`: the page keeping what has focus now
+    /// ([`forms::type_mark_script`]).
+    TypeMark {
+        id: u64,
+        tab: TabId,
+        at: (f64, f64),
+        act: Act,
+    },
+    /// `type` clicked its element at `at`: the page's word on whether focus landed on an
+    /// editable target ([`forms::type_focus_script`]).
+    TypeFocus {
+        id: u64,
+        tab: TabId,
+        at: (f64, f64),
+        text: Secret,
+        submit: bool,
+        before: Option<String>,
+    },
+    /// `select`: scrolling the `<select>` into view, resolving its DOM node (held in the
+    /// object group `group` from then on: [`held_group`]), and choosing `option`.
+    Select {
+        id: u64,
+        tab: TabId,
+        node: i32,
+        option: String,
+        stage: Selecting,
+        group: String,
+    },
     /// `focus_tab`: the tab shows in its pane a frame of its own at its pane's size
     /// ([`Host::agent_shows`]).
     Shown {
@@ -364,6 +435,39 @@ enum Wait {
     Started {
         tab: TabId,
         load: Load,
+        answer: String,
+    },
+    /// `upload_file`: its paths being checked off the event loop ([`validate_upload_paths`]).
+    Paths {
+        nonce: u64,
+        tab: TabId,
+        target: String,
+    },
+    /// `upload_file` with the node its files may go to (`node`, a backend node id): the ref's
+    /// own (`fallback`: the ref, clicked instead if the node is no file input), or the file
+    /// input that opened the chooser its click opened (`fallback` none). `object`: the node in
+    /// the page, once resolved.
+    UploadTo {
+        id: u64,
+        tab: TabId,
+        node: i64,
+        paths: Vec<PathBuf>,
+        stage: Uploading,
+        group: String,
+        object: Option<String>,
+        fallback: Option<String>,
+    },
+    /// `upload_file`: the click ran, waiting for the page to open a file chooser.
+    Chooser {
+        tab: TabId,
+        paths: Vec<PathBuf>,
+    },
+    /// `upload_file`: the files are in the input `node` (a backend node id: its id in the page's
+    /// tree), waiting for the tree to show them ([`upload::tree_wait`]).
+    Uploaded {
+        tab: TabId,
+        node: i64,
+        markers: Vec<String>,
         answer: String,
     },
 }
@@ -417,6 +521,16 @@ enum Then {
         text: Secret,
         name: String,
     },
+    /// `type`'s click at `at`: the page is asked whether focus landed on an editable target.
+    TypeFocus {
+        at: (f64, f64),
+        text: Secret,
+        submit: bool,
+        before: Option<String>,
+        mark: u64,
+    },
+    /// `upload_file`'s click: wait briefly for the page to open a file chooser.
+    Upload { paths: Vec<PathBuf> },
     /// A drag let go.
     Dragged,
     /// The answer now.
@@ -459,6 +573,10 @@ pub(super) struct Agents {
     /// What the sheet knows of the vault for its login pickers (fetched as a sheet asking for
     /// secrets shows).
     sheet_vault: SheetVault,
+    /// The tabs whose DevTools session was asked to intercept file choosers
+    /// (`Page.setInterceptFileChooserDialog`): those with an `upload_file` in flight
+    /// ([`Host::agent_intercept`]).
+    intercepting: std::collections::BTreeSet<TabId>,
     /// The values `fill_secret` typed, per session: redacted from every reply it gets.
     filled: BTreeMap<SessionId, Vec<Secret>>,
 }
@@ -490,6 +608,23 @@ impl Agents {
     }
 }
 
+/// The DevTools object group a waiting call holds in `tab`'s page, which is released however
+/// the call ends (answered, failed, timed out, or dropped with its session or connection):
+/// `select` from the moment it asks for its node, until its answer.
+fn held_group(wait: &Wait) -> Option<(TabId, &str)> {
+    match wait {
+        // from its `DOM.resolveNode`, which makes the group
+        Wait::UploadTo { tab, group, .. } => Some((*tab, group)),
+        Wait::Select {
+            tab,
+            group,
+            stage: Selecting::Resolving | Selecting::Applying,
+            ..
+        } => Some((*tab, group)),
+        _ => None,
+    }
+}
+
 /// The tab a call waits on, if it waits on one.
 fn wait_tab(wait: &Wait) -> Option<TabId> {
     match wait {
@@ -506,12 +641,70 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Locate { tab, .. }
         | Wait::Metrics { tab, .. }
         | Wait::Vault { tab, .. }
+        | Wait::Paths { tab, .. }
         | Wait::Focus { tab, .. }
+        | Wait::TypeMark { tab, .. }
+        | Wait::TypeFocus { tab, .. }
+        | Wait::Select { tab, .. }
         | Wait::Input { tab, .. }
         | Wait::Shown { tab }
         | Wait::Started { tab, .. }
+        | Wait::Chooser { tab, .. }
+        | Wait::UploadTo { tab, .. }
+        | Wait::Uploaded { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
         _ => None,
+    }
+}
+
+/// The DevTools call or page script a waiting call waits on the answer of, if any.
+fn answer_id(wait: &Wait) -> Option<u64> {
+    match *wait {
+        Wait::Eval { id, .. }
+        | Wait::Article { id, .. }
+        | Wait::Shot { id }
+        | Wait::Scroll { id, .. }
+        | Wait::Locate { id, .. }
+        | Wait::Metrics { id, .. }
+        | Wait::Focus { id, .. }
+        | Wait::TypeMark { id, .. }
+        | Wait::TypeFocus { id, .. }
+        | Wait::Select { id, .. }
+        | Wait::UploadTo { id, .. }
+        | Wait::Input { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// What a waiting call is doing, as a file chooser opening on its tab sees it
+/// ([`upload::Stage`]): every stage of `upload_file`, and the calls whose input or script may
+/// open one.
+fn stage(wait: &Wait) -> Stage {
+    match wait {
+        Wait::Input {
+            then: Then::Upload { .. },
+            ..
+        }
+        | Wait::Chooser { .. } => Stage::UploadClicked,
+        Wait::Locate {
+            act: Act::Upload { .. },
+            ..
+        }
+        | Wait::Scroll {
+            act: Act::Upload { .. },
+            ..
+        }
+        | Wait::Paths { .. }
+        | Wait::UploadTo { .. }
+        | Wait::Uploaded { .. } => Stage::Upload,
+        Wait::Input { .. }
+        | Wait::Settle { .. }
+        | Wait::Started { .. }
+        | Wait::Eval { .. }
+        | Wait::Focus { .. }
+        | Wait::TypeMark { .. }
+        | Wait::TypeFocus { .. } => Stage::Input,
+        _ => Stage::Other,
     }
 }
 
@@ -521,6 +714,48 @@ fn mouse(button: ButtonKind) -> MouseButton {
         ButtonKind::Right => MouseButton::Right,
         ButtonKind::Middle => MouseButton::Middle,
     }
+}
+
+/// Validates and canonicalizes local file paths for `upload_file`: rejects empty lists,
+/// missing paths and directories cleanly.
+fn validate_upload_paths(paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    if paths.is_empty() {
+        return Err("at least one file path is required".into());
+    }
+    let mut out = Vec::with_capacity(paths.len());
+    for raw in paths {
+        if raw.trim().is_empty() {
+            return Err("file path must not be empty".into());
+        }
+        let path = Path::new(raw);
+        let meta = std::fs::metadata(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => format!("file not found: {raw}"),
+            _ => format!("cannot read {raw:?}: {e}"),
+        })?;
+        if !meta.is_file() {
+            return Err(format!("not a file: {raw}"));
+        }
+        let canon =
+            std::fs::canonicalize(path).map_err(|e| format!("cannot resolve {raw:?}: {e}"))?;
+        out.push(canon);
+    }
+    Ok(out)
+}
+
+/// The activity log's target for `upload_file`: every path in full (the log is the owner's
+/// private record of what left the machine), and the origin of the page that took them (or
+/// would have). The agent's reply names the files only.
+fn upload_log<P: AsRef<Path>>(paths: &[P], origin: Option<&str>) -> String {
+    let mut line = paths
+        .iter()
+        .map(|p| p.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(origin) = origin {
+        line.push_str(" into ");
+        line.push_str(origin);
+    }
+    line
 }
 
 /// A random 256-bit token, hex.
@@ -941,7 +1176,13 @@ impl Host {
             McpEvent::Call { conn, id, call } => self.agent_call(conn, id, call),
             McpEvent::Gone(conn) => {
                 self.agents.conns.remove(&conn);
-                self.agents.pending.retain(|p| p.reply.conn != conn);
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.agents.pending)
+                    .into_iter()
+                    .partition(|p| p.reply.conn == conn);
+                self.agents.pending = kept;
+                for p in gone {
+                    self.agent_let_go(&p.wait);
+                }
                 let gone: Vec<SessionId> = self
                     .agents
                     .sessions
@@ -1866,8 +2107,11 @@ impl Host {
             .partition(|p| p.reply.session.as_ref() == Some(id));
         self.agents.pending = kept;
         for p in gone {
+            self.agent_let_go(&p.wait);
             self.agent_send(p.reply, ToolResult::error(why.clone()), Outcome::Failed);
         }
+        // its calls' deadlines and a kept tab's chooser interception go with them
+        self.agent_arm();
         let tabs = &self.model.tabs;
         self.agents.refs.retain(|t, _| tabs.contains_key(t));
         self.agent_log(id, "session_stopped", None, Outcome::Done);
@@ -1989,11 +2233,10 @@ impl Host {
                 submit,
                 ..
             } => {
-                let act = Act::Type {
-                    text: Secret::new(text),
-                    submit,
-                };
-                self.agent_act(reply, tab, &target.0, None, act);
+                self.agent_type(reply, tab, &target.0, Secret::new(text), submit);
+            }
+            AgentCall::Select { target, option, .. } => {
+                self.agent_select(reply, tab, &target.0, option);
             }
             AgentCall::PressKey { key, .. } => self.agent_press(reply, &session, tab, &key),
             AgentCall::Screenshot {
@@ -2072,6 +2315,9 @@ impl Host {
             }
             AgentCall::FillSecret { target, secret, .. } => {
                 self.agent_fill(reply, &session, tab, target.0, &secret)
+            }
+            AgentCall::UploadFile { target, paths, .. } => {
+                self.agent_upload(reply, tab, &target.0, paths)
             }
         }
     }
@@ -2518,7 +2764,23 @@ impl Host {
             return self.agent_unpress(reply, tab, &act, "the tab has no page");
         };
         match act {
-            Act::Click { .. } | Act::Type { .. } | Act::Fill { .. } => {
+            Act::Type { mark, .. } => {
+                // what has focus is kept first: the click is sent once the page has it
+                let script = forms::type_mark_script(mark);
+                match view.eval(&script) {
+                    Some(id) => {
+                        let wait = Wait::TypeMark {
+                            id: id.0,
+                            tab,
+                            at: (x, y),
+                            act,
+                        };
+                        self.agent_wait(reply, wait, WAIT);
+                    }
+                    None => self.agent_fail(reply, "the page cannot run scripts now"),
+                }
+            }
+            Act::Click { .. } | Act::Fill { .. } | Act::Upload { .. } => {
                 self.agent_input(reply, tab, x, y, act)
             }
             Act::Hover => {
@@ -2667,23 +2929,19 @@ impl Host {
             }
         }
         let then = match act {
-            Act::Type { text, submit } => {
-                view.edit(EditCommand::SelectAll);
-                view.ime_commit(text.expose());
-                if submit {
-                    if let Err(e) = self.agent_keys(tab, "Enter") {
-                        return self.agent_fail(reply, &e);
-                    }
-                    Then::Submitted { before }
-                } else {
-                    Then::Settle("typed".into())
-                }
-            }
+            Act::Type { text, submit, mark } => Then::TypeFocus {
+                at: (x, y),
+                text,
+                submit,
+                before,
+                mark,
+            },
             Act::Fill { text, name } => Then::Focus {
                 at: (x, y),
                 text,
                 name,
             },
+            Act::Upload { paths } => Then::Upload { paths },
             _ => Then::Settle("clicked".into()),
         };
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
@@ -2754,6 +3012,32 @@ impl Host {
                 };
                 self.agent_wait(reply, wait, WAIT);
             }
+            Then::TypeFocus {
+                at,
+                text,
+                submit,
+                before,
+                mark,
+            } => {
+                let Some(id) = self
+                    .tab_view(tab)
+                    .and_then(|v| v.eval(&forms::type_focus_script(at.0, at.1, mark)))
+                else {
+                    return self.agent_fail(reply, "the page cannot run scripts now");
+                };
+                let wait = Wait::TypeFocus {
+                    id: id.0,
+                    tab,
+                    at,
+                    text,
+                    submit,
+                    before,
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            Then::Upload { paths } => {
+                self.agent_wait(reply, Wait::Chooser { tab, paths }, UPLOAD_CHOOSER_WAIT);
+            }
             Then::Dragged => self.agent_dragged(reply),
             Then::Answer(answer) => self.agent_send(reply, ToolResult::text(answer), Outcome::Done),
         }
@@ -2809,6 +3093,191 @@ impl Host {
             Fence::Pointer(at.0, at.1),
             Then::Answer("filled"),
         );
+    }
+
+    /// `type`: refuses dropdown roles up front; then, at the element, what has focus is kept,
+    /// the click sent, and the text typed only where [`forms::classify_type_focus`] allows.
+    fn agent_type(&mut self, reply: Reply, tab: TabId, target: &str, text: Secret, submit: bool) {
+        let Some((item, _, _)) = self.agent_item(tab, target) else {
+            return self.agent_fail(reply, "stale ref: take a new snapshot");
+        };
+        if let Some(why) = forms::type_role_refusal(&item.role) {
+            return self.agent_refuse(reply, why);
+        }
+        let mark = self.agents.fresh();
+        let act = Act::Type { text, submit, mark };
+        self.agent_act(reply, tab, target, None, act);
+    }
+
+    /// The page's answer to [`forms::type_focus_script`]: the text is typed only where
+    /// [`forms::classify_type_focus`] allows.
+    #[allow(clippy::too_many_arguments)]
+    fn agent_type_focused(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        at: (f64, f64),
+        text: Secret,
+        submit: bool,
+        before: Option<String>,
+        result: &Result<String, String>,
+    ) {
+        let json = match result {
+            Ok(json) => json,
+            Err(e) => {
+                return self
+                    .agent_fail(reply, &format!("could not verify focus before typing: {e}"));
+            }
+        };
+        if let Err(why) = forms::parse_type_focus(json) {
+            return self.agent_refuse(reply, &why);
+        }
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_fail(reply, "the tab has no page");
+        };
+        view.edit(EditCommand::SelectAll);
+        view.ime_commit(text.expose());
+        let then = if submit {
+            if let Err(e) = self.agent_keys(tab, "Enter") {
+                return self.agent_fail(reply, &e);
+            }
+            Then::Submitted { before }
+        } else {
+            Then::Settle("typed".into())
+        };
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        self.agent_fence(reply, tab, Fence::Pointer(at.0, at.1), then);
+    }
+
+    /// `select`: resolves a `<select>` in the page's own document and picks `option`.
+    fn agent_select(&mut self, reply: Reply, tab: TabId, target: &str, option: String) {
+        let Some((item, _, top)) = self.agent_item(tab, target) else {
+            return self.agent_fail(reply, "stale ref: take a new snapshot");
+        };
+        if !top {
+            return self.agent_refuse(
+                reply,
+                "select works only on the page's own document, not in a frame",
+            );
+        }
+        if item.id <= 0 {
+            return self.agent_fail(reply, "the element cannot be reached");
+        }
+        let params = json!({ "backendNodeId": item.id });
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("DOM.scrollIntoViewIfNeeded", &params))
+        {
+            Some(id) => {
+                let wait = Wait::Select {
+                    id: id.0,
+                    tab,
+                    node: item.id,
+                    option,
+                    stage: Selecting::Revealing,
+                    group: format!("{SELECT_GROUP}-{}", self.agents.fresh()),
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            None => self.agent_fail(reply, "the page cannot be reached now"),
+        }
+    }
+
+    /// DevTools' answer to one stage of `select`.
+    fn agent_selected(&mut self, p: Pending, result: &Result<Value, String>) {
+        let Wait::Select {
+            tab,
+            node,
+            option,
+            stage,
+            group,
+            ..
+        } = p.wait
+        else {
+            return;
+        };
+        match stage {
+            Selecting::Revealing => {
+                if let Err(e) = result {
+                    return self
+                        .agent_fail(p.reply, &format!("the element cannot be reached: {e}"));
+                }
+                let params = json!({ "backendNodeId": node, "objectGroup": group });
+                match self
+                    .tab_view(tab)
+                    .and_then(|v| v.cdp("DOM.resolveNode", &params))
+                {
+                    Some(id) => {
+                        let wait = Wait::Select {
+                            id: id.0,
+                            tab,
+                            node,
+                            option,
+                            stage: Selecting::Resolving,
+                            group,
+                        };
+                        self.agent_wait(p.reply, wait, WAIT);
+                    }
+                    None => self.agent_fail(p.reply, "the page cannot be reached now"),
+                }
+            }
+            Selecting::Resolving => {
+                let v = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.agent_release_group(tab, &group);
+                        return self
+                            .agent_fail(p.reply, &format!("the element cannot be resolved: {e}"));
+                    }
+                };
+                let Some(object_id) = v.pointer("/object/objectId").and_then(Value::as_str) else {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_fail(p.reply, "the element could not be resolved to a node");
+                };
+                let params = json!({
+                    "objectId": object_id,
+                    "functionDeclaration": forms::select_option_script(),
+                    "arguments": [{ "value": option }],
+                    "returnByValue": true,
+                });
+                match self
+                    .tab_view(tab)
+                    .and_then(|v| v.cdp("Runtime.callFunctionOn", &params))
+                {
+                    Some(id) => {
+                        let wait = Wait::Select {
+                            id: id.0,
+                            tab,
+                            node,
+                            option,
+                            stage: Selecting::Applying,
+                            group,
+                        };
+                        self.agent_wait(p.reply, wait, WAIT);
+                    }
+                    None => {
+                        self.agent_release_group(tab, &group);
+                        self.agent_fail(p.reply, "the page cannot run scripts now");
+                    }
+                }
+            }
+            Selecting::Applying => {
+                self.agent_release_group(tab, &group);
+                let v = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return self.agent_fail(p.reply, &format!("could not select option: {e}"));
+                    }
+                };
+                if let Some(thrown) = v.get("exceptionDetails") {
+                    return self.agent_fail(p.reply, &forms::select_threw(thrown));
+                }
+                match forms::format_select_result(&v["result"]["value"], &option) {
+                    Ok(msg) => self.agent_settle(p.reply, tab, msg),
+                    Err(why) => self.agent_fail(p.reply, &why),
+                }
+            }
+        }
     }
 
     /// `press_key`: the chord to the page, unless it is one of wubble's shortcuts
@@ -3075,7 +3544,21 @@ impl Host {
     /// Lets the page drop the values `evaluate` held (its object group); the answer means
     /// nothing.
     fn agent_release_values(&mut self, tab: TabId) {
-        let params = json!({ "objectGroup": EVAL_GROUP });
+        self.agent_release_group(tab, EVAL_GROUP);
+    }
+
+    /// A waiting call that ends without its answer (timed out, or dropped with its session, its
+    /// connection or a refused navigation): the object group it holds, if any, released.
+    fn agent_let_go(&mut self, wait: &Wait) {
+        if let Some((tab, group)) = held_group(wait) {
+            let group = group.to_owned();
+            self.agent_release_group(tab, &group);
+        }
+    }
+
+    /// Lets the page drop a DevTools object group; the answer means nothing.
+    fn agent_release_group(&mut self, tab: TabId, group: &str) {
+        let params = json!({ "objectGroup": group });
         if let Some(id) = self
             .tab_view(tab)
             .and_then(|v| v.cdp("Runtime.releaseObjectGroup", &params))
@@ -3166,6 +3649,437 @@ impl Host {
         }
     }
 
+    /// `upload_file`: validates local file paths, logs only their file names, and clicks `target`
+    /// with the upload armed so `Host::run_chooser` answers Chromium directly without an OS dialog.
+    fn agent_upload(&mut self, mut reply: Reply, tab: TabId, target: &str, paths: Vec<String>) {
+        let origin = self.agent_origin(tab);
+        reply.target = Some(upload_log(&paths, origin.as_deref()));
+        if upload::upload_in_flight(&self.agent_stages(tab)) {
+            return self.agent_refuse(
+                reply,
+                "another upload_file is in flight on this tab: wait for its answer",
+            );
+        }
+        // the file system is asked on a thread of its own, the answer awaited with a deadline
+        let nonce = self.agents.fresh();
+        let checking = std::thread::Builder::new()
+            .name("wubble-upload-paths".into())
+            .spawn(move || {
+                let checked = validate_upload_paths(&paths);
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.agent_paths(nonce, checked));
+                });
+            });
+        if let Err(e) = checking {
+            return self.agent_fail(reply, &format!("the paths cannot be checked now: {e}"));
+        }
+        let wait = Wait::Paths {
+            nonce,
+            tab,
+            target: target.to_owned(),
+        };
+        self.agent_wait(reply, wait, UPLOAD_PATHS_WAIT);
+    }
+
+    /// `upload_file`'s paths, checked: on to its element.
+    fn agent_paths(&mut self, nonce: u64, checked: Result<Vec<PathBuf>, String>) {
+        let Some(i) = self
+            .agents
+            .pending
+            .iter()
+            .position(|p| matches!(p.wait, Wait::Paths { nonce: n, .. } if n == nonce))
+        else {
+            return;
+        };
+        let mut p = self.agents.pending.remove(i);
+        self.agent_arm();
+        let Wait::Paths { tab, target, .. } = p.wait else {
+            return;
+        };
+        match checked {
+            Ok(paths) => {
+                let origin = self.agent_origin(tab);
+                p.reply.target = Some(upload_log(&paths, origin.as_deref()));
+                self.agent_upload_to(p.reply, tab, &target, paths)
+            }
+            Err(why) => self.agent_fail(p.reply, &why),
+        }
+    }
+
+    /// The origin of `tab`'s page, if it is on the web.
+    fn agent_origin(&self, tab: TabId) -> Option<String> {
+        wubble_core::autofill::web_origin(&self.agent_url(tab))
+    }
+
+    /// `upload_file`'s files to the element `target` names: an `<input type=file>` of the page's
+    /// own document (frames of its process among it) takes them directly; anything else, or an
+    /// element of another process's frame, is clicked ([`Host::agent_input`]) for its chooser.
+    fn agent_upload_to(&mut self, reply: Reply, tab: TabId, target: &str, paths: Vec<PathBuf>) {
+        let Some((item, _, top)) = self.agent_item(tab, target) else {
+            return self.agent_fail(reply, "stale ref: take a new snapshot");
+        };
+        if !top || item.id <= 0 {
+            return self.agent_act(reply, tab, target, None, Act::Upload { paths });
+        }
+        let fallback = Some(target.to_owned());
+        self.agent_upload_node(reply, tab, i64::from(item.id), paths, fallback);
+    }
+
+    /// Resolves `node`, the element `upload_file`'s files may go to, in a group of its own.
+    fn agent_upload_node(
+        &mut self,
+        reply: Reply,
+        tab: TabId,
+        node: i64,
+        paths: Vec<PathBuf>,
+        fallback: Option<String>,
+    ) {
+        let group = format!("{UPLOAD_GROUP}-{}", self.agents.fresh());
+        let params = json!({ "backendNodeId": node, "objectGroup": group });
+        match self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("DOM.resolveNode", &params))
+        {
+            Some(id) => {
+                let wait = Wait::UploadTo {
+                    id: id.0,
+                    tab,
+                    node,
+                    paths,
+                    stage: Uploading::Resolving,
+                    group,
+                    object: None,
+                    fallback,
+                };
+                self.agent_wait(reply, wait, WAIT);
+            }
+            None => self.agent_fail(reply, "the page cannot be reached now"),
+        }
+    }
+
+    /// DevTools' answer to one stage of `upload_file` at its node.
+    fn agent_uploading(&mut self, p: Pending, result: &Result<Value, String>) {
+        let Wait::UploadTo {
+            tab,
+            node,
+            paths,
+            stage,
+            group,
+            object,
+            fallback,
+            ..
+        } = p.wait
+        else {
+            return;
+        };
+        let mut reply = p.reply;
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.agent_release_group(tab, &group);
+                let why = match stage {
+                    Uploading::Setting => format!("the file input did not take the files: {e}"),
+                    _ => format!("the element cannot be reached: {e}"),
+                };
+                return self.agent_fail(reply, &why);
+            }
+        };
+        let wait = |stage, object| Wait::UploadTo {
+            id: 0,
+            tab,
+            node,
+            paths: paths.clone(),
+            stage,
+            group: group.clone(),
+            object,
+            fallback: fallback.clone(),
+        };
+        match stage {
+            Uploading::Resolving => {
+                let Some(object) = v.pointer("/object/objectId").and_then(Value::as_str) else {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_fail(reply, "the element could not be resolved to a node");
+                };
+                let params = json!({
+                    "objectId": object,
+                    "functionDeclaration": upload::TARGET_SCRIPT,
+                    "returnByValue": true,
+                });
+                let next = wait(Uploading::Reading, Some(object.to_owned()));
+                self.agent_upload_step(reply, "Runtime.callFunctionOn", &params, next);
+            }
+            Uploading::Reading => {
+                let Some(found) = upload::parse_target(v) else {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_fail(reply, "the element could not be read");
+                };
+                if found.file {
+                    reply.target = Some(upload_log(&paths, Some(&found.origin)));
+                }
+                if !found.file {
+                    self.agent_release_group(tab, &group);
+                    return match fallback {
+                        // not a file input: clicked, for the chooser it opens
+                        Some(target) => {
+                            self.agent_act(reply, tab, &target, None, Act::Upload { paths })
+                        }
+                        None => self.agent_fail(
+                            reply,
+                            "the chooser named an element that is no file input",
+                        ),
+                    };
+                }
+                if let Err(why) = upload::fits(&found, paths.len()) {
+                    self.agent_release_group(tab, &group);
+                    return self.agent_refuse(reply, why);
+                }
+                let allowed = self.agent_grant_of(tab).is_some_and(|(_, grant)| {
+                    found.origin != "null" && agent::may_go(&grant, &found.origin).is_ok()
+                });
+                if !allowed {
+                    self.agent_release_group(tab, &group);
+                    let why = format!(
+                        "the file input is in a document of {}, not one of this session's sites",
+                        found.origin
+                    );
+                    return self.agent_refuse(reply, &why);
+                }
+                let files: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                let params = json!({ "files": files, "objectId": object });
+                let next = wait(Uploading::Setting, object.clone());
+                self.agent_upload_step(reply, "DOM.setFileInputFiles", &params, next);
+            }
+            Uploading::Setting => {
+                self.agent_release_group(tab, &group);
+                self.agent_uploaded(reply, tab, node, &paths);
+            }
+        }
+    }
+
+    /// The next DevTools call of `upload_file` at its node, and `wait` (its id set) for its
+    /// answer.
+    fn agent_upload_step(&mut self, reply: Reply, method: &str, params: &Value, mut wait: Wait) {
+        let tab = wait_tab(&wait);
+        let sent = tab
+            .and_then(|tab| self.tab_view(tab))
+            .and_then(|v| v.cdp(method, params));
+        match (sent, &mut wait) {
+            (Some(sent), Wait::UploadTo { id, .. }) => {
+                *id = sent.0;
+                self.agent_wait(reply, wait, WAIT);
+            }
+            _ => {
+                if let Wait::UploadTo { tab, group, .. } = &wait {
+                    let (tab, group) = (*tab, group.clone());
+                    self.agent_release_group(tab, &group);
+                }
+                self.agent_fail(reply, "the page cannot be reached now");
+            }
+        }
+    }
+
+    /// The files are in the input: the answer once the page's tree shows them.
+    fn agent_uploaded(&mut self, reply: Reply, tab: TabId, node: i64, paths: &[PathBuf]) {
+        let names: Vec<String> = paths
+            .iter()
+            .filter_map(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        let answer = format!("uploaded {}", names.join(", "));
+        let wait = Wait::Uploaded {
+            tab,
+            node,
+            markers: upload::markers(&names),
+            answer,
+        };
+        self.agent_wait(reply, wait, UPLOAD_AX_WAIT);
+    }
+
+    /// A file chooser DevTools caught in `tab` (`Page.fileChooserOpened`, while
+    /// [`Host::agent_intercept`] asks for them): a clicked `upload_file`'s files go to the
+    /// element that opened it ([`upload::chooser`]).
+    pub(super) fn agent_intercepted(
+        &mut self,
+        tab: TabId,
+        opened: &wubble_engine::cdp::ChooserOpened,
+    ) {
+        let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
+        let clicked =
+            self.agents.pending.iter().position(|p| {
+                wait_tab(&p.wait) == Some(tab) && stage(&p.wait) == Stage::UploadClicked
+            });
+        let files = clicked.map_or(0, |i| match &self.agents.pending[i].wait {
+            Wait::Chooser { paths, .. }
+            | Wait::Input {
+                then: Then::Upload { paths },
+                ..
+            } => paths.len(),
+            _ => 0,
+        });
+        let opened_by = upload::Opened::DevTools {
+            multiple: opened.multiple,
+        };
+        let decision = upload::chooser(mode, &self.agent_stages(tab), opened_by, files);
+        let answered = matches!(
+            decision,
+            upload::Chooser::Answer | upload::Chooser::Refuse(_)
+        );
+        let Some(i) = clicked.filter(|_| answered) else {
+            if decision == upload::Chooser::Cancel {
+                self.agent_chooser_cancelled(tab, upload::CHOOSER_CANCELLED);
+            }
+            // otherwise no call waits for it: DevTools showed nothing
+            return;
+        };
+        let p = self.agents.pending.remove(i);
+        let paths = match p.wait {
+            Wait::Chooser { paths, .. } => paths,
+            Wait::Input {
+                id,
+                then: Then::Upload { paths },
+                ..
+            } => {
+                self.agents.ignored.push(id);
+                paths
+            }
+            _ => return self.agent_arm(),
+        };
+        match (decision, opened.node) {
+            (upload::Chooser::Refuse(why), _) => self.agent_refuse(p.reply, why),
+            (_, Some(node)) => self.agent_upload_node(p.reply, tab, node, paths, None),
+            (_, None) => self.agent_fail(p.reply, "the file chooser named no element"),
+        }
+        self.agent_arm();
+    }
+
+    /// The tabs with an `upload_file` in flight.
+    fn agent_uploading_tabs(&self) -> std::collections::BTreeSet<TabId> {
+        self.agents
+            .pending
+            .iter()
+            .filter(|p| upload::upload_in_flight(&[stage(&p.wait)]))
+            .filter_map(|p| wait_tab(&p.wait))
+            .collect()
+    }
+
+    /// Each tab's DevTools session intercepts file choosers while an `upload_file` is in flight
+    /// there: asked for as the call begins, so it is in place well before its click (asked for
+    /// with the click, the renderer was seen to take the click first and the chooser reached
+    /// CEF's `OnFileDialog`). It ends after the turn its call ended in, never between two steps
+    /// of the call (each takes the call out of the waiting list and puts it back).
+    fn agent_intercept(&mut self) {
+        let wanted = self.agent_uploading_tabs();
+        let on: Vec<TabId> = wanted
+            .difference(&self.agents.intercepting)
+            .copied()
+            .collect();
+        for tab in on {
+            self.agent_set_intercept(tab, true);
+        }
+        if self
+            .agents
+            .intercepting
+            .difference(&wanted)
+            .next()
+            .is_some()
+        {
+            slint::Timer::single_shot(Duration::ZERO, || {
+                with_host(|host| {
+                    let wanted = host.agent_uploading_tabs();
+                    let off: Vec<TabId> = host
+                        .agents
+                        .intercepting
+                        .difference(&wanted)
+                        .copied()
+                        .collect();
+                    for tab in off {
+                        host.agent_set_intercept(tab, false);
+                    }
+                })
+            });
+        }
+    }
+
+    /// `Page.setInterceptFileChooserDialog` on `tab`'s page.
+    fn agent_set_intercept(&mut self, tab: TabId, enabled: bool) {
+        let params = json!({ "enabled": enabled });
+        let sent = self
+            .tab_view(tab)
+            .and_then(|v| v.cdp("Page.setInterceptFileChooserDialog", &params));
+        if let Some(id) = sent {
+            self.agents.ignored.push(id.0);
+        }
+        // a tab without a page has no session to ask (or to keep asking)
+        if enabled && sent.is_some() {
+            self.agents.intercepting.insert(tab);
+        } else {
+            self.agents.intercepting.remove(&tab);
+        }
+    }
+
+    /// A file chooser CEF shows in `tab` (`OnFileDialog`: DevTools did not catch it), as
+    /// [`upload::chooser`] decides: the owner's goes on to the OS dialog (false); any other in a
+    /// session's tab is cancelled, logged, and the calls whose input or script may have opened
+    /// it fail (a clicked `upload_file` with [`upload::CHOOSER_UNREACHED`], the others with the
+    /// advice to use `upload_file`).
+    pub(super) fn agent_chooser(&mut self, tab: TabId, id: RequestId) -> bool {
+        let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
+        match upload::chooser(mode, &self.agent_stages(tab), upload::Opened::Dialog, 0) {
+            upload::Chooser::Owner => false,
+            _ => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_file_chooser(id, None);
+                }
+                self.agent_chooser_cancelled(tab, upload::CHOOSER_UNREACHED);
+                true
+            }
+        }
+    }
+
+    /// A chooser cancelled in `tab`: logged, and the calls in flight there whose input or
+    /// script may have opened it fail ([`upload::CHOOSER_CANCELLED`]; a clicked upload with
+    /// `clicked`).
+    fn agent_chooser_cancelled(&mut self, tab: TabId, clicked: &str) {
+        if let Some((session, _)) = self.agent_grant_of(tab) {
+            self.agent_log(&session, "file_chooser_blocked", None, Outcome::Refused);
+        }
+        let (hit, kept): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut self.agents.pending)
+            .into_iter()
+            .partition(|p| {
+                wait_tab(&p.wait) == Some(tab)
+                    && matches!(stage(&p.wait), Stage::Input | Stage::UploadClicked)
+            });
+        self.agents.pending = kept;
+        for p in hit {
+            // a DevTools call or script it waits on answers into nothing
+            if let Some(id) = answer_id(&p.wait) {
+                self.agents.ignored.push(id);
+            }
+            if matches!(p.wait, Wait::Eval { .. }) {
+                self.agent_release_values(tab);
+            }
+            let why = match stage(&p.wait) {
+                Stage::UploadClicked => clicked,
+                _ => upload::CHOOSER_CANCELLED,
+            };
+            self.agent_fail(p.reply, why);
+        }
+        self.agent_arm();
+    }
+
+    /// What each call waiting on `tab` is doing ([`stage`]).
+    fn agent_stages(&self, tab: TabId) -> Vec<Stage> {
+        self.agents
+            .pending
+            .iter()
+            .filter(|p| wait_tab(&p.wait) == Some(tab))
+            .map(|p| stage(&p.wait))
+            .collect()
+    }
+
     // ----- waiting
 
     fn agent_wait(&mut self, reply: Reply, wait: Wait, within: Duration) {
@@ -3177,8 +4091,10 @@ impl Host {
         self.agent_arm();
     }
 
-    /// The deadline timer, at the first call's deadline.
+    /// The deadline timer, at the first call's deadline; and each tab's chooser interception
+    /// as its calls want it.
     fn agent_arm(&mut self) {
+        self.agent_intercept();
         let Some(first) = self.agents.pending.iter().map(|p| p.deadline).min() else {
             self.agents.timer.stop();
             return;
@@ -3397,6 +4313,7 @@ impl Host {
             );
         }
         for p in on_tab {
+            self.agent_let_go(&p.wait);
             self.agent_fail(p.reply, &note);
         }
         self.agent_arm();
@@ -3486,17 +4403,12 @@ impl Host {
             self.agents.ignored.swap_remove(i);
             return true;
         }
-        let Some(i) = self.agents.pending.iter().position(|p| match p.wait {
-            Wait::Eval { id: w, .. }
-            | Wait::Article { id: w, .. }
-            | Wait::Shot { id: w }
-            | Wait::Scroll { id: w, .. }
-            | Wait::Locate { id: w, .. }
-            | Wait::Metrics { id: w, .. }
-            | Wait::Focus { id: w, .. }
-            | Wait::Input { id: w, .. } => w == id,
-            _ => false,
-        }) else {
+        let Some(i) = self
+            .agents
+            .pending
+            .iter()
+            .position(|p| answer_id(&p.wait) == Some(id))
+        else {
             return false;
         };
         let p = self.agents.pending.remove(i);
@@ -3603,6 +4515,38 @@ impl Host {
                 };
                 self.agent_focused(p.reply, tab, at, text, &name, &href, password);
             }
+            (Wait::TypeMark { .. }, PageEvent::EvalResult { result, .. }) => {
+                let Wait::TypeMark { tab, at, act, .. } = p.wait else {
+                    return true;
+                };
+                match result {
+                    Ok(_) => self.agent_input(p.reply, tab, at.0, at.1, act),
+                    Err(e) => {
+                        let why = format!("could not read focus before clicking: {e}");
+                        self.agent_fail(p.reply, &why);
+                    }
+                }
+            }
+            (Wait::TypeFocus { .. }, PageEvent::EvalResult { result, .. }) => {
+                let Wait::TypeFocus {
+                    tab,
+                    at,
+                    text,
+                    submit,
+                    before,
+                    ..
+                } = p.wait
+                else {
+                    return true;
+                };
+                self.agent_type_focused(p.reply, tab, at, text, submit, before, result);
+            }
+            (Wait::Select { .. }, PageEvent::CdpReply { result, .. }) => {
+                self.agent_selected(p, result);
+            }
+            (Wait::UploadTo { .. }, PageEvent::CdpReply { result, .. }) => {
+                self.agent_uploading(p, result);
+            }
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
         true
@@ -3680,13 +4624,25 @@ impl Host {
             | Wait::Settle { tab, .. }
             | Wait::Shown { tab }
             | Wait::Started { tab, .. }
+            | Wait::Chooser { tab, .. }
+            | Wait::Uploaded { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
                 return None;
             }
+            Wait::Paths { .. } if late => {
+                let why = format!(
+                    "the file system did not answer within {} s (a hung network mount?): \
+                     nothing was uploaded",
+                    UPLOAD_PATHS_WAIT.as_secs()
+                );
+                self.agent_fail(p.reply, &why);
+                return None;
+            }
             // answered by the page or the vault; only their deadline is checked here
             _ if late => {
+                self.agent_let_go(&p.wait);
                 self.agent_fail(p.reply, "the page did not answer in time");
                 return None;
             }
@@ -3770,6 +4726,28 @@ impl Host {
                 let (tab, within, max) = (*tab, within.clone(), *max);
                 self.agent_read(tab, within.as_deref(), max)
             }
+            Wait::Chooser { .. } => {
+                late.then_some(Err("clicking the element did not open a file chooser"))
+            }
+            Wait::Uploaded {
+                node,
+                markers,
+                answer,
+                ..
+            } => {
+                let input = page.and_then(|t| {
+                    t.flatten(ALL_ITEMS)
+                        .into_iter()
+                        .find(|i| Some(i.tree.as_str()) == t.document() && i64::from(i.id) == *node)
+                });
+                let input = input.as_ref().map(|i| (i.name.as_str(), i.value.as_str()));
+                upload::tree_wait(input, markers, late).map(|end| match end {
+                    upload::TreeWait::Shows | upload::TreeWait::Unshown => Ok(answer.clone()),
+                    upload::TreeWait::Late => {
+                        Ok(format!("{answer} (the page's tree did not change)"))
+                    }
+                })
+            }
             _ => None,
         };
         match done {
@@ -3830,6 +4808,9 @@ impl Host {
                 return self.fail(format!("the activity log holds a filled value: {text}"));
             }
             run.copy_logged |= tool == "share_sign_ins" && text.starts_with("cookies for ");
+            if tool == "upload_file" {
+                run.uploads_logged.push((text.to_owned(), outcome));
+            }
         }
         let entry = Entry {
             session: session.clone(),
@@ -4048,6 +5029,25 @@ impl Host {
                     "sign-ins: copies {:?} (want {want:?}), the owner keeps {:?} of 2, logged {}, \
                      the session's container gone {gone}",
                     run.copied, run.owner_kept, run.copy_logged
+                ));
+            }
+            // the owner's log: each upload's paths whole, and the page's origin they went into
+            let whole = |text: &str| {
+                text.split(" into ")
+                    .next()
+                    .is_some_and(|paths| paths.split(", ").all(|p| Path::new(p).is_absolute()))
+            };
+            let logged = |done: bool| {
+                run.uploads_logged.iter().any(|(text, outcome)| {
+                    (*outcome == Outcome::Done) == done
+                        && whole(text)
+                        && text.contains(" into http://127.0.0.1:")
+                })
+            };
+            if !logged(true) || !logged(false) {
+                return self.fail(format!(
+                    "upload_file's activity log lines: {:?}: want full paths and the page's origin",
+                    run.uploads_logged
                 ));
             }
             // the key chip on the shared site only (both have a saved login)
@@ -4635,5 +5635,156 @@ mod tests {
             ]
         );
         assert_eq!(parts("GH_ID")[0], ("a".into(), Password));
+    }
+
+    #[test]
+    fn a_select_holds_its_own_group_from_resolving_to_its_answer() {
+        let at = |stage| Wait::Select {
+            id: 1,
+            tab: TabId(3),
+            node: 9,
+            option: "x".into(),
+            stage,
+            group: "wubble-agent-select-7".into(),
+        };
+        // nothing is held while the element is only scrolled into view
+        assert_eq!(held_group(&at(Selecting::Revealing)), None);
+        for stage in [Selecting::Resolving, Selecting::Applying] {
+            assert_eq!(
+                held_group(&at(stage)),
+                Some((TabId(3), "wubble-agent-select-7"))
+            );
+        }
+        assert_eq!(held_group(&Wait::Shot { id: 1 }), None);
+    }
+
+    #[test]
+    fn an_upload_holds_its_own_group_from_resolving_its_node() {
+        for stage in [Uploading::Resolving, Uploading::Reading, Uploading::Setting] {
+            let wait = Wait::UploadTo {
+                id: 1,
+                tab: TabId(3),
+                node: 9,
+                paths: vec![],
+                stage,
+                group: "wubble-agent-upload-4".into(),
+                object: None,
+                fallback: None,
+            };
+            assert_eq!(held_group(&wait), Some((TabId(3), "wubble-agent-upload-4")));
+        }
+    }
+
+    #[test]
+    fn every_stage_of_an_upload_counts_as_one_in_flight() {
+        let tab = TabId(3);
+        let paths = || vec![PathBuf::from("/tmp/a.pdf")];
+        let viewport = Bounds::default();
+        let early = [
+            Wait::Locate {
+                id: 1,
+                tab,
+                node: 9,
+                stage: Locating::Revealing,
+                at: None,
+                viewport,
+                act: Act::Upload { paths: paths() },
+            },
+            Wait::Scroll {
+                id: 1,
+                tab,
+                bounds: viewport,
+                viewport,
+                act: Act::Upload { paths: paths() },
+            },
+            Wait::Uploaded {
+                tab,
+                node: 9,
+                markers: vec![],
+                answer: String::new(),
+            },
+        ];
+        for wait in &early {
+            assert_eq!(stage(wait), Stage::Upload);
+            assert!(upload::upload_in_flight(&[stage(wait)]));
+        }
+        let clicked = [
+            Wait::Input {
+                id: 1,
+                tab,
+                asked: 0,
+                load: Load::Asked,
+                then: Then::Upload { paths: paths() },
+            },
+            Wait::Chooser {
+                tab,
+                paths: paths(),
+            },
+        ];
+        for wait in &clicked {
+            assert_eq!(stage(wait), Stage::UploadClicked);
+        }
+        // a click's own stages are input, not an upload
+        let click = Wait::Input {
+            id: 1,
+            tab,
+            asked: 0,
+            load: Load::Asked,
+            then: Then::Settle("clicked".into()),
+        };
+        assert_eq!(stage(&click), Stage::Input);
+        let locating_click = Wait::Locate {
+            id: 1,
+            tab,
+            node: 9,
+            stage: Locating::Measuring,
+            at: None,
+            viewport,
+            act: Act::Click {
+                button: MouseButton::Left,
+                count: 1,
+            },
+        };
+        assert!(!upload::upload_in_flight(&[
+            stage(&click),
+            stage(&locating_click)
+        ]));
+    }
+
+    #[test]
+    fn upload_paths_are_checked_and_logged_whole() {
+        let dir = std::env::temp_dir().join(format!("wubble-upload-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("resume.pdf");
+        std::fs::write(&file, b"%PDF-1.4").unwrap();
+
+        let ok = validate_upload_paths(&[file.to_string_lossy().into_owned()]).unwrap();
+        assert_eq!(ok.len(), 1);
+        assert_eq!(ok[0], std::fs::canonicalize(&file).unwrap());
+
+        assert!(validate_upload_paths(&[]).is_err());
+        assert!(validate_upload_paths(&["".into()]).is_err());
+        assert!(
+            validate_upload_paths(&[dir.join("missing.pdf").to_string_lossy().into_owned()])
+                .is_err()
+        );
+        assert!(validate_upload_paths(&[dir.to_string_lossy().into_owned()]).is_err());
+
+        // the owner's log keeps every path whole, and where they went
+        assert_eq!(
+            upload_log(
+                &["/home/alice/secret-dir/resume.pdf"],
+                Some("https://a.test")
+            ),
+            "/home/alice/secret-dir/resume.pdf into https://a.test"
+        );
+        assert_eq!(
+            upload_log(
+                &[PathBuf::from("/a/b/one.txt"), PathBuf::from("/c/two.pdf")],
+                None
+            ),
+            "/a/b/one.txt, /c/two.pdf"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

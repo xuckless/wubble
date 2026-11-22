@@ -122,6 +122,35 @@ impl NavRequests {
     }
 }
 
+/// `Page.fileChooserOpened`, sent instead of a file chooser while the page's DevTools session
+/// intercepts them (`Page.setInterceptFileChooserDialog`; handler `page_handler.cc`,
+/// `PageHandler::FileChooserOpened`, BSD-3-Clause, called, nothing copied): the chooser was not
+/// shown, and the element that opened it takes files through `DOM.setFileInputFiles` by its
+/// backend node id, as Puppeteer's and Playwright's file choosers do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChooserOpened {
+    /// The frame whose element opened it.
+    pub frame: String,
+    /// `selectMultiple` (an `<input multiple>`), else one file.
+    pub multiple: bool,
+    /// The `<input type=file>` that opened it, when DevTools names one.
+    pub node: Option<i64>,
+}
+
+/// The [`ChooserOpened`] one DevTools message carries, if it is that event.
+pub fn chooser_opened(text: &str) -> Option<ChooserOpened> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    if value["method"] != "Page.fileChooserOpened" {
+        return None;
+    }
+    let params = &value["params"];
+    Some(ChooserOpened {
+        frame: params["frameId"].as_str().unwrap_or_default().to_owned(),
+        multiple: params["mode"] == "selectMultiple",
+        node: params["backendNodeId"].as_i64(),
+    })
+}
+
 /// A call that keeps a view's document-start scripts as wanted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DocCall {
@@ -405,6 +434,37 @@ mod tests {
         n.read(r#"{"id":12,"result":{}}"#);
         n.read("not json");
         assert_eq!(n.count(), 2);
+    }
+
+    #[test]
+    fn a_chooser_devtools_intercepted_names_its_frame_mode_and_element() {
+        assert_eq!(
+            chooser_opened(
+                r#"{"method":"Page.fileChooserOpened","params":{"frameId":"F1","mode":"selectMultiple","backendNodeId":42}}"#
+            ),
+            Some(ChooserOpened {
+                frame: "F1".into(),
+                multiple: true,
+                node: Some(42)
+            })
+        );
+        assert_eq!(
+            chooser_opened(
+                r#"{"method":"Page.fileChooserOpened","params":{"frameId":"F1","mode":"selectSingle"}}"#
+            ),
+            Some(ChooserOpened {
+                frame: "F1".into(),
+                multiple: false,
+                node: None
+            })
+        );
+        for other in [
+            r#"{"method":"Page.frameNavigated","params":{}}"#,
+            r#"{"id":1000001,"result":{}}"#,
+            "not json",
+        ] {
+            assert_eq!(chooser_opened(other), None, "{other}");
+        }
     }
 
     #[test]

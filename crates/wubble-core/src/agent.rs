@@ -7,6 +7,7 @@
 //! [`Grant::secret_for`] says the page's origin is the login's. Generating a token, showing the
 //! sheet, opening and tearing down the session's Space are [`Effect`]s the host executes.
 
+pub mod forms;
 pub mod harness;
 pub mod hosting;
 pub mod jsonc;
@@ -15,6 +16,7 @@ pub mod log;
 pub mod manifest;
 pub mod refs;
 pub mod spot;
+pub mod upload;
 
 use std::collections::BTreeMap;
 use std::fmt;

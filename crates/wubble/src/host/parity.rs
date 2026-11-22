@@ -717,6 +717,13 @@ impl Host {
                 let open = window.get_command_bar_state() == CommandBarState::Open;
                 is(open == want, format!("command bar open: {open}"))
             }
+            HostCheck::BarGone => {
+                let state = window.get_command_bar_state();
+                is(
+                    state == CommandBarState::Closed,
+                    format!("command bar {state:?}"),
+                )
+            }
             HostCheck::FindOpen(want) => {
                 let open = self
                     .model

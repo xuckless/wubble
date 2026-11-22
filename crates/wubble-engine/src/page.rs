@@ -597,6 +597,9 @@ pub enum PageEvent {
         id: crate::cdp::CdpId,
         result: Result<serde_json::Value, String>,
     },
+    /// The page opened a file chooser while its DevTools session intercepts them
+    /// (`View::cdp` of `Page.setInterceptFileChooserDialog`): none was shown.
+    ChooserIntercepted(crate::cdp::ChooserOpened),
     /// The answer to `View::eval`: the script's value as JSON text, or why it
     /// failed (it threw, or the page went away first).
     EvalResult {
