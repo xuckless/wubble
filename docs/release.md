@@ -7,8 +7,8 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
 ## Where things are
 
 - Tags `v<version>` on GitHub Releases of `xuckless/wubble`; each release holds
-  `wubble-<V>-<platform>.tar.xz` (platforms `linux-x86_64`, `macos-aarch64`), the Linux
-  `.debug.tar.xz` (split symbols), the `.dmg`, a `.sha256` and a `.minisig` for each, and
+  `wubble-<V>-<platform>.tar.xz` (platforms `linux-x86_64`, `macos-aarch64`), each platform's
+  `.debug.tar.xz` (Linux: split symbols; macOS: `wubble.dSYM` and `wubble-helper.dSYM`), the `.dmg`, a `.sha256` and a `.minisig` for each, and
   `latest.json` (+ `.minisig`), the signed update manifest.
 - The rolling release `updates` (a prerelease, never "latest") holds `preview.json` and, from the
   first stable version on, `stable.json`, each with its `.minisig`: byte copies of the newest
@@ -44,7 +44,11 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    `xcrun notarytool store-credentials`). It builds `wubble-ffmpeg` with Xcode's tools
    (no Homebrew), puts it in `Contents/MacOS` and signs it, then signs inside out with
    `scripts/release/macos/entitlements.plist`, notarises and staples the app and the DMG, and
-   writes `dist/wubble-<V>-macos-aarch64.tar.xz`, `.dmg` and their `.sha256`.
+   writes `dist/wubble-<V>-macos-aarch64.tar.xz`, `.dmg`, `.debug.tar.xz` and their `.sha256`. The
+   build keeps symbols for the dSYMs (environment overrides of the `dist` profile) and the app's
+   executables are stripped after bundling (`strip`), each checked against its dSYM's UUID; a
+   `--no-build` run needs a build that kept them. Upload the `.debug.tar.xz` with the release, as
+   Linux's (not signed into the manifest: nothing installs it).
 4. Sign on this box (the key never leaves it: `~/.config/wubble-release/`), with the key's text and
    its password in two environment variables:
    `wubble-release sign --key-env K --password-env P dist/wubble-<V>-<platform>.tar.xz`, then
