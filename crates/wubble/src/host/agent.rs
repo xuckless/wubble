@@ -935,7 +935,8 @@ fn source_spaces(model: &wubble_core::model::Model) -> Vec<(SpaceId, String, Con
     model
         .spaces
         .iter()
-        .filter(|s| !s.agent)
+        // a private window's sign-ins are never an agent's to copy
+        .filter(|s| !s.agent && !s.private)
         .map(|s| (s.id, s.name.clone(), s.container))
         .collect()
 }

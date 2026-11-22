@@ -12,6 +12,9 @@
 //!   is left out of its Space's window. Pip windows are left out (their tab stays its Space's).
 //! - Only live tabs (with a page) are listed; indices stay contiguous.
 //! - The focused window is the Model's last one.
+//! - Private windows (a private Space's Main window, a private tab's Little or Popup window) and
+//!   their tabs are left out: extensions do not run in them (Chrome's "Allow in Incognito" is
+//!   off by default).
 
 use crate::model::Model;
 use crate::pages::InternalPage;
@@ -59,9 +62,13 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
         .windows
         .iter()
         .rev()
+        .filter(|w| !model.is_private_window(w.id))
         .find_map(|w| w.space().map(|_| w.id));
     let mut out = Projection::default();
     for w in &model.windows {
+        if model.is_private_window(w.id) {
+            continue;
+        }
         let kind = match w.shown {
             Shown::Space(_) => ExtWindowKind::Normal,
             Shown::Little(_) | Shown::Popup(_) => ExtWindowKind::Popup,
@@ -81,7 +88,11 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
                     listed.extend(space_tabs(s, true));
                 }
                 if Some(w.id) == focused_main {
-                    for s in model.spaces.iter().filter(|s| !shown.contains(&s.id)) {
+                    for s in model
+                        .spaces
+                        .iter()
+                        .filter(|s| !s.private && !shown.contains(&s.id))
+                    {
                         listed.extend(space_tabs(s, false));
                     }
                 }

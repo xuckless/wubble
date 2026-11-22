@@ -2208,8 +2208,17 @@ impl Host {
     /// A link the user opened in a new tab (or one from the command line): where the routing
     /// rules say, else beside `opener` in the active Space. Typed addresses, pop-ups,
     /// background tabs and same-tab navigation are not routed.
+    /// In a private window no rule applies: its links stay in it (Chrome's incognito window).
     pub(super) fn open_routed(&mut self, url: String, opener: Option<TabId>) {
-        let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+        let private = opener.map_or_else(
+            || self.model.is_private_space(self.model.active_space()),
+            |t| self.model.is_private_tab(t),
+        );
+        let routed = if private {
+            wubble_core::routing::Routed::default()
+        } else {
+            wubble_core::routing::resolve(&self.model, &self.routing_rules, &url)
+        };
         self.open_in(url, routed.space, routed.container, opener);
     }
 

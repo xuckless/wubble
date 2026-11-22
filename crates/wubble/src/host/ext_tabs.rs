@@ -60,7 +60,9 @@ impl ExtHost for Host {
 }
 
 /// The command that opens `url` for an extension in `container`: in the Space of the Main
-/// window `window` names, else in the active Space; shown when `active`.
+/// window `window` names, else in the active Space (a private window is none of an
+/// extension's: its tab opens in the last normal window, `Model::normal_space`); shown when
+/// `active`.
 fn open_command(
     model: &Model,
     url: &str,
@@ -70,7 +72,8 @@ fn open_command(
 ) -> Command {
     let space = window
         .and_then(|w| model.windows.iter().find(|x| x.id == w))
-        .and_then(|w| w.space());
+        .and_then(|w| w.space())
+        .filter(|&s| !model.is_private_space(s));
     Command::ExtensionTab {
         url: opened_url(url).to_owned(),
         container,
@@ -119,8 +122,15 @@ pub(crate) fn serve(host: &mut impl ExtHost) {
                 host.engine().answer_open_tab(request, answer);
                 continue;
             }
-            ExtRequest::CloseTab(view) => host.tab_of(view).map(Command::CloseTab),
-            ExtRequest::ActivateTab(view) => host.tab_of(view).map(Command::ActivateTab),
+            // a private window's tab is none of an extension's
+            ExtRequest::CloseTab(view) => host
+                .tab_of(view)
+                .filter(|&t| !host.model().is_private_tab(t))
+                .map(Command::CloseTab),
+            ExtRequest::ActivateTab(view) => host
+                .tab_of(view)
+                .filter(|&t| !host.model().is_private_tab(t))
+                .map(Command::ActivateTab),
             ExtRequest::ActionChanged { extension } => {
                 let _ = extension;
                 host.action_changed();
