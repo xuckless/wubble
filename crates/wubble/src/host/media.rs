@@ -975,6 +975,13 @@ impl Host {
         let empty = TabMedia::default();
         let list = self.media.tabs.get(&tab).unwrap_or(&empty);
         if !self.media.settings.ask_each_time && !protected {
+            let busy = self
+                .media_latest(tab)
+                .and_then(|id| self.media.runs.get(&id))
+                .is_some_and(|r| r.job.is_live() || matches!(r.job, Job::Joining { .. }));
+            if busy {
+                return;
+            }
             let can_join = wubble_engine::save::find_ffmpeg().is_some();
             let first = list.items.iter().find_map(|i| match &i.found {
                 Found::Ready(variants) => {
@@ -1524,6 +1531,13 @@ impl Host {
             run.note.clone(),
             run.size,
         );
+        if let Err(why) = self.media_dir() {
+            eprintln!("wubble: media: {why}");
+            if let Some(window) = self.w.window.upgrade() {
+                self.toast(&window, &format!("Cannot save the video: {why}"));
+            }
+            return;
+        }
         self.media_release(id);
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);

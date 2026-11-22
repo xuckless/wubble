@@ -335,10 +335,12 @@ enum Wait {
     /// `read_text`'s article script.
     Article {
         id: u64,
+        tab: TabId,
         max: usize,
     },
     Shot {
         id: u64,
+        tab: TabId,
     },
     /// An element of a frame was out of view: the page was asked to scroll it to the middle.
     Scroll {
@@ -637,6 +639,8 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::Moved { tab, .. }
         | Wait::Tree { tab, .. }
         | Wait::Eval { tab, .. }
+        | Wait::Article { tab, .. }
+        | Wait::Shot { tab, .. }
         | Wait::Scroll { tab, .. }
         | Wait::Locate { tab, .. }
         | Wait::Metrics { tab, .. }
@@ -653,7 +657,6 @@ fn wait_tab(wait: &Wait) -> Option<TabId> {
         | Wait::UploadTo { tab, .. }
         | Wait::Uploaded { tab, .. }
         | Wait::Settle { tab, .. } => Some(*tab),
-        _ => None,
     }
 }
 
@@ -662,7 +665,7 @@ fn answer_id(wait: &Wait) -> Option<u64> {
     match *wait {
         Wait::Eval { id, .. }
         | Wait::Article { id, .. }
-        | Wait::Shot { id }
+        | Wait::Shot { id, .. }
         | Wait::Scroll { id, .. }
         | Wait::Locate { id, .. }
         | Wait::Metrics { id, .. }
@@ -1459,6 +1462,14 @@ impl Host {
         }
         let sites = sites.join(", ");
         let (target, outcome, event) = match &report {
+            Ok(r) if r.taken > 0 && r.set == 0 => (
+                format!(
+                    "cookies for {sites} from Space {space} not copied (0 of {} accepted)",
+                    r.taken
+                ),
+                Outcome::Failed,
+                Event::CookiesNotCopied,
+            ),
             Ok(r) => (
                 format!(
                     "cookies for {sites} copied from Space {space} ({} of {})",
@@ -2551,7 +2562,7 @@ impl Host {
         let Some(r) = within else {
             let script = crate::pagescripts::reader_text();
             return match self.tab_view(tab).and_then(|v| v.eval(&script)) {
-                Some(id) => self.agent_wait(reply, Wait::Article { id: id.0, max }, WAIT),
+                Some(id) => self.agent_wait(reply, Wait::Article { id: id.0, tab, max }, WAIT),
                 None => self.agent_fail(reply, "the page cannot run scripts now"),
             };
         };
@@ -2825,6 +2836,13 @@ impl Host {
     /// per [`WHEEL_TICK`] as a mouse wheel turns (Chromium takes a burst of ticks at once as one
     /// gesture it may drop); the answer after the last.
     fn agent_wheel(&mut self, reply: Reply, tab: TabId, point: Point, step: (f64, f64), left: u32) {
+        let owns = reply.session.as_ref().is_some_and(|session| {
+            self.agent_grant_of(tab)
+                .is_some_and(|(holder, _)| holder == *session)
+        });
+        if !owns {
+            return;
+        }
         let Some(view) = self.tab_view(tab) else {
             return self.agent_fail(reply, "the tab has no page");
         };
@@ -3364,7 +3382,7 @@ impl Host {
             .tab_view(tab)
             .and_then(|v| v.cdp("Page.captureScreenshot", &params))
         {
-            Some(id) => self.agent_wait(reply, Wait::Shot { id: id.0 }, WAIT),
+            Some(id) => self.agent_wait(reply, Wait::Shot { id: id.0, tab }, WAIT),
             None => self.agent_fail(reply, "the page cannot be captured now"),
         }
     }
@@ -4110,7 +4128,7 @@ impl Host {
     /// A web event of `tab`: the start, then the end, of a load lets `navigate` go on. A
     /// session's tab that commits an address off the web (a script's `location`, a redirect
     /// Chromium let through) is taken back to a blank page.
-    pub(super) fn agent_web(&mut self, tab: TabId, event: &WebEvent) {
+    pub(super) fn agent_web(&mut self, tab: TabId, event: &WebEvent) -> bool {
         let step = |load: Load| match (load, event) {
             (
                 Load::Asked,
@@ -4138,16 +4156,19 @@ impl Host {
                     eprintln!("wubble: agent: a session tab reached {url}: taken back");
                     self.agent_refused(tab, url);
                     self.agent_take_back(tab);
+                    return true;
                 }
                 Some(_) => {
                     self.agents.last_at.insert(tab, url.clone());
                 }
                 None if !agent::is_web(url) && !agent::is_blank(url) => {
                     self.agent_backstop(tab, url);
+                    return true;
                 }
                 None => {}
             }
         }
+        false
     }
 
     /// Whether the window shows `tab` in its pane with a frame of its own at its view's size:
@@ -4283,7 +4304,22 @@ impl Host {
             });
             if let Some(view) = self.tab_view(tab) {
                 view.set_navigation_rule(rule);
-                self.agents.rules.insert(view_id, grant);
+                let nav_url = view.nav().page.url.clone();
+                self.agents.rules.insert(view_id, grant.clone());
+                if let Some(grant) = grant {
+                    let current = if nav_url.is_empty() {
+                        self.agent_url(tab)
+                    } else {
+                        nav_url
+                    };
+                    if !current.is_empty() && agent::may_go(&grant, &current).is_err() {
+                        eprintln!(
+                            "wubble: agent: tab on {current} entered a session that refuses it: taken back"
+                        );
+                        self.agent_refused(tab, &current);
+                        self.agent_take_back(tab);
+                    }
+                }
             }
         }
     }
@@ -5655,7 +5691,7 @@ mod tests {
                 Some((TabId(3), "wubble-agent-select-7"))
             );
         }
-        assert_eq!(held_group(&Wait::Shot { id: 1 }), None);
+        assert_eq!(held_group(&Wait::Shot { id: 1, tab: TabId(3) }), None);
     }
 
     #[test]

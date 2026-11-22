@@ -1631,7 +1631,7 @@ impl Host {
             self.ax_smoke_step(crate::ax_smoke::Input::Title(title));
         }
         self.parity_web(&event);
-        self.agent_web(tab, &event);
+        let taken_back = self.agent_web(tab, &event);
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         if self.checks.video_smoke.is_some() {
@@ -1660,6 +1660,9 @@ impl Host {
                 }
             }
             WebEvent::UrlChanged(url) => {
+                if taken_back {
+                    return;
+                }
                 self.held_popups.remove(&tab);
                 self.media_navigated(tab, &url);
                 self.autofill_navigated(tab, &url);
@@ -1692,7 +1695,7 @@ impl Host {
                 self.dispatch(Command::RendererGone(tab));
             }
             WebEvent::KeyUnhandled { key, editable } => {
-                if Some(tab) == self.shown()
+                if Some(tab) == self.key_page()
                     && let Some(action) = self.page_first.unhandled(key)
                 {
                     self.perform_unhandled(action, editable);
@@ -2018,12 +2021,10 @@ impl Host {
                 }
             }
             Plan::View(op) => {
-                if let Some(tab) = self.shown() {
-                    self.typed_nav.ended(tab);
-                }
-                let Some(tab) = self.shown() else {
+                let Some(tab) = self.key_page().or_else(|| self.shown()) else {
                     return;
                 };
+                self.typed_nav.ended(tab);
                 let zoom_default = self.zoom_default;
                 let Some(view) = self.tab_view(tab) else {
                     return;

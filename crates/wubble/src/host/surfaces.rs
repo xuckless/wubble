@@ -90,7 +90,9 @@ impl Host {
         let routed = surface::route(event);
         // A page beside the focused one that asks something takes the focus, so its question
         // shows instead of blocking it unseen.
-        if !visible
+        let driven = self.agent_drives(tab);
+        if !driven
+            && !visible
             && self.model.window_tabs(self.w.id).contains(&tab)
             && matches!(
                 routed,
@@ -100,10 +102,12 @@ impl Host {
             self.dispatch(Command::ActivateTab(tab));
         }
         // A page's question closes the user's overlays over its tab (wubble_core::overlay).
-        if matches!(
-            routed,
-            Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
-        ) {
+        if !driven
+            && matches!(
+                routed,
+                Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
+            )
+        {
             self.overlay_open(Kind::Dialog, Some(tab));
         }
         match routed {
@@ -245,6 +249,23 @@ impl Host {
 
     /// Runs one dialog event; whether an answer reached the engine.
     pub(super) fn apply_dialog(&mut self, tab: TabId, event: DialogEvent) -> Option<bool> {
+        if self.agent_drives(tab) {
+            if let DialogEvent::Requested(req) = event {
+                let accept = req.kind.default_accept();
+                if let Some((session, _)) = self.agent_grant_of(tab) {
+                    self.agent_log(
+                        &session,
+                        "dialog_dismissed",
+                        Some(req.origin),
+                        wubble_core::agent::log::Outcome::Refused,
+                    );
+                }
+                return self
+                    .tab_view(tab)
+                    .map(|view| view.answer_dialog(req.id, accept, ""));
+            }
+            return None;
+        }
         let s = self.surfaces.entry(tab).or_default();
         let (next, answer) = surface::dialog(std::mem::take(&mut s.dialog), event);
         s.dialog = next;
@@ -296,6 +317,22 @@ impl Host {
     }
 
     pub(super) fn apply_auth(&mut self, tab: TabId, event: AuthEvent) {
+        if self.agent_drives(tab) {
+            if let AuthEvent::Requested(req) = event {
+                if let Some((session, _)) = self.agent_grant_of(tab) {
+                    self.agent_log(
+                        &session,
+                        "auth_refused",
+                        Some(req.host),
+                        wubble_core::agent::log::Outcome::Refused,
+                    );
+                }
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_auth(req.id, None);
+                }
+            }
+            return;
+        }
         let s = self.surfaces.entry(tab).or_default();
         let (next, answer) = prompt::auth(std::mem::take(&mut s.auth), event);
         s.auth = next;
@@ -313,6 +350,20 @@ impl Host {
     /// A certificate error: proceeds at once past one the user allowed this
     /// session; otherwise the panel holds the request for the user.
     fn certificate(&mut self, tab: TabId, id: RequestId, url: String, code: i32) {
+        if self.agent_drives(tab) {
+            if let Some((session, _)) = self.agent_grant_of(tab) {
+                self.agent_log(
+                    &session,
+                    "certificate_refused",
+                    Some(url),
+                    wubble_core::agent::log::Outcome::Refused,
+                );
+            }
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_certificate(id, false);
+            }
+            return;
+        }
         if zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code)) {
             if let Some(view) = self.tab_view(tab) {
                 view.answer_certificate(id, true);
@@ -616,9 +667,14 @@ impl Host {
                 ..window.get_page_error()
             }
         });
-        window.set_find(find_view(&current.find, self.find_focus));
-        // the popup is the key page's: the peek's while it has the keys
+        // the find bar and popup are the key page's: the peek's while it has the keys
         let keys = self.key_page();
+        let find = keys
+            .or(tab)
+            .and_then(|t| self.surfaces.get(&t))
+            .map(|s| &s.find)
+            .unwrap_or(&current.find);
+        window.set_find(find_view(find, self.find_focus));
         let popup = keys
             .and_then(|t| self.surfaces.get(&t))
             .and_then(|s| s.popup);
@@ -719,7 +775,7 @@ impl Host {
     }
 
     pub fn find_event(&mut self, event: FindEvent) {
-        if let Some(tab) = self.shown() {
+        if let Some(tab) = self.key_page().or_else(|| self.shown()) {
             if event == FindEvent::Open && !self.overlay_open(Kind::Find, Some(tab)) {
                 return;
             }

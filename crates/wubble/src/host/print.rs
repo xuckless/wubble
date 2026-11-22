@@ -282,11 +282,15 @@ impl Host {
         let opening = matches!(event, Event::Open { .. });
         // the sheet takes the place of another overlay, or waits for a page's dialog
         // (wubble_core::overlay)
-        if let Event::Open { tab, .. } = &event
-            && self.print == Sheet::Closed
-            && !self.overlay_open(wubble_core::overlay::Kind::PrintSheet, Some(*tab))
-        {
-            return;
+        if let Event::Open { tab, .. } = &event {
+            if !self.views.contains_key(tab) {
+                return;
+            }
+            if self.print == Sheet::Closed
+                && !self.overlay_open(wubble_core::overlay::Kind::PrintSheet, Some(*tab))
+            {
+                return;
+            }
         }
         let url = match &self.print {
             Sheet::Open { tab, .. } | Sheet::Working { tab, .. } => {
