@@ -10,6 +10,7 @@
 //! `None`). The scene's own random draws (the liquid's seeding, `stir`) are the scene's: this
 //! machine's `Random` carries only the body's and the minis' draws, in the web's order.
 
+use super::calm::{self, Calm, CalmEvent};
 use super::minis::{Circle, Minis, Throw};
 use super::rand::{Random, Rng};
 use super::softbody::{PopState, Release, SoftBody, age_waves, push_wave};
@@ -88,6 +89,9 @@ pub enum Event {
     Tick {
         dt: f64,
     },
+    /// Input elsewhere in the window (a key, typing in the search field, a pointer outside the
+    /// stage) or the window shown again: wakes a settled page ([`Calm`]). wubble's own.
+    Wake,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +145,8 @@ pub struct Living<R: Random = Rng> {
     spawn_t: f64,
     pub active: bool,
     pub still: bool,
+    /// Whether it is settling or at rest (wubble's, the owner's: [`super::calm`]).
+    pub calm: Calm,
     rng: R,
 }
 
@@ -158,6 +164,7 @@ impl<R: Random> Living<R> {
             spawn_t: K::spawn_first,
             active: true,
             still: false,
+            calm: Calm::default(),
             rng,
         }
     }
@@ -196,9 +203,19 @@ impl<R: Random> Living<R> {
             return;
         }
         let dt = dt.min(crate::kit_gen::physics::DT_CAP);
+        // wubble: the settle ([`calm`]) scales the time of the body, the minis and the scene;
+        // the click waves and the pops keep the real rate, so they end and are gone
+        let busy =
+            self.body.grab.held() || !self.body.state.waves.is_empty() || !self.pops.is_empty();
+        self.calm = calm::transition(self.calm, CalmEvent::Tick { dt, busy });
+        let k = self.calm.scale();
+        let real = dt;
+        let dt = dt * k;
         let still = self.still;
         self.body.wobble = if still { 0.0 } else { self.opts.wobble };
-        self.body.step(dt);
+        if k > 0.0 {
+            self.body.step(dt);
+        }
         if self.opts.ambient && !still {
             self.spawn_t -= dt;
             if self.spawn_t <= 0.0 {
@@ -224,13 +241,14 @@ impl<R: Random> Living<R> {
         self.minis.step(dt, self.time, &avoid, &mut self.rng);
         self.take_pops(fx);
         // `scene.frame(still ? dt * .3 : dt)`; a scene with no size yet does nothing
-        let frame_dt = if still { dt * K::still_time } else { dt };
+        let pace = if still { K::still_time } else { 1.0 };
+        let (frame_dt, real_dt) = (dt * pace, real * pace);
         if self.size.0 > 0.0 {
             self.time += frame_dt;
-            age_waves(&mut self.body.state.waves, frame_dt);
+            age_waves(&mut self.body.state.waves, real_dt);
             // the pops are aged as they are drawn (`age += lastDt`, then dropped at `life`)
             self.pops.retain_mut(|p| {
-                p.age += frame_dt;
+                p.age += real_dt;
                 p.age < p.life
             });
         }
@@ -240,6 +258,17 @@ impl<R: Random> Living<R> {
 /// One event. Pure: the state in, the next state and the effects out.
 pub fn transition<R: Random>(mut s: Living<R>, e: Event) -> (Living<R>, Vec<Effect>) {
     let mut fx = Vec::new();
+    // wubble: every input, a new size, a change of motion or being shown wakes a settled page
+    let wakes = match e {
+        Event::Resize { w, h } => (w, h) != s.size,
+        Event::Reduced(on) => on != s.still,
+        Event::Active(on) => on,
+        Event::Tick { .. } => false,
+        _ => true,
+    };
+    if wakes {
+        s.calm = calm::transition(s.calm, CalmEvent::Input);
+    }
     match e {
         Event::Resize { w, h } => {
             s.size = (w, h);
@@ -316,6 +345,7 @@ pub fn transition<R: Random>(mut s: Living<R>, e: Event) -> (Living<R>, Vec<Effe
         Event::Active(on) => s.active = on,
         Event::Reduced(on) => s.still = on,
         Event::Tick { dt } => s.tick(dt, &mut fx),
+        Event::Wake => {}
     }
     (s, fx)
 }
@@ -364,6 +394,140 @@ mod tests {
             let (l, _) = transition(l, Event::Tick { dt });
             assert_eq!((l.body.t, l.time, l.body.center()), before);
         }
+    }
+
+    #[test]
+    fn left_alone_it_settles_and_rests_and_any_input_wakes_it() {
+        use crate::start::rand::Rng;
+        let fresh = || {
+            transition(
+                Living::new(Options::new_tab(), Rng::new(7)),
+                Event::Resize {
+                    w: 1000.0,
+                    h: 800.0,
+                },
+            )
+            .0
+        };
+        let run = |mut l: Living<Rng>, seconds: f64| {
+            for _ in 0..(seconds / DT).round() as usize {
+                l = transition(l, Event::Tick { dt: DT }).0;
+            }
+            l
+        };
+        // poked: its wave runs out at the real rate, then it settles and rests
+        let (l, _) = transition(fresh(), Event::Poke { rim: Some(true) });
+        assert!(!l.body.state.waves.is_empty());
+        let l = run(l, calm::IDLE_AFTER + calm::SETTLE + 1.0);
+        assert!(l.calm.resting(), "{:?}", l.calm);
+        assert!(l.body.state.waves.is_empty() && l.pops.is_empty());
+        // at rest nothing moves
+        let frozen = |l: &Living<Rng>| {
+            (
+                l.time,
+                l.body.center(),
+                l.body.state.ring,
+                l.minis.list.iter().map(|m| (m.x, m.y)).collect::<Vec<_>>(),
+            )
+        };
+        let before = frozen(&l);
+        let l = run(l, 5.0);
+        assert_eq!(frozen(&l), before);
+        // every kind of input wakes it on the spot: the next tick moves
+        let wakes = [
+            Event::Move {
+                x: 1.0,
+                y: 2.0,
+                t_ms: 0.0,
+            },
+            Event::Down {
+                x: 1.0,
+                y: 2.0,
+                t_ms: 0.0,
+            },
+            Event::Leave,
+            Event::Poke { rim: None },
+            Event::Wake,
+            Event::Resize { w: 900.0, h: 800.0 },
+            Event::Reduced(true),
+        ];
+        for e in wakes {
+            let (woken, _) = transition(l.clone(), e);
+            assert_eq!(woken.calm.scale(), 1.0, "{e:?}");
+            let woken = run(woken, DT);
+            assert!(woken.time > l.time, "{e:?}");
+        }
+        // hidden and shown again: woken
+        let (hidden, _) = transition(l.clone(), Event::Active(false));
+        assert!(hidden.calm.resting());
+        let (shown, _) = transition(hidden, Event::Active(true));
+        assert_eq!(shown.calm.scale(), 1.0);
+        // a hand held on the body keeps it awake however long
+        let c = fresh().body.center();
+        let (held, _) = transition(
+            fresh(),
+            Event::Down {
+                x: c.0,
+                y: c.1,
+                t_ms: 0.0,
+            },
+        );
+        assert!(held.body.grab.held());
+        let held = run(held, calm::IDLE_AFTER * 3.0);
+        assert_eq!(held.calm.scale(), 1.0);
+    }
+
+    #[test]
+    fn the_settle_slows_everything_to_a_stop_without_a_jump() {
+        use crate::start::rand::Rng;
+        let mut l = transition(
+            Living::new(Options::new_tab(), Rng::new(11)),
+            Event::Resize {
+                w: 1000.0,
+                h: 800.0,
+            },
+        )
+        .0;
+        // how far the body's rim and the minis move in one tick, the largest point
+        let moved = |a: &Living<Rng>, b: &Living<Rng>| {
+            let rim = a
+                .body
+                .ring
+                .iter()
+                .zip(&b.body.ring)
+                .map(|(x, y)| f64::from((x - y).abs()))
+                .fold(0.0, f64::max);
+            let minis = a
+                .minis
+                .list
+                .iter()
+                .zip(&b.minis.list)
+                .map(|(m, n)| (m.x - n.x).hypot(m.y - n.y))
+                .fold(0.0, f64::max);
+            let (ca, cb) = (a.body.center(), b.body.center());
+            rim.max(minis).max((ca.0 - cb.0).hypot(ca.1 - cb.1))
+        };
+        let (mut live_max, mut settle_max, mut last_settle) = (0.0f64, 0.0f64, 0.0f64);
+        while !l.calm.resting() {
+            let next = transition(l.clone(), Event::Tick { dt: DT }).0;
+            let d = if l.minis.list.len() == next.minis.list.len() {
+                moved(&l, &next)
+            } else {
+                0.0
+            };
+            match next.calm {
+                Calm::Live { idle } if idle > 1.0 => live_max = live_max.max(d),
+                Calm::Settling { .. } => {
+                    settle_max = settle_max.max(d);
+                    last_settle = d;
+                }
+                _ => {}
+            }
+            l = next;
+        }
+        // settling never moves faster than the page did alive, and its last step is tiny
+        assert!(settle_max <= live_max * 1.05, "{settle_max} vs {live_max}");
+        assert!(last_settle < live_max * 0.05, "{last_settle} vs {live_max}");
     }
 
     #[test]

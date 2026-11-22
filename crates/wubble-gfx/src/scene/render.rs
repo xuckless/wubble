@@ -58,9 +58,11 @@ use super::pages::{
     OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur, rect_of,
 };
 use super::quality::{BackdropClock, MAX_DT, Quality};
-use super::start::{self, Globals, StartCard, StartDraw, StartFx, bubble_u, pop_u};
+use super::start::{
+    self, Damage, DamageIn, Globals, StartCard, StartDraw, StartFx, bubble_u, pop_u,
+};
 use super::state::{
-    Backdrop, FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms,
+    Backdrop, FluidOp, FluidOptions, GlassSurface, Rect, Scene, SceneOptions, wave_uniforms,
 };
 use crate::import::poll_once;
 use crate::{GfxError, GpuContext, bytes};
@@ -399,6 +401,8 @@ pub struct Frame {
     /// Each [`OverLayer`]'s image by [`OverLayer::index`]: a new texture, or an empty image
     /// when the layer has no glass any more.
     pub over: [Option<slint::Image>; 3],
+    /// What this frame changed in those images ([`Damage`]): the host marks it for Slint.
+    pub damage: Damage,
 }
 
 // @source slint-render-arena
@@ -599,6 +603,12 @@ pub struct Renderer {
     start_palette: [[f32; 3]; 3],
     /// The W distance field (`uW`), once the host hands it over ([`Renderer::set_wfield`]).
     w_tex: Option<Target>,
+    /// What the last drawn frame's glass read ([`glass_key`]) and where its start card was:
+    /// the next frame's [`Damage`] is judged against them.
+    last_glass: Option<Vec<u8>>,
+    last_card: Option<StartCard>,
+    /// What the frames since [`Renderer::before_rendering`] last handed it on changed.
+    damage: Option<Damage>,
 }
 
 /// wubble: the start page's living layer: its own liquid (a second [`Scene`], `Liquid`) and
@@ -700,6 +710,9 @@ impl Renderer {
             start: None,
             start_palette: SceneOptions::default().palette,
             w_tex: None,
+            last_glass: None,
+            last_card: None,
+            damage: None,
         })
     }
 
@@ -849,9 +862,25 @@ impl Renderer {
     }
 
     /// Whether the scene moves on its own beyond the ambient drift ([`Scene::animating`]); a
-    /// shown start page always does (its liquid and bubble live).
+    /// shown start page does until it has settled ([`StartDraw::rest`]) and its liquid's
+    /// ripples, light and palette have come to rest.
     pub fn animating(&self) -> bool {
-        self.scene.animating() || self.start.is_some()
+        self.scene.animating()
+            || self
+                .start
+                .as_ref()
+                .is_some_and(|l| !l.draw.rest || l.scene.animating())
+    }
+
+    /// What the frames since the last call changed in the output and overlay images
+    /// ([`Damage`]; [`Renderer::before_rendering`] hands it to the host in [`Frame`]).
+    pub fn take_damage(&mut self) -> Damage {
+        self.damage.take().unwrap_or(Damage::Nothing)
+    }
+
+    /// The next frame is drawn whole, whatever it changed (a check's reference frame).
+    pub fn draw_whole_next(&mut self) {
+        self.last_glass = None;
     }
 
     /// The texture Slint shows, once the first frame has a size.
@@ -892,6 +921,7 @@ impl Renderer {
         };
         let mut frame = Frame {
             scene: tex.map(image).transpose()?,
+            damage: self.take_damage(),
             ..Frame::default()
         };
         for (slot, change) in frame.over.iter_mut().zip(self.take_over_changes()) {
@@ -951,6 +981,8 @@ impl Renderer {
         };
         let (ow, oh) = out_size(w, h, dpr);
         let out = target(d, ow, oh, OUT, "wubble scene");
+        // a new output holds nothing: its first frame is drawn whole
+        self.last_glass = None;
         let tex = out.tex.clone();
         self.sized = Some(Sized {
             fluid,
@@ -1075,13 +1107,18 @@ impl Renderer {
         // wubble: the page-inclusive pyramid `P`, when the page blur's rule says so
         let surfaces = self.scene.surfaces();
         let built = page_drawn(Some(&sz));
-        if page_blur(&self.page_in(&surfaces, now, backdrop.is_some(), built)) == PageBlur::Build {
+        let page_built =
+            page_blur(&self.page_in(&surfaces, now, backdrop.is_some(), built)) == PageBlur::Build;
+        if page_built {
             self.build_page(&mut enc, &mut sz);
             self.page_built = Some(now);
         }
 
         // wubble: the start page's living layer, into its card's image (start.rs)
         let card = self.start_passes(&mut enc, dt, pace);
+        let card_at = card
+            .as_ref()
+            .and_then(|_| self.start.as_ref().map(|l| l.draw.card));
 
         // 4. one pass on the output: backdrop, then the glass under the page (the beam inside
         // its panel's); then each overlay layer's glass in its own image
@@ -1093,6 +1130,7 @@ impl Renderer {
         let rects = self.page_rects();
         let blit = self.bind(&self.p.blit, &[Res::Tex(2, &py.bg.view)]);
         let mut glass = Vec::with_capacity(surfaces.len());
+        let mut key = Vec::with_capacity(surfaces.len() * (std::mem::size_of::<GlassU>() + 3));
         for s in &surfaces {
             // overlay glass over a pane frosts the page; the glass under the page mixes it in
             let over_page = s.layer.is_some() && overlaps(&rect_of(s), &rects);
@@ -1110,6 +1148,15 @@ impl Renderer {
                 gu.u_amb_level = AMBIENCE_LEVEL;
             }
             let amb = ambient.unwrap_or(levels);
+            glass_key(
+                &mut key,
+                &gu,
+                [
+                    s.layer.map_or(0, |l| l.index() as u8 + 1),
+                    u8::from(std::ptr::eq(levels, py)),
+                    u8::from(ambient.is_some()),
+                ],
+            );
             let u = self.arena.push(&gu);
             glass.push(self.bind(
                 &self.p.glass,
@@ -1123,8 +1170,34 @@ impl Renderer {
             ));
         }
         let layers = by_layer(&surfaces);
-        {
-            let mut rp = self.pass(&mut enc, "wubble scene out", &sz.out.view);
+        let damage = start::damage(&DamageIn {
+            new_targets: self.over_new.iter().any(|&n| n),
+            backdrop: backdrop.is_some(),
+            page_built,
+            glass: &key,
+            last_glass: self.last_glass.as_deref(),
+            card: card_at,
+            last_card: self.last_card,
+        });
+        self.damage = Some(self.damage.map_or(damage, |d| d.and(damage)));
+        self.last_glass = Some(key);
+        self.last_card = card_at;
+        // Only the card changed: the rest of `out` is kept (loaded, not cleared) and its card
+        // rectangle drawn again, backdrop and glass under the card's corners included: the same
+        // draws from the same inputs, so the same pixels. Nothing changed: nothing is drawn.
+        let scissor = match damage {
+            Damage::Whole => None,
+            Damage::Card(r) => Some(scissor_of(r, self.scene.w, &sz.out)),
+            Damage::Nothing => Some(None),
+        };
+        if scissor != Some(None) {
+            let mut rp = match scissor {
+                Some(Some(_)) => self.pass_load(&mut enc, "wubble scene out (card)", &sz.out.view),
+                _ => self.pass(&mut enc, "wubble scene out", &sz.out.view),
+            };
+            if let Some(Some((x, y, w, h))) = scissor {
+                rp.set_scissor_rect(x, y, w, h);
+            }
             rp.set_pipeline(&self.p.blit);
             rp.set_bind_group(0, &blit, &[]);
             rp.draw(0..4, 0..1);
@@ -1140,7 +1213,10 @@ impl Renderer {
                 rp.draw(0..4, 0..1);
             }
         }
-        self.draw_over(&mut enc, &sz.out, &layers, &glass);
+        // the overlay layers read only the glass: unchanged unless the whole frame changed
+        if damage == Damage::Whole {
+            self.draw_over(&mut enc, &sz.out, &layers, &glass);
+        }
 
         if let (Some(p), Some(q)) = (self.profiler.as_mut(), timer) {
             p.end_query(&mut enc, q);
@@ -1168,6 +1244,31 @@ impl Renderer {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
+    }
+
+    /// A render pass on `view` that keeps what it holds (a frame that redraws only part of it).
+    fn pass_load<'e>(
+        &self,
+        enc: &'e mut wgpu::CommandEncoder,
+        label: &str,
+        view: &wgpu::TextureView,
+    ) -> wgpu::RenderPass<'e> {
+        enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -1774,6 +1875,8 @@ impl Renderer {
         };
         let pace = pace * l.draw.pace.clamp(0.0, 1.0);
         l.scene.advance(dt, pace);
+        // a living liquid has no still work: its flags would keep `animating` up for ever
+        let _ = l.scene.take_still_work();
         if let Some(dt) = l.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
             let f = &mut sz.fluid;
             for op in l.scene.fluid_ops(dt) {
@@ -1852,6 +1955,29 @@ impl Renderer {
         l.sized = Some(sz);
         Some(card)
     }
+}
+
+/// wubble: what one glass surface's draw reads, appended to `key`: its uniforms and `inputs`
+/// (its layer, which levels it samples). `uTime` is left out where the shader does not read it
+/// (glass.wgsl reads it only for a film rim, `uFilm` > 0.001), so the clock alone is no change.
+fn glass_key(key: &mut Vec<u8>, gu: &GlassU, inputs: [u8; 3]) {
+    let mut gu = *gu;
+    if gu.u_film <= 0.001 {
+        gu.u_time = 0.0;
+    }
+    key.extend_from_slice(bytes(&gu));
+    key.extend_from_slice(&inputs);
+}
+
+/// wubble: a logical window rectangle as a scissor on `out` (physical px), rounded out to whole
+/// pixels and held inside the texture; `None` when nothing of it is inside.
+fn scissor_of(r: Rect, view_w: f32, out: &Target) -> Option<(u32, u32, u32, u32)> {
+    let k = out.w as f32 / view_w.max(1.0);
+    let x0 = (r.x * k).floor().clamp(0.0, out.w as f32) as u32;
+    let y0 = (r.y * k).floor().clamp(0.0, out.h as f32) as u32;
+    let x1 = ((r.x + r.w) * k).ceil().clamp(0.0, out.w as f32) as u32;
+    let y1 = ((r.y + r.h) * k).ceil().clamp(0.0, out.h as f32) as u32;
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, x1 - x0, y1 - y0))
 }
 
 // @source headless readback (crate/examples/headless.rs)

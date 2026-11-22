@@ -23,8 +23,8 @@ use wubble_core::start::rand::Rng;
 use wubble_core::tab::TabId;
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
-    Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect, Renderer,
-    SceneOptions, Signal, StartCard, Tier, out_size, view_of,
+    Backdrop, Beam, Damage, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect,
+    Renderer, SceneOptions, Signal, StartCard, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{
@@ -412,10 +412,14 @@ impl Glass {
         let full_rate = steady && s.run.state() == RunState::Running;
         let interval = since.filter(|_| full_rate);
         s.start_frame(window, since);
+        // the scene drew into the textures Slint already shows: Slint cannot see that, so the
+        // frame's damage is marked (the start page's card alone while nothing else moved)
+        let mut damage = Damage::Whole;
         match s.renderer.before_rendering(window.window(), now, pace) {
             // new textures only (first frame, resize, a layer's glass appearing or gone): see
             // `Renderer::before_rendering`
             Ok(frame) => {
+                damage = frame.damage;
                 if let Some(image) = frame.scene {
                     window.set_scene(image);
                 }
@@ -440,8 +444,11 @@ impl Glass {
         // a changed window size is a change like a changed glass list: it wakes a still scene
         s.run
             .frame_done(window, animating, glass.is_some() || resized);
-        // the scene drew into the textures Slint already shows: Slint cannot see that
-        crate::partial::mark_window(window.window());
+        match damage {
+            Damage::Whole => crate::partial::mark_window(window.window()),
+            Damage::Card(r) => crate::partial::mark_rect(window.window(), r.x, r.y, r.w, r.h),
+            Damage::Nothing => {}
+        }
         true
     }
 
@@ -485,10 +492,15 @@ impl Glass {
         }
     }
 
-    /// A window event that changes when the scene draws (`run_state::event_of`).
+    /// A window event that changes when the scene draws (`run_state::event_of`). Input and the
+    /// window shown again also wake a settled start page, on this same frame.
     pub fn run_event(&mut self, event: RunEvent, window: &AppWindow) {
         if let Glass::Scene(s) = self {
+            let woke = matches!(event, RunEvent::Activity | RunEvent::Shown) && s.start.wake();
             s.run.on(event, window);
+            if woke {
+                s.run.wake_if_still(window);
+            }
         }
     }
 

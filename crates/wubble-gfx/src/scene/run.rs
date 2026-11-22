@@ -172,6 +172,27 @@ mod tests {
     }
 
     #[test]
+    fn a_start_page_in_a_hidden_window_gets_no_tick() {
+        // a shown start page always moves (`Renderer::animating`): a frame every vsync
+        let moving = Needs {
+            scene_animating: true,
+            ..Needs::default()
+        };
+        assert_eq!(
+            transition(Running, moving.event()),
+            (Running, F::RequestFrame)
+        );
+        // hidden (covered, minimised): no frame is asked for, and a window render that comes
+        // anyway (the shell's own) renders no scene, so the bubble is not stepped
+        let (s, fx) = transition(Running, Hidden);
+        assert_eq!((s, fx), (Paused, F::None));
+        assert_eq!(transition(s, moving.event()), (Paused, F::None));
+        assert!(!scene_due(s, false, true, true));
+        // shown again: frames at once
+        assert_eq!(transition(s, Shown), (Running, F::RequestFrame));
+    }
+
+    #[test]
     fn the_scene_renders_only_when_due() {
         let cases = [
             // (state, covered, changed, page_due, due)

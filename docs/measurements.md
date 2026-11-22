@@ -536,3 +536,30 @@ resize: 428 stale frames, longest run 90.)
 - The start page redraws the whole window 60 times a second for ever (dirty share 1.0, no partial frames) and
   holds the main process at 51 % of a core.
 - A still page was redrawn 8.6 times a second (whole window each time); the rule on Linux is 0 to 2 in 4 s.
+
+## The start page's damage (Linux, 2026-11-21)
+
+`--measure idle --seconds 10 --measure-page wubble://start` under `scripts/headless.sh` (1360x880@1, 60 Hz, RTX
+5060), before and after a scene frame marks only the start page's card instead of the whole window. Linux numbers;
+the Mac is not measured yet.
+
+| | slint renders /s | scene renders /s | partial frames | dirty share | items a frame | Browser % | main % |
+|---|---|---|---|---|---|---|---|
+| before | 59.9 | 59.9 | 0 of 599 | 1.000 | 56.0 | 12.4 | 11.5 |
+| after | 59.8 | 59.8 | 598 of 598 | 0.783 | 20.0 | 8.5 | 8.1 |
+
+The card is 78 % of this window, and its liquid moves all over it every frame (the web's, which never settles), so
+that is as small as the region gets without changing the motion. `SLINT_SKIA_PARTIAL_RENDERING=verify`: 0 mismatches
+in the window; 1 px on the first (whole) frame, as on main.
+Browser CPU is noisy on this shared machine: the table is one pair at load 6; two more pairs at load 12 to 18 gave
+24.3 and 26.3 % before against 19.3 and 15.9 % after (renders fell to 48 and 36 a second under that load).
+
+After the settle (owner, 2026-11-21: 2 s without input, then 2 s to a stop), the same run, same machine:
+
+| `--measure-page wubble://start` | slint renders /s | scene renders /s | dirty share | Browser % |
+|---|---|---|---|---|
+| `--warmup 1` (awake, settling, then at rest) | 14.4 | 12.8 | 0.697 | 3.5 |
+| `--warmup 8` (at rest) | 2.0 | 0 | 0.018 | 0.8 |
+
+At rest the scene draws nothing; the 2 renders a second left are the search capsule's blinking caret (Slint's
+`TextInput`, the start page's focused field), 17 items in 1.8 % of the window each.

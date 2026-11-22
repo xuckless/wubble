@@ -65,6 +65,9 @@ the design rule each derives from. "was" marks a value L2 changed toward the des
 | `AMBIENCE_STRENGTH` | 0.20 | crates/wubble-gfx/src/scene/render.rs (glass `uAmb`) | owner-requested ambience (2026-11-19, "light from the webpage leaks into the navbar"); no web counterpart; started subtle, owner judges by eye |
 | `AMBIENCE_LEVEL` | 1.0 | render.rs (glass `uAmbLevel`) | which level of the page-inclusive pyramid: 1 = its 1/16 level (σ ≈ 44 CSS px, the frost's own), the falloff knob |
 | `AMBIENCE_HZ` | 8 | render.rs, pages.rs `page_blur` | update rate of the ambience on a changing page; wubble's cost budget, no web counterpart |
+| `calm::IDLE_AFTER` | 2 s (`kit_gen::living::idle_after`) | crates/wubble-core/src/start/calm.rs | the start page's settle (owner, 2026-11-21, "settle after a few seconds"): the web's own idle span (`core/living.ts:101`, its `auto` mode starts after it); the web never settles |
+| `calm::SETTLE` | 2 s (the same token) | calm.rs | how long the bubble and liquid take to slow to a stop: no web counterpart, the idle span reused |
+| `calm::EASE` | `tokens.motion.ease.inOut` | calm.rs | the settle's curve (time scale `1 - inOut(t / SETTLE)`): starts and ends gently, so the stop has no snap |
 
 ## Glass over bright pages: the contrast ceiling (qa1/glass)
 
