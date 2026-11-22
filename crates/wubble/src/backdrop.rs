@@ -32,6 +32,7 @@ use wubble_ui::{
 };
 
 use crate::host::start::{self, StagePointer, StartHost};
+use crate::measure::Count;
 
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
@@ -369,7 +370,7 @@ impl Glass {
         // as input does; a page's frames do not
         let tint = active_tint(window);
         if window.get_address_beam().strength > 0.0 || (tint.is_some() && tint != s.tint) {
-            s.run.wake_if_still(window);
+            s.run.wake_if_still(window, Count::WakeBeam);
         }
         let covered = window.get_page_fullscreen();
         let page_due = s.schedule_pages(window, now, covered);
@@ -487,19 +488,20 @@ impl Glass {
     pub fn set_ambience(&mut self, window: &AppWindow, strength: f32) {
         if let Glass::Scene(s) = self {
             s.renderer.set_ambience(strength);
-            s.run.wake_if_still(window);
+            s.run.wake_if_still(window, Count::WakeAmbience);
             window.window().request_redraw();
         }
     }
 
-    /// A window event that changes when the scene draws (`run_state::event_of`). Input and the
-    /// window shown again also wake a settled start page, on this same frame.
-    pub fn run_event(&mut self, event: RunEvent, window: &AppWindow) {
+    /// A window event that changes when the scene draws (`run_state::event_of`); `cause` is
+    /// what `--measure` counts if it wakes the scene. Input and the window shown again also wake
+    /// a settled start page, on this same frame.
+    pub fn run_event(&mut self, event: RunEvent, cause: Count, window: &AppWindow) {
         if let Glass::Scene(s) = self {
             let woke = matches!(event, RunEvent::Activity | RunEvent::Shown) && s.start.wake();
-            s.run.on(event, window);
+            s.run.on(event, cause, window);
             if woke {
-                s.run.wake_if_still(window);
+                s.run.wake_if_still(window, Count::WakeStart);
             }
         }
     }
@@ -521,7 +523,7 @@ impl Glass {
             s.renderer.start_end();
         }
         if was != shown {
-            s.run.wake_if_still(window);
+            s.run.wake_if_still(window, Count::WakeStart);
             window.window().request_redraw();
         }
     }
@@ -531,7 +533,7 @@ impl Glass {
         if let Glass::Scene(s) = self {
             let out = s.start.pointer(p, Instant::now());
             s.apply_start(window, out);
-            s.run.wake_if_still(window);
+            s.run.wake_if_still(window, Count::WakeStart);
         }
     }
 

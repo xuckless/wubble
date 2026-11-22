@@ -58,7 +58,7 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
     cargo run -p wubble -- --smoke block   # bundled page, injected list: two blocked, one `$redirect` stub that must run; run by hand only
     cargo run -p wubble -- --measure scroll   # also video, resize, typing: per-frame paint, copy and render times (`--seconds N`, `--out CSV`); hand run only
     cargo run -p wubble -- --measure scroll --begin-frames   # any windowed run (browser, smoke, measure) with the shell's begin frames; `--no-begin-frames`: CEF's own timer; without either, the platform's pacing (`pacing::PLATFORM_PACING`: macOS the shell's, elsewhere CEF's); the report's header names it (`pacing=shell|cef-timer`)
-    cargo run -p wubble -- --measure idle --seconds 20   # still page after a warm-up (`--warmup N`): renders, timers, process CPU; hand run only
+    cargo run -p wubble -- --measure idle --seconds 20   # still page after a warm-up (`--warmup N`): renders, timers, process CPU, and what woke the still scene each time (`scene_wake_pointer`, `_entered`, `_key`, `_touch`, `_shown`, `_beam`, `_ambience`, `_start`, `_change`); hand run only
     cargo run -p wubble -- --measure startup   # stages from `main` to first page pixels; hand run only
     cargo run -p wubble -- --measure blocker   # compile and cache-load cost of the default lists; hand run only
     cargo run -p wubble-engine --example frame_smoke   # windowless zero-copy and colour check

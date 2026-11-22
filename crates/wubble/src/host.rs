@@ -3381,7 +3381,10 @@ impl Host {
                 .with_winit_window(|w| w.is_minimized())
                 .flatten()
         }) {
-            self.w.glass.borrow_mut().run_event(e, &window);
+            self.w
+                .glass
+                .borrow_mut()
+                .run_event(e, crate::run_state::wake_of(event), &window);
             match e {
                 RunEvent::Hidden => self.occlusion(true),
                 RunEvent::Shown => self.occlusion(false),

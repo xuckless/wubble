@@ -184,10 +184,23 @@ pub enum Count {
     MeasureTick,
     /// The scene's run state changed.
     RunChange,
+    /// What woke a still or paused scene (`run_state::Runner::on`): the pointer moving,
+    /// pressing or scrolling; the pointer coming in; a key or the IME; a touch; the window
+    /// shown, focused or resized; the address beam or a Space's palette; the ambience; the start
+    /// page; a frame drawn for a change (glass list, size, page blur) that left something moving.
+    WakePointer,
+    WakeEntered,
+    WakeKey,
+    WakeTouch,
+    WakeShown,
+    WakeBeam,
+    WakeAmbience,
+    WakeStart,
+    WakeChange,
 }
 
 impl Count {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 21] = [
         Self::CefFrame,
         Self::CefFrameDamaged,
         Self::SlintRender,
@@ -200,6 +213,15 @@ impl Count {
         Self::Lifecycle,
         Self::MeasureTick,
         Self::RunChange,
+        Self::WakePointer,
+        Self::WakeEntered,
+        Self::WakeKey,
+        Self::WakeTouch,
+        Self::WakeShown,
+        Self::WakeBeam,
+        Self::WakeAmbience,
+        Self::WakeStart,
+        Self::WakeChange,
     ];
 
     pub fn name(self) -> &'static str {
@@ -216,6 +238,15 @@ impl Count {
             Self::MeasureTick => "measure_ticks",
             Self::RunChange => "run_state_changes",
             Self::CefFrameDamaged => "cef_frames_damaged",
+            Self::WakePointer => "scene_wake_pointer",
+            Self::WakeEntered => "scene_wake_entered",
+            Self::WakeKey => "scene_wake_key",
+            Self::WakeTouch => "scene_wake_touch",
+            Self::WakeShown => "scene_wake_shown",
+            Self::WakeBeam => "scene_wake_beam",
+            Self::WakeAmbience => "scene_wake_ambience",
+            Self::WakeStart => "scene_wake_start",
+            Self::WakeChange => "scene_wake_change",
         }
     }
 

@@ -563,6 +563,17 @@ pump gap 33.05 / 33.14; scroll 59.8 frames /s, 9 missed refreshes, pump gap p50 
 14.6 / 16.8); video 60.0, 0 missed (before: 60.0, 1). The same within this machine's noise: Linux runs seldom spend
 the slice.
 
+## The still page the Mac redrew (2026-11-21)
+
+`idle.txt` of the Mac runs above, from its CSV (in arrival order, so the pump gaps give a clock): all 86 renders came
+in two runs, about 2.5 to 3.5 s and 4.5 to 4.9 s into the 10 s recording, at 30 to 60 a second; nothing after.
+`run_state_changes` 8 (four wakes of the still scene and four settles), `cef_frames` 0 (no page frame: not an
+occlusion and show, which repaints the page), every render a whole-window scene frame. Linux: 0 renders, 0 changes.
+What woke it is not in that output; `--measure idle` now counts each wake by cause (`scene_wake_*`, smokes.md). The
+likeliest from the code, not confirmed: the pointer moving over the window (macOS sends winit `CursorEntered` and
+`CursorMoved` to a window that is not key; the light then catches up for about a second); the headless Linux runs
+never move the pointer.
+
 ## Shell pacing against CEF's timer, Linux (2026-11-21)
 
 Headless 1360x880@1, 60 Hz, RTX 5060, debug build of main (2372843), 10 s each (idle 4 s), one run each, load about 3.
