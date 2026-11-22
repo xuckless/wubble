@@ -4022,12 +4022,7 @@ impl Host {
     /// session's tab is cancelled, logged, and the calls whose input or script may have opened
     /// it fail (a clicked `upload_file` with [`upload::CHOOSER_UNREACHED`], the others with the
     /// advice to use `upload_file`).
-    pub(super) fn agent_chooser(
-        &mut self,
-        tab: TabId,
-        id: RequestId,
-        _spec: &crate::chooser::DialogSpec,
-    ) -> bool {
+    pub(super) fn agent_chooser(&mut self, tab: TabId, id: RequestId) -> bool {
         let mode = self.agent_grant_of(tab).map(|(_, grant)| grant.mode);
         match upload::chooser(mode, &self.agent_stages(tab), upload::Opened::Dialog, 0) {
             upload::Chooser::Owner => false,
