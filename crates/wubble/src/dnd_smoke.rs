@@ -61,6 +61,7 @@ macro_rules! item {
             name: $name,
             steps: &[
                 RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], RESET[7],
+                RESET[8],
                 $($step),*
             ],
             expect: &[$($expect),*],
