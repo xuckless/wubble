@@ -13,24 +13,22 @@ use ::url::{Host, Url};
 
 use crate::action::{Action, PALETTE};
 use crate::answer::{self, AnswerKind};
+use crate::search::Engines;
 use crate::tab::TabId;
 use crate::url::percent_encode_into;
 
 // ---------------------------------------------------------------- engines
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
-
-/// One search engine as data. Templates contain exactly one `{q}`.
+/// One built-in search engine as data. Templates contain exactly one `{q}`. The user's own
+/// engines and the default are resolved from the settings (`search::Engines`).
 #[derive(Debug, PartialEq, Eq)]
 pub struct EngineInfo {
-    pub engine: SearchEngine,
     /// The text form stored in settings; never rename a shipped one.
     pub id: &'static str,
     pub name: &'static str,
+    /// Typed before a query (`bing.com cats`), it searches this engine (Chrome's keyword, the
+    /// engine's domain).
+    pub keyword: &'static str,
     pub search: &'static str,
     /// OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
     pub suggest: &'static str,
@@ -39,42 +37,91 @@ pub struct EngineInfo {
     pub image: Option<&'static str>,
 }
 
-pub const ENGINES: [EngineInfo; 2] = [
+/// The built-in engines, in the order the first-run choice and the Select list them.
+///
+/// Search and suggestion templates from Chromium's
+/// `components/search_engines/prepopulated_engines.json` (BSD-3-Clause) for Google, Bing,
+/// DuckDuckGo, Brave, Ecosia and Qwant, with Chrome's partner codes left out; Startpage, Kagi
+/// and Wikipedia from each site's own OpenSearch description.
+pub const ENGINES: [EngineInfo; 9] = [
     EngineInfo {
-        engine: SearchEngine::Google,
         id: "google",
         name: "Google",
+        keyword: "google.com",
         search: "https://www.google.com/search?q={q}",
         suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
         // Google Lens by URL: `searchbyimage` was retired for it.
         image: Some("https://lens.google.com/uploadbyurl?url={q}"),
     },
     EngineInfo {
-        engine: SearchEngine::DuckDuckGo,
         id: "duckduckgo",
         name: "DuckDuckGo",
+        keyword: "duckduckgo.com",
         search: "https://duckduckgo.com/?q={q}",
         suggest: "https://duckduckgo.com/ac/?type=list&q={q}",
         image: None,
     },
+    EngineInfo {
+        id: "bing",
+        name: "Bing",
+        keyword: "bing.com",
+        search: "https://www.bing.com/search?q={q}",
+        suggest: "https://www.bing.com/osjson.aspx?query={q}",
+        image: None,
+    },
+    EngineInfo {
+        id: "brave",
+        name: "Brave Search",
+        keyword: "search.brave.com",
+        search: "https://search.brave.com/search?q={q}",
+        suggest: "https://search.brave.com/api/suggest?q={q}",
+        image: None,
+    },
+    EngineInfo {
+        id: "ecosia",
+        name: "Ecosia",
+        keyword: "ecosia.org",
+        search: "https://www.ecosia.org/search?q={q}",
+        suggest: "https://ac.ecosia.org/autocomplete?q={q}&type=list",
+        image: None,
+    },
+    EngineInfo {
+        id: "startpage",
+        name: "Startpage",
+        keyword: "startpage.com",
+        search: "https://www.startpage.com/sp/search?query={q}",
+        suggest: "https://www.startpage.com/osuggestions?q={q}",
+        image: None,
+    },
+    EngineInfo {
+        id: "qwant",
+        name: "Qwant",
+        keyword: "qwant.com",
+        search: "https://www.qwant.com/?q={q}",
+        suggest: "https://api.qwant.com/api/suggest/?q={q}&client=opensearch",
+        image: None,
+    },
+    EngineInfo {
+        id: "kagi",
+        name: "Kagi",
+        keyword: "kagi.com",
+        search: "https://kagi.com/search?q={q}",
+        suggest: "https://kagi.com/api/autosuggest?q={q}",
+        image: None,
+    },
+    EngineInfo {
+        id: "wikipedia",
+        name: "Wikipedia",
+        keyword: "wikipedia.org",
+        search: "https://en.wikipedia.org/wiki/Special:Search?search={q}",
+        suggest: "https://en.wikipedia.org/w/api.php?action=opensearch&search={q}",
+        image: None,
+    },
 ];
 
-impl SearchEngine {
-    pub fn info(self) -> &'static EngineInfo {
-        ENGINES
-            .iter()
-            .find(|e| e.engine == self)
-            .expect("every engine has a table row")
-    }
-
-    /// The stored text form, see [`EngineInfo::id`].
-    pub fn id(self) -> &'static str {
-        self.info().id
-    }
-
-    pub fn from_id(id: &str) -> Option<SearchEngine> {
-        ENGINES.iter().find(|e| e.id == id).map(|e| e.engine)
-    }
+/// The built-in engine stored as `id`.
+pub fn engine_info(id: &str) -> Option<&'static EngineInfo> {
+    ENGINES.iter().find(|e| e.id == id)
 }
 
 /// Substitutes the percent-encoded `query` for `{q}` in `template`.
@@ -84,10 +131,6 @@ pub fn fill(template: &str, query: &str) -> String {
     percent_encode_into(query, &mut out);
     out.push_str(tail);
     out
-}
-
-pub fn suggest_url(engine: SearchEngine, query: &str) -> String {
-    fill(engine.info().suggest, query)
 }
 
 // --------------------------------------------------------------- classify
@@ -351,19 +394,36 @@ const DAY_MS: i64 = 86_400_000;
 /// intent. A local answer (`answer::answer`) to a searched query comes first when it is a
 /// calculation, second (under the intent) when it is a unit conversion. An empty query yields
 /// no rows.
+///
+/// A query that starts with an engine's keyword and a space (`wikipedia.org rust`) searches
+/// that engine, as Chrome's keyword mode: its rows are that engine's results page
+/// (`Target::Url`) for the rest of the query, and the suggestions are that engine's.
 pub fn rank(
     query: &str,
-    engine: SearchEngine,
+    engines: &Engines,
     cands: &Candidates,
     now_ms: i64,
     limit: usize,
 ) -> Vec<OmniResult> {
-    let intent = classify(query);
     let inline = if cands.prevent_inline {
         None
     } else {
         inline_match(query, cands.history, cands.bookmarks)
     };
+    let keyword = engines.keyword_search(query);
+    let query = keyword.map_or(query, |(_, rest)| rest);
+    let intent = match keyword {
+        Some(_) => Intent::Search(query.trim().to_owned()),
+        None => classify(query),
+    };
+    let searched = |q: &str| match keyword {
+        Some((engine, _)) => Target::Url(engine.search_url(q)),
+        None => Target::Search(q.to_owned()),
+    };
+    let name = keyword
+        .map(|(engine, _)| engine.name.as_str())
+        .or(engines.default.as_ref().map(|e| e.name.as_str()))
+        .unwrap_or("the Web");
     let mut out = Vec::new();
     if let Some(m) = &inline {
         out.push(row(Kind::Search, &m.url, "Open", Target::Url(m.url.clone())));
@@ -375,8 +435,8 @@ pub fn rank(
         Intent::Search(q) => out.push(row(
             Kind::Search,
             q,
-            &format!("Search {}", engine.info().name),
-            Target::Search(q.clone()),
+            &format!("Search {name}"),
+            searched(q.as_str()),
         )),
     }
     let terms = query_terms(query);
@@ -440,7 +500,7 @@ pub fn rank(
         let lower = s.to_lowercase();
         if !shown.contains(&lower) {
             shown.push(lower);
-            scored.push((0, row(Kind::Search, s, "", Target::Search(s.clone()))));
+            scored.push((0, row(Kind::Search, s, "", searched(s.as_str()))));
         }
     }
     // Stable sort: ties keep input order, then kind order.
@@ -448,8 +508,9 @@ pub fn rank(
     out.extend(scored.into_iter().map(|(_, r)| r));
     // An action named by the query's words runs on Enter: "new boost" is the action, not a web
     // search (QA HIGH-07). A URL, or words naming no action, keep the intent row first, and so
-    // does a completion: Enter opens what the field shows.
+    // do a completion (Enter opens what the field shows) and a keyword search.
     if inline.is_none()
+        && keyword.is_none()
         && matches!(intent, Intent::Search(_))
         && let Some(i) = out
             .iter()
@@ -459,6 +520,7 @@ pub fn rank(
         out.insert(0, action);
     }
     if let Intent::Search(q) = &intent
+        && keyword.is_none()
         && let Some(a) = answer::answer(q)
     {
         let at = match a.kind {
@@ -982,14 +1044,21 @@ mod tests {
     }
 
     #[test]
-    fn engine_ids_round_trip_and_are_unique() {
-        for e in &ENGINES {
-            assert_eq!(SearchEngine::from_id(e.id), Some(e.engine));
-            assert_eq!(e.engine.id(), e.id);
+    fn engine_ids_and_keywords_are_unique() {
+        for (i, e) in ENGINES.iter().enumerate() {
+            assert_eq!(engine_info(e.id), Some(e));
+            assert!(ENGINES[..i].iter().all(|o| o.id != e.id), "dup {}", e.id);
+            assert!(
+                ENGINES[..i].iter().all(|o| o.keyword != e.keyword),
+                "dup {}",
+                e.keyword
+            );
         }
-        assert_eq!(SearchEngine::from_id("google"), Some(SearchEngine::Google));
-        assert_eq!(SearchEngine::from_id("bing"), None);
-        assert_eq!(SearchEngine::from_id(""), None);
+        // the shipped ids never change
+        assert_eq!(engine_info("google").map(|e| e.name), Some("Google"));
+        assert_eq!(engine_info("duckduckgo").map(|e| e.name), Some("DuckDuckGo"));
+        assert_eq!(engine_info(""), None);
+        assert_eq!(engine_info("altavista"), None);
     }
 
     #[test]
@@ -1000,19 +1069,48 @@ mod tests {
             if let Some(image) = e.image {
                 assert_eq!(image.matches("{q}").count(), 1, "{}", e.name);
             }
-            assert_eq!(e.engine.info(), e);
+            assert!(e.search.starts_with("https://"), "{}", e.name);
+            assert!(e.suggest.starts_with("https://"), "{}", e.name);
         }
         assert_eq!(
-            fill(SearchEngine::DuckDuckGo.info().search, "c++ & rust"),
+            fill(engine_info("duckduckgo").unwrap().search, "c++ & rust"),
             "https://duckduckgo.com/?q=c%2B%2B%20%26%20rust"
         );
         assert_eq!(
-            suggest_url(SearchEngine::Google, "ru"),
+            fill(engine_info("google").unwrap().suggest, "ru"),
             "https://suggestqueries.google.com/complete/search?client=firefox&q=ru"
         );
+    }
+
+    #[test]
+    fn a_keyword_searches_its_engine() {
+        let engines = Engines::resolve("duckduckgo", &[], &[]);
+        let r = rank(
+            "wikipedia.org rust lang",
+            &engines,
+            &Candidates::default(),
+            NOW,
+            50,
+        );
+        assert_eq!(r[0].title, "rust lang");
+        assert_eq!(r[0].subtitle, "Search Wikipedia");
         assert_eq!(
-            suggest_url(SearchEngine::DuckDuckGo, "ru"),
-            "https://duckduckgo.com/ac/?type=list&q=ru"
+            r[0].target,
+            Target::Url("https://en.wikipedia.org/wiki/Special:Search?search=rust%20lang".into())
+        );
+        // the keyword alone is an address; without a known keyword the default searches
+        let r = rank("nosuch.example rust", &engines, &Candidates::default(), NOW, 50);
+        assert_eq!(r[0].target, Target::Search("nosuch.example rust".into()));
+        // suggestions in keyword mode are the keyword engine's results
+        let sugg = ["rust book".to_owned()];
+        let c = Candidates {
+            suggestions: &sugg,
+            ..Default::default()
+        };
+        let r = rank("bing.com rust", &engines, &c, NOW, 50);
+        assert_eq!(
+            r.last().unwrap().target,
+            Target::Url("https://www.bing.com/search?q=rust%20book".into())
         );
     }
 
@@ -1035,7 +1133,7 @@ mod tests {
         }
     }
     fn run(q: &str, c: &Candidates) -> Vec<OmniResult> {
-        rank(q, SearchEngine::DuckDuckGo, c, NOW, 50)
+        rank(q, &Engines::resolve("duckduckgo", &[], &[]), c, NOW, 50)
     }
     fn titles(r: &[OmniResult]) -> Vec<&str> {
         r.iter().map(|r| r.title.as_str()).collect()
@@ -1252,7 +1350,7 @@ mod tests {
             urls,
             ["https://a.com/1", "https://a.com/2", "https://a.com/3"]
         );
-        assert_eq!(rank("same", SearchEngine::Google, &c, NOW, 2).len(), 2);
+        assert_eq!(rank("same", &Engines::resolve("google", &[], &[]), &c, NOW, 2).len(), 2);
     }
 
     #[test]

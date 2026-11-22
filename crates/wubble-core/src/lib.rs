@@ -61,6 +61,7 @@ pub mod routing;
 pub mod scope;
 pub mod scroller;
 pub mod seam;
+pub mod search;
 pub mod secret;
 pub mod session;
 pub mod settings;

@@ -47,10 +47,11 @@ pub use settings::{
     PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ProcessRendererLimit,
     ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
     ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
-    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
-    SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SoundMutedSites, SponsorActions,
-    SponsorAsked, SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed,
-    VideoControls, VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
+    SearchCustom, SearchDiscoverSites, SearchDiscovered, SearchEngineChoice, Setting,
+    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SleepKeepPinned, SleepNeverSites, SoundMutedSites, SponsorActions, SponsorAsked,
+    SponsorEnabled, TouchSizing, UpdateCheckOnOpen, UpdateLastCheck, VideoCollapsed, VideoControls,
+    VideoHardwareDecode, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
 
 pub use settings::InstalledExtensions;

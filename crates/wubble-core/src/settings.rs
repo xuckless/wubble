@@ -6,8 +6,6 @@
 //! parallel typed default), so the store decodes it with its codec and the page shows it as is.
 //! Design reference, no code copied: Chromium's pref registration (path, type, default per pref).
 
-use crate::omnibox::SearchEngine;
-
 /// What a setting holds, and so which values are valid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SettingKind {
@@ -17,7 +15,8 @@ pub enum SettingKind {
     Count { min: u32, max: u32 },
     /// A finite number in `min..=max`.
     Float { min: f32, max: f32 },
-    /// `""` (ask on first run) or one of `omnibox::ENGINES` by id.
+    /// `""` (ask on first run), one of `omnibox::ENGINES` by id, or one of the user's own
+    /// engines (`search::CUSTOM_PREFIX` and its keyword).
     SearchEngine,
     /// A JSON array of strings; entries are opaque here.
     List,
@@ -40,7 +39,7 @@ impl SettingKind {
             SettingKind::Float { min, max } => text
                 .parse::<f32>()
                 .is_ok_and(|v| v.is_finite() && (min..=max).contains(&v)),
-            SettingKind::SearchEngine => text.is_empty() || SearchEngine::from_id(text).is_some(),
+            SettingKind::SearchEngine => text.is_empty() || crate::search::is_engine_id(text),
             SettingKind::List => serde_json::from_str::<Vec<String>>(text).is_ok(),
             SettingKind::Choice(words) => words.contains(&text),
             SettingKind::Map => {
@@ -114,6 +113,37 @@ pub const LIVE_SUGGESTIONS: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "0",
     label: "Search suggestions from the search engine (sends what you type, never addresses)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The user's own search engines (`search::EngineEntry`, `name | keyword | address`): each
+/// searched by its keyword, any of them the default. The list editor checks each
+/// (`search::check`).
+pub const SEARCH_CUSTOM: SettingDef = SettingDef {
+    key: "search.custom",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Your own search engines (a keyword, and the address with %s for the search)",
+    section: Section::General,
+    restart: false,
+};
+/// Site searches found on pages (OpenSearch), inactive: listed, never searched by keyword nor
+/// made the default until the user adds one to their own engines.
+pub const SEARCH_DISCOVERED: SettingDef = SettingDef {
+    key: "search.discovered",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Site searches found on pages (inactive)",
+    section: Section::General,
+    restart: false,
+};
+/// Fetch the search description a page links to (`<link rel="search">`), to list the site's
+/// search: a request wubble makes itself, so off by default.
+pub const SEARCH_DISCOVER_SITES: SettingDef = SettingDef {
+    key: "search.discover_sites",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Find site searches on pages (fetches the search description a site links to)",
     section: Section::Privacy,
     restart: false,
 };
@@ -895,6 +925,9 @@ pub const EXTENSIONS_INSTALLED: SettingDef = SettingDef {
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
     &LIVE_SUGGESTIONS,
+    &SEARCH_CUSTOM,
+    &SEARCH_DISCOVERED,
+    &SEARCH_DISCOVER_SITES,
     &SIDEBAR_WIDTH,
     &SIDEBAR_MODE,
     &REDUCE_MOTION,
@@ -1078,6 +1111,16 @@ mod tests {
     }
 
     #[test]
+    fn site_search_discovery_is_off_by_default() {
+        // fetching a site's search description is a request wubble makes itself
+        assert_eq!(SEARCH_DISCOVER_SITES.default, "0");
+        for d in [&SEARCH_CUSTOM, &SEARCH_DISCOVERED] {
+            assert_eq!((d.kind, d.default), (SettingKind::List, "[]"), "{}", d.key);
+            assert_eq!(d.section, SEARCH_ENGINE.section, "{}", d.key);
+        }
+    }
+
+    #[test]
     fn media_rows_start_as_decided() {
         // A request wubble makes itself starts off (TODO.md "Decided": nothing phones home).
         assert_eq!(SPONSOR_ENABLED.default, "0");
@@ -1133,7 +1176,11 @@ mod tests {
             (SettingKind::SearchEngine, "", true),
             (SettingKind::SearchEngine, "google", true),
             (SettingKind::SearchEngine, "duckduckgo", true),
-            (SettingKind::SearchEngine, "bing", false),
+            (SettingKind::SearchEngine, "bing", true),
+            (SettingKind::SearchEngine, "custom:wiki", true),
+            (SettingKind::SearchEngine, "custom:", false),
+            (SettingKind::SearchEngine, "custom:two words", false),
+            (SettingKind::SearchEngine, "altavista", false),
             (SettingKind::List, "[]", true),
             (SettingKind::List, "[\"a\"]", true),
             (SettingKind::List, "[1]", false),
