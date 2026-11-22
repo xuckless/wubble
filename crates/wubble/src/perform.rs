@@ -208,6 +208,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ClearBrowsingData => builtin(Builtin::ClearData),
         Action::Quit => Plan::Quit,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
+        Action::NewPrivateWindow => Plan::Model(Command::NewPrivateWindow { url: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
         Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
             Plan::Model(Command::MoveTabToWindow {

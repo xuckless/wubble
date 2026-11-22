@@ -117,9 +117,11 @@ impl Host {
                         back: v.nav().page.can_go_back,
                         forward: v.nav().page.can_go_forward,
                         search: None,
+                        private: false,
                     });
                 let nav = NavFlags {
                     search: self.search_engine.map(|e| e.info().name),
+                    private: self.model.is_private_tab(tab),
                     ..nav
                 };
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
@@ -390,6 +392,9 @@ impl Host {
                 }
                 MenuEffect::Run(MenuCommand::OpenInNewTab(url)) => {
                     self.open_routed(url, Some(tab));
+                }
+                MenuEffect::Run(MenuCommand::OpenInPrivateWindow(url)) => {
+                    self.dispatch(Command::NewPrivateWindow { url: Some(url) });
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),

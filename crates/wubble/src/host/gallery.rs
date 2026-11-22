@@ -249,6 +249,7 @@ impl Host {
                     back: true,
                     forward: false,
                     search: None,
+                    private: false,
                 };
                 surfaces.menu = Menu::Open {
                     id: FAKE,

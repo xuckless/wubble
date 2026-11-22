@@ -73,6 +73,8 @@ pub enum Command {
     Engine(i32),
     /// Open the URL in a new tab next to the page's.
     OpenInNewTab(String),
+    /// Open the URL in a new private window (`Command::NewPrivateWindow`).
+    OpenInPrivateWindow(String),
     /// Put the text on the clipboard.
     CopyText(String),
     /// Download the URL with the page's cookies, asking where to save it.
@@ -162,6 +164,9 @@ pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
     pub search: Option<&'static str>,
+    /// The page is a private window's: "Open Link in Private Window" is not offered there
+    /// (Chrome's incognito window has no "Open link in incognito window").
+    pub private: bool,
 }
 
 /// The context a row's predicates read.
@@ -316,6 +321,14 @@ const ROWS: &[Row] = &[
     row!(1, "Open Link in New Tab", |c| c.link(), always, |c| {
         Command::OpenInNewTab(c.menu.link_url.clone())
     }),
+    // Chromium's IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD, left out in an incognito window
+    row!(
+        1,
+        "Open Link in Private Window",
+        |c| c.link() && !c.nav.private,
+        always,
+        |c| { Command::OpenInPrivateWindow(c.menu.link_url.clone()) }
+    ),
     row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
         Command::SaveAs(c.menu.link_url.clone())
     }),
@@ -1549,6 +1562,7 @@ mod tests {
             back: true,
             forward: false,
             search: None,
+            private: false,
         };
         let e = entries(&page(), nav);
         assert_eq!(
@@ -1593,6 +1607,7 @@ mod tests {
             labels(&e),
             [
                 "Open Link in New Tab",
+                "Open Link in Private Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -1604,13 +1619,17 @@ mod tests {
             e[0].command,
             Command::OpenInNewTab("https://a.test/next".into())
         );
-        assert_eq!(e[1].command, Command::SaveAs("https://a.test/next".into()));
         assert_eq!(
-            e[2].command,
+            e[1].command,
+            Command::OpenInPrivateWindow("https://a.test/next".into())
+        );
+        assert_eq!(e[2].command, Command::SaveAs("https://a.test/next".into()));
+        assert_eq!(
+            e[3].command,
             Command::CopyText("https://a.test/next".into())
         );
-        assert_eq!(e[4].command, Command::ShotElement((10, 20)));
-        assert_eq!(e[5].command, Command::Inspect { x: 10, y: 20 });
+        assert_eq!(e[5].command, Command::ShotElement((10, 20)));
+        assert_eq!(e[6].command, Command::Inspect { x: 10, y: 20 });
     }
 
     #[test]
@@ -1626,6 +1645,7 @@ mod tests {
             labels(&e),
             [
                 "Open Link in New Tab",
+                "Open Link in Private Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
