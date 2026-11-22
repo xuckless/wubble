@@ -45,10 +45,12 @@ component SwapLayer inherits SwapItem {
         color: root.ink;
         horizontal-alignment: root.align;
         vertical-alignment: center;
+        overflow: elide;
     }
 }
 
 export component CrossfadeText inherits Rectangle {
+    clip: true;
     in property <string> text;
     in property <TextRole> role: Role.body;
     in property <color> ink;

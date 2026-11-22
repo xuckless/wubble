@@ -301,8 +301,8 @@ impl Host {
         let Some(view) = self.tab_view(tab) else {
             return;
         };
-        view.answer_download_path(id, path.as_deref());
-        if let Some(path) = path {
+        let ok = view.answer_download_path(id, path.as_deref());
+        if ok && let Some(path) = path {
             let reserved = Inflight {
                 tab,
                 path,

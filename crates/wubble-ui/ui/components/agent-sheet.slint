@@ -32,9 +32,11 @@ export component AgentSheet inherits SheetFrame {
     callback bound(string, int);
     // the owner unlocks the vault here, so its logins can be picked
     callback unlock-vault();
-    // A list editor holds a draft (or an edit): Escape drops that, not the sheet (the host's
-    // Escape for the overlay stack waits while this is on).
-    out property <bool> editing;
+    // A list editor holds a draft (or an edit) or a Select dropdown is open: Escape drops that,
+    // not the sheet (the host's Escape for the overlay stack waits while this is on).
+    property <bool> sites-editing;
+    property <int> open-selects;
+    out property <bool> editing: root.sites-editing || root.open-selects > 0;
 
     // The window choice: restarts from what the client asked, at each sheet.
     property <bool> headless;
@@ -44,11 +46,14 @@ export component AgentSheet inherits SheetFrame {
     changed sheet => {
         if root.sheet.open {
             root.last = root.sheet;
+        } else {
+            root.open-selects = 0;
         }
     }
     property <int> serial: root.sheet.serial;
     changed serial => {
         root.headless = root.sheet.headless;
+        root.open-selects = 0;
     }
 
     open: root.sheet.open;
@@ -72,6 +77,7 @@ export component AgentSheet inherits SheetFrame {
     // in the controls registry in `init`, and built with the window it did so before the host
     // wired the registry, sharing slot 0 with a menu (no indicator, presses on the menu's slot).
     if root.view.serial > 0: BCard {
+        z: 1;
         // the secret names asked for: the owner may remove one (none can be added: a name is
         // only what a client asks for) and binds each to a saved login below
         BStackRow {
@@ -115,7 +121,7 @@ export component AgentSheet inherits SheetFrame {
                     root.site-submitted(t);
                 }
                 changed mode => {
-                    root.editing = self.mode != ListEditorMode.browse;
+                    root.sites-editing = self.mode != ListEditorMode.browse;
                 }
             }
         }
@@ -132,11 +138,17 @@ export component AgentSheet inherits SheetFrame {
             }
         }
         if root.view.may-share && root.view.share: BRow {
+            z: share-select.mounted ? 1 : 0;
             title: "From the Space";
-            Select {
+            share-select := Select {
                 options: root.view.share-from;
                 value: root.view.share-from-index;
                 label: "From the Space";
+                view-top: root.view-top;
+                view-bottom: root.view-bottom;
+                changed is-open => {
+                    root.open-selects = max(0, root.open-selects + (self.is-open ? 1 : -1));
+                }
                 picked(i) => {
                     root.share-from-picked(i);
                 }
@@ -154,11 +166,17 @@ export component AgentSheet inherits SheetFrame {
             }
         }
         for binding in root.view.bindings: BStackRow {
+            z: bind-select.mounted ? 1 : 0;
             title: binding.title;
-            Select {
+            bind-select := Select {
                 options: binding.options;
                 value: binding.index;
                 label: binding.name;
+                view-top: root.view-top;
+                view-bottom: root.view-bottom;
+                changed is-open => {
+                    root.open-selects = max(0, root.open-selects + (self.is-open ? 1 : -1));
+                }
                 picked(i) => {
                     root.bound(binding.name, i);
                 }

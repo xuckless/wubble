@@ -488,6 +488,60 @@ impl Model {
         windows: Vec<Window>,
         now: Instant,
     ) -> Result<Model, String> {
+        Self::build_parts(
+            spaces,
+            containers,
+            tabs,
+            windows,
+            vec![],
+            None,
+            now,
+            Pressure::None,
+            0,
+            SleepPolicy::default(),
+            vec![],
+        )
+    }
+
+    /// Rebuilds this model with updated Spaces, containers, tabs and windows while keeping live
+    /// runtime state (open peeks, PiP geometry, sleep policy, never-sleep sites, clock and
+    /// pressure). Used when merging imported Spaces into a live model.
+    pub fn with_parts(
+        &self,
+        spaces: Vec<Space>,
+        containers: Vec<Container>,
+        tabs: Vec<Tab>,
+        windows: Vec<Window>,
+    ) -> Result<Model, String> {
+        Self::build_parts(
+            spaces,
+            containers,
+            tabs,
+            windows,
+            self.glances.clone(),
+            self.pip_geometry,
+            self.clock,
+            self.pressure,
+            self.wall_ms,
+            self.policy,
+            self.never_sites.clone(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_parts(
+        spaces: Vec<Space>,
+        containers: Vec<Container>,
+        tabs: Vec<Tab>,
+        windows: Vec<Window>,
+        glances: Vec<Glance>,
+        pip_geometry: Option<Geometry>,
+        clock: Instant,
+        pressure: Pressure,
+        wall_ms: i64,
+        policy: SleepPolicy,
+        never_sites: Vec<String>,
+    ) -> Result<Model, String> {
         let next = |max: Option<u64>, floor: u64| max.map_or(floor, |m| m + 1);
         let next_folder = spaces
             .iter()
@@ -508,13 +562,13 @@ impl Model {
             containers,
             tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
             windows,
-            glances: vec![],
-            pip_geometry: None,
-            clock: now,
-            pressure: Pressure::None,
-            wall_ms: 0,
-            policy: SleepPolicy::default(),
-            never_sites: vec![],
+            glances,
+            pip_geometry,
+            clock,
+            pressure,
+            wall_ms,
+            policy,
+            never_sites,
         };
         m.check()?;
         Ok(m)
@@ -1223,7 +1277,11 @@ impl Model {
         let promoted: Vec<TabId> = self
             .glances
             .iter()
-            .filter(|g| shown(self, g).contains(&g.tab))
+            .filter(|g| {
+                shown(self, g).contains(&g.tab)
+                    || self.spaces.iter().any(|s| s.active == Some(g.tab))
+                    || self.split_of(g.tab).is_some()
+            })
             .map(|g| g.tab)
             .collect();
         self.glances.retain(|g| !promoted.contains(&g.tab));
@@ -1469,8 +1527,17 @@ impl Model {
             w.shown = match w.shown {
                 Shown::Little(t) if t == tab => Shown::Little(new),
                 Shown::Popup(t) if t == tab => Shown::Popup(new),
+                Shown::Pip(t) if t == tab => Shown::Pip(new),
                 shown => shown,
             };
+        }
+        for g in &mut self.glances {
+            if g.opener == tab {
+                g.opener = new;
+            }
+            if g.tab == tab {
+                g.tab = new;
+            }
         }
         self.forget(&[tab]);
         let mut fx = vec![

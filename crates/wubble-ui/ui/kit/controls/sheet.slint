@@ -41,6 +41,9 @@ export component Sheet inherits Rectangle {
     callback cancelled();
     // the entrance's progress (tests)
     out property <float> progress: layer.progress;
+    // the scrolling fields' bounds in window coordinates, for a Select's upward flip
+    out property <length> view-top: fields.absolute-position.y;
+    out property <length> view-bottom: fields.absolute-position.y + fields.height;
 
     // Takes the keyboard for Enter and Escape (a sheet with a field focuses the field instead).
     public function take-focus() {

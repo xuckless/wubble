@@ -82,29 +82,43 @@ fn edge(table: &EdgeTable) -> Edge<'_> {
 /// Whether two rows show the same: their `images` (wgpu textures) compared by texture, as Slint
 /// 1.19 never finds two such images equal ([`wubble_ui::same_image`]), the rest by `==`;
 /// rewriting an unchanged row every frame asked for the next frame, so the shell rendered at the
-/// display rate forever.
-fn same_row<T: Clone + PartialEq, const N: usize>(
-    a: &T,
-    b: &T,
-    images: fn(&mut T) -> [&mut slint::Image; N],
-) -> bool {
-    let (mut a, mut b) = (a.clone(), b.clone());
-    let a_images = images(&mut a).map(std::mem::take);
-    let b_images = images(&mut b).map(std::mem::take);
-    a_images
-        .iter()
-        .zip(&b_images)
-        .all(|(x, y)| wubble_ui::same_image(x, y))
-        && a == b
-}
-
+/// display rate forever. Compared by reference to avoid cloning images and strings every frame.
 fn same_pane(a: &SplitPane, b: &SplitPane) -> bool {
-    same_row(a, b, |p| [&mut p.frame, &mut p.edge, &mut p.prev])
+    a.id == b.id
+        && a.x0 == b.x0
+        && a.x1 == b.x1
+        && a.clip_width == b.clip_width
+        && a.clip_height == b.clip_height
+        && a.stretch_x == b.stretch_x
+        && a.stretch_y == b.stretch_y
+        && a.fill == b.fill
+        && a.focused == b.focused
+        && a.closable == b.closable
+        && a.margin == b.margin
+        && a.prev_opacity == b.prev_opacity
+        && a.prev_clip_width == b.prev_clip_width
+        && a.prev_clip_height == b.prev_clip_height
+        && a.status_shown == b.status_shown
+        && a.status_host == b.status_host
+        && a.status_rest == b.status_rest
+        && wubble_ui::same_image(&a.frame, &b.frame)
+        && wubble_ui::same_image(&a.edge, &b.edge)
+        && wubble_ui::same_image(&a.prev, &b.prev)
 }
 
 /// [`same_pane`] for the peek's card.
 fn same_glance(a: &GlanceView, b: &GlanceView) -> bool {
-    same_row(a, b, |g| [&mut g.frame])
+    a.open == b.open
+        && a.id == b.id
+        && a.title == b.title
+        && a.clip_width == b.clip_width
+        && a.clip_height == b.clip_height
+        && a.x == b.x
+        && a.card_y == b.card_y
+        && a.y == b.y
+        && a.width == b.width
+        && a.height == b.height
+        && wubble_ui::same_image(&a.frame, &b.frame)
 }
 
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
@@ -201,8 +215,12 @@ impl Host {
 
     /// Every view on screen and its layout: the panes, then the peek.
     fn view_layouts(&self, window: &AppWindow) -> Vec<(TabId, Layout)> {
-        let mut out: Vec<(TabId, Layout)> = self
-            .pane_rects(window)
+        let rects = self.pane_rects(window);
+        self.view_layouts_with(window, &rects)
+    }
+
+    fn view_layouts_with(&self, window: &AppWindow, rects: &[PageRect]) -> Vec<(TabId, Layout)> {
+        let mut out: Vec<(TabId, Layout)> = rects
             .iter()
             .map(|r| (r.tab, self.layout_of(window, r)))
             .collect();
@@ -323,11 +341,12 @@ impl Host {
         });
         let strings = self.model.window_split(self.w.id).is_some() && self.step_strings(window, dt);
         let source = self.step_source(window, dt);
-        self.lay_out_views(window);
-        let stretching = self.step_stretch(window, dt);
-        let bowed = self.mask_panes(window);
-        self.render_panes(window);
-        self.measure_shell(window, bowed);
+        let rects = self.pane_rects(window);
+        self.lay_out_views_with(window, &rects);
+        let stretching = self.step_stretch(window, &rects, dt);
+        let bowed = self.mask_panes(window, &rects);
+        self.render_panes_with(window, &rects);
+        self.measure_shell(window, &rects, bowed);
         let autoscrolling = self.autoscroll_frame(window, now);
         let moving = strings || stretching || autoscrolling || source;
         if !moving {
@@ -359,8 +378,9 @@ impl Host {
     /// Each view on screen gets its pane's size (unchanged layouts cost nothing; a new one only
     /// asks CEF to resize, the stretched last frame shows meanwhile), then the shell's panes.
     pub(super) fn layout_panes(&mut self, window: &AppWindow) {
-        self.lay_out_views(window);
-        self.render_panes(window);
+        let rects = self.pane_rects(window);
+        self.lay_out_views_with(window, &rects);
+        self.render_panes_with(window, &rects);
         // a pane that started stretching needs the frame driver
         if self.w.frames.values().any(|f| !f.view.is_live()) {
             window.window().request_redraw();
@@ -369,8 +389,8 @@ impl Host {
 
     /// Each view on screen gets its pane's layout; its pane follows the size the view now wants
     /// (the engine's `ViewState` owns it).
-    fn lay_out_views(&mut self, window: &AppWindow) {
-        for (tab, layout) in self.view_layouts(window) {
+    fn lay_out_views_with(&mut self, window: &AppWindow, rects: &[PageRect]) {
+        for (tab, layout) in self.view_layouts_with(window, rects) {
             let Some(view) = self.tab_view(tab) else {
                 continue;
             };
@@ -385,9 +405,8 @@ impl Host {
     /// One frame of `dt` seconds of each pane's stretch and fade; a finished fade lets the stale
     /// frame go, a settled pane goes live. A pane off screen forgets its last size, so a resize
     /// it missed is no speed when it comes back. Returns whether any still moves.
-    fn step_stretch(&mut self, window: &AppWindow, dt: f64) -> bool {
+    fn step_stretch(&mut self, window: &AppWindow, rects: &[PageRect], dt: f64) -> bool {
         let (_, height) = content_size(window);
-        let rects = self.pane_rects(window);
         for (tab, frame) in &mut self.w.frames {
             if !rects.iter().any(|r| r.tab == *tab) {
                 frame.springs.forget();
@@ -418,7 +437,7 @@ impl Host {
     /// split seam's along both panes it divides), the pane's frame is redrawn with that edge cut
     /// along the string (`wubble_gfx::mask`); at rest nothing is masked. The content area stops
     /// clipping while any pane is masked, so a bulge shows. Returns whether any pane is masked.
-    fn mask_panes(&mut self, window: &AppWindow) -> bool {
+    fn mask_panes(&mut self, window: &AppWindow, rects: &[PageRect]) -> bool {
         let (_, height) = content_size(window);
         let scale = window.window().scale_factor();
         let fullscreen = matches!(self.screen, Screen::Page { .. });
@@ -430,7 +449,7 @@ impl Host {
         let web = window.global::<Palette>().get_web();
         let fill = [web.red(), web.green(), web.blue()].map(|c| f32::from(c) / 255.0);
         let mut any = false;
-        for (i, rect) in self.pane_rects(window).into_iter().enumerate() {
+        for (i, rect) in rects.iter().enumerate() {
             // a fullscreen page is square and alone: nothing bends it
             let (split_left, right) = if fullscreen {
                 (None, None)
@@ -475,7 +494,7 @@ impl Host {
 
     /// `--measure resize`: whether the scene and the panes were laid out for the window size of
     /// this frame (observations; never asserted).
-    fn measure_shell(&self, window: &AppWindow, bowed: bool) {
+    fn measure_shell(&self, window: &AppWindow, rects: &[PageRect], bowed: bool) {
         let size = window.window().size();
         let scene_off = self
             .w
@@ -485,7 +504,6 @@ impl Host {
             .and_then(|g| g.scene_size())
             .is_some_and(|s| s != (size.width, size.height));
         let (width, _) = content_size(window);
-        let rects = self.pane_rects(window);
         let pane_off = rects
             .last()
             .is_some_and(|r| (r.x + r.width - width).abs() > 0.5);
@@ -507,11 +525,15 @@ impl Host {
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
     /// seam's grab mid-drag, survives).
     pub(super) fn render_panes(&mut self, window: &AppWindow) {
+        let rects = self.pane_rects(window);
+        self.render_panes_with(window, &rects);
+    }
+
+    fn render_panes_with(&mut self, window: &AppWindow, rects: &[PageRect]) {
         self.render_glance(window);
         self.render_popup(window);
         let (_, height) = content_size(window);
         let focused = self.shown();
-        let rects = self.pane_rects(window);
         let fill = rects.len() == 1;
         let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
         // a start page has no frame and no pane fill: the scene's living layer shows there
@@ -522,7 +544,7 @@ impl Host {
             })
         };
         let panes: Vec<SplitPane> = rects
-            .into_iter()
+            .iter()
             .filter(|r| !start(r.tab))
             .map(|r| {
                 let frame = self.w.frames.get(&r.tab);
@@ -613,13 +635,13 @@ impl Host {
         });
         crate::bind::sync(window.get_seams(), seams, |m| window.set_seams(m));
         window.set_focus_ring(ring.into());
-        self.sync_scene_pages(window);
+        self.sync_scene_pages_with(window, rects);
     }
 
     /// The scene's view of the panes (`Glass::set_pages`): each pane's card in the window and
     /// its latest frame, the presenter's texture itself (no copy). Overlay glass over a pane
     /// frosts it; the window's glass picks up its light. Panes without a frame are left out.
-    fn sync_scene_pages(&self, window: &AppWindow) {
+    fn sync_scene_pages_with(&self, window: &AppWindow, rects: &[PageRect]) {
         let (_, height) = content_size(window);
         let (cx, cy) = (window.get_content_x(), window.get_content_y());
         let radius = if window.get_page_fullscreen() {
@@ -627,9 +649,8 @@ impl Host {
         } else {
             window.global::<Radius>().get_md()
         };
-        let pages: Vec<PagePane> = self
-            .pane_rects(window)
-            .into_iter()
+        let pages: Vec<PagePane> = rects
+            .iter()
             .filter_map(|r| {
                 let frame = self.w.frames.get(&r.tab)?;
                 Some(PagePane {
@@ -840,7 +861,7 @@ impl Host {
         window.window().request_redraw();
         // the page blur (overlay glass, ambience) samples the same texture
         if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
-            glass.pages_written(window);
+            glass.pages_written(window, Rect::new(x as f32, y as f32, w as f32, h as f32));
         }
     }
 

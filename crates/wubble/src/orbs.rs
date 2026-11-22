@@ -37,6 +37,8 @@ struct Stage {
     frames: Rc<VecModel<Image>>,
     /// The shared clock's zero (the web's `performance.now()` origin).
     origin: Instant,
+    /// Reused per-frame mark buffer so `paint` does not allocate on every orb frame.
+    scratch: Vec<OrbMark>,
 }
 
 thread_local! {
@@ -60,6 +62,7 @@ pub fn install(id: WindowId, gpu: &GpuContext, window: &AppWindow) {
                 cells: vec![],
                 frames,
                 origin: Instant::now(),
+                scratch: Vec::new(),
             },
         )
     });
@@ -213,27 +216,29 @@ impl Stage {
         let frame = cell.orb.frame(t);
         let marks = cell.orb.marks(&frame);
         let ink = |i: [f64; 4]| i.map(|c| c as f32);
-        let list: Vec<OrbMark> = marks
-            .lines
-            .iter()
-            .map(|(l, i)| OrbMark::Line {
-                x1: l.x1 as f32,
-                y1: l.y1 as f32,
-                x2: l.x2 as f32,
-                y2: l.y2 as f32,
-                w: l.w as f32,
-                ink: ink(*i),
-            })
-            .chain(marks.dots.iter().map(|(d, i)| OrbMark::Dot {
-                x: d.x as f32,
-                y: d.y as f32,
-                r: d.r as f32,
-                ink: ink(*i),
-            }))
-            .collect();
+        self.scratch.clear();
+        self.scratch.extend(
+            marks
+                .lines
+                .iter()
+                .map(|(l, i)| OrbMark::Line {
+                    x1: l.x1 as f32,
+                    y1: l.y1 as f32,
+                    x2: l.x2 as f32,
+                    y2: l.y2 as f32,
+                    w: l.w as f32,
+                    ink: ink(*i),
+                })
+                .chain(marks.dots.iter().map(|(d, i)| OrbMark::Dot {
+                    x: d.x as f32,
+                    y: d.y as f32,
+                    r: d.r as f32,
+                    ink: ink(*i),
+                })),
+        );
         // physical px per frame unit: the tuned size's CSS px drawn over the shown side
         let per_unit = side_px as f32 / cell.orb.size.px() as f32;
-        let image = self.painter.paint(canvas, per_unit, &list);
+        let image = self.painter.paint(canvas, per_unit, &self.scratch);
         if slot < self.frames.row_count() {
             self.frames.set_row_data(slot, image);
         }

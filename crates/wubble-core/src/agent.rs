@@ -338,8 +338,10 @@ impl Grant {
                 let bare = site.strip_prefix("*.").unwrap_or(site);
                 let covered = !bare.contains('/')
                     && !bare.contains(':')
-                    && self.allows_site(&format!("https://{bare}/"))
-                    && self.allows_site(&format!("http://{bare}/"));
+                    && self.allows_site(&format!("https://{bare}/__wubble_probe__"))
+                    && self.allows_site(&format!("http://{bare}/__wubble_probe__"))
+                    && self.allows_site(&format!("https://sub.{bare}/__wubble_probe__"))
+                    && self.allows_site(&format!("http://sub.{bare}/__wubble_probe__"));
                 if !site.is_empty()
                     && !covered
                     && !self.sites().any(same)
@@ -1997,5 +1999,37 @@ mod tests {
         })
         .unwrap();
         assert_eq!(l.bound["GITHUB_ID"].part, Part::Username);
+    }
+
+    #[test]
+    fn missing_does_not_treat_exact_host_or_root_path_as_covering_domain() {
+        let exact = Grant::new(
+            [],
+            &[
+                "https://example.com/*".into(),
+                "http://example.com/*".into(),
+            ],
+            Mode::Headless,
+        )
+        .unwrap();
+        assert_eq!(
+            exact.missing(&["*.example.com".into()], &[]).sites,
+            vec!["*.example.com"]
+        );
+        assert_eq!(
+            exact.missing(&["example.com".into()], &[]).sites,
+            vec!["example.com"]
+        );
+
+        let root_only = Grant::new(
+            [],
+            &["https://example.com/".into(), "http://example.com/".into()],
+            Mode::Headless,
+        )
+        .unwrap();
+        assert_eq!(
+            root_only.missing(&["example.com".into()], &[]).sites,
+            vec!["example.com"]
+        );
     }
 }

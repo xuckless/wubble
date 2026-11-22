@@ -75,7 +75,10 @@ pub mod run;
 mod start;
 mod state;
 
-pub use pages::{OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur};
+pub use pages::{
+    AMBIENCE_REACH, OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, damage_reaches_glass,
+    overlaps, page_blur,
+};
 pub use quality::{
     AVG_WEIGHT, BackdropClock, CACHED_REFRESH_CALLS, DOWN_FRACTION, FIT_FRACTION, Governor,
     HELP_FRACTION, HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality,

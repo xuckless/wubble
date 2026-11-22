@@ -94,6 +94,7 @@ const _: () = assert!(std::mem::size_of::<MarkI>() == 48);
 pub struct OrbCanvas {
     size: u32,
     accum_view: wgpu::TextureView,
+    resolve_group: wgpu::BindGroup,
     ring: Ring,
 }
 
@@ -116,8 +117,10 @@ pub struct OrbPainter {
     marks: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
+    marks_group: wgpu::BindGroup,
     instances: wgpu::Buffer,
     capacity: u64,
+    scratch: Vec<MarkI>,
 }
 
 impl OrbPainter {
@@ -195,6 +198,18 @@ impl OrbPainter {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let marks_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wubble orb marks"),
+            layout: &marks.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform,
+                    offset: 0,
+                    size: NonZeroU64::new(std::mem::size_of::<OrbU>() as u64),
+                }),
+            }],
+        });
         let (instances, capacity) = Self::instance_buffer(&device, 1024);
         Self {
             device,
@@ -202,8 +217,10 @@ impl OrbPainter {
             marks,
             resolve,
             uniform,
+            marks_group,
             instances,
             capacity,
+            scratch: Vec::new(),
         }
     }
 
@@ -235,9 +252,18 @@ impl OrbPainter {
             view_formats: &[],
         });
         let accum_view = accum.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolve_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("wubble orb resolve"),
+            layout: &self.resolve.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&accum_view),
+            }],
+        });
         Ok(OrbCanvas {
             size,
             accum_view,
+            resolve_group,
             ring: Ring::new(&self.device, FrameSize::new(size, size))?,
         })
     }
@@ -250,13 +276,14 @@ impl OrbPainter {
             (self.instances, self.capacity) =
                 Self::instance_buffer(&self.device, n.next_power_of_two());
         }
-        let data: Vec<MarkI> = marks.iter().map(|&m| m.into()).collect();
-        if !data.is_empty() {
+        self.scratch.clear();
+        self.scratch.extend(marks.iter().map(|&m| MarkI::from(m)));
+        if !self.scratch.is_empty() {
             // SAFETY: `MarkI` is #[repr(C)], Copy and all f32 (no padding).
             let raw = unsafe {
                 std::slice::from_raw_parts(
-                    data.as_ptr() as *const u8,
-                    data.len() * std::mem::size_of::<MarkI>(),
+                    self.scratch.as_ptr() as *const u8,
+                    self.scratch.len() * std::mem::size_of::<MarkI>(),
                 )
             };
             self.queue.write_buffer(&self.instances, 0, raw);
@@ -269,26 +296,6 @@ impl OrbPainter {
         };
         self.queue.write_buffer(&self.uniform, 0, bytes(&u));
         let target = canvas.ring.advance();
-        let marks_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wubble orb marks"),
-            layout: &self.marks.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &self.uniform,
-                    offset: 0,
-                    size: NonZeroU64::new(std::mem::size_of::<OrbU>() as u64),
-                }),
-            }],
-        });
-        let resolve_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("wubble orb resolve"),
-            layout: &self.resolve.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&canvas.accum_view),
-            }],
-        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -310,7 +317,7 @@ impl OrbPainter {
             });
             if n > 0 {
                 pass.set_pipeline(&self.marks);
-                pass.set_bind_group(0, &marks_group, &[]);
+                pass.set_bind_group(0, &self.marks_group, &[]);
                 pass.set_vertex_buffer(0, self.instances.slice(..));
                 pass.draw(0..4, 0..n as u32);
             }
@@ -330,7 +337,7 @@ impl OrbPainter {
                 ..Default::default()
             });
             pass.set_pipeline(&self.resolve);
-            pass.set_bind_group(0, &resolve_group, &[]);
+            pass.set_bind_group(0, &canvas.resolve_group, &[]);
             pass.draw(0..4, 0..1);
         }
         self.queue.submit([encoder.finish()]);

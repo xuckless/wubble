@@ -112,6 +112,7 @@ component SettingRow inherits VerticalLayout {
     callback reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
+    out property <bool> menu-mounted;
 
     property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
     padding-bottom: root.listed ? Shell.row-pad-y : 0px;
@@ -157,6 +158,9 @@ component SettingRow inherits VerticalLayout {
                 accent: root.accent;
                 view-top: root.view-top;
                 view-bottom: root.view-bottom;
+                changed mounted => {
+                    root.menu-mounted = self.mounted;
+                }
                 picked(i) => {
                     root.changed(root.setting.key, root.setting.words[i]);
                 }
@@ -833,7 +837,7 @@ export component SettingsPage inherits Rectangle {
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
                     below: row.last ? Shell.section-below : 0px;
-                    z: row.options.length > 0 ? 1 : 0;
+                    z: setting-row-inner.menu-mounted ? 1 : 0;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
@@ -846,7 +850,7 @@ export component SettingsPage inherits Rectangle {
                     CardSlice {
                         first: row.first;
                         last: row.last;
-                        SettingRow {
+                        setting-row-inner := SettingRow {
                             setting: row;
                             accent: root.accent;
                             view-top: page.absolute-position.y;

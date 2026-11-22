@@ -239,7 +239,11 @@ impl TabRows {
     // @source slint-tabs-drag
     /// Pointer down on row `i` (y in px). Returns nothing; a press only becomes a drag after 6 px.
     pub fn down(&mut self, i: usize, y: f64) {
-        let id = self.rows[i].id;
+        // wubble change: ignore stale row indices after a concurrent close.
+        let Some(row) = self.rows.get(i) else {
+            return;
+        };
+        let id = row.id;
         self.drag = Some(Drag {
             id,
             from: i,
@@ -644,5 +648,12 @@ mod tests {
         t.set_ids(&ids, Some(0));
         assert_eq!(entering(&t), [9]);
         assert_eq!(t.rows.last().unwrap().entrance(), 0.0);
+    }
+
+    #[test]
+    fn down_out_of_bounds_is_ignored() {
+        let mut t = TabRows::new(&[1, 2], Some(0));
+        t.down(99, 10.0);
+        assert_eq!(t.up(), TabUp::None);
     }
 }

@@ -741,7 +741,7 @@ export component AppWindow inherits Window {
     property <bool> agent-sheet-open: root.agent-sheet-view.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
-    property <bool> overlay-open: root.menu.open || root.downloads-open || root.extensions-open || root.extension-popup.open || root.extension-prompt.open || root.spaces-open || root.dialog.open || root.page-error.open;
+    property <bool> overlay-open: root.menu.open || root.downloads-open || root.extensions-open || root.extension-popup.open || root.extension-prompt.open || root.spaces-open || root.dialog.open || root.page-error.open || root.bookmark-open || root.print-open || root.agent-sheet-open;
     function settle-focus() {
         root.sidebar-focused = false;
         if root.menu.open {
@@ -837,7 +837,7 @@ export component AppWindow inherits Window {
     }
     changed find-open => {
         if !root.find-open && !root.overlay-open && bar.state == CommandBarState.closed {
-            web-focus.focus();
+            root.settle-focus();
         }
     }
 

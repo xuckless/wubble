@@ -55,7 +55,8 @@ use std::time::{Duration, Instant};
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
 use super::pages::{
-    OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur, rect_of,
+    OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, damage_reaches_glass, overlaps, page_blur,
+    rect_of,
 };
 use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::start::{
@@ -761,6 +762,46 @@ impl Renderer {
         }
     }
 
+    /// A pane's texture was written in place within `damage` (window logical px): marks `P` stale
+    /// only if `damage` can visibly reach an overlay glass surface or the ambience around a pane.
+    pub fn pages_written_rect(&mut self, damage: super::state::Rect) {
+        if self.pages.is_empty() {
+            return;
+        }
+        let surfaces = self.scene.surfaces();
+        let rects = self.page_rects();
+        if damage_reaches_glass(&damage, &surfaces, &rects, self.ambience > 0.0) {
+            self.pages_stale = true;
+        }
+    }
+
+    /// The single opaque pane's card when exactly one pane is set (for partial dirty-region
+    /// subtraction in the host).
+    pub fn single_page_rect(&self) -> Option<PageRect> {
+        match self.pages.as_slice() {
+            [one] => Some(one.rect),
+            _ => None,
+        }
+    }
+
+    /// Padded logical rects of all active overlay glass surfaces (`layer.is_some()`).
+    pub fn overlay_dirty_rects(&self) -> Vec<super::state::Rect> {
+        let pad = GLASS_PAD as f32;
+        self.scene
+            .surfaces()
+            .into_iter()
+            .filter(|s| s.layer.is_some())
+            .map(|s| {
+                super::state::Rect::new(
+                    s.x as f32 - pad,
+                    s.y as f32 - pad,
+                    s.w as f32 + pad * 2.0,
+                    s.h as f32 + pad * 2.0,
+                )
+            })
+            .collect()
+    }
+
     /// Whether to build `P` on the next frame, from the glass and panes as they are now and no
     /// new backdrop: the host's `scene_due` input (`Build`) and its wake-up (`After`).
     pub fn page_verdict(&self, now: Instant) -> PageBlur {
@@ -996,7 +1037,7 @@ impl Renderer {
     fn bind(&self, pl: &wgpu::RenderPipeline, res: &[Res]) -> wgpu::BindGroup {
         // every pass that reads a texture reads it through `samp` (binding 1); an auto layout
         // only contains what the shader uses, so the sampler is left out when nothing samples
-        let mut entries = vec![];
+        let mut entries = Vec::with_capacity(res.len() + 1);
         if res.iter().any(|r| matches!(r, Res::Tex(..))) {
             entries.push(wgpu::BindGroupEntry {
                 binding: 1,

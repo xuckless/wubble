@@ -18,6 +18,8 @@ use super::{ByteRange, Container, Plan, Refusal, Segment, Source, Track, Variant
 
 /// Most segments one representation may expand to (a malformed manifest's runaway count).
 const MAX_SEGMENTS: u64 = 100_000;
+/// Widest zero-padded template identifier (`%0Nd`): stops a crafted manifest from allocating GiB.
+const MAX_FORMAT_WIDTH: usize = 32;
 
 /// The variants a detected MPD offers.
 pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
@@ -149,9 +151,12 @@ fn track_of(set: &AdaptationSet, rep: &Representation) -> Option<Track> {
 fn parse_range(text: &str) -> Option<ByteRange> {
     let (a, b) = text.trim().split_once('-')?;
     let (start, end): (u64, u64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
-    (end >= start).then_some(ByteRange {
+    if end < start {
+        return None;
+    }
+    Some(ByteRange {
         start,
-        len: end - start + 1,
+        len: (end - start).checked_add(1)?,
     })
 }
 
@@ -219,7 +224,8 @@ fn fill(template: &str, rep: &Representation, number: u64, time: u64) -> String 
                 f.trim_start_matches('0')
                     .trim_end_matches('d')
                     .parse::<usize>()
-                    .ok(),
+                    .ok()
+                    .map(|w| w.min(MAX_FORMAT_WIDTH)),
             ),
             None => (part, None),
         };
@@ -286,7 +292,7 @@ fn template_segments(
                 Some(r) => r as u64,
                 None => 0,
             };
-            if number - start + repeat >= MAX_SEGMENTS {
+            if number.saturating_sub(start).saturating_add(repeat) >= MAX_SEGMENTS {
                 return Err(too_many());
             }
             for _ in 0..=repeat {
@@ -294,8 +300,8 @@ fn template_segments(
                     base,
                     &fill(media, rep, number, time),
                 )));
-                time += s.d;
-                number += 1;
+                time = time.saturating_add(s.d);
+                number = number.saturating_add(1);
             }
         }
         return Ok(out);
@@ -306,7 +312,7 @@ fn template_segments(
     let seconds = seconds.ok_or_else(|| Refusal::Failed("a manifest without a duration".into()))?;
     let count = (seconds * timescale as f64 / duration).ceil() as u64;
     let count = match t.endNumber {
-        Some(end) if end >= start => count.min(end - start + 1),
+        Some(end) if end >= start => count.min((end - start).saturating_add(1)),
         _ => count,
     };
     if count > MAX_SEGMENTS {
@@ -316,7 +322,7 @@ fn template_segments(
         let time = (n as f64 * duration) as u64;
         out.push(Segment::whole(&join_url(
             base,
-            &fill(media, rep, start + n, time),
+            &fill(media, rep, start.saturating_add(n), time),
         )));
     }
     Ok(out)
@@ -528,5 +534,36 @@ mod tests {
             "r1/00042-9-5$.m4s"
         );
         assert_eq!(fill("plain.mp4", &rep, 1, 0), "plain.mp4");
+        // Huge format width is capped rather than allocating GiB.
+        let capped = fill("$Number%099999999999d$.m4s", &rep, 7, 0);
+        assert_eq!(capped.len(), MAX_FORMAT_WIDTH + 4);
+        assert!(capped.ends_with("7.m4s"));
+    }
+
+    #[test]
+    fn crafted_ranges_and_timeline_overflows_do_not_panic() {
+        assert_eq!(parse_range("0-18446744073709551615"), None);
+        assert_eq!(
+            parse_range("1-18446744073709551615"),
+            Some(ByteRange {
+                start: 1,
+                len: u64::MAX
+            })
+        );
+        // Second timeline entry with r=-1 and huge next t must hit MAX_SEGMENTS, not wrap.
+        let crafted = "<AdaptationSet contentType=\"video\" mimeType=\"video/mp4\">\
+            <SegmentTemplate media=\"s-$Number$.m4s\" startNumber=\"1\" timescale=\"1\">\
+              <SegmentTimeline>\
+                <S t=\"0\" d=\"1\" r=\"1\"/>\
+                <S t=\"2\" d=\"1\" r=\"-1\"/>\
+                <S t=\"18446744073709551615\" d=\"1\"/>\
+              </SegmentTimeline>\
+            </SegmentTemplate>\
+            <Representation id=\"v\" bandwidth=\"1\"/>\
+          </AdaptationSet>";
+        assert!(matches!(
+            variants(&mpd(crafted), BASE),
+            Err(Refusal::Unsupported(_))
+        ));
     }
 }

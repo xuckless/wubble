@@ -278,7 +278,7 @@ impl Pattern {
 
 /// A host as the `url` crate writes it (lowercase, punycode), refusing wildcards and ports.
 fn ascii_host(host: &str) -> Option<String> {
-    if host.is_empty() || host.contains(['*', ':', '/', '@']) {
+    if host.is_empty() || host.contains(['*', ':', '/', '@', '?', '#']) {
         return None;
     }
     let url = url::Url::parse(&format!("http://{host}/")).ok()?;
@@ -768,5 +768,17 @@ go()
             assert_eq!(At::from_index(at.index()), at);
         }
         assert_eq!(At::from_index(7), At::Start);
+    }
+
+    #[test]
+    fn host_with_query_or_fragment_is_rejected() {
+        for bad in [
+            "example.com?foo=1",
+            "example.com#frag",
+            "https://example.com?token=1",
+            "https://example.com#top",
+        ] {
+            assert_eq!(Pattern::parse(bad), None, "{bad}");
+        }
     }
 }

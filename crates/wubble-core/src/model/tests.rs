@@ -3727,3 +3727,83 @@ fn an_agent_space_s_tabs_are_not_the_user_s_closed_tabs() {
     // another Space's deletion leaves the rule for this one's tabs alone
     assert!(m.closes_into_recent(ids[0], &Command::DeleteSpace(s)));
 }
+
+#[test]
+fn reopen_in_container_remaps_pip_and_glances() {
+    let (m, ids) = with_tabs(1);
+    let (m, _) = run(
+        m,
+        Command::NewContainer {
+            name: "Work".into(),
+        },
+    );
+    let work = m.containers[1].id;
+    let win = m.main_window();
+
+    // PiP tab stays in PiP after ReopenInContainer.
+    let (m, _) = run(m, Command::OpenPip { tab: ids[0] });
+    assert_eq!(m.pip_tab(), Some(ids[0]));
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: ids[0],
+            container: work,
+        },
+    );
+    let new_pip = m.pip_tab().expect("PiP window stays open");
+    assert_ne!(new_pip, ids[0]);
+    assert_eq!(m.tabs[&new_pip].container, work);
+    assert!(m.check().is_ok(), "{:?}", m.check());
+
+    // Glance opener and glance tab both survive ReopenInContainer.
+    let (m, _) = run(m, Command::ClosePip);
+    let (m, _) = run(
+        m,
+        Command::OpenGlance {
+            window: win,
+            opener: new_pip,
+            url: "https://peek.test".into(),
+        },
+    );
+    let g_tab = m.glance_of(win).unwrap().tab;
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: g_tab,
+            container: ContainerId::DEFAULT,
+        },
+    );
+    let g = m.glance_of(win).expect("peek stays open");
+    assert_ne!(g.tab, g_tab);
+    assert_eq!(m.tabs[&g.tab].container, ContainerId::DEFAULT);
+    assert!(m.check().is_ok(), "{:?}", m.check());
+}
+
+#[test]
+fn moving_a_glance_tab_to_another_space_or_window_promotes_it() {
+    let (m, ids) = with_tabs(1);
+    let (m, s2) = add_space(m, ContainerId::DEFAULT);
+    let win = m.main_window();
+    let (m, _) = run(
+        m,
+        Command::OpenGlance {
+            window: win,
+            opener: ids[0],
+            url: "https://peek.test".into(),
+        },
+    );
+    let g_tab = m.glance_of(win).unwrap().tab;
+    let (m, _) = run(
+        m,
+        Command::MoveTab {
+            tab: g_tab,
+            to: Dest::Normal {
+                space: s2,
+                index: 0,
+            },
+        },
+    );
+    assert!(m.glance_of(win).is_none());
+    assert_eq!(m.spaces[1].active, Some(g_tab));
+    assert!(m.check().is_ok(), "{:?}", m.check());
+}

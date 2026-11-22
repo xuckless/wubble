@@ -124,10 +124,17 @@ impl SponsorTab {
     }
 }
 
+/// Maximum stale eval IDs retained so a long-lived tab that drops evals cannot grow unboundedly.
+const MAX_STALE_POLLS: usize = 256;
+
 pub(super) struct Videos {
     controls: bool,
     rates: RateTable,
     overlays: BTreeMap<TabId, Overlay>,
+    /// On-demand 10 Hz clock for active video overlays (stopped when `overlays` is empty).
+    clock: slint::Timer,
+    /// True once the host enables wall-clock timers (off in deterministic smokes).
+    clock_enabled: bool,
     /// Snapshot polls in flight (eval id to tab and the round it went out in), at most one per
     /// tab.
     polls: BTreeMap<u64, (TabId, u64)>,
@@ -135,8 +142,8 @@ pub(super) struct Videos {
     /// sent while the frame navigates is never answered.
     round: u64,
     /// Polls sent to a document that has since gone: their answers are dropped (and may never
-    /// come, so they do not hold up the next poll).
-    stale: BTreeSet<u64>,
+    /// come, so they do not hold up the next poll). Keyed to `TabId` so closing a view prunes them.
+    stale: BTreeMap<u64, TabId>,
     /// Frame screenshots in flight.
     frames: BTreeMap<u64, TabId>,
     /// The pointer over the visible page's video, and over the controls.
@@ -178,9 +185,11 @@ impl Default for Videos {
             controls: true,
             rates: RateTable::new(),
             overlays: BTreeMap::new(),
+            clock: slint::Timer::default(),
+            clock_enabled: false,
             polls: BTreeMap::new(),
             round: 0,
-            stale: BTreeSet::new(),
+            stale: BTreeMap::new(),
             frames: BTreeMap::new(),
             over_video: false,
             over_controls: false,
@@ -328,8 +337,9 @@ impl Host {
             .map(|(id, _)| *id)
             .collect();
         for id in lost {
-            self.videos.polls.remove(&id);
-            self.videos.stale.insert(id);
+            if let Some((tab, _)) = self.videos.polls.remove(&id) {
+                self.record_stale_poll(id, tab);
+            }
         }
         let polling: BTreeSet<TabId> = self.videos.polls.values().map(|(t, _)| *t).collect();
         for tab in tabs.difference(&polling).copied().collect::<Vec<_>>() {
@@ -347,7 +357,7 @@ impl Host {
     pub(super) fn media_answer(&mut self, tab: TabId, event: &PageEvent) -> bool {
         match event {
             PageEvent::EvalResult { id, result } => {
-                if self.videos.stale.remove(&id.0) {
+                if self.videos.stale.remove(&id.0).is_some() {
                     return true;
                 }
                 if self.videos.polls.remove(&id.0).is_some() {
@@ -481,6 +491,7 @@ impl Host {
         if next != Overlay::default() {
             self.videos.overlays.insert(tab, next);
         }
+        self.sync_video_clock();
         for effect in effects {
             match effect {
                 VideoEffect::Page(cmd) => {
@@ -684,6 +695,37 @@ impl Host {
         }
     }
 
+    /// Enables the on-demand 10 Hz video overlay clock (started only while an overlay is open).
+    pub fn enable_video_clock(&mut self) {
+        self.videos.clock_enabled = true;
+        self.sync_video_clock();
+    }
+
+    /// Starts or stops the 10 Hz overlay clock based on whether any video overlay is active.
+    fn sync_video_clock(&mut self) {
+        if self.videos.clock_enabled && !self.videos.overlays.is_empty() {
+            if !self.videos.clock.running() {
+                self.videos.clock.start(
+                    slint::TimerMode::Repeated,
+                    crate::VIDEO_TICK_EVERY,
+                    || {
+                        crate::measure::count(crate::measure::Count::VideoTick);
+                        crate::with_host(Host::tick_video);
+                    },
+                );
+            }
+        } else if self.videos.clock.running() {
+            self.videos.clock.stop();
+        }
+    }
+
+    fn record_stale_poll(&mut self, id: u64, tab: TabId) {
+        self.videos.stale.insert(id, tab);
+        while self.videos.stale.len() > MAX_STALE_POLLS {
+            self.videos.stale.pop_first();
+        }
+    }
+
     /// The overlay's clock between polls, so the controls go on time (`LEAVE_MS` is shorter than
     /// a poll).
     pub fn tick_video(&mut self) {
@@ -705,7 +747,7 @@ impl Host {
             .collect();
         for id in old {
             self.videos.polls.remove(&id);
-            self.videos.stale.insert(id);
+            self.record_stale_poll(id, tab);
         }
         self.video_event(tab, VideoInput::PageChanged);
         self.videos.playing.remove(&tab);
@@ -713,7 +755,9 @@ impl Host {
 
     pub(super) fn media_view_gone(&mut self, tab: TabId) {
         self.videos.overlays.remove(&tab);
+        self.sync_video_clock();
         self.videos.polls.retain(|_, (t, _)| *t != tab);
+        self.videos.stale.retain(|_, t| *t != tab);
         self.videos.frames.retain(|_, t| *t != tab);
         self.videos.pip_calls.retain(|_, (t, _)| *t != tab);
         self.videos.playing.remove(&tab);

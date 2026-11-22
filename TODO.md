@@ -116,6 +116,8 @@ Open, for the owner's eye:
 - [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
 
 Open, to build or check:
+- [ ] From PR #4's review (2026-11-22), not fixed in the merge: a headless agent session's dialogs are answered for it (alert accepted, confirm and prompt cancelled, leave-page accepted) and the tool call in flight is not told, and the log line says "refused" whatever the answer; a sign-in copy of which no cookie was accepted now stops a starting session (`CookiesNotCopied`): owner's call whether that is wanted; the approval sheet counts its open Selects, so one destroyed while open (the bindings rewritten) leaves Escape dead; a second Save click while a media download runs does nothing and says nothing; a failed ffmpeg join now discards the fetched tracks; `space-switcher.slint` got a spacing the design does not have and `crossfade.slint` a clip that may cut the swap motion (derived-review sheet); a scroll thumb that hides mid-press loses its release
+- [ ] The scene's partial marking (PR #4): after a scene render only the strips around the one page and the overlay glass are redrawn, when that page fills the content area; checked with `SLINT_SKIA_PARTIAL_RENDERING=verify` on the video, overlay, page, split and tabs smokes (0 mismatches), not yet on a tab drag preview, a history swipe or a split closing to one pane
 - [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on a playing YouTube tab (tests pass; not reproduced)
 - [ ] The command bar's panel still takes clicks while it shrinks away (176 ms): a click on the page under it then is lost; check the design's exit (pointer-events)
 - [ ] In-place rename for a new Space in the sidebar (needs a design); Linux alternates for the chords GNOME takes
@@ -131,12 +133,9 @@ Open, to build or check:
 - [ ] Rebinding the sidebar shortcut also unbinds its second chord, Mod+Alt+S (once compact mode's), and the shortcut editor shows only the first chord
 - [ ] Narrow Settings (content width 759 px or less): the slider and select rows do not wrap to full width as the design's narrow block does (`settings.css`:120-130); repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
 - [ ] The built-in pages' list rows take Tab and Enter but not Up/Down, and a focused row is not scrolled into view
-- [ ] `FocusKeys` with `native-button: false` fires again on key repeat (a held Enter or Space)
 - [ ] macOS: a held key's repeats reach the page with `repeat: false` (CEF 156 builds its NSEvent with `isARepeat:NO`): a one-line CEF patch, then drop parity's `A.space-repeat` Mac gap; check YouTube's Space tap and hold-for-2x on the Mac
 - [ ] The settings search no longer finds "Your own filter lists" (the setting moved to `Section::Hidden`; the Filter lists section is not searchable)
 - [ ] A Space button opened by keyboard does not give the Spaces menu the keyboard focus
-- [ ] The popovers' scroll thumbs' touch area covers the rows' right edge
-- [ ] The Settings Select clips a long value at its width ("Ask on first sea" for the search engine with none chosen; on main since the placeholder came, before PR #2): fit the control to its longest label, or elide
 - [ ] A popover's entrance marks the whole window dirty (the glass's scene scale and alpha change each frame), so partial rendering does not help during it
 
 ## M0: Frame path
@@ -265,8 +264,6 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] The shell's items are still walked twice per page frame (Slint's dirty-region pass and render walk): the roads and estimates are in docs/research/renderer-roads.md section 6; the owner decides on a core fork or waiting for slint#15028
 - [ ] An inset shadow (`inner-shadow-*`) at a fractional device position: its anti-aliased edge column comes out up to 5 levels different when a partial frame's clip covers it than in a whole frame, and stays until the item is redrawn (Settings' section pill, the address field; gallery 69 in 2 of 6 runs). Snapping the shadow image to the pixel grid removes it but moves the shadow's edges by up to 3 levels against upstream: the owner's call (measurements.md "Pixel questions")
 - [ ] Chromium's GPU process exits (133, a trap) right after the gallery's agent scenes 12 and 13 end their session (`agents_stop`) in most runs, on main too; when it happens with the page alive, that page lays out again with smaller body text until it is reloaded (`42-toast-question`; reproduced on main by killing the GPU process)
-- [ ] A scene render (ambience, 8 to 10 a second during video and scroll) marks the whole window dirty; mark only what the scene shows through
-- [ ] A page's damage far from the glass (a spinner mid-page) still rebuilds the page blur for the ambience at 8 Hz, a whole-window frame: build it only when the damage is within the ambience's reach (about 130 px of a pane edge) or under overlay glass
 - [ ] The CEF pump wakes 30 times a second on a still page (its 33 ms ceiling, a recorded decision): report the energy case to the owner before changing it
 - [ ] macOS: the window is transparent (`background: transparent`, so the Metal layer is not opaque) and WindowServer blends the whole window on every present; an opaque window where the shell covers it all, after a look on the Mac
 - [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`

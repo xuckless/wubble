@@ -34,10 +34,23 @@ export component FocusKeys inherits FocusScope {
     in property <bool> native-button: false;
     callback activate();
     callback other-key(KeyEvent) -> EventResult;
+    property <bool> space-down;
     focus-on-click: false;
+    focus-lost => {
+        root.space-down = false;
+    }
     key-pressed(e) => {
         if e.text == " " || e.text == Key.Return {
-            if !root.native-button || (e.text == Key.Return && !e.repeat) {
+            if e.repeat {
+                return accept;
+            }
+            if root.native-button {
+                if e.text == " " {
+                    root.space-down = true;
+                } else {
+                    root.activate();
+                }
+            } else {
                 root.activate();
             }
             return accept;
@@ -46,7 +59,11 @@ export component FocusKeys inherits FocusScope {
     }
     key-released(e) => {
         if root.native-button && e.text == " " {
-            root.activate();
+            let was-down = root.space-down;
+            root.space-down = false;
+            if was-down {
+                root.activate();
+            }
             return accept;
         }
         return reject;

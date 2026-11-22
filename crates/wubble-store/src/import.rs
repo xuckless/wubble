@@ -109,14 +109,24 @@ struct Merged {
 fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> Result<Merged> {
     let mut sum = ImportSummary::default();
 
-    // Containers: the Default container maps to Default, others by name, else appended.
+    // Containers: the Default container maps to Default, others by name (skipping agent-space
+    // containers so imported user tabs never merge into an agent session), else appended.
+    let agent_containers: Vec<ContainerId> = model
+        .spaces
+        .iter()
+        .filter(|s| s.agent)
+        .map(|s| s.container)
+        .collect();
     let mut containers = model.containers.clone();
     let mut next_container = containers.iter().map(|c| c.id.0).max().unwrap_or(0) + 1;
     let mut cmap: HashMap<ContainerId, ContainerId> = HashMap::new();
     for c in &imp.containers {
         let to = if c.id == ContainerId::DEFAULT {
             ContainerId::DEFAULT
-        } else if let Some(e) = containers.iter().find(|e| e.name == c.name) {
+        } else if let Some(e) = containers
+            .iter()
+            .find(|e| e.name == c.name && !agent_containers.contains(&e.id))
+        {
             e.id
         } else {
             let id = ContainerId(next_container);
@@ -321,14 +331,9 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             summary: sum,
         });
     }
-    let merged = Model::from_parts(
-        spaces,
-        containers,
-        tabs,
-        model.windows.clone(),
-        model.clock(),
-    )
-    .map_err(Error::Corrupt)?;
+    let merged = model
+        .with_parts(spaces, containers, tabs, model.windows.clone())
+        .map_err(Error::Corrupt)?;
     Ok(Merged {
         model: merged,
         marks: new_marks,
@@ -481,7 +486,8 @@ impl Store {
         } = merge_spaces(model, imported, &marks)?;
         let tx = self.conn.transaction().await?;
         if summary.spaces_added > 0 || summary.containers_added > 0 {
-            write_model(&tx, &merged).await?;
+            let persisted = merged.for_session(&[]);
+            write_model(&tx, &persisted).await?;
             // Marks of Spaces that no longer exist must not suppress a later import.
             tx.execute(
                 "DELETE FROM import_marks WHERE space_id NOT IN (SELECT id FROM spaces)",
@@ -1135,6 +1141,76 @@ mod tests {
                 &s.load_session(std::time::Instant::now()).await.unwrap(),
                 &model,
             );
+        });
+    }
+
+    #[test]
+    fn import_preserves_live_model_state_and_skips_agent_containers() {
+        use std::time::Duration;
+        use wubble_core::model::{Command, apply};
+        use wubble_core::sleep::SleepPolicy;
+        use wubble_core::space::Rgb;
+
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let m = Model::new(std::time::Instant::now());
+            let (m, _) = apply(
+                m,
+                Command::NewTab {
+                    url: "https://opener.test/".into(),
+                    container: None,
+                    opener: None,
+                },
+            );
+            let opener = m.visible_tab().unwrap();
+            let win = m.main_window();
+            // Open a glance (peek), set custom sleep policy + never-sleep sites, and add an agent container named "Work".
+            let (m, _) = apply(
+                m,
+                Command::OpenGlance {
+                    window: win,
+                    opener,
+                    url: "https://peek.test/".into(),
+                },
+            );
+            let custom_policy = SleepPolicy {
+                freeze_after: Duration::from_secs(123),
+                discard_after: Duration::from_secs(456),
+                keep_pinned_alive: false,
+            };
+            let (m, _) = apply(m, Command::SetSleepPolicy(custom_policy));
+            let (m, _) = apply(m, Command::SetNeverSleepSites(vec!["keep.test".into()]));
+            let (m, _) = apply(
+                m,
+                Command::NewContainer {
+                    name: "Work".into(),
+                },
+            );
+            let agent_container = m.containers[1].id;
+            let (m, _) = apply(
+                m,
+                Command::NewSpace {
+                    name: "Agent: task".into(),
+                    tint: Rgb(1, 2, 3),
+                    container: agent_container,
+                },
+            );
+            let agent_space = m.spaces[1].id;
+            let (m, _) = apply(m, Command::MarkAgentSpace(agent_space));
+
+            let (merged, sum) = s.apply_import(&m, &fixture(), 10).await.unwrap();
+            assert!(sum.spaces_added > 0);
+            assert!(merged.glance_of(win).is_some(), "open peek stays alive");
+            assert_eq!(merged.policy(), custom_policy);
+            assert_eq!(merged.never_sites(), &["keep.test"]);
+            // The imported "Home" Space (which uses container "Work") must NOT reuse the agent Space's container.
+            let imported_home = merged
+                .spaces
+                .iter()
+                .find(|sp| sp.name == "Home")
+                .expect("imported Home space");
+            assert_ne!(imported_home.container, agent_container);
+            assert!(merged.check().is_ok(), "{:?}", merged.check());
         });
     }
 }
