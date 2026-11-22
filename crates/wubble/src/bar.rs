@@ -94,9 +94,18 @@ pub enum Choice {
     SetEngine(SearchEngine),
 }
 
-/// The open tabs, active Space first, each Space in sidebar order.
+/// The open tabs, active Space first, each Space in sidebar order. A private window lists its
+/// own tabs only, and no other window lists a private one (Chrome's tab switcher stays within
+/// one profile).
 pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
-    let mut spaces: Vec<_> = model.spaces.iter().map(|s| s.id).collect();
+    let active = model.active_space();
+    let private = model.is_private_space(active);
+    let mut spaces: Vec<_> = model
+        .spaces
+        .iter()
+        .filter(|s| if private { s.id == active } else { !s.private })
+        .map(|s| s.id)
+        .collect();
     spaces.sort_by_key(|&s| s != model.active_space());
     spaces
         .into_iter()
