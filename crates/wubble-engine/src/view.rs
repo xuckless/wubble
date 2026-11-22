@@ -51,6 +51,11 @@ use crate::pinch::{self, Pinch, TouchKind};
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
 
+/// Chrome's caret browsing preferences (`chrome/common/pref_names.h` `kCaretBrowsingEnabled`
+/// and `kShowCaretBrowsingDialog`); `wubble_core::caret` says what they mean.
+const CARET_BROWSING: &str = "settings.a11y.caret_browsing.enabled";
+const CARET_DIALOG: &str = "settings.a11y.caretbrowsing.show_dialog";
+
 /// Where a view sits in the host window (both physical pixels), and where the window and its
 /// monitor are on the desktop: what the page reads as `screen.*`, `window.screenX/Y`,
 /// `outerWidth` and `MouseEvent.screenX/Y`, and what Blink places popups such as `<select>`
@@ -971,6 +976,61 @@ impl View {
                 }
                 None => Err("sound setting: no request context".to_string()),
             };
+        });
+        result
+    }
+
+    /// Caret browsing in this view's profile (Chrome's `settings.a11y.caret_browsing.enabled`)
+    /// and whether Chrome asks before turning it on (`settings.a11y.caretbrowsing.show_dialog`,
+    /// on when unset). `None` when the view is not open or Chromium registers no such
+    /// preference in this build: F7 then does nothing.
+    pub fn caret_browsing(&mut self) -> Option<(bool, bool)> {
+        let mut out = None;
+        self.send(|host| {
+            out = (|| {
+                let context = host.request_context()?;
+                let read = |pref: &str| {
+                    let name = cef::CefString::from(pref);
+                    if context.has_preference(Some(&name)) == 0 {
+                        return None;
+                    }
+                    context.preference(Some(&name)).map(|v| v.bool() != 0)
+                };
+                let enabled = read(CARET_BROWSING)?;
+                Some((enabled, read(CARET_DIALOG).unwrap_or(true)))
+            })();
+        });
+        out
+    }
+
+    /// Writes both caret browsing preferences ([`View::caret_browsing`]) on this view's request
+    /// context; Chromium pushes the change to the profile's open pages. `Err` when the view is
+    /// not open or CEF refuses (the preference is missing or managed).
+    pub fn set_caret_browsing(&mut self, enabled: bool, ask: bool) -> Result<(), String> {
+        let mut result = Err(format!("{CARET_BROWSING}: the view is not open"));
+        self.send(|host| {
+            result = (|| {
+                let context = host.request_context().ok_or("no request context")?;
+                for (pref, on) in [(CARET_BROWSING, enabled), (CARET_DIALOG, ask)] {
+                    let name = cef::CefString::from(pref);
+                    if context.can_set_preference(Some(&name)) == 0 {
+                        // the dialog's preference is a nicety: a build without it still toggles
+                        if pref == CARET_DIALOG {
+                            continue;
+                        }
+                        return Err(format!("{pref}: not settable"));
+                    }
+                    let mut value = cef::value_create().ok_or("CEF made no value")?;
+                    value.set_bool(i32::from(on));
+                    // a non-null `error`, as in `set_minimum_font_size`
+                    let mut error = cef::CefString::from("");
+                    if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0
+                    {
+                        return Err(format!("{pref}: {error}"));
+                    }
+                }
+                Ok(())
+            })();
         });
         result
     }
