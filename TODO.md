@@ -307,3 +307,5 @@ starts with a measurement on the Mac that names the cause before any code change
 7. An ungoogled + CEF patch queue rebased every Chromium milestone is permanent work for one person.
 8. Windows is CI-only: input, IME and windowing bugs there are found late.
 9. Turso is pre-release: keep the file format SQLite-compatible and back up before migrations.
+
+  - [ ] `E.hover-cursor FAIL: cursor 0` once in 10 parity runs with `--begin-frames` on Linux (2026-11-21), 0 in 8 repeats of the E items in either mode: watch for it; cause unknown
