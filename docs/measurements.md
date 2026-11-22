@@ -504,3 +504,35 @@ What the samples show and do not:
   needs a build with symbols.
 - Nothing here counts frames, so the paint rate during video (60 or 120) and the lag on a tab switch a tester
   reported are not answered by this run.
+
+## The owner's Mac, preview.5: frame runs in Low Power Mode (2026-11-21)
+
+`--measure` runs of the installed app, started by the owner (`/Users/Shared/wubble-frames.sh`), 10 s each, Low
+Power Mode on, on the adapter, window 2560x1600@2, one run each (scroll twice). The first two runs reported a
+120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo).
+
+| run | page frames /s | shell renders /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | main % | GPU proc % |
+|---|---|---|---|---|---|---|---|
+| idle (still page) | 0 | 8.6 | 193 | 16.6 / 24.7 / 919 | 33.8 / 37.6 | 7.2 | 0.7 |
+| idle on the start page | 0 | 59.8 | 606 | 16.7 / 22.9 / 30 | 38.8 / 51.3 | 51.3 | 0.3 |
+| scroll | 34.9 | 48.1 | 246 | 16.7 / 48.6 / 65 | 2.2 / 50.1 | 33.6 | 18.9 |
+| scroll, second run | 56.1 | 58.5 | 36 | 16.7 / 24.0 / 48 | 3.4 / 14.4 | 33.2 | 11.6 |
+| scroll, `--begin-frames` | 58.1 | 59.4 | 12 | 16.7 / 20.2 / 33 | 4.5 / 11.9 | 37.1 | 10.0 |
+| canvas animation | 49.6 | 56.0 | 81 | 16.7 / 36.9 / 51 | 4.0 / 17.9 | 31.9 | 22.3 |
+| canvas, `--begin-frames` | 58.9 | 59.9 | 3 | 16.6 / 19.4 / 33 | 7.6 / 16.6 | 32.9 | 15.4 |
+| resize | 43.9 | 58.5 | 88 | 16.6 / 28.6 / 51 | 9.6 / 29.8 | 87.1 | 17.7 |
+| typing | 41.0 | 44.7 | 224 | 17.4 / 47.8 / 115 | 2.9 / 48.2 | 32.4 | 19.5 |
+
+(frame interval = `present_interval`; typing: key to pixels 53 / 88 / 103 ms, pointer to pixels 45 / 81 / 83 ms;
+resize: 428 stale frames, longest run 90.)
+
+- Frames are dropped: with CEF on its own timer, 35 to 56 page frames a second on a 60 Hz display and 36 to 246
+  missed refreshes in 10 s; the late frames come in steps of about 50 ms (three refreshes). The message pump
+  shows gaps of 33 to 55 ms in every run (idle too), so the main loop is being woken late; why (Low Power Mode's
+  timer coalescing, the pump's own delayed-work timer, App Nap) is not yet known, and no run was made with Low
+  Power Mode off.
+- With `--begin-frames` (one CEF frame per shell render) the same pages hold 58 to 59 frames a second with 3 to
+  12 missed refreshes, on less GPU-process time.
+- The start page redraws the whole window 60 times a second for ever (dirty share 1.0, no partial frames) and
+  holds the main process at 51 % of a core.
+- A still page was redrawn 8.6 times a second (whole window each time); the rule on Linux is 0 to 2 in 4 s.
