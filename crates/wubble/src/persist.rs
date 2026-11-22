@@ -262,6 +262,11 @@ pub struct Loaded {
     pub favicons: HashMap<String, Favicon>,
     /// Every Boost, in the user's order.
     pub boosts: Vec<Boost>,
+    /// The last run quit in order (`Store::begin_run`); `true` without a database.
+    pub clean_exit: bool,
+    /// The last session's pages the startup mode left out (`wubble_core::startup`), set where
+    /// the model is handed to the host (`main.rs`).
+    pub startup: wubble_core::startup::Offer,
 }
 
 impl Default for Loaded {
@@ -273,6 +278,8 @@ impl Default for Loaded {
             downloads: vec![],
             favicons: HashMap::new(),
             boosts: vec![],
+            clean_exit: true,
+            startup: wubble_core::startup::Offer::Idle,
         }
     }
 }
@@ -839,7 +846,13 @@ fn serve(
             // Autofill unlocks a locked vault; one found unusable stays so until the page's
             // explicit unlock (`wubble_vault::state`: retry is a user action).
             let wait = match request {
-                Request::Shutdown => return,
+                Request::Shutdown => {
+                    // what was queued before is done: the run quit in order
+                    if let Err(e) = pollster::block_on(vault.store_mut().store_mut().end_run()) {
+                        eprintln!("wubble: store: {e}");
+                    }
+                    return;
+                }
                 Request::Vault(f) if matches!(vault.state(), VaultState::Locked) => KeyWait::Job(f),
                 Request::Vault(f) => {
                     f(&mut vault);
@@ -927,6 +940,7 @@ fn latest_save_only(batch: Vec<Request>) -> impl Iterator<Item = Request> {
 async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     let mut store = Store::open(path).await?;
     let model = store.load_session(std::time::Instant::now()).await?;
+    let clean_exit = store.begin_run().await?;
     let settings = Settings {
         ui: UiState {
             sidebar_width: store.setting::<SidebarWidth>().await?,
@@ -965,6 +979,8 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
         downloads,
         favicons,
         boosts,
+        clean_exit,
+        startup: wubble_core::startup::Offer::Idle,
     };
     Ok((store, loaded))
 }

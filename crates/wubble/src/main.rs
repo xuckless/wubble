@@ -1243,10 +1243,18 @@ pub fn quit() {
     let _ = slint::quit_event_loop();
 }
 
-/// macOS's `terminate:` (Cmd+Q, the menu bar's Quit, the Dock's): the Quit action's plan,
-/// which asks first when quitting would cancel private downloads (`Host::close_asks`).
+/// macOS's `terminate:` from the menu bar's Quit or the Dock's: the Quit action's plan, which
+/// asks first when quitting would cancel private downloads (`Host::close_asks`).
 fn quit_asked() {
-    with_host(|host| host.perform(wubble_core::action::Action::Quit));
+    with_host(|host| host.quit_now());
+}
+
+/// The quit keys on macOS (`terminate:` sent by Cmd+Q): later, outside AppKit's dispatch, the
+/// host quits or asks for a second press ("Warn before quitting", `host/startup.rs`).
+fn quit_keys() {
+    if slint::invoke_from_event_loop(|| with_host(Host::quit_keys)).is_err() {
+        quit();
+    }
 }
 
 /// The window's display refresh rate. Wayland names the current monitor only
@@ -2247,6 +2255,10 @@ fn run(
             page_smoke::free_port()?.to_string(),
         );
     }
+    // What the startup mode opens of the session (`wubble_core::startup`); smokes keep theirs.
+    if matches!(mode, Mode::Browse { .. }) {
+        host::open_session(&mut loaded, &store, url.is_some());
+    }
     let blocking = blocking::Blocking::new();
     blocking.on_lists_changed(|| {
         let _ = slint::invoke_from_event_loop(|| with_host(Host::filter_lists_changed));
@@ -2483,8 +2495,10 @@ fn run(
     window.show()?;
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
+    with_host(Host::startup_opened);
     measure::mark(measure::Stage::SessionRestored);
     wubble_engine::app::set_quit_handler(Some(quit_asked));
+    wubble_engine::app::set_quit_key_handler(Some(quit_keys));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {
@@ -2552,6 +2566,7 @@ fn run(
     let code = Verdict::of(mode, &outcome).print();
     drain(&mut host.engine);
     wubble_engine::app::set_quit_handler(None);
+    wubble_engine::app::set_quit_key_handler(None);
     Ok(code)
 }
 

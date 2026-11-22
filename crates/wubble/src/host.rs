@@ -53,6 +53,7 @@ mod shortcuts;
 mod site_search;
 mod snapshots;
 pub(crate) mod start;
+mod startup;
 mod status;
 mod surfaces;
 mod swipe;
@@ -69,6 +70,7 @@ pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
 pub(crate) use pinch::fixture as pinch_fixture;
+pub(crate) use startup::open_session;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;
@@ -617,6 +619,10 @@ pub struct Host {
     ext_ui: ext_ui::ExtUi,
     /// Whether the MCP server is hosted (`host/hosting.rs`).
     hosting: hosting::McpHosting,
+    /// The last session's pages the startup mode left out, offered back (`host/startup.rs`).
+    startup: wubble_core::startup::Offer,
+    /// "Warn before quitting": the quit keys' first press (`wubble_core::quit`).
+    quit_guard: wubble_core::quit::QuitGuard,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
@@ -655,6 +661,8 @@ impl Host {
             downloads,
             favicons,
             boosts,
+            clean_exit: _,
+            startup: offer,
         } = loaded;
         let favicons = model
             .tabs
@@ -847,6 +855,8 @@ impl Host {
             contents: Default::default(),
             ui_epoch: Instant::now(),
             ui_timer: slint::Timer::default(),
+            startup: offer,
+            quit_guard: Default::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -2696,11 +2706,9 @@ impl Host {
                 }
             }
             Plan::StopAgents => self.agents_stop(),
-            Plan::Quit => {
-                if !self.close_asks(wubble_core::window::Closing::App) {
-                    quit();
-                }
-            }
+            Plan::GoHome => self.go_home(),
+            Plan::OpenLastSession => self.startup_event(wubble_core::startup::OfferEvent::Restore),
+            Plan::Quit => self.quit_keys(),
             Plan::Nothing => {}
         }
     }
