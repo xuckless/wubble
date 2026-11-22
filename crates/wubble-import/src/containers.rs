@@ -38,6 +38,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Container>, ImportError> {
             Some(Container {
                 id: ContainerId(id),
                 name: name.to_owned(),
+                ephemeral: false,
             })
         })
         .collect())

@@ -124,6 +124,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             containers.push(Container {
                 id,
                 name: c.name.clone(),
+                ephemeral: false,
             });
             sum.containers_added += 1;
             id
@@ -187,6 +188,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             split: None,
             never_sleep: false,
             agent: false,
+            private: false,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));
@@ -610,10 +612,12 @@ mod tests {
                 Container {
                     id: D,
                     name: "Default".into(),
+                    ephemeral: false,
                 },
                 Container {
                     id: ContainerId(3),
                     name: "Work".into(),
+                    ephemeral: false,
                 },
             ],
             spaces: vec![

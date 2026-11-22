@@ -255,6 +255,16 @@ pub enum Command {
     NewWindow {
         space: Option<SpaceId>,
     },
+    /// A private window (Chrome's incognito window, Ctrl+Shift+N), focused: a new private Space
+    /// ([`Space::private`]) in the in-memory container every private window shares (made with
+    /// the first one), on `url` or, without one, with the command bar open. The window is locked
+    /// to its Space ([`Command::SwitchSpace`] is refused there; new tabs, pop-ups and links land
+    /// in it), its tabs never move to a normal Space or window, and closing it closes its tabs
+    /// and deletes the Space (with the last private window, the container:
+    /// [`Effect::ContainerDeleted`]).
+    NewPrivateWindow {
+        url: Option<String>,
+    },
     /// The last Main window is not closed: [`Effect::LastWindowClosed`] asks the host to quit.
     /// A Little or Popup window closes its tab with it.
     CloseWindow(WindowId),
@@ -414,8 +424,12 @@ impl Model {
     /// The Space Settings' "+" and the New Space action add: [`crate::space::next_space`]
     /// beside the Spaces there are, in the Default container.
     pub fn new_space(&self) -> Command {
-        let (name, tint) =
-            crate::space::next_space(self.spaces.iter().map(|s| (s.name.as_str(), s.tint)));
+        let (name, tint) = crate::space::next_space(
+            self.spaces
+                .iter()
+                .filter(|s| !s.private)
+                .map(|s| (s.name.as_str(), s.tint)),
+        );
         Command::NewSpace {
             name,
             tint,
@@ -439,6 +453,7 @@ impl Model {
             split: None,
             never_sleep: false,
             agent: false,
+            private: false,
         };
         Self {
             windows: vec![Window::main(WindowId(0), space.id)],
@@ -446,6 +461,7 @@ impl Model {
             containers: vec![Container {
                 id: ContainerId::DEFAULT,
                 name: "Default".into(),
+                ephemeral: false,
             }],
             tabs: BTreeMap::new(),
             glances: vec![],
@@ -683,14 +699,24 @@ impl Model {
     }
 
     /// The Space `delta` steps from the active one, wrapping at both ends.
+    /// Private Spaces are no stops: each is locked in its own window.
     pub fn space_step(&self, delta: isize) -> Option<SpaceId> {
-        let ids: Vec<SpaceId> = self.spaces.iter().map(|s| s.id).collect();
+        let ids: Vec<SpaceId> = self
+            .spaces
+            .iter()
+            .filter(|s| !s.private)
+            .map(|s| s.id)
+            .collect();
         cycle(&ids, Some(self.active_space()), delta)
     }
 
-    /// The Space at `index` (0-based), if there is one.
+    /// The Space at `index` (0-based) among those that are not private, if there is one.
     pub fn nth_space(&self, index: usize) -> Option<SpaceId> {
-        self.spaces.get(index).map(|s| s.id)
+        self.spaces
+            .iter()
+            .filter(|s| !s.private)
+            .nth(index)
+            .map(|s| s.id)
     }
 
     /// Tabs whose page is alive (not discarded): each has one engine view.
@@ -706,8 +732,11 @@ impl Model {
         let mut placed = BTreeMap::new();
         let mut space_ids = vec![];
         let mut folder_ids = vec![];
-        if self.spaces.is_empty() {
-            return Err("no spaces".into());
+        if self.spaces.iter().all(|s| s.private) {
+            return Err("no spaces but private ones".into());
+        }
+        if self.containers.iter().filter(|c| c.ephemeral).count() > 1 {
+            return Err("two ephemeral containers".into());
         }
         if self.containers.first().map(|c| c.id) != Some(ContainerId::DEFAULT) {
             return Err("containers[0] is not Default".into());
@@ -725,6 +754,11 @@ impl Model {
             if !self.has_container(s.container) {
                 return Err(format!("space {:?} has unknown container", s.id));
             }
+            // a private Space's tabs, and only theirs, live in the in-memory container
+            if s.private != self.is_ephemeral(s.container) {
+                return Err(format!("space {:?} private={} container", s.id, s.private));
+            }
+            let private = s.private;
             let mut place = |t: TabId| -> Result<(), String> {
                 if placed.insert(t, si).is_some() {
                     return Err(format!("tab {t:?} placed twice"));
@@ -735,6 +769,9 @@ impl Model {
                 }
                 if !self.has_container(tab.container) {
                     return Err(format!("tab {t:?} has unknown container"));
+                }
+                if self.is_ephemeral(tab.container) != private {
+                    return Err(format!("tab {t:?} crosses a private window's line"));
                 }
                 if tab.opener.is_some_and(|o| !self.tabs.contains_key(&o)) {
                     return Err(format!("tab {t:?} opener is gone"));
@@ -961,6 +998,11 @@ impl Model {
         space: Option<SpaceId>,
         show: bool,
     ) -> Vec<Effect> {
+        // extensions do not run in private windows (Chrome's default: "Allow in Incognito" off)
+        if space.is_some_and(|s| self.is_private_space(s)) {
+            return vec![];
+        }
+        let space = Some(space.unwrap_or_else(|| self.normal_space()));
         let Some((id, si, create)) = self.place_new_tab(url, Some(container), None, space) else {
             return vec![];
         };
@@ -995,8 +1037,16 @@ impl Model {
         let inherited = opener.and_then(|o| self.tabs.get(&o)).map(|t| t.container);
         let opener = opener.filter(|_| opener_space == Some(si));
         let default = self.spaces[si].container;
-        let id = self.fresh_tab();
         let eff = container.or(inherited).unwrap_or(default);
+        // a private Space's tabs are all in its in-memory container, and no other tab is
+        let eff = if self.spaces[si].private {
+            default
+        } else if self.is_ephemeral(eff) {
+            return None;
+        } else {
+            eff
+        };
+        let id = self.fresh_tab();
         let tab = Tab {
             id,
             url: url.clone(),
@@ -1128,7 +1178,8 @@ impl Model {
     }
 
     /// Whether closing `tab` by `command` (applied next) puts it on the user's recently-closed
-    /// list: not a peek's, not an empty tab, and not a tab of an agent Space that `command`
+    /// list: not a peek's, not an empty tab, not a private window's, and not a tab of an agent
+    /// Space that `command`
     /// deletes (a session's teardown or the owner's dustbin: its pages are none of the user's).
     /// A tab an agent session drives is excluded by the caller, which knows the sessions.
     pub fn closes_into_recent(&self, tab: TabId, command: &Command) -> bool {
@@ -1141,12 +1192,15 @@ impl Model {
         };
         !self.is_glance(tab)
             && !deleted_agent_space
+            && !self.is_private_tab(tab)
             && self.tabs.get(&tab).is_some_and(|t| !t.url.is_empty())
     }
 
-    /// The model as a session keeps it: without the peeks and their tabs, and without the
+    /// The model as a session keeps it: without the peeks and their tabs, without the
     /// `transient` Spaces (an agent session's), their tabs and their own containers (a restart
-    /// never brings one back).
+    /// never brings one back), and without the private windows, their Spaces, tabs and the
+    /// in-memory container (Chrome never writes an off-the-record profile's session). When only
+    /// private windows are open, a Main window on a normal Space stands in for them.
     pub fn for_session(&self, transient: &[SpaceId]) -> Model {
         let mut m = self.clone();
         let gone: Vec<TabId> = m.glances.drain(..).map(|g| g.tab).collect();
@@ -1160,6 +1214,20 @@ impl Model {
             };
             m = apply(m, Command::DeleteSpace(space)).0;
             m = apply(m, Command::DeleteContainer(container)).0;
+        }
+        for space in m.private_spaces() {
+            let Some(window) = m.space_window(space) else {
+                continue;
+            };
+            let mains = m
+                .windows
+                .iter()
+                .filter(|w| w.kind() == crate::window::WindowKind::Main)
+                .count();
+            if mains == 1 {
+                m = apply(m, Command::NewWindow { space: None }).0;
+            }
+            m = apply(m, Command::CloseWindow(window)).0;
         }
         m
     }
@@ -1273,6 +1341,10 @@ impl Model {
         let (Some((src, _)), Some(dst)) = (self.place_of(tab), self.dest_space(to)) else {
             return vec![];
         };
+        // a tab never crosses between a private Space and a normal one
+        if self.spaces[src].private != self.spaces[dst].private {
+            return vec![];
+        }
         let src_was_active = self.spaces[src].active == Some(tab);
         // A pane moved to another Space leaves its split there.
         let heir = (src != dst).then(|| self.leave_split(tab)).flatten();
@@ -1345,7 +1417,10 @@ impl Model {
         let Some(si) = self.space_idx(space) else {
             return vec![];
         };
-        if !self.has_container(container) {
+        if !self.has_container(container)
+            || self.spaces[si].private
+            || self.is_ephemeral(container)
+        {
             return vec![];
         }
         // Existing tabs keep their live context: the default only seeds new tabs.
@@ -1359,7 +1434,9 @@ impl Model {
         let Some(si) = self.space_idx(space) else {
             return vec![];
         };
-        if self.spaces.len() == 1 {
+        // a private Space goes with its window (`Command::CloseWindow`), and the last Space
+        // that is not private stays
+        if self.spaces[si].private || self.spaces.iter().filter(|s| !s.private).count() == 1 {
             return vec![];
         }
         let gone = self.order_idx(si);
@@ -1391,13 +1468,21 @@ impl Model {
         if self.active_space() == space {
             return vec![];
         }
+        // a private window is locked to its Space, and no switcher reaches a private Space
+        if self.spaces[si].private || self.is_private_space(self.active_space()) {
+            return vec![];
+        }
         let mut fx = self.set_active_space(space);
         fx.push(self.show(self.spaces[si].active));
         fx
     }
 
     fn delete_container(&mut self, container: ContainerId) -> Vec<Effect> {
-        if container == ContainerId::DEFAULT || !self.has_container(container) {
+        // the in-memory container goes with the last private window, never by itself
+        if container == ContainerId::DEFAULT
+            || !self.has_container(container)
+            || self.is_ephemeral(container)
+        {
             return vec![];
         }
         // Live pages in the dead context are replaced by Default ones, as in a reopen.
@@ -1425,7 +1510,11 @@ impl Model {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
         };
-        if !self.has_container(container) || self.tabs[&tab].container == container {
+        if !self.has_container(container)
+            || self.tabs[&tab].container == container
+            || self.spaces[si].private
+            || self.is_ephemeral(container)
+        {
             return vec![];
         }
         let new = self.fresh_tab();
@@ -1922,6 +2011,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             space,
             show,
         } => m.extension_tab(url, container, space, show),
+        // an agent session never works in a private Space
+        Command::OpenInSpace { space, .. } if m.is_private_space(space) => vec![],
         Command::OpenInSpace { space, url } => m
             .place_new_tab(url, None, None, Some(space))
             .map(|(id, si, create)| {
@@ -2013,7 +2104,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::NewContainer { name } => {
             let id = ContainerId(m.next_container);
             m.next_container += 1;
-            m.containers.push(Container { id, name });
+            m.containers.push(Container {
+                id,
+                name,
+                ephemeral: false,
+            });
             vec![]
         }
         Command::DeleteContainer(c) => m.delete_container(c),
@@ -2044,6 +2139,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::SwapPane { tab, right } => m.swap_pane(tab, right),
         Command::OpenInternal(page) => m.open_internal(page),
         Command::NewWindow { space } => m.new_window(space),
+        Command::NewPrivateWindow { url } => m.new_private_window(url),
         Command::CloseWindow(w) => m.close_window(w),
         Command::FocusWindow(w) => {
             m.focus(w);
@@ -2075,7 +2171,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             vec![]
         }
         Command::MarkAgentSpace(space) => {
-            if let Some(si) = m.space_idx(space) {
+            if let Some(si) = m.space_idx(space).filter(|&si| !m.spaces[si].private) {
                 m.spaces[si].agent = true;
             }
             vec![]

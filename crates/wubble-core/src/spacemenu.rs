@@ -87,10 +87,14 @@ pub struct Geometry {
     pub rule: f64,
 }
 
-/// The popup for a window showing Space `current`, over the model's Spaces in order.
+/// The popup for a window showing Space `current`, over the model's Spaces in order. Private
+/// Spaces are no rows (each is locked in its own window), and a private window's popup lists
+/// nothing: it cannot switch Space.
 pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
+    let locked = spaces.iter().any(|s| s.id == current && s.private);
     let rows: Vec<Row> = spaces
         .iter()
+        .filter(|s| !s.private && !locked)
         .map(|s| Row {
             target: Target::Space(s.id),
             name: s.name.clone(),
@@ -187,6 +191,7 @@ mod tests {
             split: None,
             never_sleep: false,
             agent: false,
+            private: false,
         }
     }
 

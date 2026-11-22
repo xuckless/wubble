@@ -55,6 +55,7 @@ impl Store {
             containers.push(Container {
                 id: ContainerId(narrow(r.get(0)?, "container id")?),
                 name: r.get(1)?,
+                ephemeral: false,
             });
         }
 
@@ -89,6 +90,8 @@ impl Store {
                 split: None,
                 never_sleep: r.get::<i64>(6)? != 0,
                 agent: r.get::<i64>(7)? != 0,
+                // a private Space is never written (`write_model`)
+                private: false,
             });
         }
         if spaces.is_empty() {
@@ -999,6 +1002,7 @@ mod tests {
                     split: None,
                     never_sleep: false,
                     agent: false,
+                    private: false,
                 },
                 Space {
                     id: SpaceId(1),
@@ -1012,16 +1016,19 @@ mod tests {
                     split: None,
                     never_sleep: false,
                     agent: false,
+                    private: false,
                 },
             ];
             let containers = vec![
                 Container {
                     id: D,
                     name: "Default".into(),
+                    ephemeral: false,
                 },
                 Container {
                     id: ContainerId(1),
                     name: "Work".into(),
+                    ephemeral: false,
                 },
             ];
             let mut tabs = vec![

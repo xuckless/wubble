@@ -22,6 +22,11 @@ pub struct FolderId(pub u32);
 pub struct Container {
     pub id: ContainerId,
     pub name: String,
+    /// Kept in memory only, never on disk: the one container every private window's tabs share
+    /// (Chrome's off-the-record profile, `Profile::GetPrimaryOTRProfile`). The engine opens it
+    /// without a storage directory; it is never saved and goes when the last private window
+    /// closes ([`crate::model::Command::NewPrivateWindow`]).
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +110,16 @@ pub struct Space {
     /// ended and left its tabs to the owner ([`crate::agent::clear`]). Set once
     /// (`Command::MarkAgentSpace`), never cleared, saved with the session.
     pub agent: bool,
+    /// A private window's Space (Chrome's incognito window): shown by exactly one Main window
+    /// for its life, its tabs in the ephemeral container ([`Container::ephemeral`]), and none
+    /// of it saved, recorded or listed elsewhere. Set at creation
+    /// (`Command::NewPrivateWindow`), never changed; the Space goes when its window closes.
+    pub private: bool,
 }
+
+/// What a private Space and its window are called (the window title's suffix, the sidebar
+/// header's chip).
+pub const PRIVATE_NAME: &str = "Private";
 
 /// Most pages side by side (the design's `SPLIT.maxPanes`).
 pub const MAX_PANES: usize = crate::split::SPLIT::maxPanes;

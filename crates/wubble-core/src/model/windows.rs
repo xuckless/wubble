@@ -1,9 +1,15 @@
 //! The window half of [`Model`]: which window shows what, and the window commands.
 
 use super::{DEFAULT_TINT, Dest, Effect, Model};
-use crate::space::{ContainerId, Rgb, Space, SpaceIcon, SpaceId, SplitGroup};
+use crate::space::{
+    Container, ContainerId, PRIVATE_NAME, Rgb, Space, SpaceIcon, SpaceId, SplitGroup,
+};
 use crate::tab::TabId;
 use crate::window::{Geometry, Shown, Window, WindowId, WindowKind, WindowTarget};
+
+/// A private Space's tint: the design's lilac swatch, Firefox private browsing's purple (the
+/// window's dark tint and Private chip are the shell's, `kit/chrome/private-mark.slint`).
+const PRIVATE_TINT: [u8; 3] = crate::kit_gen::spaces::SWATCHES[1];
 
 impl Model {
     /// The Space of the focused Main window (the last focused one while a Little or Popup
@@ -120,6 +126,71 @@ impl Model {
             .map(|w| w.id)
     }
 
+    /// Whether `space` is a private window's ([`Space::private`]).
+    pub fn is_private_space(&self, space: SpaceId) -> bool {
+        self.space_idx(space).is_some_and(|si| self.spaces[si].private)
+    }
+
+    /// Whether `container` is the in-memory one private windows share ([`Container::ephemeral`]).
+    pub fn is_ephemeral(&self, container: ContainerId) -> bool {
+        self.containers
+            .iter()
+            .any(|c| c.id == container && c.ephemeral)
+    }
+
+    /// Whether `tab` is a private window's: placed in a private Space, or (the same, by
+    /// [`Model::check`]) living in the ephemeral container. Nothing of it is saved or recorded.
+    pub fn is_private_tab(&self, tab: TabId) -> bool {
+        self.location(tab)
+            .is_some_and(|(s, _)| self.is_private_space(s))
+            || self
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| self.is_ephemeral(t.container))
+    }
+
+    /// Whether window `id` is private: a Main window showing a private Space, or a Popup or
+    /// Pip window of a private tab.
+    pub fn is_private_window(&self, id: WindowId) -> bool {
+        match self.window(id).map(|w| w.shown) {
+            Some(Shown::Space(s)) => self.is_private_space(s),
+            Some(Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t)) => self.is_private_tab(t),
+            None => false,
+        }
+    }
+
+    /// The private Spaces, in order: what a session, the history and every list leave out.
+    pub fn private_spaces(&self) -> Vec<SpaceId> {
+        self.spaces
+            .iter()
+            .filter(|s| s.private)
+            .map(|s| s.id)
+            .collect()
+    }
+
+    /// Whether a private window is open.
+    pub fn has_private(&self) -> bool {
+        self.spaces.iter().any(|s| s.private)
+    }
+
+    /// The Space of the last focused Main window that is not private, else the first Space that
+    /// is not: where a link from another app, an extension's tab or an agent's lands while a
+    /// private window has focus (Chrome opens those in the last normal window).
+    pub fn normal_space(&self) -> SpaceId {
+        self.windows
+            .iter()
+            .rev()
+            .filter_map(Window::space)
+            .find(|&s| !self.is_private_space(s))
+            .or_else(|| self.spaces.iter().find(|s| !s.private).map(|s| s.id))
+            .expect("a Space that is not private")
+    }
+
+    /// The Main window showing `space`, if one does.
+    pub fn space_window(&self, space: SpaceId) -> Option<WindowId> {
+        self.shown_by(space).map(|i| self.windows[i].id)
+    }
+
     /// The index of the focused Main window.
     fn main_idx(&self) -> usize {
         self.windows
@@ -148,6 +219,10 @@ impl Model {
 
     /// The focused Main window shows `space`; if another Main window shows it already, that
     /// window takes focus instead (two windows never show one Space).
+    ///
+    /// A private window is locked to its Space: it is never turned to another one. A Space no
+    /// window shows is then shown by the last focused Main window that is not private (focused),
+    /// or by a new window when there is none.
     pub(super) fn set_active_space(&mut self, space: SpaceId) -> Vec<Effect> {
         if self.active_space() == space {
             return vec![];
@@ -156,8 +231,22 @@ impl Model {
         match self.shown_by(space) {
             Some(i) => fx.extend(self.focus(self.windows[i].id)),
             None => {
-                let i = self.main_idx();
-                self.windows[i].shown = Shown::Space(space);
+                let main = self.main_idx();
+                let normal = self.windows.iter().rposition(|w| {
+                    w.space().is_some_and(|s| !self.is_private_space(s))
+                });
+                match normal {
+                    Some(i) => {
+                        self.windows[i].shown = Shown::Space(space);
+                        if i != main {
+                            fx.extend(self.focus(self.windows[i].id));
+                        }
+                    }
+                    None => {
+                        let id = self.push_window(Shown::Space(space), None);
+                        fx.push(Effect::WindowOpened(id));
+                    }
+                }
             }
         }
         fx.push(Effect::SpaceChanged(space));
@@ -166,7 +255,9 @@ impl Model {
 
     /// The Space no Main window shows that is nearest to index `near`, lower first.
     pub(super) fn free_space(&self, near: usize) -> Option<SpaceId> {
-        let free = |i: &usize| self.shown_by(self.spaces[*i].id).is_none();
+        // a private Space is its own window's, never another's
+        let free =
+            |i: &usize| !self.spaces[*i].private && self.shown_by(self.spaces[*i].id).is_none();
         let n = self.spaces.len();
         (0..=near.min(n.saturating_sub(1)))
             .rev()
@@ -191,6 +282,7 @@ impl Model {
             split: None,
             never_sleep: false,
             agent: false,
+            private: false,
         });
         id
     }
@@ -244,7 +336,7 @@ impl Model {
             Shown::Little(t) | Shown::Popup(t) => self.close_tab(t),
             // the tab stays, back in its Space's window
             Shown::Pip(_) => self.close_pip(),
-            Shown::Space(_) => {
+            Shown::Space(s) => {
                 if self
                     .windows
                     .iter()
@@ -253,6 +345,9 @@ impl Model {
                     == 1
                 {
                     return vec![Effect::LastWindowClosed];
+                }
+                if self.is_private_space(s) {
+                    return self.close_private_window(id, s);
                 }
                 let was_focused = self.focused() == id;
                 self.windows.retain(|w| w.id != id);
@@ -263,6 +358,86 @@ impl Model {
                 fx
             }
         }
+    }
+
+    /// A private window closes (Chrome `BrowserView` closing an incognito window): its tabs close,
+    /// its Space goes, and with the last private window the ephemeral container goes too, so
+    /// nothing of it outlives the window (Chrome destroys the off-the-record profile when its
+    /// last browser closes, `ProfileDestroyer::DestroyOTRProfileWhenAppropriate`). The caller
+    /// checked it is not the last Main window.
+    fn close_private_window(&mut self, id: WindowId, space: SpaceId) -> Vec<Effect> {
+        let Some(si) = self.space_idx(space) else {
+            return vec![];
+        };
+        let gone = self.order_idx(si);
+        self.glances
+            .retain(|g| g.window != id && !gone.contains(&g.tab) && !gone.contains(&g.opener));
+        let was_focused = self.focused() == id;
+        let container = self.spaces[si].container;
+        let mut fx: Vec<Effect> = gone.iter().map(|&t| Effect::CloseTab(t)).collect();
+        self.spaces.remove(si);
+        self.forget(&gone);
+        self.windows.retain(|w| w.id != id);
+        fx.push(Effect::WindowClosed(id));
+        if !self.spaces.iter().any(|s| s.container == container)
+            && !self.tabs.values().any(|t| t.container == container)
+        {
+            self.containers.retain(|c| c.id != container);
+            fx.push(Effect::ContainerDeleted(container));
+        }
+        if was_focused {
+            let active = self.active_space();
+            fx.push(Effect::SpaceChanged(active));
+            let si = self.space_idx(active).expect("active space");
+            fx.push(self.show(self.spaces[si].active));
+        }
+        fx
+    }
+
+    /// The ephemeral container private windows share: the one there is, else a new one.
+    fn private_container(&mut self) -> ContainerId {
+        if let Some(c) = self.containers.iter().find(|c| c.ephemeral) {
+            return c.id;
+        }
+        let id = ContainerId(self.next_container);
+        self.next_container += 1;
+        self.containers.push(Container {
+            id,
+            name: PRIVATE_NAME.into(),
+            ephemeral: true,
+        });
+        id
+    }
+
+    /// A new private Space in the ephemeral container and the Main window showing it, focused.
+    fn add_private_window(&mut self) -> (SpaceId, WindowId) {
+        let container = self.private_container();
+        let tint = {
+            let [r, g, b] = PRIVATE_TINT;
+            Rgb(r, g, b)
+        };
+        let space = self.add_space(PRIVATE_NAME.into(), tint, container);
+        let si = self.space_idx(space).expect("just added");
+        self.spaces[si].private = true;
+        let id = self.push_window(Shown::Space(space), None);
+        (space, id)
+    }
+
+    /// Ctrl+Shift+N: a private window, focused, on a new private Space; on `url` (Open Link in
+    /// Private Window) or, without one, with the command bar open (Chrome's incognito window
+    /// opens on its new tab page).
+    pub(super) fn new_private_window(&mut self, url: Option<String>) -> Vec<Effect> {
+        let (space, id) = self.add_private_window();
+        let mut fx = vec![Effect::WindowOpened(id), Effect::SpaceChanged(space)];
+        match url.and_then(|u| self.place_new_tab(u, None, None, Some(space))) {
+            Some((tab, si, create)) => {
+                self.spaces[si].active = Some(tab);
+                fx.push(create);
+                fx.push(Effect::ActivateTab(tab));
+            }
+            None => fx.push(Effect::ShowCommandBar),
+        }
+        fx
     }
 
     /// Closes the Little, Popup and Pip windows whose tab is gone.
@@ -281,12 +456,25 @@ impl Model {
         if !self.tabs.contains_key(&tab) {
             return vec![];
         }
+        // a tab never crosses between private and normal windows (Chrome keeps incognito tabs in
+        // incognito windows: `TabStripModel` drags only within one profile)
+        let private = self.is_private_tab(tab);
         let mut fx = vec![];
         let target = match to {
             WindowTarget::Existing(w) => match self.window(w) {
-                Some(win) if win.kind() == WindowKind::Main => w,
+                Some(win)
+                    if win.kind() == WindowKind::Main && self.is_private_window(w) == private =>
+                {
+                    w
+                }
                 _ => return vec![],
             },
+            // a private tab dragged out makes a private window of its own
+            WindowTarget::New if private => {
+                let (_, id) = self.add_private_window();
+                fx.push(Effect::WindowOpened(id));
+                id
+            }
             WindowTarget::New => {
                 let space = self.space_for_window();
                 let id = self.push_window(Shown::Space(space), None);
@@ -347,6 +535,12 @@ impl Model {
         space: Option<SpaceId>,
         container: Option<ContainerId>,
     ) -> Vec<Effect> {
+        // a link from another app never opens in a private window (Chrome opens it in the last
+        // normal one)
+        if space.is_some_and(|s| self.is_private_space(s)) {
+            return vec![];
+        }
+        let space = Some(space.unwrap_or_else(|| self.normal_space()));
         let Some((tab, _, create)) = self.place_new_tab(url, container, None, space) else {
             return vec![];
         };
@@ -357,7 +551,11 @@ impl Model {
 
     pub(super) fn promote_little(&mut self, window: WindowId, space: SpaceId) -> Vec<Effect> {
         let tab = match self.window(window).map(|w| w.shown) {
-            Some(Shown::Little(t)) if self.space_idx(space).is_some() => t,
+            Some(Shown::Little(t))
+                if self.space_idx(space).is_some() && !self.is_private_space(space) =>
+            {
+                t
+            }
             _ => return vec![],
         };
         self.windows.retain(|w| w.id != window);
@@ -433,6 +631,14 @@ impl Model {
     pub(super) fn check_windows(&self) -> Result<(), String> {
         if !self.windows.iter().any(|w| w.kind() == WindowKind::Main) {
             return Err("no Main window".into());
+        }
+        // a private Space lives exactly as long as its window
+        if let Some(s) = self
+            .spaces
+            .iter()
+            .find(|s| s.private && self.shown_by(s.id).is_none())
+        {
+            return Err(format!("private space {:?} shown by no window", s.id));
         }
         let mut seen: Vec<TabId> = vec![];
         for (i, w) in self.windows.iter().enumerate() {
