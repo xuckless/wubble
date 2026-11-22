@@ -400,7 +400,7 @@ impl Model {
     }
 
     /// Adds an unfocused window. Returns its id.
-    fn push_window(&mut self, shown: Shown, geometry: Option<Geometry>) -> WindowId {
+    pub(super) fn push_window(&mut self, shown: Shown, geometry: Option<Geometry>) -> WindowId {
         let id = WindowId(self.next_window);
         self.next_window += 1;
         // before the focused one: `focus` then moves it last
