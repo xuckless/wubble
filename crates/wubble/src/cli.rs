@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::passwords_smoke::VaultPhase;
 use clap::{CommandFactory, Parser, error::ErrorKind};
+pub use wubble_gfx::pacing::Pacing;
 
 pub use crate::load_run::Variant;
 pub use crate::measure::Scenario;
@@ -56,7 +57,8 @@ struct Cli {
     /// renders, wake-ups, CPU and GPU), `startup` (start-up stages to the first
     /// page pixels), `blocker` (the content blocker, windowless) or `memory` (the
     /// process tree's memory with 0, 1, 10 and 50 tabs, then frozen and
-    /// discarded). Exits by itself.
+    /// discarded) or `tabs` (three tabs, one animating, switched every second: the time to the
+    /// new tab's first frame and the frames of the switch). Exits by itself.
     #[arg(long, value_name = "SCENARIO", value_enum, conflicts_with = "profile")]
     measure: Option<Scenario>,
     /// How long `--measure` runs.
@@ -70,10 +72,14 @@ struct Cli {
     /// `wubble://start`; a page with a caret or a small animation), to see what it keeps drawing.
     #[arg(long, value_name = "URL", requires = "measure")]
     measure_page: Option<String>,
-    /// `--measure` with CEF paced by external begin frames, one per Slint
-    /// render, instead of CEF's own timer.
-    #[arg(long, requires = "measure")]
+    /// CEF paced by the shell's external begin frames, one per render of the window, instead of
+    /// this platform's default (`wubble_gfx::pacing::PLATFORM_PACING`); for any windowed run,
+    /// `--measure` included.
+    #[arg(long, conflicts_with = "no_begin_frames")]
     begin_frames: bool,
+    /// CEF painting on its own timer, instead of this platform's default.
+    #[arg(long)]
+    no_begin_frames: bool,
     /// `--measure load`: what the engine hooks requests with (default: as shipped).
     #[arg(long, value_name = "VARIANT", value_enum, requires = "measure")]
     load_variant: Option<Variant>,
@@ -388,7 +394,6 @@ pub struct Measure {
     /// Seconds to wait before recording, over the scenario's own.
     pub warmup: Option<NonZeroU32>,
     pub out: Option<PathBuf>,
-    pub begin_frames: bool,
     pub load: LoadArgs,
     /// `--measure idle`'s page instead of the bundled one.
     pub page: Option<String>,
@@ -448,7 +453,6 @@ impl TryFrom<Cli> for Command {
                 seconds: cli.seconds,
                 warmup: cli.warmup,
                 out: cli.out,
-                begin_frames: cli.begin_frames,
                 page: cli
                     .measure_page
                     .as_deref()
@@ -581,7 +585,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    parse_with_shot(args).map(|(command, _)| command)
+    parse_with_shot(args).map(|(command, ..)| command)
 }
 
 /// The hand-run shot options (`--shot`, `--frozen-backdrop`, `--parity`), apart from the
@@ -594,7 +598,8 @@ pub struct ShotArgs {
 }
 
 /// [`parse`], and the shot options.
-pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, ShotArgs), clap::Error>
+/// Also the pacing `--begin-frames` or `--no-begin-frames` asks for, if either.
+pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, ShotArgs, Option<Pacing>), clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
@@ -605,7 +610,12 @@ where
         frozen_backdrop: cli.frozen_backdrop,
         parity: cli.parity.take(),
     };
-    Command::try_from(cli).map(|command| (command, shot))
+    let pacing = match (cli.begin_frames, cli.no_begin_frames) {
+        (true, _) => Some(Pacing::Shell),
+        (_, true) => Some(Pacing::CefTimer),
+        _ => None,
+    };
+    Command::try_from(cli).map(|command| (command, shot, pacing))
 }
 
 #[cfg(test)]
@@ -730,7 +740,7 @@ mod tests {
 
     #[test]
     fn a_shot_needs_a_smoke() {
-        let (command, shot) =
+        let (command, shot, _) =
             parse_with_shot(["wubble", "--smoke", "settings", "--shot", "/tmp/s.png"]).unwrap();
         assert_eq!(command, Command::Smoke(Smoke::Settings));
         assert_eq!(shot.path, Some(PathBuf::from("/tmp/s.png")));
@@ -750,7 +760,7 @@ mod tests {
             "--parity",
             "/tmp/p.json",
         ];
-        let (_, shot) = parse_with_shot(args).unwrap();
+        let (_, shot, _) = parse_with_shot(args).unwrap();
         assert!(shot.frozen_backdrop);
         assert_eq!(shot.parity, Some(PathBuf::from("/tmp/p.json")));
         assert!(parse(["wubble", "--frozen-backdrop"]).is_err());
@@ -1050,7 +1060,6 @@ mod tests {
             seconds: NonZeroU32::new(seconds).expect("test uses seconds > 0"),
             warmup: None,
             out: out.map(PathBuf::from),
-            begin_frames: false,
             load: LoadArgs::default(),
             page: None,
         }))
@@ -1068,6 +1077,7 @@ mod tests {
             ("startup", Scenario::Startup),
             ("load", Scenario::Load),
             ("memory", Scenario::Memory),
+            ("tabs", Scenario::Tabs),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),
@@ -1101,16 +1111,28 @@ mod tests {
         );
         assert_eq!(
             parse(["wubble", "--measure", "video", "--begin-frames"]).ok(),
-            Some(Command::Measure(Measure {
-                scenario: Scenario::Video,
-                seconds: DEFAULT_SECONDS,
-                warmup: None,
-                out: None,
-                begin_frames: true,
-                load: LoadArgs::default(),
-                page: None,
-            }))
+            measure(Scenario::Video, DEFAULT_SECONDS.get(), None)
         );
+    }
+
+    #[test]
+    fn pacing_is_overridden_both_ways_for_any_run() {
+        let pacing = |args: &[&str]| {
+            parse_with_shot(std::iter::once("wubble").chain(args.iter().copied()))
+                .ok()
+                .map(|(.., pacing)| pacing)
+        };
+        assert_eq!(pacing(&[]), Some(None));
+        assert_eq!(pacing(&["--begin-frames"]), Some(Some(Pacing::Shell)));
+        assert_eq!(
+            pacing(&["--measure", "scroll", "--no-begin-frames"]),
+            Some(Some(Pacing::CefTimer))
+        );
+        assert_eq!(
+            pacing(&["--smoke", "page", "--begin-frames"]),
+            Some(Some(Pacing::Shell))
+        );
+        assert_eq!(pacing(&["--begin-frames", "--no-begin-frames"]), None);
     }
 
     #[test]
@@ -1191,7 +1213,6 @@ mod tests {
             &["--measure", "scroll", "--url", "about:blank"],
             &["--seconds", "3"],
             &["--out", "/tmp/m.csv"],
-            &["--begin-frames"],
         ] {
             let args = std::iter::once("wubble").chain(bad.iter().copied());
             assert!(parse(args).is_err(), "{bad:?}");

@@ -721,6 +721,9 @@ impl Host {
             };
             measure::count(measure::Count::CefFrame);
             self.pace(PaceEvent::FrameArrived);
+            if let Some(refresh) = self.refresh() {
+                self.engine.page_painted(refresh);
+            }
             let size = frame.size();
             // A frame painted for this layout shows its layout's part (CEF can paint a pixel
             // more); a stale one, painted for another, is shown whole, scaled to the pane.

@@ -24,7 +24,7 @@ use wubble_gfx::FramePresenter;
 use wubble_ui::AppWindow;
 use wubble_ui::glass::GlassRegistry;
 
-use super::{PaneFrame, surfaces};
+use super::{Pace, PaneFrame, surfaces};
 use crate::backdrop::Glass;
 use crate::panes::Panes;
 
@@ -105,6 +105,8 @@ pub(crate) struct WindowHost {
     pub(super) split_commands: Vec<wubble_core::model::Command>,
     /// What of the surfaces the shell last drew.
     pub(super) drawn: surfaces::Drawn,
+    /// The begin frames of the pages this window shows (`Pacing::Shell`), one per render.
+    pub(super) pace: Pace,
 }
 
 impl WindowHost {
@@ -140,6 +142,7 @@ impl WindowHost {
             panes_last: None,
             split_commands: vec![],
             drawn: Default::default(),
+            pace: Pace::default(),
         }
     }
 }
