@@ -33,6 +33,9 @@ pub struct Seen {
     pub capsule_in_newest: bool,
     /// Windows still drawing a drag ghost.
     pub ghosts: usize,
+    /// Windows whose page is still entering after a tab switch (or the hidden one leaving): its
+    /// pixels are not the page's yet.
+    pub entering: usize,
     /// Every model window has its size recorded.
     pub geometry: bool,
 }
@@ -45,6 +48,7 @@ impl Seen {
             && self.framed
             && self.shown == shown
             && self.ghosts == 0
+            && self.entering == 0
             && self.bars == 0
             && self.geometry
     }
@@ -171,6 +175,7 @@ mod tests {
             start_in_newest: false,
             capsule_in_newest: false,
             ghosts: 0,
+            entering: 0,
             geometry: true,
         }
     }
@@ -225,6 +230,12 @@ mod tests {
         };
         let (s, a) = next(s, &ghost);
         assert_eq!(a, None, "a ghost left in the source window");
+        let entering = Seen {
+            entering: 1,
+            ..seen(2, 2)
+        };
+        let (s, a) = next(s, &entering);
+        assert_eq!(a, None, "the moved tab's page still entering");
         let (s, a) = next(s, &seen(2, 2));
         assert_eq!(a, Some(Action::CheckAndClose));
         let (s, a) = next(s, &seen(1, 1));
