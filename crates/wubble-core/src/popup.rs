@@ -64,8 +64,8 @@ pub const ROWS: &[(Opened, bool, Outcome)] = &[
 /// one is: for the address pill (Chromium shows its blocked pop-up icon for both). With
 /// `glance` off (the `glance.enabled` setting), a peek is a foreground tab.
 ///
-/// Chromium's own blocker is off in every wubble profile (welding's `SharedProfile::allow_popups`),
-/// so requests without a gesture reach this table; were it on, they would never arrive.
+/// Chromium's own blocker is off (wubble-engine's `disable-popup-blocking` switch), so requests
+/// without a gesture reach this table; were it on, they would never arrive.
 pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: bool) -> Outcome {
     let row = |g: bool| {
         ROWS.iter()

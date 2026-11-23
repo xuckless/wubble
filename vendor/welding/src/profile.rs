@@ -81,31 +81,6 @@ impl SharedProfile {
     pub fn request_context(&self) -> cef::RequestContext {
         self.context.clone()
     }
-
-    /// Turns Chromium's own pop-up blocker off for this context: its
-    /// default POPUPS content setting becomes allow, so every request a page
-    /// makes, with a user gesture or without, reaches `OnBeforePopup` and the
-    /// host's [`crate::PopupFactory`] or `NavigationEvent::NewWindowRequested`
-    /// (with `user_gesture` as Chromium judged it). The host must then block
-    /// what it does not want. Kept in the profile's preferences. Call on CEF's
-    /// UI thread once [`Self::is_ready`]; true if the setting reads back
-    /// allow (false: Chromium still blocks pop-ups without a gesture before
-    /// the host hears of them).
-    /// wubble change 63, see `WUBBLE_CHANGES.md`.
-    pub fn allow_popups(&self) -> bool {
-        use cef::{ContentSettingTypes, ContentSettingValues, ImplRequestContext};
-        // both URLs none: the context's default (refused for an incognito
-        // context, which a disk-backed one never is)
-        self.context.set_content_setting(
-            None,
-            None,
-            ContentSettingTypes::POPUPS,
-            ContentSettingValues::ALLOW,
-        );
-        self.context
-            .content_setting(None, None, ContentSettingTypes::POPUPS)
-            == ContentSettingValues::ALLOW
-    }
 }
 
 /// The context a producer creates its browser in: the shared one when the

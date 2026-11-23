@@ -541,17 +541,6 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     `handlers.rs`: `new_window_kind` and `popup_size` are crate-visible.
     Test: `opened::tests`; wubble's `--smoke popup` drives it in CEF.
 
-63. **Chromium's pop-up blocker off, per shared profile.** `profile.rs`:
-    `SharedProfile::allow_popups()` sets the context's default POPUPS content
-    setting to allow (`CefRequestContext::SetContentSetting` with no URLs) and
-    reports whether it reads back allow. Chromium's blocker
-    (`blocked_content::MaybeBlockPopup`, default block) otherwise refuses a
-    `window.open` without a user gesture inside `CanCreateWindow`, before
-    `OnBeforePopup`, so the host never hears of it; with it off, every request
-    reaches the pop-up factory or `NewWindowRequested` with its gesture, and
-    the host's own policy blocks. No test here (it needs CEF); wubble's
-    `--smoke popup` drives it.
-
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

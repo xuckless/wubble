@@ -525,6 +525,12 @@ fn nvidia_vaapi(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -
 /// also made unresolvable inside Chromium's own network stack: the request is still tried and
 /// fails, nothing is looked up or sent.
 const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
+    // Chromium's pop-up blocker off (read only in components/blocked_content/popup_blocker.cc,
+    // before any content setting): every `window.open` reaches `OnBeforePopup` with its real
+    // user gesture and wubble's table (`wubble_core::popup`) blocks, for the address pill. Not
+    // the POPUPS content setting: ALLOW there also lets a cross-origin frame navigate `top`
+    // without a gesture (Blink `LocalFrame::CanNavigate`, `allow_popup`).
+    ("disable-popup-blocking", None),
     ("disable-component-update", None),
     ("disable-background-networking", None),
     (
@@ -1526,6 +1532,18 @@ mod tests {
             .iter()
             .map(|(n, v)| ((*n).to_string(), v.map(str::to_string)))
             .collect()
+    }
+
+    /// Every pop-up reaches wubble's own table: Chromium's blocker is off by its switch, on every
+    /// command line (not by the POPUPS content setting, which would also allow framebusting).
+    #[test]
+    fn chromium_s_pop_up_blocker_is_off() {
+        let cef = cef_config(&config("/opt/wubble", "/c"));
+        assert!(
+            cef.command_line_switches
+                .iter()
+                .any(|s| *s == ("disable-popup-blocking".to_string(), None))
+        );
     }
 
     /// "Nothing phones home": what a fresh profile asked Google for with no page open is off by
