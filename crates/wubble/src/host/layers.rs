@@ -72,7 +72,11 @@ impl Host {
         {
             add(Kind::Menu, None);
         }
-        Stack { shown, layers }
+        Stack {
+            shown,
+            layers,
+            leaving: vec![],
+        }
     }
 
     /// Runs `event` with `shown` the visible tab before it; carries out the closes, hides and
@@ -203,6 +207,41 @@ impl Host {
                 }
             }
             (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
+            // the free surfaces: no rule of the overlays closes one (`overlay::Group::Free`)
+            (
+                Kind::ErrorPanel
+                | Kind::Popup
+                | Kind::Toast
+                | Kind::Tooltip
+                | Kind::Preview
+                | Kind::Status
+                | Kind::AutofillChip
+                | Kind::AutofillMenu
+                | Kind::AutofillPrompt
+                | Kind::VideoStrip
+                | Kind::VideoTab
+                | Kind::VideoSpeeds
+                | Kind::PipStrip
+                | Kind::PipCard
+                | Kind::Reader
+                | Kind::Boost
+                | Kind::Glance
+                | Kind::Swipe
+                | Kind::ExitPage
+                | Kind::Entrance
+                | Kind::Peek
+                | Kind::SeamBow
+                | Kind::SplitRing
+                | Kind::SplitSeams
+                | Kind::DevTools
+                | Kind::TabGhost
+                | Kind::DropZone
+                | Kind::PageGhost
+                | Kind::DropMark
+                | Kind::Autoscroll
+                | Kind::Specimen,
+                _,
+            ) => {}
         }
     }
 }
