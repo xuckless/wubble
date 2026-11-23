@@ -44,6 +44,8 @@ pub(super) const STEPS: &[Step] = &[
             })
         }
     ),
+    // given a `--shot-dir`: the private window (its Private chip and tint), once it settled
+    step!("the private window shot", nothing, Host::private_shot),
     step!(
         "a download in the private tab",
         |h, c| {
@@ -162,6 +164,31 @@ impl Host {
         let host = format!("{PRIVATE_HOST}.localhost");
         self.write_site(tab, SiteChange::Blocker(host.clone()));
         self.write_site(tab, SiteChange::NeverSleep(host));
+    }
+
+    /// Shoots the private window after a few hundred runs of CEF work (its page drawn, the
+    /// shell's entrance done); nothing without a `--shot-dir`.
+    fn private_shot(&mut self, c: &mut DataSmoke) -> Poll {
+        if !crate::shot::has_dir() {
+            return Pass;
+        }
+        if c.runs < 300 {
+            return Pending;
+        }
+        let Some(window) = c
+            .private_window
+            .filter(|&w| self.enter(w))
+            .and_then(|_| self.w.window.upgrade())
+        else {
+            return super::Fail("no private window to shoot".into());
+        };
+        match crate::shot::take_scene(&window, 0, "private-window") {
+            Ok(path) => {
+                c.notes.push(format!("shot {}", path.display()));
+                Pass
+            }
+            Err(e) => super::Fail(format!("the shot failed: {e}")),
+        }
     }
 
     fn private_downloaded(&mut self, _: &mut DataSmoke) -> Poll {

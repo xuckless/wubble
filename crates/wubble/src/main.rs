@@ -318,7 +318,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::Private) => match smoke_private() {
+        Command::Smoke(Smoke::Private { dir }) => match smoke_private(dir) {
             Ok(()) => {
                 println!("smoke: private ok");
                 ExitCode::SUCCESS
@@ -328,8 +328,17 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::DataPhase { ending, profile }) => match smoke_profile(&profile) {
-            Ok(()) => with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile)),
+        Command::Smoke(Smoke::DataPhase {
+            ending,
+            profile,
+            dir,
+        }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                if let Some(dir) = dir {
+                    shot::request_dir(dir);
+                }
+                with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile))
+            }
             Err(e) => {
                 eprintln!("smoke: {e}");
                 ExitCode::FAILURE
@@ -458,7 +467,7 @@ fn main() -> ExitCode {
                 | Smoke::Passwords
                 | Smoke::PasswordsPhase { .. }
                 | Smoke::Data
-                | Smoke::Private
+                | Smoke::Private { .. }
                 | Smoke::DataPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
@@ -765,7 +774,7 @@ fn killed_by(status: &std::process::ExitStatus) -> Option<i32> {
 
 /// `--smoke private`: the private-window script on a throwaway profile, ending in a quit; then
 /// the profile is searched for anything of the private pages (`data_smoke::private_leaks`).
-fn smoke_private() -> Result<(), Box<dyn std::error::Error>> {
+fn smoke_private(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let no_sandbox = app::no_sandbox_requested(std::env::args_os());
     let profile = std::env::temp_dir().join(format!("wubble-private-{}", std::process::id()));
@@ -777,6 +786,9 @@ fn smoke_private() -> Result<(), Box<dyn std::error::Error>> {
             "--profile".into(),
             profile.clone().into(),
         ];
+        if let Some(dir) = &dir {
+            args.extend(["--shot-dir".into(), dir.clone().into()]);
+        }
         args.extend(no_sandbox.then(|| app::NO_SANDBOX_ARG.into()));
         let status = std::process::Command::new(&exe)
             .args(args)
