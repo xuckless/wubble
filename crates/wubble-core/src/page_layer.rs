@@ -213,6 +213,14 @@ pub fn transition(route: Route, needs: Needs, event: Event) -> (Route, Vec<Effec
     }
 }
 
+/// Whether a pane's layer has no use left: it is hidden (not [`Route::on_layer`]) and the page is
+/// a pane among the shell's chrome ([`Need::Windowed`]), where stage 1 never shows one. The host
+/// then drops it (`Capable(false)`, its entry with it), so windowed browsing pays nothing for
+/// it, and makes a new one at the page's next frame as the window's whole content.
+pub fn layer_unused(route: Route, needs: Needs) -> bool {
+    !route.on_layer() && needs.has(Need::Windowed)
+}
+
 /// OS buffers per view: the one on the layer, one the compositor may still read, one the shell
 /// may still be sampling (`Entering`, `Leaving`), one to copy into.
 pub const POOL_SLOTS: usize = 4;
@@ -633,6 +641,24 @@ mod tests {
         ];
         for &(route, on) in rows {
             assert_eq!(route.on_layer(), on, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn page_layer_a_hidden_layer_of_a_windowed_page_goes() {
+        let windowed = Needs::NONE.with(Need::Windowed, true);
+        let covered = needs(true);
+        #[rustfmt::skip]
+        let rows: &[(Route, Needs, bool)] = &[
+            (Composited, windowed, true), (Entering, windowed, true), (Unsupported, windowed, true),
+            (Composited, windowed.with(Need::Covered, true), true),
+            // still visible: it goes once the shell has drawn the page (`Presenting`)
+            (ON5, windowed, false), (FOR5, windowed, false),
+            // fullscreen or picture-in-picture: the layer comes back when the cover goes
+            (Composited, covered, false), (Entering, Needs::NONE, false), (ON5, Needs::NONE, false),
+        ];
+        for &(route, needs, gone) in rows {
+            assert_eq!(layer_unused(route, needs), gone, "{route:?} {needs:?}");
         }
     }
 

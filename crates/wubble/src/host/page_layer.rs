@@ -16,7 +16,7 @@ use slint::ComponentHandle;
 use wubble_core::page_layer::{self, Effect, Event, Mode, Needs, Owners, Route};
 use wubble_core::stretch::after_frame;
 use wubble_core::tab::TabId;
-use wubble_core::window::WindowKind;
+use wubble_core::window::{WindowId, WindowKind};
 use wubble_engine::view::Layout;
 use wubble_gfx::layer::PageLayer;
 use wubble_gfx::{FrameSize, NativeFrame};
@@ -24,6 +24,7 @@ use wubble_ui::AppWindow;
 
 use super::Host;
 use super::panes::{content_size, frame_clip, pane_radius, px};
+use super::window::WindowHost;
 use crate::screen::Screen;
 
 /// A window's page layers.
@@ -130,6 +131,12 @@ impl Host {
                 Err(e) => eprintln!("wubble: page layer: {e}"),
             }
         }
+        // a page that left fullscreen keeps no layer (it is made again at the next one)
+        self.layers_gone(window, |host, tab| {
+            host.w.layers.panes.get(&tab).is_some_and(|p| {
+                page_layer::layer_unused(p.route, host.layer_needs(window, tab, None, false))
+            })
+        });
         drew
     }
 
@@ -159,11 +166,7 @@ impl Host {
     /// A snapshot is about to read `tab`'s frame from its presenter: a page on its layer hands
     /// its latest frame over first.
     pub(super) fn layer_pixels(&mut self, tab: TabId) {
-        let holder = std::iter::once(&self.w)
-            .chain(self.parked.values())
-            .find(|w| w.layers.panes.contains_key(&tab))
-            .map(|w| w.id);
-        let Some(id) = holder else {
+        let Some(id) = self.window_where(|w| w.layers.panes.contains_key(&tab)) else {
             return;
         };
         let here = self.w.id;
@@ -183,14 +186,14 @@ impl Host {
 
     /// The panes of this window whose tab `gone` names left it (or the window closes): their
     /// layer goes at once (`Capable(false)`), and their entry with it.
-    pub(super) fn layers_gone(&mut self, window: &AppWindow, gone: impl Fn(TabId) -> bool) {
+    pub(super) fn layers_gone(&mut self, window: &AppWindow, gone: impl Fn(&Self, TabId) -> bool) {
         let tabs: Vec<TabId> = self
             .w
             .layers
             .panes
             .keys()
             .copied()
-            .filter(|&t| gone(t))
+            .filter(|&t| gone(self, t))
             .collect();
         for tab in tabs {
             if let Err(e) = self.run_layer(window, tab, Event::Capable(false), None, false) {
@@ -203,30 +206,37 @@ impl Host {
     /// The renderer is about to present a frame of `window` (the vendored renderer's hook):
     /// each of its panes with a layer hears what that render drew of it.
     pub(crate) fn presenting(&mut self, window: &slint::Window) {
-        let id = std::iter::once(&self.w)
-            .chain(self.parked.values())
-            .find(|w| std::ptr::eq(w.handle.window(), window))
-            .filter(|w| !w.layers.is_empty())
-            .map(|w| w.id);
+        let id =
+            self.window_where(|w| std::ptr::eq(w.handle.window(), window) && !w.layers.is_empty());
         let Some(id) = id else {
             return;
         };
+        let here = self.w.id;
         self.enter(id);
-        let Some(app) = self.w.window.upgrade() else {
-            return;
-        };
-        let drawn: Vec<(TabId, Option<u64>)> = self
-            .w
-            .layers
-            .panes
-            .iter_mut()
-            .map(|(&tab, pane)| (tab, pane.drawn.take()))
-            .collect();
-        for (tab, drawn) in drawn {
-            if let Err(e) = self.run_layer(&app, tab, Event::Presenting { drawn }, None, false) {
-                eprintln!("wubble: page layer: {e}");
+        if let Some(app) = self.w.window.upgrade() {
+            let drawn: Vec<(TabId, Option<u64>)> = self
+                .w
+                .layers
+                .panes
+                .iter_mut()
+                .map(|(&tab, pane)| (tab, pane.drawn.take()))
+                .collect();
+            for (tab, drawn) in drawn {
+                let event = Event::Presenting { drawn };
+                if let Err(e) = self.run_layer(&app, tab, event, None, false) {
+                    eprintln!("wubble: page layer: {e}");
+                }
             }
         }
+        self.enter(here);
+    }
+
+    /// The window (the current one or a parked one) `holds` picks.
+    pub(super) fn window_where(&self, holds: impl Fn(&WindowHost) -> bool) -> Option<WindowId> {
+        std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .find(|w| holds(w))
+            .map(|w| w.id)
     }
 
     /// Whether `tab` is this window's whole content: its page fullscreen, and whether this is
@@ -275,8 +285,13 @@ impl Host {
         mut arrival: Option<Arrival>,
         pixels: bool,
     ) -> Result<bool, String> {
-        let before = self.w.layers.on_layer();
+        // a hide in a render's present hook joins that render's drawable, presented after the
+        // hook returns: the shell stops presenting with the transaction at the next run that is
+        // not one (the next render's start, before it acquires its drawable)
+        let presenting = matches!(event, Event::Presenting { .. });
         let mut drew = false;
+        // the first failure, returned once every effect ran (a `Hide` after it must still run)
+        let mut error = None;
         let mut next = Some(event);
         while let Some(event) = next.take() {
             let Some(route) = self.w.layers.panes.get(&tab).map(|p| p.route) else {
@@ -302,10 +317,6 @@ impl Host {
                         };
                         let size = a.frame.size();
                         let clip = frame_clip(size, &a.layout);
-                        // the stretch follows a frame on the layer as it does the shell's
-                        if let Some(f) = self.w.frames.get_mut(&tab) {
-                            f.view = after_frame(f.view, px(a.wanted), px(size)).0;
-                        }
                         let (_, height) = content_size(window);
                         let (cx, cy) = (window.get_content_x(), window.get_content_y());
                         let rect = self.pane_rects(window).into_iter().find(|r| r.tab == tab);
@@ -334,9 +345,18 @@ impl Host {
                                 radius,
                             );
                         }
-                        if let Err(e) = pane.layer.show(&a.frame) {
-                            eprintln!("wubble: page layer: {e}");
-                            failed = true;
+                        match pane.layer.show(&a.frame) {
+                            // the stretch follows a frame on the layer as it does the shell's
+                            // (a refused one reaches the shell, which advances it then)
+                            Ok(()) => {
+                                if let Some(f) = self.w.frames.get_mut(&tab) {
+                                    f.view = after_frame(f.view, px(a.wanted), px(size)).0;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("wubble: page layer: {e}");
+                                failed = true;
+                            }
                         }
                         // kept even when refused: the failure hands it to the shell
                         pane.latest = Some(a.frame);
@@ -349,8 +369,13 @@ impl Host {
                     }
                     Effect::Present => {
                         if let Some(a) = arrival.take() {
-                            self.present_frame(window, tab, a.layout, a.wanted, a.frame)?;
-                            drew = true;
+                            match self.present_frame(window, tab, a.layout, a.wanted, a.frame) {
+                                Ok(()) => drew = true,
+                                Err(e) => {
+                                    failed = true;
+                                    error.get_or_insert(e);
+                                }
+                            }
                         }
                     }
                     Effect::PresentLatest => {
@@ -366,8 +391,13 @@ impl Host {
                                 .tab_view(tab)
                                 .and_then(|v| v.wanted_frame())
                                 .unwrap_or(layout.frame_size());
-                            self.present_frame(window, tab, layout, wanted, frame)?;
-                            drew = true;
+                            match self.present_frame(window, tab, layout, wanted, frame) {
+                                Ok(()) => drew = true,
+                                Err(e) => {
+                                    failed = true;
+                                    error.get_or_insert(e);
+                                }
+                            }
                         }
                     }
                     Effect::Redraw => {
@@ -388,13 +418,13 @@ impl Host {
                 next = Some(Event::Failed);
             }
         }
-        let after = self.w.layers.on_layer();
-        if after != before {
+        if !presenting {
+            let on = self.w.layers.on_layer();
             for pane in self.w.layers.panes.values_mut() {
-                pane.layer.present_in_transaction(after);
+                pane.layer.present_in_transaction(on);
             }
         }
-        Ok(drew)
+        error.map_or(Ok(drew), Err)
     }
 }
 

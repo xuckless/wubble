@@ -879,14 +879,14 @@ impl Host {
     /// showed are hidden (or closed) by the model.
     fn close_window(&mut self, id: WindowId) {
         // its pages' layers go while it is still a window (none with `--page-layer=off`)
-        let layered = std::iter::once(&self.w)
-            .chain(self.parked.values())
-            .any(|w| w.id == id && !w.layers.is_empty());
-        if layered {
+        if self
+            .window_where(|w| w.id == id && !w.layers.is_empty())
+            .is_some()
+        {
             let here = self.w.id;
             self.enter(id);
             if let Some(window) = self.w.window.upgrade() {
-                self.layers_gone(&window, |_| true);
+                self.layers_gone(&window, |_, _| true);
             }
             self.enter(here);
         }
@@ -1238,7 +1238,7 @@ impl Host {
         // input already goes to the tabs shown now: blank until they paint.
         let kept = self.framed_tabs();
         // a page that left its pane leaves its layer first (its frame goes to the shell)
-        self.layers_gone(&window, |t| !kept.contains(&t));
+        self.layers_gone(&window, |_, t| !kept.contains(&t));
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
         window::free_slots(&mut self.w.slots, &kept);

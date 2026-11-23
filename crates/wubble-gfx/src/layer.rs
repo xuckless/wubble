@@ -20,7 +20,8 @@ pub trait PageLayer {
 
     /// Where the layer sits (`frame`: x, y, width, height in points), what of its buffer it
     /// shows (`contents`: the same in the buffer's unit square), the buffer's pixels per point
-    /// and the corner radius in points.
+    /// and the corner radius in points. A placement the layer already has commits nothing (the
+    /// host places it at each frame).
     fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64);
 
     /// `frame`'s OS buffer onto the layer, shown. Fails for a frame copied without one.
@@ -32,7 +33,8 @@ pub trait PageLayer {
     /// While `on`, the shell's drawable is shown with the Core Animation transaction that
     /// carries this layer's changes (`presentsWithTransaction`), so a hide and the shell's frame
     /// that replaces it land together. Read when the drawable is acquired: set before the render
-    /// that needs it, cleared after the hide.
+    /// that needs it, cleared after the hide's drawable went out (the next render's start). Setting
+    /// the value it has does nothing.
     fn present_in_transaction(&mut self, _on: bool) {}
 }
 
@@ -143,9 +145,18 @@ mod mac {
         }
 
         fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64) {
+            let (frame, contents) = (rect(frame), rect(contents));
+            let l = &self.layer;
+            let same = l.frame() == frame
+                && l.contentsRect() == contents
+                && l.contentsScale() == scale
+                && l.cornerRadius() == radius;
+            if same {
+                return;
+            }
             transaction(|| {
-                self.layer.setFrame(rect(frame));
-                self.layer.setContentsRect(rect(contents));
+                self.layer.setFrame(frame);
+                self.layer.setContentsRect(contents);
                 self.layer.setContentsScale(scale);
                 self.layer.setCornerRadius(radius);
                 self.layer.setMasksToBounds(radius > 0.0);
@@ -187,7 +198,9 @@ mod mac {
         }
 
         fn present_in_transaction(&mut self, on: bool) {
-            self.metal.setPresentsWithTransaction(on);
+            if self.metal.presentsWithTransaction() != on {
+                self.metal.setPresentsWithTransaction(on);
+            }
         }
     }
 
