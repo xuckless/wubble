@@ -92,6 +92,9 @@ export component AppWindow inherits Window {
     in property <string> pip-title;
     // The Pip window's controls and the card's button (host `pip_command`).
     callback pip-command(string, float);
+    // The Pip window's strip shows (the host's, `pip_hovered`), and the pointer's reports.
+    in property <bool> pip-strip;
+    callback pip-hovered(bool);
     // The visible page for screen readers (empty unless pages' accessibility is on: `a11y.web`),
     // and what one asked of an item (host `ax.rs`).
     in property <[AxItemView]> ax-items;
@@ -1304,6 +1307,10 @@ export component AppWindow inherits Window {
             }
             if root.pip: PipControls {
                 paused: root.video.paused;
+                shown: root.pip-strip;
+                hovered(on) => {
+                    root.pip-hovered(on);
+                }
                 command(name, value) => {
                     root.pip-command(name, value);
                 }

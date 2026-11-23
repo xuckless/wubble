@@ -1590,6 +1590,7 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_pip_command(move |name, value| {
         with_host_in(win, |host| host.pip_command(&name, value))
     });
+    window.on_pip_hovered(move |on| with_host_in(win, |host| host.pip_hovered(on)));
     window.on_ax_action(move |index, name, value| {
         with_host_in(win, |host| host.ax_action(index, &name, &value))
     });

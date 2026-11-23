@@ -1276,6 +1276,14 @@ impl Host {
         }
     }
 
+    /// The pointer came over the picture-in-picture window (true) or left it: its strip shows
+    /// while it is there. The host's answer, so the strip's visibility is not Slint's own.
+    pub(crate) fn pip_hovered(&mut self, on: bool) {
+        if let Some(window) = self.w.window.upgrade() {
+            window.set_pip_strip(on);
+        }
+    }
+
     /// The Main window's card for its tab in picture-in-picture, and the Pip window's controls.
     pub(super) fn render_pip(&mut self, window: &AppWindow) {
         let card = self.model.pip_tab().filter(|&t| {
