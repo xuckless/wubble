@@ -483,7 +483,8 @@ impl Store {
         } = merge_spaces(model, imported, &marks)?;
         let tx = self.conn.transaction().await?;
         if summary.spaces_added > 0 || summary.containers_added > 0 {
-            write_model(&tx, &merged).await?;
+            // the session part of it: a private window's Space and tabs are never written
+            write_model(&tx, &merged.for_session(&[])).await?;
             // Marks of Spaces that no longer exist must not suppress a later import.
             tx.execute(
                 "DELETE FROM import_marks WHERE space_id NOT IN (SELECT id FROM spaces)",

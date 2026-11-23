@@ -18,7 +18,7 @@ use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
-    Side, SpaceKind, SplitGroup, Storage,
+    SpaceKind, SplitGroup, Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 use wubble_core::window::{Geometry, Window, WindowId};
@@ -328,9 +328,9 @@ fn split_group(space: &Space, tabs: Vec<TabId>, stops: Vec<Option<f64>>) -> Opti
 }
 
 /// Delete the whole stored session and write `model` in its place, inside `tx`. The caller has
-/// run `Model::check`. Shared by `save_session` and `apply_import`. Nothing of a private window
-/// is written (its Space, tabs, folders, split, window and in-memory container: Chrome never
-/// writes an off-the-record profile's session), whatever model the caller passes.
+/// run `Model::check`. Shared by `save_session` and `apply_import`. The caller passes a
+/// session (`Model::for_session`): nothing of a private window is in it (Chrome never writes
+/// an off-the-record profile's session).
 pub(crate) async fn write_model(
     tx: &turso::transaction::Transaction<'_>,
     model: &Model,
@@ -353,14 +353,9 @@ pub(crate) async fn write_model(
     write_tabs(tx, model).await?;
     write_splits(tx, model).await?;
     write_windows(tx, model).await?;
-    let active = if model.side_of_space(model.active_space()) == Side::Private {
-        model.normal_space()
-    } else {
-        model.active_space()
-    };
     tx.execute(
         "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
-        (active.0,),
+        (model.active_space().0,),
     )
     .await?;
     Ok(())
@@ -377,8 +372,7 @@ async fn write_windows(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
     let mains = m
         .windows
         .iter()
-        .filter_map(|w| Some((w, w.space()?)))
-        .filter(|(_, space)| m.side_of_space(*space) != Side::Private);
+        .filter_map(|w| Some((w, w.space()?)));
     for (i, (w, space)) in mains.enumerate() {
         let g = w.geometry;
         st.execute((
@@ -399,7 +393,7 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
     let mut st = tx
         .prepare("INSERT INTO containers(id, name, position) VALUES (?1, ?2, ?3)")
         .await?;
-    for (i, c) in m.containers.iter().filter(|c| c.storage != Storage::Memory).enumerate() {
+    for (i, c) in m.containers.iter().enumerate() {
         st.execute((c.id.0, c.name.as_str(), i as i64)).await?;
     }
     Ok(())
@@ -412,7 +406,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
              agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
-    for (i, s) in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private).enumerate() {
+    for (i, s) in m.spaces.iter().enumerate() {
         // A Space whose only tabs are in Little or Popup windows has no active tab; those
         // windows are not kept, so its first tab is shown after a restart.
         let active = s.active.or_else(|| m.order(s.id).first().copied());
@@ -437,7 +431,7 @@ async fn write_folders(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
     let mut st = tx
         .prepare("INSERT INTO tab_folders(id, space_id, name, position) VALUES (?1, ?2, ?3, ?4)")
         .await?;
-    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
+    for s in &m.spaces {
         for (i, item) in s.items.iter().enumerate() {
             if let Item::Folder(f) = item {
                 st.execute((f.id.0, s.id.0, f.name.as_str(), i as i64))
@@ -471,7 +465,7 @@ async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Resu
         .await?;
         Ok::<(), Error>(())
     };
-    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
+    for s in &m.spaces {
         for (i, &t) in s.pinned.iter().enumerate() {
             put(t, s.id, None, true, i).await?;
         }
@@ -495,7 +489,7 @@ async fn write_splits(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             "INSERT INTO split_panes(space_id, position, tab_id, stop) VALUES (?1, ?2, ?3, ?4)",
         )
         .await?;
-    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
+    for s in &m.spaces {
         let Some(g) = &s.split else { continue };
         for (i, &t) in g.tabs.iter().enumerate() {
             st.execute((s.id.0, i as i64, tab_id(t)?, g.stops.get(i).copied()))

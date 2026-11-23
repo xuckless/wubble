@@ -4176,3 +4176,30 @@ fn every_command_keeps_to_its_side_of_the_private_line() {
     );
     assert!(m.window(little).is_none());
 }
+
+/// A session (what the store writes, the import's write too) holds nothing of a private
+/// window: its Space, tabs, window and in-memory container go, focused or not, and the last
+/// normal window stays (or is made, when every normal window was closed).
+#[test]
+fn a_private_window_is_no_part_of_a_session() {
+    let (m, n) = with_tabs(1);
+    let (m, _, ps) = private_window(m, "https://p.test/");
+    let p0 = m.order(ps)[0];
+    let (alone, _) = run(m.clone(), Command::CloseWindow(WindowId(0)));
+    // (row, the live model)
+    for (row, live) in [("focused", m.clone()), ("the only Main window", alone)] {
+        let saved = live.for_session(&[]);
+        saved.check().unwrap_or_else(|e| panic!("{row}: {e}"));
+        assert!(saved.space_idx(ps).is_none(), "{row}");
+        assert!(!saved.tabs.contains_key(&p0), "{row}");
+        assert!(saved.containers.iter().all(|c| c.storage == Storage::Disk), "{row}");
+        assert!(saved.spaces.iter().all(|s| s.kind != SpaceKind::Private), "{row}");
+        assert!(
+            saved.windows.iter().any(|w| w.kind() == WindowKind::Main),
+            "{row}: a normal window to come back to"
+        );
+        assert_eq!(saved.side_of_space(saved.active_space()), Side::Normal, "{row}");
+        assert!(live.tabs.contains_key(&p0), "{row}: the live model keeps it");
+    }
+    assert!(m.for_session(&[]).tabs.contains_key(&n[0]), "the normal tab stays");
+}
