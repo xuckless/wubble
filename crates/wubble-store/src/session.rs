@@ -260,7 +260,10 @@ impl Store {
             let id = WindowId(narrow(r.get(0)?, "window id")?);
             let space = SpaceId(narrow(r.get(1)?, "space id")?);
             let tab: Option<i64> = r.get(8)?;
-            let tab = tab.map(|t| narrow(t, "tab id").map(TabId)).transpose()?;
+            // a tab id no tab can have: the row is dropped, not the session
+            let Ok(tab) = tab.map(|t| narrow(t, "tab id").map(TabId)).transpose() else {
+                continue;
+            };
             let Some(&si) = space_at.get(&space) else {
                 continue;
             };
@@ -270,8 +273,17 @@ impl Store {
             let shown = match tab {
                 None if windows.iter().any(|w| w.space() == Some(space)) => continue,
                 None => Shown::Space(space),
-                Some(t) if !popup_fits(&spaces[si], t, &windows) => continue,
-                Some(t) => Shown::Popup(t),
+                // a Popup window shows a tab placed in its Space and on screen nowhere else
+                // (not the Space's active tab, nor a pane of its split, nor an earlier window's)
+                Some(t)
+                    if space_has(&spaces[si], t)
+                        && spaces[si].active != Some(t)
+                        && !spaces[si].split.as_ref().is_some_and(|g| g.tabs.contains(&t))
+                        && windows.iter().all(|w| w.tab() != Some(t)) =>
+                {
+                    Shown::Popup(t)
+                }
+                Some(_) => continue,
             };
             let int = |v: Option<i64>| v.and_then(|v| i32::try_from(v).ok());
             let size = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
@@ -283,7 +295,11 @@ impl Store {
             );
             let state: String = r.get(6)?;
             let monitor: Option<String> = r.get(7)?;
-            let geometry = w.zip(h).map(|(width, height)| Geometry {
+            // a size a window can have, however the row was written
+            let geometry = w
+                .zip(h)
+                .map(|size| wubble_core::window::bounded(size, None))
+                .map(|(width, height)| Geometry {
                 width,
                 height,
                 pos: x.zip(y),
@@ -327,15 +343,6 @@ fn space_has(space: &Space, tab: TabId) -> bool {
             Item::Tab(x) => *x == tab,
             Item::Folder(f) => f.tabs.contains(&tab),
         })
-}
-
-/// Whether a stored Popup window can show `tab` of `space`: the tab is placed there and is not
-/// on screen otherwise (the Space's active tab, a pane of its split, an earlier window's).
-fn popup_fits(space: &Space, tab: TabId, windows: &[Window]) -> bool {
-    space_has(space, tab)
-        && space.active != Some(tab)
-        && !space.split.as_ref().is_some_and(|g| g.tabs.contains(&tab))
-        && windows.iter().all(|w| w.tab() != Some(tab))
 }
 
 /// The split stored for `space`: its panes left to right and the stop after each (`None` on the
@@ -818,24 +825,48 @@ mod tests {
             },
         );
         let popup = m.focused();
-        let g = |width: u32,
-                 height: u32,
-                 pos: Option<(i32, i32)>,
-                 state: WindowState,
-                 monitor: Option<&str>| Geometry {
-            width,
-            height,
-            pos,
-            state,
-            monitor: monitor.map(String::from),
-        };
-        for (window, geometry) in [
-            (1, g(800, 600, Some((10, -20)), WindowState::Normal, None)),
+        let reports = [
+            (
+                1,
+                Geometry {
+                    width: 800,
+                    height: 600,
+                    pos: Some((10, -20)),
+                    ..Geometry::default()
+                },
+            ),
             // reported at the screen's size: the model keeps the normal bounds
-            (1, g(1920, 1080, Some((0, 0)), WindowState::Maximized, Some("DP-1"))),
-            (0, g(900, 700, None, WindowState::Minimized, None)),
-            (popup.0, g(400, 300, Some((50, 60)), WindowState::Normal, Some("HDMI-1"))),
-        ] {
+            (
+                1,
+                Geometry {
+                    width: 1920,
+                    height: 1080,
+                    pos: Some((0, 0)),
+                    state: WindowState::Maximized,
+                    monitor: Some("DP-1".into()),
+                },
+            ),
+            (
+                0,
+                Geometry {
+                    width: 900,
+                    height: 700,
+                    state: WindowState::Minimized,
+                    ..Geometry::default()
+                },
+            ),
+            (
+                popup.0,
+                Geometry {
+                    width: 400,
+                    height: 300,
+                    pos: Some((50, 60)),
+                    monitor: Some("HDMI-1".into()),
+                    ..Geometry::default()
+                },
+            ),
+        ];
+        for (window, geometry) in reports {
             m = ap(
                 m,
                 Command::ResizeWindow {
@@ -884,12 +915,27 @@ mod tests {
                 .filter(|w| w.space().is_some())
                 .cloned()
                 .collect();
+            let mut bounded = m.windows.clone();
+            if let Some(g) = bounded.last_mut().and_then(|w| w.geometry.as_mut()) {
+                (g.width, g.height) = (wubble_core::window::MAX_SIDE, 1);
+            }
             // (case, SQL run on the saved session, the windows loaded)
             let cases = [
                 (
                     "its tab is gone",
                     "UPDATE windows SET tab_id = 999 WHERE tab_id IS NOT NULL".to_string(),
                     mains.clone(),
+                ),
+                (
+                    "a tab id no tab can have",
+                    "UPDATE windows SET tab_id = -1 WHERE tab_id IS NOT NULL".to_string(),
+                    mains.clone(),
+                ),
+                (
+                    "kept, at a size a window can have",
+                    "UPDATE windows SET width = 4294967295, height = 0 WHERE tab_id IS NOT NULL"
+                        .to_string(),
+                    bounded,
                 ),
                 (
                     "its tab is its Space's shown tab",
@@ -919,6 +965,35 @@ mod tests {
                 assert_eq!(loaded.tabs.len(), m.tabs.len(), "{case}");
                 loaded.check().unwrap();
             }
+        });
+    }
+
+    #[test]
+    fn a_space_whose_tabs_are_all_in_popup_windows_comes_back_with_no_active_tab() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let ap = |m, c| apply(m, c).0;
+            // the empty Space: a tab, its pop-up, then the tab closed
+            let mut m = ap(rich(), Command::SwitchSpace(SpaceId(2)));
+            m = new_tab(m, "https://o.test", None, None);
+            let opener = m.spaces[2].active.unwrap();
+            m = ap(
+                m,
+                Command::OpenPopupWindow {
+                    url: "https://p.test".into(),
+                    opener,
+                    size: None,
+                },
+            );
+            m = ap(m, Command::CloseTab(opener));
+            // The fixture covers what the test claims.
+            assert_eq!(m.spaces[2].active, None);
+            assert_eq!(m.order(SpaceId(2)).len(), 1);
+            store.save_session(&m).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            // stored with no active tab, so the Popup window can show its tab again
+            assert_eq!(loaded.spaces[2].active, None);
+            assert_eq!(loaded.windows, m.windows);
         });
     }
 
