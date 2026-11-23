@@ -8,6 +8,7 @@ use slint::ComponentHandle;
 
 use wubble_core::autoscroll::{self, At, Autoscroll, Input};
 use wubble_core::motion::{K, Spring, spring, squash_of, step_k};
+use wubble_core::overlay::Kind;
 use wubble_core::tab::TabId;
 use wubble_engine::input::Point;
 use wubble_ui::AppWindow;
@@ -114,9 +115,10 @@ impl Host {
 
     fn render_autoscroll(&mut self, window: &AppWindow) {
         let zoom = self.autoscroll_zoom();
+        let on = self.autoscroll.state != Autoscroll::Off;
+        // the store says whether the cursor shows; this is its content
+        self.surface_is(Kind::Autoscroll, on);
         let a = &self.autoscroll;
-        let on = a.state != Autoscroll::Off;
-        window.set_autoscroll_on(on);
         let Some(anchor) = a.state.anchor() else {
             return;
         };

@@ -889,6 +889,8 @@ impl Host {
     /// Closes window `id`'s platform window. Its frames and rings go with it; the tabs it
     /// showed are hidden (or closed) by the model.
     fn close_window(&mut self, id: WindowId) {
+        // a drag it runs ends now: no release can reach it
+        self.window_lost(id, true);
         // its overlays go with it
         let here = self.w.id;
         if self.enter(id)
@@ -3576,14 +3578,15 @@ impl Host {
                     });
                 self.tab_drag_pointer(at.0, at.1, true);
                 self.drag_window_pointer(true);
+                self.drag_released_elsewhere();
             }
             WindowEvent::Focused(focused) => {
                 // before Slint sees it: the start page's capsule keeps the bar through it
                 window.set_window_active(*focused);
-                // a page drag inside the window ends with nothing dropped (an OS drag goes on), and
-                // the pages' fingers are cancelled
+                // a drag of the window ends with nothing dropped (an OS drag goes on), what ends
+                // with the window's keys is cancelled, and the pages' fingers are cancelled
                 if !*focused {
-                    self.drag_cancelled();
+                    self.window_lost(self.w.id, false);
                     self.fingers(FingerInput::OnScreen(vec![]));
                 }
                 let current = self.model.focused() == self.w.id;
@@ -3627,13 +3630,6 @@ impl Host {
         }
         // Link hints take every key while their labels show.
         if self.hint_key(key) {
-            return EventResult::PreventDefault;
-        }
-        // Esc ends a page drag with nothing dropped, as in Chromium, or drops a tab drag.
-        if key.pressed
-            && key.unmodified == Key::Named(NamedKey::Escape)
-            && (self.drag_cancelled() || self.cancel_tab_drag())
-        {
             return EventResult::PreventDefault;
         }
         // A draft in the agent sheet's list editor takes Escape before anything: it drops the

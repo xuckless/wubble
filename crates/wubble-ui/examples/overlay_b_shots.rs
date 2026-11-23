@@ -260,6 +260,7 @@ fn main() {
 
     // the swipe chip pulled half way, then ready
     app.set_swipe_shift(60.0);
+    app.set_swipe_on(true);
     app.set_swipe_progress(0.5);
     step(300);
     shoot(&app, &dir, "09-swipe-pull");
@@ -268,6 +269,7 @@ fn main() {
     step(600);
     shoot(&app, &dir, "10-swipe-ready");
     app.set_swipe_progress(0.0);
+    app.set_swipe_on(false);
 
     // the autoscroll pointer still, then moving
     app.set_autoscroll_anchor_x(700.0);

@@ -24,23 +24,8 @@ export component ShotOverlay inherits Rectangle {
     callback cancelled();
 
     visible: root.active || marquee.fade > 0;
-    changed active => {
-        if root.active {
-            keys.focus();
-        }
-    }
 
     property <bool> dragging: area.pressed;
-
-    keys := FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.cancelled();
-                return accept;
-            }
-            return reject;
-        }
-    }
 
     marquee := BMarquee {
         shown: root.active;

@@ -20,6 +20,7 @@ use slint::winit_030::winit::event::WindowEvent;
 use wubble_core::drag::{self, Drag, Effect, Input};
 use wubble_core::model::Command;
 use wubble_core::omnibox::{self, Intent};
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_core::pagedrag::{self, DragOps, Over, PageDrag, Shell};
 use wubble_core::tab::TabId;
 use wubble_core::tabdrag;
@@ -149,7 +150,8 @@ impl Host {
         self.drag.page_dragging()?;
         let window = self.w.window.upgrade()?;
         let g = window.get_page_ghost();
-        g.shown.then_some((g.has_image, (g.width, g.height)))
+        (self.ui.phase(self.w.id, Layer::new(Kind::PageGhost, None)) == Some(Phase::Open))
+            .then_some((g.has_image, (g.width, g.height)))
     }
 
     /// Pointer input during a page drag goes to the drag, not to the page as mouse input;
@@ -210,10 +212,34 @@ impl Host {
         true
     }
 
-    /// `tab` closed or navigated away mid-drag.
+    /// `tab` closed or navigated away mid-drag: a drag of it ends (a page drag whose source it is,
+    /// a tab row held or dragged).
     pub(super) fn drag_gone(&mut self, tab: TabId) {
-        if self.drag.page().is_some() {
-            self.run_drag(Input::Page(pagedrag::Input::Gone(tab)));
+        match self.drag {
+            Drag::Page(_) => self.run_drag(Input::Page(pagedrag::Input::Gone(tab))),
+            Drag::Tab(_) => self.run_drag(Input::Tab(tabdrag::Input::Gone(tab))),
+            Drag::Idle => {}
+        }
+    }
+
+    /// Window `id` lost the keys or `closed`: the drag it runs ends as cancelled (a release can
+    /// no longer reach it), and what ends with the window in the store (a swipe, an autoscroll, a
+    /// pick) is cancelled. The one entry for the focus and the close.
+    pub(super) fn window_lost(&mut self, id: wubble_core::window::WindowId, closed: bool) {
+        if let Some(input) = drag::window_lost_actions(&self.drag, id, self.drag_window, closed) {
+            self.run_drag(input);
+        }
+        if !closed && let Some(window) = self.w.window.upgrade() {
+            let w = self.w.id;
+            self.act(&window, wubble_core::overlay::Action::Lost { w });
+        }
+    }
+
+    /// A left release seen by this window while another window's drag runs: it ends the drag as
+    /// cancelled, so no ghost outlives the button.
+    pub(super) fn drag_released_elsewhere(&mut self) {
+        if let Some(input) = drag::release_input(&self.drag, self.w.id == self.drag_window) {
+            self.run_drag(input);
         }
     }
 
@@ -270,10 +296,25 @@ impl Host {
                 self.render_tab_drag(&window);
             }
             self.render_page_drag(&window);
+            self.sync_drag_surfaces();
         }
         self.enter(here);
         if self.drag.page().is_none() {
             self.drag_ghost = None;
+        }
+    }
+
+    /// Opens and closes the drag's surfaces in the store to what its state shows (closes first:
+    /// a grab opens only once what it ends is closed); a pointer move changes none.
+    pub(super) fn sync_drag_surfaces(&mut self) {
+        let shown = drag::surfaces(&self.drag);
+        for kind in drag::SURFACES {
+            if !shown.contains(&kind) {
+                self.surface_is(kind, false);
+            }
+        }
+        for &kind in shown {
+            self.surface_is(kind, true);
         }
     }
 
@@ -601,16 +642,14 @@ impl Host {
     /// The page drag's ghost: inside the window, at the pointer; gone once the OS has the drag.
     fn render_page_drag(&self, window: &AppWindow) {
         let Some(d) = self.drag.page_dragging() else {
-            if window.get_page_ghost().shown {
-                window.set_page_ghost(PageGhost::default());
-                window.set_drop_mark(DropMarkView::default());
-                window.set_bookmarks_drop(Default::default());
-            }
+            // content only: the store says whether it shows (Slint ignores a value that is the same)
+            window.set_page_ghost(PageGhost::default());
+            window.set_drop_mark(DropMarkView::default());
+            window.set_bookmarks_drop(Default::default());
             return;
         };
         let (x, y) = self.drag_win;
         let mut view = PageGhost {
-            shown: true,
             x,
             y,
             ..PageGhost::default()
@@ -812,7 +851,6 @@ impl Host {
         use crate::gallery_smoke::GhostScene as G;
         let g = window.get_drop_geometry();
         let label = |x, y| PageGhost {
-            shown: true,
             x,
             y,
             title: "The Wallpaper Project".into(),
@@ -839,7 +877,6 @@ impl Host {
                     );
                 }
                 let ghost = PageGhost {
-                    shown: true,
                     x: cx + 360.0,
                     y: cy + 280.0,
                     has_image: true,
@@ -866,6 +903,10 @@ impl Host {
         };
         window.set_page_ghost(ghost);
         self.drop_mark(window, mark);
+        // the rows the real drag opens (`sync_drag_surfaces`)
+        for kind in [Kind::PageGhost, Kind::DropMark] {
+            self.surface_is(kind, true);
+        }
     }
 }
 

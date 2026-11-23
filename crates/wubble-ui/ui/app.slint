@@ -306,7 +306,14 @@ export component AppWindow inherits Window {
     // A tab dragged out of the list (wubble_core::tabdrag), written by the host: its title
     // follows the pointer, and the content edge it would split into is lit (0 none, 1 left,
     // 2 right). Written for wubble: the design repo has no drag out of the list.
+    // Whether each shows is the store's (`wubble_core::overlay`, written with the overlays'
+    // open flags): these are their content.
     in property <string> drag-ghost;
+    in property <bool> drag-ghost-on;
+    in property <bool> drop-zone-on;
+    in property <bool> page-ghost-on;
+    in property <bool> drop-mark-on;
+    in property <bool> swipe-on;
     in property <length> drag-x;
     in property <length> drag-y;
     in property <int> drag-zone: 0;
@@ -1567,7 +1574,7 @@ export component AppWindow inherits Window {
                 }
             }
             // The history swipe's chip at the edge it goes toward.
-            if root.swipe-progress != 0: SwipeChip {
+            if root.swipe-on: SwipeChip {
                 progress: root.swipe-progress;
                 shift: root.swipe-shift;
             }
@@ -1861,26 +1868,26 @@ export component AppWindow inherits Window {
 
     // The drop zone at the content's edge, or the drop target a page drag is over, then the
     // ghost, over everything but the menu.
-    if root.drag-zone > 0: DropMark {
+    if root.drop-zone-on: DropMark {
         kind: DropMarkKind.box;
         x: root.content-x + (root.drag-zone == 2 ? root.content-width * 0.75 : 0px);
         y: root.content-y;
         width: root.content-width * 0.25;
         height: root.content-height;
     }
-    DropMark {
+    if root.drop-mark-on: DropMark {
         kind: root.drop-mark.kind;
         x: root.drop-mark.x;
         y: root.drop-mark.y;
         width: root.drop-mark.width;
         height: root.drop-mark.height;
     }
-    if root.drag-ghost != "": DragGhost {
+    if root.drag-ghost-on && root.drag-ghost != "": DragGhost {
         pointer-x: root.drag-x;
         pointer-y: root.drag-y;
         title: root.drag-ghost;
     }
-    if root.page-ghost.shown: DragGhost {
+    if root.page-ghost-on: DragGhost {
         pointer-x: root.page-ghost.x;
         pointer-y: root.page-ghost.y;
         image: root.page-ghost.image;

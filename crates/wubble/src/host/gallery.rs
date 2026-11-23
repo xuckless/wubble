@@ -221,6 +221,9 @@ impl Host {
         // a page drag's ghost and mark are the gallery's own, and only its drag scenes'
         window.set_page_ghost(Default::default());
         window.set_drop_mark(Default::default());
+        for kind in wubble_core::drag::SURFACES {
+            self.surface_is(kind, false);
+        }
         self.gallery_extensions(scene.overlay);
         self.gallery_orbs(window, scene.overlay, scene.ground);
         let shown = self.shown();

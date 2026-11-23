@@ -4,4 +4,3 @@ components/downloads-popover.slint	hover-shown	has-hover	1
 components/extensions-popover.slint	escape	Key.Escape	1
 components/extensions-popover.slint	hover-shown	has-hover	1
 components/settings.slint	open-write	root.notices-open	1
-components/shot-overlay.slint	escape	Key.Escape	1

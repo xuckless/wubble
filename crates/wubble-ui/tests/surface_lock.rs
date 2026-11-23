@@ -149,6 +149,24 @@ fn the_surface_lock_holds() {
     SURFACE_LOCK.ratchet(&violations());
 }
 
+/// Escape is the overlays' rule (`overlay::Esc`), never a handler of the shell's: the region
+/// picker's is gone, and what remains in the baseline is the extensions popover's, which
+/// leaves with its own surface moving into the store.
+#[test]
+fn the_escape_handlers_left_are_named() {
+    let named = ["components/extensions-popover.slint"];
+    for (rel, text) in ui_files()
+        .into_iter()
+        .filter(|(rel, _)| !rel.starts_with("kit/"))
+    {
+        let escapes = text
+            .lines()
+            .filter(|l| code(l).contains("Key.Escape"))
+            .count();
+        assert_eq!(escapes > 0, named.contains(&rel.as_str()), "{rel}");
+    }
+}
+
 #[test]
 fn the_scanner_finds_each_rule() {
     let written: BTreeSet<String> = ["downloads-open".to_string()].into();

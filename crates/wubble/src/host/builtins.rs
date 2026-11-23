@@ -598,10 +598,13 @@ impl Host {
             self.hint_event(tab, HintEvent::Cancel);
             return false;
         }
+        // Escape is the overlays': the topmost one that takes it (`overlay_escape`) ends the hints
+        if key.unmodified == Key::Named(NamedKey::Escape) {
+            return false;
+        }
         let m = key.modifiers.keys;
         let chord = m.control_key() || m.alt_key() || m.super_key();
         let hint_key = match &key.unmodified {
-            Key::Named(NamedKey::Escape) => Some(HintKey::Escape),
             Key::Named(NamedKey::Backspace) => Some(HintKey::Backspace),
             Key::Character(c) => c.chars().next().map(HintKey::Char),
             _ => None,

@@ -13,6 +13,7 @@ use std::time::Duration;
 use wubble_core::fling::{self, Fling, FlingEffect, FlingInput};
 use wubble_core::gesture::{self, PinchInput, Swipe, SwipeEffect, SwipeInput};
 use wubble_core::motion;
+use wubble_core::overlay::Kind;
 use wubble_core::tab::TabId;
 use wubble_engine::input::{Modifiers, Point};
 use wubble_engine::pinch::Gesture;
@@ -206,7 +207,7 @@ impl Host {
         self.swipe_input(window, input);
     }
 
-    fn swipe_input(&mut self, window: &AppWindow, input: SwipeInput) {
+    pub(super) fn swipe_input(&mut self, window: &AppWindow, input: SwipeInput) {
         let (next, effects) = gesture::transition(self.gestures.swipe, input);
         self.gestures.swipe = next;
         let overshoot = match next {
@@ -218,8 +219,12 @@ impl Host {
                 SwipeEffect::Indicate(p) => {
                     window.set_swipe_progress(p as f32);
                     window.set_swipe_shift(chip_shift(p, overshoot) as f32);
+                    self.surface_is(Kind::Swipe, p != 0.0);
                 }
-                SwipeEffect::Hide => window.set_swipe_progress(0.0),
+                SwipeEffect::Hide => {
+                    window.set_swipe_progress(0.0);
+                    self.surface_is(Kind::Swipe, false);
+                }
                 // the page that comes does not glide on with the swipe
                 SwipeEffect::Go(action) => {
                     self.fling(FlingInput::Interrupt);

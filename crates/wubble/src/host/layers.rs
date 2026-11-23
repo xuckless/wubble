@@ -14,8 +14,8 @@ use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_ui::{
-    AgentWidgets, AppWindow, CommandBarState, CommandPlacement, DropMarkKind, GlassLayer, Mounted,
-    PeekCue, SidebarMode,
+    AgentWidgets, AppWindow, CommandBarState, CommandPlacement, GlassLayer, Mounted, PeekCue,
+    SidebarMode,
 };
 
 use super::Host;
@@ -26,7 +26,7 @@ use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 8] = [
+const STORED: [Kind; 14] = [
     Kind::Downloads,
     Kind::Spaces,
     Kind::Popup,
@@ -35,6 +35,12 @@ const STORED: [Kind; 8] = [
     Kind::AutofillPrompt,
     Kind::Reader,
     Kind::Status,
+    Kind::Swipe,
+    Kind::TabGhost,
+    Kind::DropZone,
+    Kind::PageGhost,
+    Kind::DropMark,
+    Kind::Autoscroll,
 ];
 
 /// What the store reads of the host's other owners as an action runs (never copied into it).
@@ -200,7 +206,6 @@ impl Host {
             (Kind::VideoTab, key, video.w > 0.0 && video.collapsed),
             (Kind::VideoSpeeds, key, video.w > 0.0 && video.open && video.speeds),
             (Kind::PipStrip, None, window.get_pip_strip()),
-            (Kind::Swipe, None, window.get_swipe_progress() != 0.0),
             (Kind::ExitPage, None, window.get_exit_t() < 1.0 && window.get_exit_page().size().width > 0),
             (Kind::Entrance, None, window.get_page_enter() < 1.0),
             (Kind::Peek, None, window.get_peeking()),
@@ -208,11 +213,6 @@ impl Host {
             (Kind::SplitRing, None, !window.get_focus_ring().is_empty()),
             (Kind::SplitSeams, None, slint::Model::row_count(&window.get_seams()) > 0),
             (Kind::DevTools, Some(PANEL_TAB), self.panel_width() > 0.0),
-            (Kind::TabGhost, None, !window.get_drag_ghost().is_empty()),
-            (Kind::DropZone, None, window.get_drag_zone() > 0),
-            (Kind::PageGhost, None, window.get_page_ghost().shown),
-            (Kind::DropMark, None, window.get_drop_mark().kind != DropMarkKind::None),
-            (Kind::Autoscroll, None, window.get_autoscroll_on()),
             (Kind::Specimen, None, window.global::<AgentWidgets>().get_specimen()),
         ];
         for (kind, tab, on) in free {
@@ -408,6 +408,13 @@ impl Host {
             let open = |kind| self.ui.phase(w, Layer::new(kind, None)) == Some(Phase::Open);
             window.set_downloads_open(open(Kind::Downloads));
             window.set_spaces_open(open(Kind::Spaces));
+            // the drags', the swipe's and the autoscroll's surfaces: the kit shows each while open
+            window.set_swipe_on(open(Kind::Swipe));
+            window.set_drag_ghost_on(open(Kind::TabGhost));
+            window.set_drop_zone_on(open(Kind::DropZone));
+            window.set_page_ghost_on(open(Kind::PageGhost));
+            window.set_drop_mark_on(open(Kind::DropMark));
+            window.set_autoscroll_on(open(Kind::Autoscroll));
             let bits = mounted(&window.get_mounted());
             // a pane's bubble is drawn from its pane's report until the fade over (`status_drawn`);
             // the other pane layers have no exit
@@ -465,6 +472,23 @@ impl Host {
             Action::Close { w, layer }
         };
         self.act(&window, action);
+    }
+
+    /// `kind`, a window surface its owner shows while some state holds (a drag, a swipe, an
+    /// autoscroll), is open or not by what that state says now: only a change reaches the store.
+    pub(super) fn surface_is(&mut self, kind: Kind, on: bool) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let (w, layer) = (self.w.id, Layer::new(kind, None));
+        if (self.ui.phase(w, layer) == Some(Phase::Open)) != on {
+            let action = if on {
+                Action::Open { w, layer }
+            } else {
+                Action::Close { w, layer }
+            };
+            self.act(&window, action);
+        }
     }
 
     /// The kit drew `kind` of `tab` at `rect` (window logical px); the same place again is
@@ -642,6 +666,25 @@ impl Host {
             (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
             // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
             (Kind::ErrorPanel | Kind::Boost, _) => {}
+            // a drag ends with nothing dropped (its own state closes its surfaces), a swipe and an
+            // autoscroll end as their machines end them
+            (Kind::TabGhost, _) => {
+                self.cancel_tab_drag();
+            }
+            (Kind::PageGhost, _) => {
+                self.drag_cancelled();
+            }
+            (Kind::Swipe, _) => {
+                let window = self.w.handle();
+                self.swipe_input(
+                    &window,
+                    wubble_core::gesture::SwipeInput::End { cancelled: true },
+                );
+            }
+            (Kind::Autoscroll, _) => {
+                let window = self.w.handle();
+                self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
+            }
             // the free surfaces: no rule of the overlays closes one (`overlay::Group::Free`)
             (
                 Kind::Popup
@@ -659,7 +702,6 @@ impl Host {
                 | Kind::PipCard
                 | Kind::Reader
                 | Kind::Glance
-                | Kind::Swipe
                 | Kind::ExitPage
                 | Kind::Entrance
                 | Kind::Peek
@@ -667,11 +709,8 @@ impl Host {
                 | Kind::SplitRing
                 | Kind::SplitSeams
                 | Kind::DevTools
-                | Kind::TabGhost
                 | Kind::DropZone
-                | Kind::PageGhost
                 | Kind::DropMark
-                | Kind::Autoscroll
                 | Kind::Specimen,
                 _,
             ) => {}
