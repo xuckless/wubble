@@ -23,7 +23,7 @@ use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
 
-use super::{Host, new_tab, now_ms};
+use super::{Host, new_tab};
 use crate::chooser::{self, DialogSpec};
 use crate::clipboard::{Bridge as _, Buffer};
 use crate::ime::{self, ImeCall, ImeInput};
@@ -267,19 +267,17 @@ impl Host {
             }
             return;
         }
+        // a private window's tab reads its own choices over the stored ones, and remembers
+        // only in memory (`remember_site`)
+        let table = self.site_choices(tab).into_owned();
         let s = self.surfaces.entry(tab).or_default();
-        let (next, answers) = prompt::permission(
-            std::mem::take(&mut s.permission),
-            event,
-            &self.site_permissions,
-        );
+        let (next, answers) =
+            prompt::permission(std::mem::take(&mut s.permission), event, &table);
         s.permission = next;
         for answer in answers {
             if let Some((site, kinds, decision)) = &answer.remember {
                 for &kind in kinds {
-                    self.site_permissions.set(site, kind, *decision);
-                    self.store
-                        .set_site_permission(site, kind, *decision, now_ms());
+                    self.remember_site(tab, site, kind, *decision);
                 }
             }
             match answer.reply {
@@ -443,18 +441,8 @@ impl Host {
                     self.dispatch(Command::PromoteLittle { window, space });
                 }
                 MenuEffect::Run(MenuCommand::AllowPopups(site)) => {
-                    self.site_permissions
-                        .set(&site, Permission::Popups, Decision::Allow);
-                    // a private window's choice lasts this run only (Chrome's off-the-record
-                    // content settings are in memory)
-                    if !self.model.is_private_tab(tab) {
-                        self.store.set_site_permission(
-                            &site,
-                            Permission::Popups,
-                            Decision::Allow,
-                            now_ms(),
-                        );
-                    }
+                    // a private window's choice stays in memory, with its private windows
+                    self.remember_site(tab, &site, Permission::Popups, Decision::Allow);
                     self.open_held_popups(tab);
                 }
                 MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
@@ -758,16 +746,19 @@ impl Host {
     /// call): stored for the site and shown, even when a limit left it
     /// unchanged. The view's own zoom reports (CEF re-reading the level after
     /// a load, the shell's corrections) are never stored, nor is a private
-    /// window's zoom (it reads the stored levels and writes none, as Chrome's
-    /// off-the-record zoom map does).
+    /// window's zoom: it is kept in memory over the stored levels
+    /// (`PrivateChoices::zoom`), as Chrome's off-the-record zoom map is.
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
-        let url = self
-            .model
-            .tabs
-            .get(&tab)
-            .filter(|_| !self.model.is_private_tab(tab))
-            .map(|t| t.url.clone());
-        if let Some(host) = url.as_deref().and_then(zoom::host_of) {
+        let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
+        let host = url.as_deref().and_then(zoom::host_of);
+        if let (Some(url), Some(host)) = (url.as_deref(), host.as_deref())
+            && self.model.is_private_tab(tab)
+        {
+            // kept in memory over the stored level, which zooming back to drops it for
+            let stored = zoom::wanted(&self.site_zoom, url, self.zoom_default);
+            let table = std::mem::take(&mut self.private_choices.zoom);
+            self.private_choices.zoom = zoom::next_table(table, host, percent, stored);
+        } else if let Some(host) = host {
             let table = zoom::next_table(self.site_zoom.clone(), &host, percent, self.zoom_default);
             // Applied as the setting: the table becomes `site_zoom` there.
             self.write_setting(
@@ -783,6 +774,12 @@ impl Host {
     /// A tab committed `url`: show it at the zoom stored for its site.
     pub(super) fn restore_zoom(&mut self, tab: TabId, url: &str) {
         let want = zoom::wanted(&self.site_zoom, url, self.zoom_default);
+        // a private window's own level, else the stored one
+        let want = if self.model.is_private_tab(tab) {
+            zoom::wanted(&self.private_choices.zoom, url, want)
+        } else {
+            want
+        };
         if let Some(view) = self.tab_view(tab)
             && view.zoom_percent() != want
         {

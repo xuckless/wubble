@@ -93,7 +93,7 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
-use wubble_core::site::SitePermissions;
+use wubble_core::site::{Decision, Permission, PrivateChoices, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
@@ -505,6 +505,9 @@ pub struct Host {
     blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
     site_permissions: SitePermissions,
+    /// The site choices made in private windows: in memory only, read over the stored ones by
+    /// private tabs (`site_choices`), dropped with the private windows' container.
+    private_choices: PrivateChoices,
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
@@ -739,6 +742,7 @@ impl Host {
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
+            private_choices: PrivateChoices::default(),
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
             media: media::Media::new(media_observer),
@@ -1170,9 +1174,11 @@ impl Host {
             }
             Call::Quit => quit(),
             Call::ForgetContainer(c) => {
-                // the private windows' container leaves no download rows behind
+                // the private windows' container leaves no download rows and no site choices
+                // behind
                 if self.engine.is_ephemeral(c) {
                     self.forget_private_downloads(c);
+                    self.private_choices = PrivateChoices::default();
                 }
                 self.engine.forget_container(c);
             }
@@ -1777,6 +1783,32 @@ impl Host {
     fn site_of(&self, tab: TabId) -> Option<String> {
         let url = self.model.tabs.get(&tab)?.url.as_str();
         wubble_core::site::origin_of(url)
+    }
+
+    /// The site choices `tab` reads: the stored ones, and for a private window's tab its own
+    /// in-memory ones over them.
+    fn site_choices(&self, tab: TabId) -> std::borrow::Cow<'_, SitePermissions> {
+        if self.model.is_private_tab(tab) {
+            std::borrow::Cow::Owned(
+                self.site_permissions
+                    .overlaid(&self.private_choices.permissions),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(&self.site_permissions)
+        }
+    }
+
+    /// Remembers `decision` for `site` as chosen in `tab`: a private window's choice in memory
+    /// only (it goes with the private windows' container), any other in the table and the
+    /// store.
+    fn remember_site(&mut self, tab: TabId, site: &str, kind: Permission, decision: Decision) {
+        if self.model.is_private_tab(tab) {
+            self.private_choices.permissions.set(site, kind, decision);
+        } else {
+            self.site_permissions.set(site, kind, decision);
+            self.store
+                .set_site_permission(site, kind, decision, now_ms());
+        }
     }
 
     // ----- browsing data

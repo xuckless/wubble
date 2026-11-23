@@ -138,6 +138,15 @@ impl SitePermissions {
         self.0.get(&(origin.to_string(), kind)).copied()
     }
 
+    /// `self` with `over`'s decisions on top: what a private window's tab reads, its own choices
+    /// (kept in memory) over the stored ones, as Chrome's off-the-record content settings
+    /// inherit the regular profile's.
+    pub fn overlaid(&self, over: &SitePermissions) -> SitePermissions {
+        let mut out = self.clone();
+        out.0.extend(over.0.iter().map(|(k, d)| (k.clone(), *d)));
+        out
+    }
+
     /// A request from `origin` (`None`: an opaque origin, never remembered)
     /// for every kind in `asked`. Any kind blocked: deny; every kind
     /// allowed: grant; otherwise ask (a request is answered whole, so a
@@ -159,6 +168,17 @@ impl SitePermissions {
             Verdict::Ask
         }
     }
+}
+
+/// The per-site choices made in private windows (permissions, Allow pop-ups, save-password
+/// "Never", zoom): never stored, read over the stored ones by private tabs only, and dropped
+/// with the private windows' in-memory container (Chrome's off-the-record
+/// `HostContentSettingsMap` and zoom map go with the off-the-record profile).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrivateChoices {
+    pub permissions: SitePermissions,
+    /// Per-site zoom ([`crate::zoom::next_table`]), read before the stored table.
+    pub zoom: crate::zoom::ZoomTable,
 }
 
 impl FromIterator<(String, Permission, Decision)> for SitePermissions {
@@ -219,6 +239,35 @@ mod tests {
         t.forget(o, Microphone);
         assert_eq!(t.get(o, Microphone), None);
         assert_eq!(t.decide(Some(o), &[Camera]), Verdict::Grant);
+    }
+
+    #[test]
+    fn private_choices_sit_over_the_stored_ones() {
+        let (a, b) = ("https://a.test", "https://b.test");
+        let stored: SitePermissions = [
+            (a.to_string(), Popups, Decision::Block),
+            (b.to_string(), Camera, Decision::Allow),
+        ]
+        .into_iter()
+        .collect();
+        let mut private = SitePermissions::default();
+        private.set(a, Popups, Decision::Allow);
+        private.set(b, SavePasswords, Decision::Block);
+        let read = stored.overlaid(&private);
+        // (origin, kind, what a private tab reads, what a normal tab reads)
+        let cases = [
+            (a, Popups, Some(Decision::Allow), Some(Decision::Block)),
+            (b, Camera, Some(Decision::Allow), Some(Decision::Allow)),
+            (b, SavePasswords, Some(Decision::Block), None),
+            (a, Camera, None, None),
+        ];
+        for (origin, kind, in_private, in_normal) in cases {
+            assert_eq!(read.get(origin, kind), in_private, "{origin} {kind:?} private");
+            assert_eq!(stored.get(origin, kind), in_normal, "{origin} {kind:?} normal");
+        }
+        // nothing private reaches the stored table, and nothing is left once it is dropped
+        assert_eq!(stored.iter().count(), 2);
+        assert_eq!(stored.overlaid(&PrivateChoices::default().permissions), stored);
     }
 
     #[test]

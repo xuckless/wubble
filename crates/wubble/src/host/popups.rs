@@ -46,7 +46,7 @@ impl Host {
         let site = self.site_of(tab);
         let remembered = site
             .as_deref()
-            .and_then(|o| self.site_permissions.get(o, Permission::Popups));
+            .and_then(|o| self.site_choices(tab).get(o, Permission::Popups));
         let glance = self.glance_enabled;
         let url = request.url.clone();
         let command = match popup::decide(request.opened, request.gesture, remembered, glance) {

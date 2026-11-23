@@ -163,7 +163,7 @@ impl Host {
     fn autofill_policy(&mut self, tab: TabId, origin: Option<String>) -> Policy {
         let origin = origin.or_else(|| self.page_url(tab).and_then(|u| autofill::web_origin(&u)));
         let never_save = origin.is_some_and(|o| {
-            self.site_permissions.get(&o, Permission::SavePasswords) == Some(Decision::Block)
+            self.site_choices(tab).get(&o, Permission::SavePasswords) == Some(Decision::Block)
         });
         // an agent session's tab: the key menu only on a site whose sign-ins the owner shared
         // with it (for the owner watching; what it fills is the agent's as `fill_secret`'s
@@ -283,15 +283,9 @@ impl Host {
                     vault_failed("updated", &e);
                 }
             }),
+            // from a private window "Never" lasts while its private windows do, and is not stored
             Effect::Never { origin } => {
-                self.site_permissions
-                    .set(&origin, Permission::SavePasswords, Decision::Block);
-                self.store.set_site_permission(
-                    &origin,
-                    Permission::SavePasswords,
-                    Decision::Block,
-                    now_ms(),
-                );
+                self.remember_site(tab, &origin, Permission::SavePasswords, Decision::Block);
             }
         }
     }

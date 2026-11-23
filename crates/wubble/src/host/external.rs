@@ -46,7 +46,10 @@ impl Host {
             return;
         }
         let page = self.committed.get(&tab).cloned().unwrap_or_default();
-        match external::decide(&url, &page, gesture == Some(true), &self.site_permissions) {
+        // a private window's tab reads its own choices over the stored ones
+        let verdict =
+            external::decide(&url, &page, gesture == Some(true), &self.site_choices(tab));
+        match verdict {
             Verdict::Open => self.open_in_app(&url),
             Verdict::Block => eprintln!("wubble: {url}: not opened (no click, or blocked)"),
             Verdict::Ask => {
