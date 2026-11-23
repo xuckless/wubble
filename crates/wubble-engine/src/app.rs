@@ -922,6 +922,16 @@ pub struct Engine {
 impl Engine {
     /// Initialises CEF. Call once per process, on the UI thread.
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
+        // CEF resolves `root_cache_path` through symlinks, then refuses a container's profile
+        // that is not a child of the resolved path ("Cannot create profile at path", `storage`):
+        // macOS's temp dir is under `/var`, a link to `/private/var`. Resolved once, for both.
+        let cache_dir = std::fs::create_dir_all(&config.cache_dir)
+            .and_then(|()| std::fs::canonicalize(&config.cache_dir))
+            .unwrap_or_else(|_| config.cache_dir.clone());
+        let config = EngineConfig {
+            cache_dir,
+            ..config
+        };
         if config.no_sandbox {
             eprintln!(
                 "wubble: WARNING: the CEF sandbox is OFF ({NO_SANDBOX_ARG}). Pages run \
