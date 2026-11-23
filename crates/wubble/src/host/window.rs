@@ -118,8 +118,6 @@ pub(crate) struct WindowHost {
     pub(super) cursor: super::cursor::PageCursor,
     /// The touchscreen's fingers down on this window's pages (`host/touch.rs`).
     pub(super) fingers: wubble_core::touch::Fingers,
-    /// When this window's toast goes (`Host::show_toast`): its one clock.
-    pub(super) toast: slint::Timer,
     /// This window's full screen, its own or one of its pages' (`crate::screen`): each window
     /// has its own, so one window's page fullscreen is never another's.
     pub(super) screen: Screen,
@@ -165,7 +163,6 @@ impl WindowHost {
             pace: Pace::default(),
             cursor: Default::default(),
             fingers: Default::default(),
-            toast: slint::Timer::default(),
             screen: Screen::default(),
             layers: Default::default(),
         }

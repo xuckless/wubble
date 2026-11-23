@@ -854,7 +854,7 @@ impl Host {
                 is(got.as_deref() == Some(want), format!("tooltip {got:?}"))
             }
             HostCheck::Status(want) => {
-                let got = self.status.shown().map(|(_, url)| url.to_owned());
+                let got = self.status_shown().map(|(_, url)| url.to_owned());
                 is(
                     got.as_deref() == Some(want),
                     format!("status bubble {got:?}"),

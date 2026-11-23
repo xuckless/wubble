@@ -1,29 +1,19 @@
 //! Tooltips, host side: a page's `title` (`PageEvent::Tooltip`) near the pointer and the shell's
-//! icon buttons' names and shortcuts (`Tips.hover`), through one `hovercard` machine with the
-//! design's tooltip timing (`TOOLTIP`). The host is the one writer of the window's `TipView`.
+//! icon buttons' names and shortcuts (`Tips.hover`), through the window's tooltip slot of the
+//! store (`overlay::Kind::Tooltip`, the design's tooltip timing). The host is the one writer
+//! of the window's `TipView`.
 
 use wubble_core::action::Action;
-use wubble_core::hovercard::{self, Effect, Event, Hover, TOOLTIP};
+use wubble_core::overlay::{Cue, Key, Kind, Surface};
 use wubble_core::tab::TabId;
 use wubble_ui::TipView;
 
 use super::Host;
-use super::hover::HoverClock;
-
-/// What a tooltip is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TipKey {
-    /// The page in this tab's `title` under the pointer.
-    Page(TabId),
-    /// A shell button that runs this action.
-    Shell(Action),
-}
 
 /// Below and right of the pointer, where Chromium puts a page's tooltip (logical px).
 const POINTER_OFFSET: (f32, f32) = (12.0, 20.0);
 
 pub(super) struct Tips {
-    clock: HoverClock<TipKey>,
     /// The page's tooltip text, per tab that has one.
     page: Option<(TabId, String)>,
     /// The shell button hovered last and where its tooltip hangs (window px: centre, top,
@@ -36,7 +26,6 @@ pub(super) struct Tips {
 impl Tips {
     pub fn new() -> Self {
         Self {
-            clock: HoverClock::new(TOOLTIP),
             page: None,
             button: None,
             pointer: None,
@@ -56,11 +45,11 @@ impl Host {
         // began (from the hover that preceded it), and Chrome shows no tooltip mid-drag
         if text.is_empty() || self.drag.page_dragging().is_some() {
             self.tips.page = None;
-            self.tip_leave(TipKey::Page(tab));
+            self.hover(Kind::Tooltip, Key::Page(tab), Cue::Leave);
         } else {
             let changed = self.tips.page.as_ref().is_none_or(|(_, t)| *t != text);
             self.tips.page = Some((tab, text));
-            self.tip_enter(TipKey::Page(tab), changed);
+            self.tip_enter(Key::Page(tab), changed);
         }
     }
 
@@ -72,16 +61,23 @@ impl Host {
         };
         if on {
             self.tips.button = Some((action, x, ys));
-            self.tip_enter(TipKey::Shell(action), false);
+            self.tip_enter(Key::Shell(action), false);
         } else {
-            self.tip_leave(TipKey::Shell(action));
+            self.hover(Kind::Tooltip, Key::Shell(action), Cue::Leave);
+        }
+    }
+
+    fn tip_slot(&self) -> Surface {
+        Surface {
+            w: self.w.id,
+            kind: Kind::Tooltip,
         }
     }
 
     /// The text of a page's tooltip, while one shows.
     pub(super) fn page_tip_shown(&self) -> Option<String> {
-        match hovercard::shown(self.tips.clock.state()) {
-            Some(TipKey::Page(tab)) => self
+        match self.ui.shown(self.tip_slot()) {
+            Some(Key::Page(tab)) => self
                 .tips
                 .page
                 .as_ref()
@@ -93,52 +89,26 @@ impl Host {
 
     /// A press, a key or the window losing focus: no tooltip.
     pub(super) fn tip_dismiss(&mut self) {
-        if self.tips.clock.state() != Hover::Idle {
-            self.tip_step(Event::Dismiss);
-        }
+        self.hover(Kind::Tooltip, Key::None, Cue::Dismiss);
     }
 
     /// `redraw`: the shown tooltip's words changed while its key did not.
-    fn tip_enter(&mut self, key: TipKey, redraw: bool) {
-        let now = self.tips.clock.now();
-        let shown = hovercard::shown(self.tips.clock.state()) == Some(key);
-        self.tip_step(Event::Enter { key, now });
+    fn tip_enter(&mut self, key: Key, redraw: bool) {
+        let shown = self.ui.shown(self.tip_slot()) == Some(key);
+        self.hover(Kind::Tooltip, key, Cue::Enter);
         if redraw && shown {
             self.render_tip(Some(key), false);
         }
     }
 
-    fn tip_leave(&mut self, key: TipKey) {
-        self.tips.clock.leave_if(key, Self::tip_tick);
-    }
-
-    fn tip_tick(&mut self) {
-        let now = self.tips.clock.now();
-        self.tip_step(Event::Tick { now });
-    }
-
-    fn tip_step(&mut self, event: Event<TipKey>) {
-        let (before, effect) = self.tips.clock.step(event, Self::tip_tick);
-        match effect {
-            // From rest it appears in place; from another tooltip it glides.
-            Some(Effect::Show(key)) => {
-                let warm =
-                    hovercard::shown(before).is_some() || matches!(before, Hover::Cooling { .. });
-                self.render_tip(Some(key), !warm);
-            }
-            Some(Effect::Hide) => self.render_tip(None, false),
-            None => {}
-        }
-    }
-
     /// Draws the tooltip for `key`, or fades it out (it keeps its words while it does).
-    fn render_tip(&mut self, key: Option<TipKey>, jump: bool) {
+    pub(super) fn render_tip(&mut self, key: Option<Key>, jump: bool) {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let mut view: TipView = window.get_tip();
         let content = match key {
-            Some(TipKey::Page(tab)) => self
+            Some(Key::Page(tab)) => self
                 .tips
                 .page
                 .as_ref()
@@ -150,7 +120,7 @@ impl Host {
                     let at = (x + POINTER_OFFSET.0, y + POINTER_OFFSET.1, y, false);
                     (text.clone(), String::new(), at)
                 }),
-            Some(TipKey::Shell(action)) => {
+            Some(Key::Shell(action)) => {
                 self.tips
                     .button
                     .filter(|(a, ..)| *a == action)
@@ -159,7 +129,7 @@ impl Host {
                         (name, keys, (x, bottom, top, true))
                     })
             }
-            None => None,
+            Some(Key::None | Key::Tab(_) | Key::Notice(_)) | None => None,
         };
         match content {
             Some((text, shortcut, (x, y, top, centered))) => {

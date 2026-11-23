@@ -596,9 +596,8 @@ impl Host {
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
                 let prev = frame.and_then(PaneFrame::fading);
                 let masked = frame.and_then(|f| f.masked.clone());
-                let (status_shown, status_host, status_rest) = self
-                    .status
-                    .view(r.tab, super::status::status_chars(r.width));
+                let (status_shown, status_host, status_rest) =
+                    self.status_view(r.tab, super::status::status_chars(r.width));
                 SplitPane {
                     id: crate::shell::pane_id(r.tab),
                     x0: r.x as f32,

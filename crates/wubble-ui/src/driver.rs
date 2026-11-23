@@ -29,9 +29,7 @@ use std::time::Instant;
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
 use wubble_core::beam::{self, Beam};
 use wubble_core::bow::{BOWED, EdgeTable};
-use wubble_core::chrome::{
-    self, CommandBar, CommandEffect, CommandEvent, Peek, PeekEffect, PeekEvent,
-};
+use wubble_core::chrome::{self, CommandBar, CommandEffect, CommandEvent};
 use wubble_core::motion::{DT_CAP, OVERLAP_IN, ease, overlap_in, tween};
 
 /// The outgoing page's exit, s: the design's `wb-out` (`webview.tsx`, 190 ms in-out).
@@ -43,8 +41,8 @@ use wubble_core::tabs::{self, TabRows, TabUp};
 use crate::glass::GlassRegistry;
 use crate::{
     AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, CommandPlacement, GlassItem,
-    GlassLayer, InternalPageKind, LeavingRow, NavScroll, Origin, PageScroll, PeekCue, Radius,
-    Shell, SidebarMode, TabItem, sync,
+    GlassLayer, InternalPageKind, LeavingRow, NavScroll, Origin, PageScroll, Radius, Shell,
+    SidebarMode, TabItem, sync,
 };
 
 impl From<seam::SidebarMode> for SidebarMode {
@@ -119,8 +117,6 @@ pub struct Driver {
     /// Time of the previous frame while moving; `None` while idle, so the first frame after a
     /// wake steps with dt 0.
     last: Option<Instant>,
-    /// The hidden sidebar's peek (wubble_core::chrome::Peek); `peek_timer` runs its `Arm`.
-    peek: Peek,
     /// The command bar's life (wubble_core::chrome::CommandBar); `exit_timer` runs its exit.
     command: CommandBar,
 }
@@ -205,7 +201,6 @@ impl Driver {
             origin: None,
             clock_ms: 0.0,
             last: None,
-            peek: Peek::Idle,
             command: CommandBar::Closed,
         };
         driver.advance(window, 0.0);
@@ -273,7 +268,7 @@ impl Driver {
     /// peek.
     fn set_compact(&self, window: &AppWindow) {
         let w = self.seam.w.x.max(0.0);
-        window.set_sidebar_rail(chrome::compact(w, self.seam.mode, self.peek.shown()));
+        window.set_sidebar_rail(chrome::compact(w, self.seam.mode, window.get_peek()));
     }
 
     fn set_mode(&mut self, window: &AppWindow, mode: seam::SidebarMode) {
@@ -707,40 +702,6 @@ scroller_global!(
     wire_nav_scroll
 );
 
-/// One step of the peek (wubble_core::chrome::peek), its effects run: the one timer armed or
-/// stopped, `peek` written, and the sidebar's compact look worked out again (a peek is never
-/// compact).
-fn peek_step(driver: &Shared, window: &AppWindow, timer: &Rc<slint::Timer>, event: PeekEvent) {
-    let state = driver.borrow().peek;
-    let (state, effects) = chrome::peek(state, event);
-    driver.borrow_mut().peek = state;
-    for effect in effects {
-        match effect {
-            PeekEffect::Arm(ms) => {
-                let (d, w, t) = (
-                    Rc::downgrade(driver),
-                    window.as_weak(),
-                    Rc::downgrade(timer),
-                );
-                timer.start(
-                    slint::TimerMode::SingleShot,
-                    std::time::Duration::from_millis(ms.into()),
-                    move || {
-                        if let (Some(d), Some(w), Some(t)) = (d.upgrade(), w.upgrade(), t.upgrade())
-                        {
-                            peek_step(&d, &w, &t, PeekEvent::TimerFired);
-                        }
-                    },
-                );
-            }
-            PeekEffect::Disarm => timer.stop(),
-        }
-    }
-    window.set_peek(state.shown());
-    driver.borrow().set_compact(window);
-    window.window().request_redraw();
-}
-
 /// One step of the command bar (wubble_core::chrome::command), its effects run: the state, mode
 /// and origin written, the exit timed (the dropdown's out duration), the keys moved (taken once
 /// the opener's prefill has landed).
@@ -976,25 +937,20 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
         }
     });
 
-    // the hidden sidebar's peek: the pointer's cues and the mode, into the machine
-    let peek_timer = Rc::new(slint::Timer::default());
-    let (d, w, t) = (Rc::clone(&driver), window.as_weak(), Rc::clone(&peek_timer));
-    window.on_peek_cue(move |cue| {
-        let Some(w) = w.upgrade() else { return };
-        let event = match cue {
-            PeekCue::EdgeEntered => PeekEvent::EdgeEntered,
-            PeekCue::StripMoved => PeekEvent::StripMoved,
-            PeekCue::PanelEntered => PeekEvent::PanelEntered,
-            PeekCue::PanelLeft => PeekEvent::PanelLeft,
-        };
-        peek_step(&d, &w, &t, event);
-    });
-    let (d, w, t) = (Rc::clone(&driver), window.as_weak(), peek_timer);
-    window.on_sidebar_mode_changed(move |mode| {
-        if let Some(w) = w.upgrade() {
-            peek_step(&d, &w, &t, PeekEvent::ModeChanged(mode.into()));
+    // the hidden sidebar's peek is the host's (the store's peek slot): a change of it or of
+    // the mode works the sidebar's compact look out again (a peek is never compact)
+    let compact = || {
+        let (d, w) = (Rc::clone(&driver), window.as_weak());
+        move || {
+            if let Some(w) = w.upgrade() {
+                d.borrow().set_compact(&w);
+                w.window().request_redraw();
+            }
         }
-    });
+    };
+    window.on_peek_changed(compact());
+    let again = compact();
+    window.on_sidebar_mode_changed(move |_| again());
 
     // the tab list's scroller: wheel, touch and the thumb
     let (d, w) = hook();

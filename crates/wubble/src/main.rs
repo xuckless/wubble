@@ -153,10 +153,6 @@ const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 /// follow the video's place and time at this pace.
 const MEDIA_POLL_EVERY: Duration = Duration::from_millis(250);
 
-/// How often the video controls' hide clock is checked (`Host::tick_video`): finer than a poll,
-/// as they go 250 ms after the pointer leaves.
-pub(crate) const VIDEO_TICK_EVERY: Duration = Duration::from_millis(100);
-
 /// How often live tabs are asked whether they play sound (the speaker glyph;
 /// CEF has no audible callback, see `wubble_engine::media`).
 const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
@@ -1452,12 +1448,17 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
             host.write_setting(&key, &value);
         })
     });
-    // the Sidebar row follows the shell's own mode; later, outside whatever changed it
+    // the Sidebar row and the peek follow the shell's own mode; later, outside whatever
+    // changed it
     window.on_sidebar_mode_seen(move || {
         let _ = slint::invoke_from_event_loop(move || {
-            with_host_in(win, |host| host.settings_sidebar_seen())
+            with_host_in(win, |host| {
+                host.settings_sidebar_seen();
+                host.peek_mode();
+            })
         });
     });
+    window.on_peek_cue(move |cue| with_host_in(win, |host| host.peek_cue(cue)));
     window.on_setting_reset(move |key| with_host_in(win, |host| host.setting_reset(&key)));
     window.on_setting_entry_removed(move |key, entry| {
         with_host_in(win, |host| host.setting_entry_removed(&key, &entry))
@@ -2256,7 +2257,6 @@ fn run(
     let audible = slint::Timer::default();
     let media = slint::Timer::default();
     if host_timers {
-        with_host(Host::enable_video_clock);
         media.start(slint::TimerMode::Repeated, MEDIA_POLL_EVERY, || {
             measure::count(measure::Count::MediaPoll);
             with_host(Host::poll_media)

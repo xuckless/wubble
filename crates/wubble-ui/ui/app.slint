@@ -876,10 +876,15 @@ export component AppWindow inherits Window {
 
     // Peek (chrome.tsx): a hidden sidebar slides in over the page, on thick glass at its saved
     // width, when the pointer reaches the edge strip; it leaves once the pointer has been off it
-    // for a while. The machine is wubble_core::chrome::Peek, run by the driver from the cues
-    // below; `peek` is its one output (shown or leaving). It never outlives the hidden mode.
+    // for a while. The host's peek slot of the store (wubble_core::overlay) times it from the
+    // cues below; `peek` is its one output (shown or leaving), and `peek-changed` tells the
+    // driver, whose compact look reads it. It never outlives the hidden mode.
     in property <bool> peek: false;
     callback peek-cue(PeekCue);
+    callback peek-changed();
+    changed peek => {
+        root.peek-changed();
+    }
     callback sidebar-mode-changed(SidebarMode);
     // the mode changed, however (the button, the shortcut, the seam, the Settings row): the host
     // draws the Settings page's Sidebar row again from it

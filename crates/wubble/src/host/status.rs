@@ -1,48 +1,22 @@
 //! The link status bubble, host side: the page's status text (`PageEvent::LinkStatus`, the
-//! hovered link's URL) feeds one `hovercard` machine with Chromium's status timing
-//! (`STATUS_BUBBLE`), keyed by the tab whose pane shows it; its state and the text are what
+//! hovered link's URL) feeds the window's status slot of the store (`overlay::Kind::Status`,
+//! Chromium's timing), keyed by the tab whose pane shows it; its state and the text are what
 //! `render_panes` draws in that pane (`StatusBubble`). Moving it away from the pointer is the
 //! pane's own (`SplitView`).
 
-use wubble_core::hovercard::{self, Event, STATUS_BUBBLE};
+use wubble_core::overlay::{Cue, Key, Kind, Surface};
 use wubble_core::tab::TabId;
 
 use super::Host;
-use super::hover::HoverClock;
 
 pub(super) struct Status {
-    clock: HoverClock<TabId>,
     /// The last tab that had a status, and its text: kept while the bubble fades out.
     text: Option<(TabId, String)>,
 }
 
 impl Status {
     pub fn new() -> Self {
-        Self {
-            clock: HoverClock::new(STATUS_BUBBLE),
-            text: None,
-        }
-    }
-
-    /// What `tab`'s pane draws: shown, and the URL's host and rest cut to `max_chars`.
-    pub fn view(&self, tab: TabId, max_chars: usize) -> (bool, String, String) {
-        match &self.text {
-            Some((t, url)) if *t == tab => {
-                let shown = hovercard::shown(self.clock.state()) == Some(tab);
-                let (host, rest) = wubble_core::url::status_parts(url, max_chars);
-                (shown, host, rest)
-            }
-            _ => (false, String::new(), String::new()),
-        }
-    }
-
-    /// The URL the bubble shows now, if it shows.
-    pub fn shown(&self) -> Option<(TabId, &str)> {
-        let tab = hovercard::shown(self.clock.state())?;
-        self.text
-            .as_ref()
-            .filter(|(t, _)| *t == tab)
-            .map(|(t, url)| (*t, url.as_str()))
+        Self { text: None }
     }
 }
 
@@ -53,34 +27,55 @@ pub(super) fn status_chars(width: f64) -> usize {
 }
 
 impl Host {
+    fn status_slot(&self) -> Surface {
+        Surface {
+            w: self.w.id,
+            kind: Kind::Status,
+        }
+    }
+
+    /// What `tab`'s pane draws: shown, and the URL's host and rest cut to `max_chars`.
+    pub(super) fn status_view(&self, tab: TabId, max_chars: usize) -> (bool, String, String) {
+        match &self.status.text {
+            Some((t, url)) if *t == tab => {
+                let shown = self.ui.shown(self.status_slot()) == Some(Key::Tab(tab));
+                let (host, rest) = wubble_core::url::status_parts(url, max_chars);
+                (shown, host, rest)
+            }
+            _ => (false, String::new(), String::new()),
+        }
+    }
+
+    /// The URL the bubble shows now, if it shows.
+    pub(super) fn status_shown(&self) -> Option<(TabId, &str)> {
+        let Some(Key::Tab(tab)) = self.ui.shown(self.status_slot()) else {
+            return None;
+        };
+        self.status
+            .text
+            .as_ref()
+            .filter(|(t, _)| *t == tab)
+            .map(|(t, url)| (*t, url.as_str()))
+    }
+
     /// The page's status text changed: a link is hovered (`text` is its URL), or none is.
     pub(super) fn link_status(&mut self, tab: TabId, text: String) {
         if text.is_empty() {
-            if self.status.clock.leave_if(tab, Self::status_tick) {
-                self.status_render();
-            }
+            self.hover(Kind::Status, Key::Tab(tab), Cue::Leave);
             return;
         }
+        let swapped = self.status.text.as_ref().is_none_or(|(_, t)| *t != text);
         self.status.text = Some((tab, text));
-        let now = self.status.clock.now();
-        self.status
-            .clock
-            .step(Event::Enter { key: tab, now }, Self::status_tick);
-        self.status_render();
-    }
-
-    fn status_tick(&mut self) {
-        let now = self.status.clock.now();
-        self.status
-            .clock
-            .step(Event::Tick { now }, Self::status_tick);
-        self.status_render();
+        self.hover(Kind::Status, Key::Tab(tab), Cue::Enter);
+        // another link's words while it shows: the slot did not move, the text did
+        if swapped && self.ui.shown(self.status_slot()) == Some(Key::Tab(tab)) {
+            self.status_render();
+        }
     }
 
     fn status_render(&mut self) {
-        if let Some(window) = self.w.window.upgrade() {
-            self.render_panes(&window);
-        }
+        let window = self.w.handle();
+        self.render_panes(&window);
     }
 }
 

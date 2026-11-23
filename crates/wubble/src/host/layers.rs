@@ -7,7 +7,7 @@
 use slint::ComponentHandle;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::overlay::{
-    self, Action, Coverage, Effect, Env, Facts, Kind, Layer, Phase, Scope, Stack,
+    self, Action, Coverage, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
 };
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
@@ -15,6 +15,7 @@ use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_ui::{
     AgentWidgets, AppWindow, CommandBarState, CommandPlacement, DropMarkKind, GlassLayer, Mounted,
+    PeekCue, SidebarMode,
 };
 
 use super::Host;
@@ -213,7 +214,7 @@ impl Host {
             }
         }
         // the status bubble is the host's for a pane on screen here
-        if let Some((tab, _)) = self.status.shown()
+        if let Some((tab, _)) = self.status_shown()
             && self.w.frames.contains_key(&tab)
         {
             add(Kind::Status, Some(tab));
@@ -269,11 +270,14 @@ impl Host {
             Action::Switched { from, .. } => from,
             _ => self.shown(),
         };
-        let ui = std::mem::take(&mut self.ui);
-        let (ui, fx) = overlay::reduce(ui, &self.env(window, menu_tab), action);
+        let before = std::mem::take(&mut self.ui);
+        let (ui, fx) = overlay::reduce(before.clone(), &self.env(window, menu_tab), action);
         self.ui = ui;
         for &effect in &fx {
             match effect {
+                Effect::Show(at, key) => self.draw_slot(at, Some(key), &before),
+                Effect::Unshow(at) => self.draw_slot(at, None, &before),
+                Effect::Arm(at) => self.arm_surfaces(at),
                 Effect::Cancel(layer) => self.overlay_cancel(menu_tab, layer),
                 Effect::Hide(Layer {
                     kind: Kind::Notice, ..
@@ -292,6 +296,90 @@ impl Host {
             }
         }
         fx
+    }
+
+    /// The store's one clock, in ms: every hover action and tick carries it.
+    pub(super) fn surface_now(&self) -> u64 {
+        self.ui_epoch.elapsed().as_millis() as u64
+    }
+
+    /// A hover or timed surface of this window: the kit's hover cue or its owner's show.
+    pub(super) fn hover(&mut self, kind: Kind, key: Key, cue: Cue) {
+        let at = Surface { w: self.w.id, kind };
+        let now = self.surface_now();
+        let window = self.w.handle();
+        self.step(&window, Action::Hover { at, key, cue, now });
+    }
+
+    /// The hidden sidebar's peek: the shell's pointer cue as its slot's (chrome.tsx: the edge
+    /// at once, a move in the strip after its delay, back on the panel stays, off it goes after
+    /// its time).
+    pub(crate) fn peek_cue(&mut self, cue: PeekCue) {
+        let cue = match cue {
+            PeekCue::EdgeEntered => Cue::Show,
+            PeekCue::StripMoved => Cue::Enter,
+            PeekCue::PanelEntered => Cue::Keep,
+            PeekCue::PanelLeft => Cue::Leave,
+        };
+        self.hover(Kind::Peek, Key::None, cue);
+    }
+
+    /// The sidebar's mode changed: a peek never outlives the hidden mode.
+    pub(crate) fn peek_mode(&mut self) {
+        if self.w.handle().get_sidebar_mode() != SidebarMode::Hidden {
+            self.hover(Kind::Peek, Key::None, Cue::Dismiss);
+        }
+    }
+
+    /// The store's one timer fired.
+    fn surface_tick(&mut self) {
+        let now = self.surface_now();
+        let window = self.w.handle();
+        self.step(&window, Action::Tick { now });
+    }
+
+    /// `Effect::Arm`: the one timer set for `at` on the store's clock, or stopped. It runs in
+    /// every mode (smokes too): the hover surfaces' times are the user's.
+    fn arm_surfaces(&mut self, at: Option<u64>) {
+        let Some(at) = at else {
+            self.ui_timer.stop();
+            return;
+        };
+        let wait = std::time::Duration::from_millis(at.saturating_sub(self.surface_now()));
+        self.ui_timer.start(slint::TimerMode::SingleShot, wait, || {
+            crate::measure::count(crate::measure::Count::SurfaceTick);
+            crate::with_host(Host::surface_tick);
+        });
+    }
+
+    /// A hover slot shows for `key` (or, `None`, hides): drawn into its own window, by its
+    /// surface's one writer. `before`: the store before the step (a tooltip glides from another
+    /// one or a warm hide, else appears in place; the video strip that hid was this tab's).
+    fn draw_slot(&mut self, at: Surface, key: Option<Key>, before: &overlay::Ui) {
+        let here = self.w.id;
+        if !self.enter(at.w) {
+            return;
+        }
+        let window = self.w.handle();
+        match at.kind {
+            Kind::Tooltip => {
+                let was = before.hover(at);
+                let warm = wubble_core::hovercard::shown(was).is_some()
+                    || matches!(was, wubble_core::hovercard::Hover::Cooling { .. });
+                self.render_tip(key, !warm);
+            }
+            Kind::Preview => self.render_preview(match key {
+                Some(Key::Tab(tab)) => Some(tab),
+                _ => None,
+            }),
+            Kind::Status => self.render_panes(&window),
+            Kind::Toast => window.set_toast_shown(key.is_some()),
+            Kind::VideoStrip => self.video_slot(key, before.shown(at)),
+            Kind::PipStrip => window.set_pip_strip(key.is_some()),
+            Kind::Peek => window.set_peek(key.is_some()),
+            _ => {}
+        }
+        self.enter(here);
     }
 
     /// Writes the store's overlays into every window (only an open one shows; Slint ignores a

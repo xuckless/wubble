@@ -43,8 +43,11 @@
 
 mod store;
 
-pub use store::{Action, AxRoots, Effect, Env, KeyOwner, Phase, PointerOwner, Ui, reduce};
+pub use store::{
+    Action, AxRoots, Cue, Effect, Env, Key, KeyOwner, Phase, PointerOwner, Surface, Ui, reduce,
+};
 
+use crate::hovercard::{self, Timing};
 use crate::tab::TabId;
 use crate::window::WindowKind;
 
@@ -222,10 +225,10 @@ pub enum Life {
     Answer,
     /// Until dismissed (a click outside, Escape, its own close).
     Dismiss,
-    /// For this many ms, unless replaced.
+    /// For this many ms, unless replaced: a hover slot of the store shown for a time.
     Timed(u64),
-    /// While hovered (with its owner's delays).
-    Hover,
+    /// While hovered, with these delays: a hover slot of the store ([`Surface`]).
+    Hover(Timing),
     /// While a drag or gesture runs.
     Drag,
     /// As its owner's state says (the page's error, the reader on, a transition's run).
@@ -293,6 +296,21 @@ const TOAST_TIMES: [[Option<u64>; 2]; 2] = [
 pub fn toast_ms(button: bool, sticky: bool) -> Option<u64> {
     TOAST_TIMES[usize::from(button)][usize::from(sticky)]
 }
+
+/// The video strip: shown at once or for a while by the video machine (`video::hold`), gone
+/// [`crate::video::LEAVE_MS`] after the pointer left.
+const VIDEO: Timing = Timing {
+    sticky_ms: crate::video::LEAVE_MS,
+    ..hovercard::AT_ONCE
+};
+
+/// The hidden sidebar's peek (chrome.tsx): [`crate::chrome::PEEK_IN_MS`] after a move in its
+/// strip (at once from its edge), [`crate::chrome::PEEK_OUT_MS`] after the pointer left.
+const PEEK: Timing = Timing {
+    show_ms: crate::chrome::PEEK_IN_MS as u64,
+    warm_ms: 0,
+    sticky_ms: crate::chrome::PEEK_OUT_MS as u64,
+};
 
 const ALL: &[WindowKind] = &[
     WindowKind::Main,
@@ -390,24 +408,26 @@ pub const ROWS: &[Row] = &[
         escape: Esc::Never, on_leave: false, closes: &[], ..DISMISSED },
     // ----- free
     Row { kind: Kind::Popup, z: 90, pointer: Pointer::OwnRect, ..FREE },
+    // the toast and the notice on it are one slot (`Key::Notice`): its navigation close is the notice's row's
     Row { kind: Kind::Toast, z: 62, glass: Some("toast"), life: Life::Timed(TOAST_SHOWN_MS), ..FREE },
-    Row { kind: Kind::Tooltip, z: 114, life: Life::Hover, ..FREE },
-    Row { kind: Kind::Preview, z: 52, glass: Some("preview"), life: Life::Hover, ..FREE },
-    Row { kind: Kind::Status, scope: Scope::Pane, z: 30, life: Life::Hover, ..FREE },
+    Row { kind: Kind::Tooltip, z: 114, life: Life::Hover(hovercard::TOOLTIP), on_nav: true, ..FREE },
+    Row { kind: Kind::Preview, z: 52, glass: Some("preview"), life: Life::Hover(hovercard::TAB_CARD), ..FREE },
+    Row { kind: Kind::Status, scope: Scope::Pane, z: 30, life: Life::Hover(hovercard::STATUS_BUBBLE), on_nav: true, ..FREE },
     Row { kind: Kind::AutofillChip, scope: Scope::Tab, z: 96, pointer: Pointer::OwnRect, ..FREE },
     Row { kind: Kind::AutofillMenu, scope: Scope::Tab, z: 97, pointer: Pointer::OwnRect, glass: Some("autofill-menu"), life: Life::Dismiss, ..FREE },
     Row { kind: Kind::AutofillPrompt, scope: Scope::Tab, z: 98, pointer: Pointer::OwnRect, glass: Some("autofill-prompt"), life: Life::Answer, ..FREE },
-    Row { kind: Kind::VideoStrip, scope: Scope::Pane, z: 40, pointer: Pointer::OwnRect, glass: Some("video-strip"), life: Life::Hover, windows: PAGES, ..FREE },
+    // the strip, its tab and its menu are one slot (the video machine says which)
+    Row { kind: Kind::VideoStrip, scope: Scope::Pane, z: 40, pointer: Pointer::OwnRect, glass: Some("video-strip"), life: Life::Hover(VIDEO), windows: PAGES, on_nav: true, ..FREE },
     Row { kind: Kind::VideoTab, scope: Scope::Pane, z: 41, pointer: Pointer::OwnRect, glass: Some("video-tab"), windows: PAGES, ..FREE },
     Row { kind: Kind::VideoSpeeds, scope: Scope::Pane, z: 42, pointer: Pointer::OwnRect, glass: Some("video-speeds"), life: Life::Dismiss, windows: PAGES, ..FREE },
-    Row { kind: Kind::PipStrip, z: 44, pointer: Pointer::OwnRect, glass: Some("pip-strip"), life: Life::Hover, windows: PIP, ..FREE },
+    Row { kind: Kind::PipStrip, z: 44, pointer: Pointer::OwnRect, glass: Some("pip-strip"), life: Life::Hover(hovercard::AT_ONCE), windows: PIP, ..FREE },
     Row { kind: Kind::PipCard, scope: Scope::Tab, z: 46, pointer: Pointer::OwnRect, windows: MAIN, ..FREE },
     Row { kind: Kind::Reader, scope: Scope::Tab, z: 54, pointer: Pointer::OwnRect, glass: Some("reader"), ..FREE },
     Row { kind: Kind::Glance, z: 64, keys: Keys::OnAsk, pointer: Pointer::Scrim, glass: Some("glance"), life: Life::Dismiss, escape: Esc::Any, ..FREE },
     Row { kind: Kind::Swipe, z: 70, life: Life::Drag, ..FREE },
     Row { kind: Kind::ExitPage, z: 10, ..FREE },
     Row { kind: Kind::Entrance, z: 20, cover: Coverage::Pixels, ..FREE },
-    Row { kind: Kind::Peek, z: 80, pointer: Pointer::OwnRect, glass: Some("peek"), life: Life::Hover, windows: PAGES, ..FREE },
+    Row { kind: Kind::Peek, z: 80, pointer: Pointer::OwnRect, glass: Some("peek"), life: Life::Hover(PEEK), windows: PAGES, ..FREE },
     Row { kind: Kind::SeamBow, z: 82, pointer: Pointer::Grab, cover: Coverage::Pixels, life: Life::Drag, windows: PAGES, ..FREE },
     Row { kind: Kind::SplitRing, z: 34, ..FREE },
     Row { kind: Kind::SplitSeams, z: 36, pointer: Pointer::Grab, ..FREE },
@@ -436,6 +456,15 @@ impl Kind {
             self.row().group,
             Group::Exclusive | Group::Modal | Group::Holds
         )
+    }
+
+    /// Its hover slot's delays, when it is a hover or timed surface of the store.
+    pub fn timing(self) -> Option<Timing> {
+        match self.row().life {
+            Life::Hover(t) => Some(t),
+            Life::Timed(_) => Some(hovercard::AT_ONCE),
+            Life::Answer | Life::Dismiss | Life::Drag | Life::Owner => None,
+        }
     }
 
     /// Under the overlays' rules.

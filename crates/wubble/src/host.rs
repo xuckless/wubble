@@ -35,7 +35,6 @@ mod gesture;
 mod gpu;
 mod harness;
 mod hosting;
-mod hover;
 mod layers;
 mod look;
 mod media;
@@ -378,8 +377,13 @@ pub struct Host {
     pub timer: slint::Timer,
     /// The one owner of tabs and Spaces.
     model: Model,
-    /// The one owner of which overlays are open or leaving (`wubble_core::overlay::Ui`).
+    /// The one owner of which overlays are open or leaving, and of the hover and timed
+    /// surfaces (`wubble_core::overlay::Ui`).
     ui: wubble_core::overlay::Ui,
+    /// The store's one clock: the zero of every `now` its actions carry (`Host::surface_now`).
+    ui_epoch: Instant,
+    /// The store's one timer, armed by its `Effect::Arm` (`host/layers.rs`).
+    ui_timer: slint::Timer,
     /// The view of every live tab.
     views: BTreeMap<TabId, ViewId>,
     /// Effects not yet executed: they wait until the window can size a view.
@@ -796,6 +800,8 @@ impl Host {
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
             ui: Default::default(),
+            ui_epoch: Instant::now(),
+            ui_timer: slint::Timer::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.

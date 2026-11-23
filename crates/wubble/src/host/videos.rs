@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Cue, Key, Kind};
 use wubble_core::pip::{self, Pip, PipEffect, PipInput};
 use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
@@ -132,10 +132,6 @@ pub(super) struct Videos {
     controls: bool,
     rates: RateTable,
     overlays: BTreeMap<TabId, Overlay>,
-    /// On-demand 10 Hz clock for active video overlays (stopped when `overlays` is empty).
-    clock: slint::Timer,
-    /// True once the host enables wall-clock timers (off in deterministic smokes).
-    clock_enabled: bool,
     /// Snapshot polls in flight (eval id to tab and the round it went out in), at most one per
     /// tab.
     polls: BTreeMap<u64, (TabId, u64)>,
@@ -186,8 +182,6 @@ impl Default for Videos {
             controls: true,
             rates: RateTable::new(),
             overlays: BTreeMap::new(),
-            clock: slint::Timer::default(),
-            clock_enabled: false,
             polls: BTreeMap::new(),
             round: 0,
             stale: BTreeMap::new(),
@@ -313,9 +307,8 @@ impl Host {
     // ----- the poll
 
     /// Asks the page kit of each tab that matters for its snapshot: the tabs on screen, the one
-    /// in picture-in-picture, the ones playing sound. Also the overlay's clock.
+    /// in picture-in-picture, the ones playing sound.
     pub fn poll_media(&mut self) {
-        let now = now_ms() as u64;
         // The docked DevTools panel is a pane but no page of the user's; a hidden window's
         // pages show no controls, so they are not asked (each ask wakes their renderer).
         let mut tabs: BTreeSet<TabId> = if self.w.hidden {
@@ -347,10 +340,6 @@ impl Host {
             if let Some(id) = self.tab_view(tab).and_then(|v| v.eval(SNAPSHOT)) {
                 self.videos.polls.insert(id.0, (tab, round));
             }
-        }
-        let shown: Vec<TabId> = self.videos.overlays.keys().copied().collect();
-        for tab in shown {
-            self.video_event(tab, VideoInput::Tick(now));
         }
     }
 
@@ -451,7 +440,6 @@ impl Host {
                 video: video.clone(),
                 site_rate,
                 fold,
-                now,
             },
         );
         let fired: Vec<usize> = json
@@ -492,7 +480,6 @@ impl Host {
         if next != Overlay::default() {
             self.videos.overlays.insert(tab, next);
         }
-        self.sync_video_clock();
         for effect in effects {
             match effect {
                 VideoEffect::Page(cmd) => {
@@ -552,6 +539,8 @@ impl Host {
                         self.redraw_video();
                     }
                 }
+                // the window's video slot of the store: whether and how long the controls show
+                VideoEffect::Hold(cue) => self.hover(Kind::VideoStrip, Key::Tab(tab), cue),
             }
         }
     }
@@ -599,7 +588,7 @@ impl Host {
             tab,
             VideoInput::Command {
                 cmd,
-                now: now_ms() as u64,
+                over: self.video_over(),
                 can_save,
             },
         );
@@ -684,56 +673,46 @@ impl Host {
         }
     }
 
+    /// Where the pointer is for the controls: on them, on the video, or away.
+    fn video_over(&self) -> Over {
+        match (self.videos.over_controls, self.videos.over_video) {
+            (true, _) => Over::Strip,
+            (false, true) => Over::Video,
+            (false, false) => Over::Away,
+        }
+    }
+
     fn video_pointer_changed(&mut self) {
         if let Some(tab) = self.shown() {
-            let over = match (self.videos.over_controls, self.videos.over_video) {
-                (true, _) => Over::Strip,
-                (false, true) => Over::Video,
-                (false, false) => Over::Away,
-            };
-            let now = now_ms() as u64;
-            self.video_event(tab, VideoInput::Pointer { over, now });
+            let over = self.video_over();
+            self.video_event(tab, VideoInput::Pointer { over });
         }
     }
 
-    /// Enables the on-demand 10 Hz video overlay clock (started only while an overlay is open).
-    pub fn enable_video_clock(&mut self) {
-        self.videos.clock_enabled = true;
-        self.sync_video_clock();
+    /// The store's video slot showed for `key`, or (`None`) hid what it showed for `was`: the
+    /// controls drawn again, a hidden one's menu shut.
+    pub(super) fn video_slot(&mut self, key: Option<Key>, was: Option<Key>) {
+        if key.is_none()
+            && let Some(Key::Tab(tab)) = was
+        {
+            self.video_event(tab, VideoInput::Hidden);
+        }
+        self.redraw_video();
     }
 
-    /// Starts or stops the 10 Hz overlay clock based on whether any video overlay is active.
-    fn sync_video_clock(&mut self) {
-        if self.videos.clock_enabled && !self.videos.overlays.is_empty() {
-            if !self.videos.clock.running() {
-                self.videos.clock.start(
-                    slint::TimerMode::Repeated,
-                    crate::VIDEO_TICK_EVERY,
-                    || {
-                        crate::measure::count(crate::measure::Count::VideoTick);
-                        crate::with_host(Host::tick_video);
-                    },
-                );
-            }
-        } else if self.videos.clock.running() {
-            self.videos.clock.stop();
-        }
+    /// The window's video slot shows for `tab`.
+    fn video_up(&self, tab: TabId) -> bool {
+        let at = wubble_core::overlay::Surface {
+            w: self.w.id,
+            kind: Kind::VideoStrip,
+        };
+        self.ui.shown(at) == Some(Key::Tab(tab))
     }
 
     fn record_stale_poll(&mut self, id: u64, tab: TabId) {
         self.videos.stale.insert(id, tab);
         while self.videos.stale.len() > MAX_STALE_POLLS {
             self.videos.stale.pop_first();
-        }
-    }
-
-    /// The overlay's clock between polls, so the controls go on time (`LEAVE_MS` is shorter than
-    /// a poll).
-    pub fn tick_video(&mut self) {
-        let now = now_ms() as u64;
-        let tabs: Vec<TabId> = self.videos.overlays.keys().copied().collect();
-        for tab in tabs {
-            self.video_event(tab, VideoInput::Tick(now));
         }
     }
 
@@ -756,7 +735,6 @@ impl Host {
 
     pub(super) fn media_view_gone(&mut self, tab: TabId) {
         self.videos.overlays.remove(&tab);
-        self.sync_video_clock();
         self.videos.polls.retain(|_, (t, _)| *t != tab);
         self.videos.stale.retain(|_, t| *t != tab);
         self.videos.frames.retain(|_, t| *t != tab);
@@ -811,7 +789,8 @@ impl Host {
                 .videos
                 .overlays
                 .get(&tab)
-                .is_some_and(|o| o.shown() || o.collapsed())
+                .is_some_and(|o| o.strip() || o.collapsed())
+            && self.video_up(tab)
     }
 
     /// The visible page's controls.
@@ -826,6 +805,7 @@ impl Host {
         let tab = self.model.window_key_tab(self.w.id);
         let on_window = self.video_on_window(window);
         let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
+        let up = tab.is_some_and(|t| self.video_up(t));
         let view = match (overlay, tab, on_window) {
             (Some(o), Some(tab), Some((r, pane)))
                 if self.videos.controls && !self.site_hides_video(tab) =>
@@ -844,8 +824,8 @@ impl Host {
                     let save = self.video_save_state(tab);
                     let nearest = video::nearest_rate(v.rate);
                     VideoView {
-                        open: o.shown(),
-                        collapsed: o.collapsed(),
+                        open: up && o.strip(),
+                        collapsed: up && o.collapsed(),
                         pane_right: (pane.x + pane.w) as f32,
                         pane_bottom: (pane.y + pane.h) as f32,
                         x: r.x as f32,
@@ -861,7 +841,7 @@ impl Host {
                             .iter()
                             .position(|&r| r == nearest)
                             .map_or(-1, |i| i as i32),
-                        speeds: o.speeds_open(),
+                        speeds: up && o.speeds_open(),
                         can_pip: self.model.can_pip(tab),
                         frame: v.frame,
                         save: match save {
@@ -956,7 +936,7 @@ impl Host {
                 && self.overlay_open(Kind::Notice, Some(tab))
             {
                 self.videos.asking = true;
-                self.toast_with(ASK_SPONSOR.0, ASK_SPONSOR.1, true);
+                self.toast_notice(tab, ASK_SPONSOR.0, ASK_SPONSOR.1);
                 self.videos.toast = Some(ToastAct::AskSponsor(tab));
             }
             return;
@@ -1128,11 +1108,11 @@ impl Host {
 
     /// Its tab left (false) or came back (true): the question hides or shows again, waiting.
     pub(super) fn notice_shown(&mut self, shown: bool) {
-        let Some(act @ ToastAct::AskSponsor(_)) = self.videos.toast else {
+        let Some(act @ ToastAct::AskSponsor(tab)) = self.videos.toast else {
             return;
         };
         if shown {
-            self.toast_with(ASK_SPONSOR.0, ASK_SPONSOR.1, true);
+            self.toast_notice(tab, ASK_SPONSOR.0, ASK_SPONSOR.1);
             self.videos.toast = Some(act);
         } else {
             self.toast_hide();
@@ -1278,11 +1258,10 @@ impl Host {
     }
 
     /// The pointer came over the picture-in-picture window (true) or left it: its strip shows
-    /// while it is there. The host's answer, so the strip's visibility is not Slint's own.
+    /// while it is there, by the window's strip slot of the store (at once, both ways).
     pub(crate) fn pip_hovered(&mut self, on: bool) {
-        if let Some(window) = self.w.window.upgrade() {
-            window.set_pip_strip(on);
-        }
+        let cue = if on { Cue::Show } else { Cue::Leave };
+        self.hover(Kind::PipStrip, Key::None, cue);
     }
 
     /// The tab whose card this window shows: a Main window's visible tab playing in
@@ -1365,6 +1344,7 @@ impl Host {
         let pip = self.pip_smoke_seen();
         let sponsor = tab.and_then(|t| self.videos.sponsor_tabs.get(&t));
         let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
+        let up = tab.is_some_and(|t| self.video_up(t));
         let window = self.w.window.upgrade();
         let toast = window
             .as_ref()
@@ -1381,9 +1361,9 @@ impl Host {
             pip,
             now: now_ms() as u64,
             controls,
-            strip: overlay.is_some_and(Overlay::shown),
-            collapsed: overlay.is_some_and(Overlay::collapsed),
-            speeds: overlay.is_some_and(Overlay::speeds_open),
+            strip: up && overlay.is_some_and(Overlay::strip),
+            collapsed: up && overlay.is_some_and(Overlay::collapsed),
+            speeds: up && overlay.is_some_and(Overlay::speeds_open),
             menu: tab.is_some_and(|t| {
                 self.surfaces
                     .get(&t)

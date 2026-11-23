@@ -15,7 +15,7 @@ use wubble_core::clipboard::{self, Ask, Asker, Payload, Reader};
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::dnd;
 use wubble_core::model::Command;
-use wubble_core::overlay::{self, Kind};
+use wubble_core::overlay::{self, Cue, Key, Kind};
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowTarget;
@@ -929,7 +929,7 @@ impl Host {
             println!("probe: toast {text:?}");
         }
         self.toast_replaced();
-        self.show_toast(window, text, "", false);
+        self.show_toast(window, text, "", None);
     }
 
     /// A notice with a button (`action`); `sticky`: it stays until answered. What the button
@@ -937,41 +937,36 @@ impl Host {
     pub(super) fn toast_with(&mut self, text: &str, action: &str, sticky: bool) {
         self.toast_replaced();
         if let Some(window) = self.w.window.upgrade() {
-            self.show_toast(&window, text, action, sticky);
+            self.show_toast(&window, text, action, sticky.then_some(Key::None));
+        }
+    }
+
+    /// The page's question over `tab` (`overlay::Kind::Notice`), held on the toast until
+    /// answered; what its button does is the caller's to remember.
+    pub(super) fn toast_notice(&mut self, tab: TabId, text: &str, action: &str) {
+        self.toast_replaced();
+        if let Some(window) = self.w.window.upgrade() {
+            self.show_toast(&window, text, action, Some(Key::Notice(tab)));
         }
     }
 
     /// Takes whatever notice shows away.
     pub(super) fn toast_hide(&mut self) {
-        self.w.toast.stop();
-        if let Some(window) = self.w.window.upgrade() {
-            window.set_toast_shown(false);
-        }
+        self.hover(Kind::Toast, Key::None, Cue::Dismiss);
     }
 
     /// Shows a notice for its time (`overlay::TOAST_SHOWN_MS`; with a button the one undo
-    /// window, `sponsor::TOAST_MS`, which no button outlives), restarting the time; a sticky
-    /// one until it is answered or taken away. The window's timer is the toast's one clock.
-    fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, sticky: bool) {
+    /// window, `sponsor::TOAST_MS`, which no button outlives), restarting the time; a `held`
+    /// one, for its key, until it is answered or taken away. The window's toast slot of the
+    /// store times it; another toast replaces it in place.
+    fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, held: Option<Key>) {
         self.toast_serial = self.toast_serial.wrapping_add(1);
         window.set_toast_text(text.into());
         window.set_toast_action(action.into());
-        window.set_toast_sticky(sticky);
-        window.set_toast_shown(true);
-        let Some(ms) = wubble_core::overlay::toast_ms(!action.is_empty(), sticky) else {
-            self.w.toast.stop();
-            return;
-        };
-        let shown = window.as_weak();
-        self.w.toast.start(
-            slint::TimerMode::SingleShot,
-            std::time::Duration::from_millis(ms),
-            move || {
-                if let Some(window) = shown.upgrade() {
-                    window.set_toast_shown(false);
-                }
-            },
-        );
+        window.set_toast_sticky(held.is_some());
+        let cue = wubble_core::overlay::toast_ms(!action.is_empty(), held.is_some())
+            .map_or(Cue::Show, Cue::ShowFor);
+        self.hover(Kind::Toast, held.unwrap_or(Key::None), cue);
     }
 
     /// Puts `text` on the system clipboard: through the window's Wayland connection, else

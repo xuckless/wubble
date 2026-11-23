@@ -19,72 +19,11 @@ pub fn compact(live_width: f64, mode: SidebarMode, peeking: bool) -> bool {
 }
 
 /// How long the pointer rests in the edge strip before the hidden sidebar peeks, ms
-/// (chrome.tsx `onMove`: `setTimeout(() => setPeek(true), 60)`).
+/// (chrome.tsx `onMove`: `setTimeout(() => setPeek(true), 60)`). The peek is the store's peek
+/// slot (`overlay::Kind::Peek`): the edge shows it at once, these are its delays.
 pub const PEEK_IN_MS: u32 = 60;
 /// How long after the pointer left the peeking sidebar it goes, ms (chrome.tsx `leaveSide`).
 pub const PEEK_OUT_MS: u32 = 260;
-
-/// The hidden sidebar's peek (chrome.tsx:250-257): a presentation of [`SidebarMode::Hidden`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Peek {
-    #[default]
-    Idle,
-    /// The pointer moved in the edge strip; it shows when the timer fires.
-    Arming,
-    Shown,
-    /// The pointer left the panel; it goes when the timer fires.
-    Leaving,
-}
-
-impl Peek {
-    /// The panel is on screen (sliding in, resting or about to go).
-    pub fn shown(self) -> bool {
-        matches!(self, Peek::Shown | Peek::Leaving)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PeekEvent {
-    /// The pointer entered the edge strip (`.wb-peek-edge` onPointerEnter): shows at once.
-    EdgeEntered,
-    /// The pointer moved in the strip a hidden sidebar peeks from without entering the edge
-    /// element (wubble: the window's west resize strip over it): arms the 60 ms timer.
-    StripMoved,
-    /// The pointer is over the panel or the strip again.
-    PanelEntered,
-    /// The pointer left the panel and the strip (`leaveSide`).
-    PanelLeft,
-    TimerFired,
-    /// The sidebar's mode changed (`useEffect(() => { if (!hidden) setPeek(false) })`).
-    ModeChanged(SidebarMode),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PeekEffect {
-    /// (Re)start the one timer, ms.
-    Arm(u32),
-    Disarm,
-}
-
-/// One step of the peek.
-pub fn peek(state: Peek, event: PeekEvent) -> (Peek, Vec<PeekEffect>) {
-    use Peek::*;
-    use PeekEffect::*;
-    use PeekEvent::*;
-    match (state, event) {
-        (_, ModeChanged(m)) if m != SidebarMode::Hidden => (Idle, vec![Disarm]),
-        (_, ModeChanged(_)) => (state, vec![]),
-        (Idle, EdgeEntered) => (Shown, vec![]),
-        (Arming, EdgeEntered) => (Shown, vec![Disarm]),
-        (Idle | Arming, StripMoved) => (Arming, vec![Arm(PEEK_IN_MS)]),
-        (Arming, TimerFired) => (Shown, vec![]),
-        (Arming, PanelLeft) => (Idle, vec![Disarm]),
-        (Shown, PanelLeft) => (Leaving, vec![Arm(PEEK_OUT_MS)]),
-        (Leaving, EdgeEntered | StripMoved | PanelEntered) => (Shown, vec![Disarm]),
-        (Leaving, TimerFired) => (Idle, vec![]),
-        (s, _) => (s, vec![]),
-    }
-}
 
 /// What the command bar opens for (command.tsx `cmd.mode`): `Here` replaces the shown page (the
 /// address pill), `New` opens a tab (New tab), `Split` opens beside the focused page.
@@ -237,8 +176,6 @@ pub fn is_secure(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use PeekEffect::*;
-    use PeekEvent::*;
 
     const MODES: [SidebarMode; 3] = [
         SidebarMode::Extended,
@@ -423,73 +360,6 @@ mod tests {
             for w in [0.0, 139.0, 140.0, 340.0] {
                 assert!(!compact(w, mode, true), "a peek is never compact");
             }
-        }
-    }
-
-    #[test]
-    fn the_edge_shows_the_peek_at_once() {
-        assert_eq!(peek(Peek::Idle, EdgeEntered), (Peek::Shown, vec![]));
-        assert_eq!(peek(Peek::Arming, EdgeEntered), (Peek::Shown, vec![Disarm]));
-    }
-
-    #[test]
-    fn a_move_in_the_strip_arms_and_rearms() {
-        assert_eq!(
-            peek(Peek::Idle, StripMoved),
-            (Peek::Arming, vec![Arm(PEEK_IN_MS)])
-        );
-        assert_eq!(
-            peek(Peek::Arming, StripMoved),
-            (Peek::Arming, vec![Arm(PEEK_IN_MS)])
-        );
-        assert_eq!(peek(Peek::Arming, TimerFired), (Peek::Shown, vec![]));
-    }
-
-    #[test]
-    fn leaving_the_panel_cancels_arming() {
-        assert_eq!(peek(Peek::Arming, PanelLeft), (Peek::Idle, vec![Disarm]));
-    }
-
-    #[test]
-    fn the_peek_goes_a_while_after_the_pointer_left() {
-        assert_eq!(
-            peek(Peek::Shown, PanelLeft),
-            (Peek::Leaving, vec![Arm(PEEK_OUT_MS)])
-        );
-        assert_eq!(peek(Peek::Leaving, TimerFired), (Peek::Idle, vec![]));
-        for back in [PanelEntered, EdgeEntered, StripMoved] {
-            assert_eq!(
-                peek(Peek::Leaving, back),
-                (Peek::Shown, vec![Disarm]),
-                "{back:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_stale_timer_or_a_repeat_does_nothing() {
-        for (s, e) in [
-            (Peek::Idle, TimerFired),
-            (Peek::Shown, TimerFired),
-            (Peek::Idle, PanelLeft),
-            (Peek::Idle, PanelEntered),
-            (Peek::Shown, EdgeEntered),
-            (Peek::Shown, StripMoved),
-            (Peek::Shown, PanelEntered),
-            (Peek::Leaving, PanelLeft),
-            (Peek::Arming, PanelEntered),
-        ] {
-            assert_eq!(peek(s, e), (s, vec![]), "{s:?} {e:?}");
-        }
-    }
-
-    #[test]
-    fn a_mode_other_than_hidden_ends_the_peek_from_any_state() {
-        for s in [Peek::Idle, Peek::Arming, Peek::Shown, Peek::Leaving] {
-            for m in [SidebarMode::Extended, SidebarMode::Rail] {
-                assert_eq!(peek(s, ModeChanged(m)), (Peek::Idle, vec![Disarm]), "{s:?}");
-            }
-            assert_eq!(peek(s, ModeChanged(SidebarMode::Hidden)), (s, vec![]));
         }
     }
 

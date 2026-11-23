@@ -6,6 +6,13 @@
 //! What other owners know is never kept here: the visible tab (the model's), the window's kind
 //! (its host's), whether the page has the keys (the shell's) come as an [`Env`].
 //!
+//! The hover and timed surfaces (a tooltip, the tab card, the link status bubble, the toast and
+//! its notice, the video strip, the picture-in-picture strip, the sidebar's peek) are one
+//! `hovercard` machine per [`Surface`] (window, kind), stepped by the kit's discrete hover cues
+//! and their owners' shows ([`Action::Hover`]) and by the host's ONE timer ([`Action::Tick`]),
+//! which [`Effect::Arm`] sets to the soonest deadline of them all. The store never reads a
+//! clock: `now` comes with each action.
+//!
 //! Prior art: Zed `crates/workspace/src/modal_layer.rs` (one layer owning the modal's
 //! open/closed and the focus to return to; here the focus is derived, [`Ui::key_owner`] after
 //! the close), the Elm architecture's `update(model, msg) -> (model, cmds)`.
@@ -13,6 +20,7 @@
 use std::collections::BTreeMap;
 
 use super::{Esc, Group, Keys, Kind, Layer, Pointer, Stack};
+use crate::hovercard::{self, Event, Hover};
 use crate::tab::TabId;
 use crate::window::{WindowId, WindowKind};
 
@@ -35,10 +43,63 @@ fn home(w: WindowId, layer: Layer) -> Home {
     layer.tab.map_or(Home::Window(w), Home::Tab)
 }
 
-/// The overlays the store owns, for every window and tab of the app.
+/// One window's hover or timed surface (a kind with [`Kind::timing`]): its slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Surface {
+    pub w: WindowId,
+    pub kind: Kind,
+}
+
+/// What a hover slot shows for: replacing it in its slot is a move, never a hide and a show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// The slot's one thing (a toast, the peek, the picture-in-picture strip).
+    None,
+    /// A tab: its row's card, its pane's status bubble or video strip.
+    Tab(TabId),
+    /// The page in this tab's `title` under the pointer.
+    Page(TabId),
+    /// A shell button that runs this action.
+    Shell(crate::action::Action),
+    /// The notice asked over this tab, held on the toast until answered.
+    Notice(TabId),
+}
+
+impl Key {
+    fn tab(self) -> Option<TabId> {
+        match self {
+            Key::Tab(t) | Key::Page(t) | Key::Notice(t) => Some(t),
+            Key::None | Key::Shell(_) => None,
+        }
+    }
+}
+
+/// What the kit's hover or a surface's owner says of a slot; never a pointer position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cue {
+    /// The pointer came onto the key: it shows after the slot's delay.
+    Enter,
+    /// The pointer left the key (a stale leave, of a key the slot is no longer on, is nothing).
+    Leave,
+    /// Shown now and held (the peek's edge, the pointer on a strip, a notice).
+    Show,
+    /// Shown now for this many ms (a toast, the video strip after a move over the video).
+    ShowFor(u64),
+    /// The pointer is back on the key on its way out: it stays.
+    Keep,
+    /// A press, a key, a tab switch, an answer: gone now (for its key; `Key::None`, whatever
+    /// shows).
+    Dismiss,
+}
+
+/// The overlays the store owns, for every window and tab of the app, and its hover slots.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Ui {
     entries: BTreeMap<(Home, Kind), Phase>,
+    /// The hover and timed surfaces; absent is `Hover::Idle`.
+    hover: BTreeMap<Surface, Hover<Key>>,
+    /// What the host's one timer is armed for (the store's own timer bookkeeping).
+    armed: Option<u64>,
 }
 
 /// What other owners know, read when an action runs; never stored.
@@ -79,6 +140,15 @@ pub enum Action {
     ViewGone(TabId),
     /// The window closed.
     WindowGone(WindowId),
+    /// A hover or timed surface's cue, at `now` on the host's clock.
+    Hover {
+        at: Surface,
+        key: Key,
+        cue: Cue,
+        now: u64,
+    },
+    /// The host's one timer fired.
+    Tick { now: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +184,12 @@ pub enum Effect {
     Hide(Layer),
     /// Its tab is visible again.
     Reveal(Layer),
+    /// A hover slot shows for this key (moved to it, when it showed another).
+    Show(Surface, Key),
+    /// A hover slot hides (its kit draws the fade).
+    Unshow(Surface),
+    /// The host's one timer: fire at this time, or stop.
+    Arm(Option<u64>),
 }
 
 impl Ui {
@@ -208,9 +284,110 @@ impl Ui {
         AxRoots { modal, roots }
     }
 
-    /// Nothing leaving: no exit for the kit to report.
+    /// Nothing leaving, no hover deadline: no exit for the kit to report, no timer armed.
     pub fn idle(&self) -> bool {
-        self.entries.values().all(|&p| p == Phase::Open)
+        self.entries.values().all(|&p| p == Phase::Open) && self.deadline().is_none()
+    }
+
+    /// A hover slot's state.
+    pub fn hover(&self, at: Surface) -> Hover<Key> {
+        self.hover.get(&at).copied().unwrap_or_default()
+    }
+
+    /// The key a hover slot is up for (also on its way out).
+    pub fn shown(&self, at: Surface) -> Option<Key> {
+        hovercard::shown(self.hover(at))
+    }
+
+    fn deadline(&self) -> Option<u64> {
+        self.hover
+            .values()
+            .filter_map(|&h| hovercard::deadline(h))
+            .min()
+    }
+
+    /// One slot's step, its effect pushed.
+    fn slot(&mut self, at: Surface, event: Event<Key>, fx: &mut Vec<Effect>) {
+        let Some(timing) = at.kind.timing() else {
+            return;
+        };
+        let (next, effect) = hovercard::transition(self.hover(at), event, &timing);
+        if next == Hover::Idle {
+            self.hover.remove(&at);
+        } else {
+            self.hover.insert(at, next);
+        }
+        fx.extend(effect.map(|e| match e {
+            hovercard::Effect::Show(key) => Effect::Show(at, key),
+            hovercard::Effect::Hide => Effect::Unshow(at),
+        }));
+    }
+
+    fn cue(&mut self, at: Surface, key: Key, cue: Cue, now: u64, fx: &mut Vec<Effect>) {
+        let on = match self.hover(at) {
+            Hover::Pending { key: k, .. }
+            | Hover::Shown { key: k }
+            | Hover::Leaving { key: k, .. } => k == key,
+            Hover::Idle | Hover::Cooling { .. } => false,
+        };
+        let event = match cue {
+            Cue::Enter => Event::Enter { key, now },
+            Cue::Leave if on => Event::Leave { now },
+            Cue::Keep if on => Event::Keep,
+            // `Key::None` dismisses whatever the slot is on
+            Cue::Dismiss if on || key == Key::None => Event::Dismiss,
+            // a leave, a return or a dismissal of a key the slot is not on: a stale one
+            Cue::Leave | Cue::Keep | Cue::Dismiss => return,
+            Cue::Show => Event::Show { key },
+            Cue::ShowFor(ms) => Event::ShowFor { key, now, ms },
+        };
+        self.slot(at, event, fx);
+    }
+
+    /// Every slot whose deadline passed, through as many of its steps as are due (a hide
+    /// with no warm time rests in the same tick).
+    fn tick(&mut self, now: u64, fx: &mut Vec<Effect>) {
+        let slots: Vec<Surface> = self.hover.keys().copied().collect();
+        for at in slots {
+            while self
+                .hover
+                .get(&at)
+                .is_some_and(|&h| hovercard::deadline(h).is_some_and(|d| d <= now))
+            {
+                self.slot(at, Event::Tick { now }, fx);
+            }
+        }
+    }
+
+    /// The slots for `tab` go (`nav`: only the ones whose row closes on a navigation).
+    fn drop_tab(&mut self, tab: TabId, nav: bool, fx: &mut Vec<Effect>) {
+        let slots: Vec<Surface> = self
+            .hover
+            .iter()
+            .filter(|&(s, &h)| {
+                (!nav || s.kind.row().on_nav)
+                    && [hovercard::shown(h), hovercard::active(h)]
+                        .iter()
+                        .any(|k| k.and_then(Key::tab) == Some(tab))
+            })
+            .map(|(&s, _)| s)
+            .collect();
+        for at in slots {
+            self.slot(at, Event::Dismiss, fx);
+        }
+    }
+
+    /// The timer for the soonest deadline, when it changed. A deadline that only moved later
+    /// keeps the timer armed (it fires early, and that tick arms the true one): a pointer
+    /// moving over a video never re-arms it. `fired`: the timer just ran out.
+    fn arm(&mut self, fired: bool) -> Option<Effect> {
+        let next = self.deadline();
+        let armed = if fired { None } else { self.armed };
+        if matches!((armed, next), (Some(a), Some(n)) if n > a) {
+            return None;
+        }
+        self.armed = next;
+        (next != armed).then_some(Effect::Arm(next))
     }
 
     /// The leaving overlays of `w` the kit no longer draws (`drawn` false, or their tab not
@@ -356,11 +533,33 @@ impl Ui {
     }
 }
 
+/// One step of the store: the hover slots (a cue, the timer, a navigation, a tab or window
+/// gone), then the overlays, then the timer armed for what is due next.
+pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
+    let mut fx = vec![];
+    match action {
+        Action::Hover { at, key, cue, now } => ui.cue(at, key, cue, now, &mut fx),
+        Action::Tick { now } => ui.tick(now, &mut fx),
+        Action::Navigated { tab, .. } => ui.drop_tab(tab, true, &mut fx),
+        Action::ViewGone(tab) => ui.drop_tab(tab, false, &mut fx),
+        // its slots go with it, nothing left to hide
+        Action::WindowGone(w) => ui.hover.retain(|s, _| s.w != w),
+        _ => {}
+    }
+    if !matches!(action, Action::Hover { .. } | Action::Tick { .. }) {
+        let (next, more) = overlays(ui, env, action);
+        ui = next;
+        fx.extend(more);
+    }
+    fx.extend(ui.arm(matches!(action, Action::Tick { .. })));
+    (ui, fx)
+}
+
 /// One step of the overlays: every (phase, action) cell is decided here (absent, Open,
 /// Leaving), each by the acting row's data. A refused open changes nothing; an action on a
 /// leaving overlay is ignored but its reopening (fresh content: Unmount, Mount) and its
 /// `Exited`. Add behaviour as a [`super::Row`] field, not a branch on a kind.
-pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
+fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
     // a tab's overlay meets the overlays of the window that shows its tab, wherever it was asked
     let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
     let w = match action {
@@ -377,6 +576,7 @@ pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             let fx = ui.drop_home(Home::Window(w), true);
             return (ui, fx);
         }
+        Action::Hover { .. } | Action::Tick { .. } => return (ui, vec![]),
     };
     let mut s = Step {
         ui,
@@ -421,7 +621,12 @@ pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
                 }
             }
         }
-        Action::ViewGone(_) | Action::WindowGone(_) => unreachable!("answered above"),
+        Action::ViewGone(_)
+        | Action::WindowGone(_)
+        | Action::Hover { .. }
+        | Action::Tick { .. } => {
+            unreachable!("answered above")
+        }
     }
     if s.focus {
         // a machine's overlay cancelled here is still in `others` until its machine closes it

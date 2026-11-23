@@ -398,7 +398,7 @@ impl Host {
         if let Some(tab) = shown {
             match scene.overlay {
                 Overlay::Status(url) => self.link_status(tab, url.to_owned()),
-                _ if self.status.shown().is_some() => self.link_status(tab, String::new()),
+                _ if self.status_shown().is_some() => self.link_status(tab, String::new()),
                 _ => {}
             }
         }

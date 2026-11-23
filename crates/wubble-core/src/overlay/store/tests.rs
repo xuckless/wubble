@@ -568,3 +568,304 @@ fn store_walk() {
         assert!(ui.idle(), "seed {seed}: never drained: {ui:?}");
     }
 }
+
+// ----- the hover and timed surfaces
+
+const HOVERED: [Kind; 7] = [Tooltip, Preview, Status, Toast, VideoStrip, PipStrip, Peek];
+
+fn at(kind: Kind) -> Surface {
+    Surface { w: W1, kind }
+}
+fn hv(kind: Kind, key: Key, cue: Cue, now: u64) -> Action {
+    Action::Hover {
+        at: at(kind),
+        key,
+        cue,
+        now,
+    }
+}
+fn tick(now: u64) -> Action {
+    Action::Tick { now }
+}
+use Effect::{Arm, Show, Unshow};
+
+/// Runs `actions` from `ui`, checking after each that the store is idle exactly when its
+/// timer is not armed; the store after them and every effect, in order.
+fn walk(ui: Ui, actions: &[Action]) -> (Ui, Vec<Effect>) {
+    let e = env(A);
+    actions.iter().fold((ui, vec![]), |(ui, mut fx), &a| {
+        let (ui, more) = reduce(ui, &e, a);
+        assert_eq!(
+            ui.idle(),
+            ui.armed.is_none(),
+            "idle iff no timer, after {a:?}"
+        );
+        fx.extend(more);
+        (ui, fx)
+    })
+}
+
+#[test]
+fn every_hover_kind_has_its_delays_and_no_other_kind_has_any() {
+    use crate::hovercard::{AT_ONCE, STATUS_BUBBLE, TAB_CARD, TOOLTIP, Timing};
+    let video = Timing {
+        sticky_ms: crate::video::LEAVE_MS,
+        ..AT_ONCE
+    };
+    let peek = Timing {
+        show_ms: 60,
+        warm_ms: 0,
+        sticky_ms: 260,
+    };
+    #[rustfmt::skip]
+    let rows = [(Tooltip, TOOLTIP), (Preview, TAB_CARD), (Status, STATUS_BUBBLE), (Toast, AT_ONCE),
+        (VideoStrip, video), (PipStrip, AT_ONCE), (Peek, peek)];
+    assert_eq!(rows.map(|r| r.0), HOVERED);
+    for (kind, timing) in rows {
+        assert_eq!(kind.timing(), Some(timing), "{kind:?}");
+    }
+    for row in ROWS.iter().filter(|r| !HOVERED.contains(&r.kind)) {
+        assert_eq!(row.kind.timing(), None, "{:?}", row.kind);
+    }
+}
+
+/// From rest, each kind's first cue: its state and its effects (a delay arms the timer).
+#[test]
+fn a_cue_from_rest_in_every_slot() {
+    let k = Key::Tab(A);
+    #[rustfmt::skip]
+    let rows: &[(&str, Kind, Key, Cue, Hover<Key>, Vec<Effect>)] = &[
+        ("tooltip waits 280", Tooltip, Key::Page(A), Cue::Enter, Hover::Pending { key: Key::Page(A), due: 1_280 }, vec![Arm(Some(1_280))]),
+        ("card waits 500", Preview, k, Cue::Enter, Hover::Pending { key: k, due: 1_500 }, vec![Arm(Some(1_500))]),
+        ("status waits 80", Status, k, Cue::Enter, Hover::Pending { key: k, due: 1_080 }, vec![Arm(Some(1_080))]),
+        ("toast for 1500", Toast, Key::None, Cue::ShowFor(1_500), Hover::Leaving { key: Key::None, at: 2_500 }, vec![Show(at(Toast), Key::None), Arm(Some(2_500))]),
+        ("notice held", Toast, Key::Notice(A), Cue::Show, Hover::Shown { key: Key::Notice(A) }, vec![Show(at(Toast), Key::Notice(A))]),
+        ("video for 1200", VideoStrip, k, Cue::ShowFor(crate::video::STILL_MS), Hover::Leaving { key: k, at: 2_200 }, vec![Show(at(VideoStrip), k), Arm(Some(2_200))]),
+        ("video held on the strip", VideoStrip, k, Cue::Show, Hover::Shown { key: k }, vec![Show(at(VideoStrip), k)]),
+        ("pip strip at once", PipStrip, Key::None, Cue::Show, Hover::Shown { key: Key::None }, vec![Show(at(PipStrip), Key::None)]),
+        ("peek edge at once", Peek, Key::None, Cue::Show, Hover::Shown { key: Key::None }, vec![Show(at(Peek), Key::None)]),
+        ("peek strip waits 60", Peek, Key::None, Cue::Enter, Hover::Pending { key: Key::None, due: 1_060 }, vec![Arm(Some(1_060))]),
+        ("peek panel at rest", Peek, Key::None, Cue::Keep, Hover::Idle, vec![]),
+        ("leave at rest", Status, k, Cue::Leave, Hover::Idle, vec![]),
+        ("dismiss at rest", Tooltip, k, Cue::Dismiss, Hover::Idle, vec![]),
+    ];
+    for (name, kind, key, cue, state, want) in rows {
+        let (ui, fx) = walk(Ui::default(), &[hv(*kind, *key, *cue, 1_000)]);
+        assert_eq!((ui.hover(at(*kind)), &fx), (*state, want), "{name}");
+    }
+}
+
+/// Entered, then left before the delay ran out: never shown, no timer; a stale leave of a
+/// key the slot is not on changes nothing.
+#[test]
+fn a_leave_before_the_delay_shows_nothing() {
+    for kind in [Tooltip, Preview, Status, Peek] {
+        let k = Key::Tab(A);
+        let (ui, fx) = walk(
+            Ui::default(),
+            &[
+                hv(kind, k, Cue::Enter, 0),
+                hv(kind, Key::Tab(B), Cue::Leave, 10),
+            ],
+        );
+        assert!(
+            matches!(ui.hover(at(kind)), Hover::Pending { .. }),
+            "{kind:?} stale"
+        );
+        let (ui, more) = walk(ui, &[hv(kind, k, Cue::Leave, 20), tick(1_000)]);
+        assert_eq!(
+            (ui.hover(at(kind)), fx.len(), &more[..]),
+            (Hover::Idle, 1, &[Arm(None)][..]),
+            "{kind:?}"
+        );
+    }
+}
+
+/// Shown, then left: shown until its sticky time ran out, then hidden; the tooltip's next one
+/// is warm for 520 ms; the picture-in-picture strip hides in the very next tick.
+#[test]
+fn a_leave_after_showing_hides_after_the_sticky_time() {
+    let k = Key::Tab(A);
+    #[rustfmt::skip]
+    let rows = [(Tooltip, 0), (Preview, 100), (Status, 250), (VideoStrip, 250), (PipStrip, 0), (Peek, 260)];
+    for (kind, sticky) in rows {
+        let (ui, _) = walk(Ui::default(), &[hv(kind, k, Cue::Show, 0)]);
+        let left = 1_000 + sticky;
+        let (ui, fx) = walk(ui, &[hv(kind, k, Cue::Leave, 1_000)]);
+        assert_eq!(
+            (ui.hover(at(kind)), fx),
+            (Hover::Leaving { key: k, at: left }, vec![Arm(Some(left))]),
+            "{kind:?}"
+        );
+        let (early, fx) = walk(ui.clone(), &[tick(left.saturating_sub(1).max(1_000))]);
+        if sticky > 0 {
+            assert_eq!(
+                (early.shown(at(kind)), fx),
+                (Some(k), vec![Arm(Some(left))]),
+                "{kind:?} early"
+            );
+        }
+        let (ui, fx) = walk(ui, &[tick(left)]);
+        assert_eq!(fx.first(), Some(&Unshow(at(kind))), "{kind:?} hides");
+        assert_eq!(ui.shown(at(kind)), None, "{kind:?}");
+        if kind == PipStrip {
+            assert_eq!((ui.hover(at(kind)), ui.idle()), (Hover::Idle, true));
+        }
+    }
+    let (ui, _) = walk(
+        Ui::default(),
+        &[
+            hv(Tooltip, k, Cue::Show, 0),
+            hv(Tooltip, k, Cue::Leave, 10),
+            tick(10),
+        ],
+    );
+    let (_, fx) = walk(ui.clone(), &[hv(Tooltip, Key::Page(B), Cue::Enter, 529)]);
+    assert_eq!(fx, vec![Show(at(Tooltip), Key::Page(B)), Arm(None)], "warm");
+    // cold: the delay again (the timer, armed for the warm time's end, re-arms when it fires)
+    let (ui, fx) = walk(ui, &[hv(Tooltip, Key::Page(B), Cue::Enter, 530)]);
+    let due = Hover::Pending {
+        key: Key::Page(B),
+        due: 810,
+    };
+    assert_eq!((ui.hover(at(Tooltip)), fx), (due, vec![]), "cold");
+}
+
+/// The one timer: armed for the soonest deadline of every slot; a deadline that only moved
+/// later re-arms nothing until the stale fire; a tick before its time re-arms the same.
+#[test]
+fn one_timer_for_every_slot() {
+    let k = Key::Tab(A);
+    let (ui, fx) = walk(
+        Ui::default(),
+        &[hv(Preview, k, Cue::Enter, 0), hv(Status, k, Cue::Enter, 0)],
+    );
+    assert_eq!(fx, vec![Arm(Some(500)), Arm(Some(80))]);
+    let (ui, fx) = walk(ui, &[tick(79)]);
+    assert_eq!(fx, vec![Arm(Some(80))], "early: the same again");
+    let (ui, fx) = walk(ui, &[tick(80)]);
+    assert_eq!(fx, vec![Show(at(Status), k), Arm(Some(500))]);
+    let (ui, fx) = walk(ui, &[tick(5_000)]);
+    assert_eq!(
+        (fx, ui.idle()),
+        (vec![Show(at(Preview), k)], true),
+        "far past, then rest"
+    );
+    // a toast shown again later: no re-arm until the old time comes
+    let (ui, fx) = walk(
+        Ui::default(),
+        &[
+            hv(Toast, Key::None, Cue::ShowFor(1_500), 0),
+            hv(Toast, Key::None, Cue::ShowFor(1_500), 100),
+        ],
+    );
+    assert_eq!(fx, vec![Show(at(Toast), Key::None), Arm(Some(1_500))]);
+    let (ui, fx) = walk(ui, &[tick(1_500), tick(1_600)]);
+    assert_eq!(fx, vec![Arm(Some(1_600)), Unshow(at(Toast))]);
+    assert!(ui.idle());
+}
+
+/// One slot, another key: a move (a show of the new one), never a hide between.
+#[test]
+fn a_new_key_replaces_in_its_slot() {
+    let (x, a) = (Key::Shell(crate::action::Action::Reload), Key::Page(A));
+    #[rustfmt::skip]
+    let rows: &[(&str, Kind, Vec<Action>, Vec<Effect>)] = &[
+        ("tooltip page to button", Tooltip, vec![hv(Tooltip, a, Cue::Show, 0), hv(Tooltip, x, Cue::Enter, 5)], vec![Show(at(Tooltip), a), Show(at(Tooltip), x)]),
+        ("card row to row", Preview, vec![hv(Preview, Key::Tab(A), Cue::Show, 0), hv(Preview, Key::Tab(B), Cue::Enter, 5)], vec![Show(at(Preview), Key::Tab(A)), Show(at(Preview), Key::Tab(B))]),
+        ("toast to notice and back", Toast, vec![hv(Toast, Key::None, Cue::ShowFor(1_500), 0), hv(Toast, Key::Notice(A), Cue::Show, 5), hv(Toast, Key::None, Cue::ShowFor(6_000), 9)],
+            vec![Show(at(Toast), Key::None), Arm(Some(1_500)), Show(at(Toast), Key::Notice(A)), Arm(None), Show(at(Toast), Key::None), Arm(Some(6_009))]),
+        ("a button's toast replaced by a plain one: the shorter time", Toast, vec![hv(Toast, Key::None, Cue::ShowFor(6_000), 0), hv(Toast, Key::None, Cue::ShowFor(1_500), 10)],
+            vec![Show(at(Toast), Key::None), Arm(Some(6_000)), Arm(Some(1_510))]),
+        ("the same pending key keeps its time", Preview, vec![hv(Preview, Key::Tab(A), Cue::Enter, 0), hv(Preview, Key::Tab(A), Cue::Enter, 300)], vec![Arm(Some(500))]),
+        ("another pending key starts over", Preview, vec![hv(Preview, Key::Tab(A), Cue::Enter, 0), hv(Preview, Key::Tab(B), Cue::Enter, 300)], vec![Arm(Some(500))]),
+    ];
+    for (name, kind, actions, want) in rows {
+        let (ui, fx) = walk(Ui::default(), actions);
+        assert_eq!(&fx, want, "{name}");
+        assert!(
+            ui.shown(at(*kind)).is_some() || ui.deadline().is_some(),
+            "{name}"
+        );
+    }
+}
+
+/// A navigation drops the slots of that tab whose row says so; a tab gone drops every slot of
+/// it; a window gone drops its slots with no effect; nothing shows for a dead tab later.
+#[test]
+fn navigation_a_tab_gone_and_a_window_gone() {
+    let e = env(A);
+    #[rustfmt::skip]
+    let shown = [hv(Tooltip, Key::Page(A), Cue::Show, 0), hv(Preview, Key::Tab(A), Cue::Show, 0), hv(Status, Key::Tab(A), Cue::Show, 0),
+        hv(VideoStrip, Key::Tab(A), Cue::Show, 0), hv(Toast, Key::Notice(A), Cue::Show, 0), hv(Peek, Key::None, Cue::Show, 0),
+        hv(PipStrip, Key::None, Cue::Show, 0), Action::Hover { at: Surface { w: W2, kind: Status }, key: Key::Tab(B), cue: Cue::Show, now: 0 }];
+    let (ui, _) = walk(Ui::default(), &shown);
+    let (_, fx) = reduce(ui.clone(), &e, nav(A));
+    assert_eq!(
+        fx,
+        vec![
+            Unshow(at(Tooltip)),
+            Unshow(at(Status)),
+            Unshow(at(VideoStrip))
+        ],
+        "navigated"
+    );
+    let (_, fx) = reduce(ui.clone(), &e, Action::ViewGone(A));
+    #[rustfmt::skip]
+    assert_eq!(fx, vec![Unshow(at(Toast)), Unshow(at(Tooltip)), Unshow(at(Preview)), Unshow(at(Status)), Unshow(at(VideoStrip))], "tab gone");
+    let (gone, fx) = reduce(ui, &e, Action::WindowGone(W1));
+    assert_eq!(fx, vec![], "window gone");
+    assert_eq!(
+        gone.shown(Surface {
+            w: W2,
+            kind: Status
+        }),
+        Some(Key::Tab(B)),
+        "the other window's stays"
+    );
+    assert!(HOVERED.iter().all(|&k| gone.hover(at(k)) == Hover::Idle));
+    let (_, fx) = walk(
+        Ui::default(),
+        &[
+            hv(Preview, Key::Tab(A), Cue::Enter, 0),
+            Action::ViewGone(A),
+            tick(500),
+        ],
+    );
+    assert_eq!(
+        fx,
+        vec![Arm(Some(500)), Arm(None)],
+        "no card for a dead tab"
+    );
+}
+
+/// The hidden sidebar's peek, every row of the design's (chrome.tsx:250-257) through its
+/// slot: the host's cues are Show (the edge), Enter (a move in the strip), Keep (back over the
+/// panel), Leave (off the panel and the strip), Dismiss (a mode other than hidden).
+#[test]
+fn the_peek_through_its_slot() {
+    let p = |cue, now| hv(Peek, Key::None, cue, now);
+    let up = Some(Key::None);
+    #[rustfmt::skip]
+    let rows: &[(&str, Vec<Action>, Option<Key>, Vec<Effect>)] = &[
+        ("the edge shows at once", vec![p(Cue::Show, 0)], up, vec![Show(at(Peek), Key::None)]),
+        ("arming, the edge shows at once", vec![p(Cue::Enter, 0), p(Cue::Show, 10)], up, vec![Arm(Some(60)), Show(at(Peek), Key::None), Arm(None)]),
+        ("a strip move shows after 60", vec![p(Cue::Enter, 0), tick(59), tick(60)], up, vec![Arm(Some(60)), Arm(Some(60)), Show(at(Peek), Key::None)]),
+        ("leaving the strip while arming", vec![p(Cue::Enter, 0), p(Cue::Leave, 30), tick(60)], None, vec![Arm(Some(60)), Arm(None)]),
+        ("the panel at rest starts nothing", vec![p(Cue::Keep, 0)], None, vec![]),
+        ("the panel while arming", vec![p(Cue::Enter, 0), p(Cue::Keep, 10)], None, vec![Arm(Some(60))]),
+        ("it goes 260 after the pointer left", vec![p(Cue::Show, 0), p(Cue::Leave, 100), tick(359), tick(360)], None,
+            vec![Show(at(Peek), Key::None), Arm(Some(360)), Arm(Some(360)), Unshow(at(Peek))]),
+        ("back on the panel cancels", vec![p(Cue::Show, 0), p(Cue::Leave, 100), p(Cue::Keep, 200), tick(360)], up, vec![Show(at(Peek), Key::None), Arm(Some(360)), Arm(None)]),
+        ("back on the edge cancels", vec![p(Cue::Show, 0), p(Cue::Leave, 100), p(Cue::Show, 200)], up, vec![Show(at(Peek), Key::None), Arm(Some(360)), Arm(None)]),
+        ("back in the strip cancels", vec![p(Cue::Show, 0), p(Cue::Leave, 100), p(Cue::Enter, 200)], up, vec![Show(at(Peek), Key::None), Arm(Some(360)), Arm(None)]),
+        ("leaving twice keeps the first time", vec![p(Cue::Show, 0), p(Cue::Leave, 100), p(Cue::Leave, 200)], up, vec![Show(at(Peek), Key::None), Arm(Some(360))]),
+        ("shown, the edge and the strip again", vec![p(Cue::Show, 0), p(Cue::Show, 5), p(Cue::Enter, 6), p(Cue::Keep, 7)], up, vec![Show(at(Peek), Key::None)]),
+        ("a mode other than hidden ends it", vec![p(Cue::Show, 0), p(Cue::Leave, 100), p(Cue::Dismiss, 110)], None, vec![Show(at(Peek), Key::None), Arm(Some(360)), Unshow(at(Peek)), Arm(None)]),
+        ("a mode change while arming", vec![p(Cue::Enter, 0), p(Cue::Dismiss, 10)], None, vec![Arm(Some(60)), Arm(None)]),
+    ];
+    for (name, actions, up, want) in rows {
+        let (ui, fx) = walk(Ui::default(), actions);
+        assert_eq!((ui.shown(at(Peek)), &fx), (*up, want), "{name}");
+    }
+}

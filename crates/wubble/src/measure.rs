@@ -197,7 +197,7 @@ pub enum Count {
     PumpWorked,
     /// The host's timers.
     MediaPoll,
-    VideoTick,
+    SurfaceTick,
     AudibleProbe,
     Lifecycle,
     /// `--measure`'s own tick.
@@ -228,7 +228,7 @@ impl Count {
         Self::Pump,
         Self::PumpWorked,
         Self::MediaPoll,
-        Self::VideoTick,
+        Self::SurfaceTick,
         Self::AudibleProbe,
         Self::Lifecycle,
         Self::MeasureTick,
@@ -252,7 +252,7 @@ impl Count {
             Self::Pump => "pump_runs",
             Self::PumpWorked => "pump_worked",
             Self::MediaPoll => "media_polls",
-            Self::VideoTick => "video_ticks",
+            Self::SurfaceTick => "surface_ticks",
             Self::AudibleProbe => "audible_probes",
             Self::Lifecycle => "lifecycle_ticks",
             Self::MeasureTick => "measure_ticks",

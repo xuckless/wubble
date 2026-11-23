@@ -4,19 +4,21 @@
 //! [`VideoEffect`]s the host carries out (page kit commands, the per-site rate, a frame
 //! screenshot, picture-in-picture, the media downloader's entry).
 //!
-//! The strip's life is [`Ui`]: hidden, shown, collapsed into its tab, or dismissed. Folded is
-//! a state of its own ([`Fold`] while hidden, [`Ui::Collapsed`] while the tab shows), so a
+//! What the controls show is [`Ui`]: the strip, its tab, or dismissed. Whether and how long
+//! they show is the store's video slot (`overlay::Kind::VideoStrip`), fed the cue of [`hold`]
+//! for where the pointer is ([`VideoEffect::Hold`]). Collapsed is a state of its own, so a
 //! collapse outlives the pointer leaving and coming back: only a click on the tab
 //! ([`VideoCmd::Expand`]) opens the strip again, never a hover. The pointer on the strip, its
-//! tab or its menu ([`Over::Strip`]) leaves no hide time to run out.
+//! tab or its menu ([`Over::Strip`]) holds the slot.
 //!
-//! Times are milliseconds on the host's clock, passed in: nothing here reads a clock.
+//! Nothing here reads a clock or keeps a time.
 
 use std::collections::BTreeMap;
 
 use crate::download::{DownloadEntry, DownloadState};
 use crate::media::Refusal;
 use crate::media::detect::{Detected, Found};
+use crate::overlay::Cue;
 use crate::zoom;
 
 /// The speeds offered, slowest first (0.25 to 4, as Chromium's own player menu tops out at 2).
@@ -151,12 +153,13 @@ impl VideoState {
 /// Where the pointer is: off the video, on it, or on the controls (which hold them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Over {
+    // the order of [`HOLD`]'s rows
     Away,
     Video,
     Strip,
 }
 
-/// What a hidden strip comes back as: the strip, or its tab (the user collapsed it).
+/// What a new video's strip starts as: the strip, or its tab (the user collapsed it).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Fold {
     #[default]
@@ -164,60 +167,39 @@ pub enum Fold {
     Tucked,
 }
 
-/// What the controls show.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// What the controls show when they show; whether and how long they show is the store's video
+/// slot (`overlay::Kind::VideoStrip`), which this machine feeds with [`VideoEffect::Hold`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
-    /// Nothing shows; the next hover brings back the strip or, tucked, its tab.
-    Hidden(Fold),
-    Shown {
-        over: Over,
-        /// When the controls go (never while the pointer is on them or the menu is open).
-        hide_at: Option<u64>,
-        /// The speed menu is open.
-        speeds: bool,
-    },
-    /// Tucked into a tab at the page's right edge; it goes like the strip does, and comes back
-    /// tucked. Only a click on the tab opens the strip.
-    Collapsed { over: Over, hide_at: Option<u64> },
+    /// The strip; `speeds`: its speed menu is open.
+    Strip { speeds: bool },
+    /// Tucked into a tab at the page's right edge; only a click on it opens the strip.
+    Tab,
     /// Closed by the user: hidden until the next navigation.
     Dismissed,
 }
 
 impl Ui {
-    /// The two states look alike (a changed `hide_at` alone needs no redraw).
-    fn looks_like(self, other: Ui) -> bool {
-        match (self, other) {
-            (Ui::Shown { speeds: a, .. }, Ui::Shown { speeds: b, .. }) => a == b,
-            (Ui::Collapsed { .. }, Ui::Collapsed { .. }) => true,
-            (Ui::Hidden(_), Ui::Hidden(_)) | (Ui::Dismissed, Ui::Dismissed) => true,
-            _ => false,
-        }
-    }
-
-    /// The strip shown for a while with the pointer `over`, as it was folded.
-    fn showing(fold: Fold, over: Over, now: u64) -> Ui {
+    fn of(fold: Fold) -> Ui {
         match fold {
-            Fold::Open => Ui::Shown {
-                over,
-                hide_at: hide_after(over, false, now),
-                speeds: false,
-            },
-            Fold::Tucked => Ui::Collapsed {
-                over,
-                hide_at: hide_after(over, false, now),
-            },
+            Fold::Open => Ui::Strip { speeds: false },
+            Fold::Tucked => Ui::Tab,
         }
     }
 }
 
-/// When the controls go, the pointer being `over` and the menu `speeds` open or not.
-fn hide_after(over: Over, speeds: bool, now: u64) -> Option<u64> {
-    match over {
-        _ if speeds => None,
-        Over::Strip => None,
-        Over::Video => Some(now + STILL_MS),
-        Over::Away => Some(now + LEAVE_MS),
-    }
+/// How the strip's slot holds, by where the pointer is (`[over]`) and the menu open or not
+/// (`[speeds]`): on the strip, its tab or with the menu open it is held; after a move over the
+/// video it goes [`STILL_MS`] later; the pointer gone, the slot's own [`LEAVE_MS`].
+const HOLD: [[Cue; 2]; 3] = [
+    [Cue::Leave, Cue::Show],
+    [Cue::ShowFor(STILL_MS), Cue::Show],
+    [Cue::Show, Cue::Show],
+];
+
+/// The video slot's cue for the pointer `over`, the menu `speeds` open or not.
+pub fn hold(over: Over, speeds: bool) -> Cue {
+    HOLD[over as usize][usize::from(speeds)]
 }
 
 /// The video controls of one page.
@@ -246,32 +228,27 @@ impl Overlay {
         }
     }
 
-    pub fn shown(&self) -> bool {
+    /// While the slot shows: the strip.
+    pub fn strip(&self) -> bool {
         matches!(
             self,
             Overlay::Video {
-                ui: Ui::Shown { .. },
+                ui: Ui::Strip { .. },
                 ..
             }
         )
     }
 
-    /// The controls are tucked into their edge tab (and shown).
+    /// While the slot shows: the controls tucked into their edge tab.
     pub fn collapsed(&self) -> bool {
-        matches!(
-            self,
-            Overlay::Video {
-                ui: Ui::Collapsed { .. },
-                ..
-            }
-        )
+        matches!(self, Overlay::Video { ui: Ui::Tab, .. })
     }
 
     pub fn speeds_open(&self) -> bool {
         matches!(
             self,
             Overlay::Video {
-                ui: Ui::Shown { speeds: true, .. },
+                ui: Ui::Strip { speeds: true },
                 ..
             }
         )
@@ -322,18 +299,18 @@ pub enum VideoInput {
         video: Option<VideoState>,
         site_rate: f64,
         fold: Fold,
-        now: u64,
     },
     /// The pointer moved (or left).
-    Pointer { over: Over, now: u64 },
-    /// The host's clock moved on (each poll).
-    Tick(u64),
-    /// A control was used. `can_save`: the save button is offered ([`Save::offered`]).
+    Pointer { over: Over },
+    /// A control was used, the pointer `over`. `can_save`: the save button is offered
+    /// ([`Save::offered`]).
     Command {
         cmd: VideoCmd,
-        now: u64,
+        over: Over,
         can_save: bool,
     },
+    /// The store's slot hid the controls: the menu closes with them.
+    Hidden,
     /// A new document: nothing of the old one's video is left.
     PageChanged,
 }
@@ -370,6 +347,8 @@ pub enum VideoEffect {
     HideSite,
     /// The controls changed: draw them.
     Redraw,
+    /// The store's video slot for this tab: shown at once, for a while, left or gone.
+    Hold(Cue),
 }
 
 /// The nearest offered speed to `rate`, so a page's odd value still marks a menu row.
@@ -403,16 +382,16 @@ pub fn with_rate(table: RateTable, host: &str, rate: f64) -> RateTable {
 }
 
 pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffect>) {
-    use VideoEffect::Redraw;
+    use VideoEffect::{Hold, Redraw};
     let rate_set = state.rate_set();
     match (state, input) {
         (_, VideoInput::PageChanged) => (Overlay::default(), vec![Redraw]),
         (state, VideoInput::Snapshot { video: None, .. }) => {
-            let redraw = matches!(state, Overlay::Video { .. });
-            (
-                Overlay::NoVideo { rate_set },
-                if redraw { vec![Redraw] } else { vec![] },
-            )
+            let fx = match state {
+                Overlay::Video { .. } => vec![Hold(Cue::Dismiss), Redraw],
+                Overlay::NoVideo { .. } => vec![],
+            };
+            (Overlay::NoVideo { rate_set }, fx)
         }
         (
             state,
@@ -420,7 +399,6 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 video: Some(video),
                 site_rate,
                 fold,
-                now,
             },
         ) => {
             let mut effects = vec![];
@@ -435,12 +413,12 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
             } else {
                 video.duration > 0.0
             };
+            // the remembered fold counts only for a new video
             let ui = match &state {
                 Overlay::Video { ui, .. } => *ui,
-                Overlay::NoVideo { .. } => Ui::Hidden(fold),
+                Overlay::NoVideo { .. } => Ui::of(fold),
             };
-            let ui = expire(ui, now);
-            if state.video() != Some(&video) || Some(ui) != current_ui(&state) {
+            if state.video() != Some(&video) {
                 effects.push(Redraw);
             }
             (
@@ -452,77 +430,42 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 effects,
             )
         }
-        (
-            Overlay::Video {
-                video,
-                rate_set,
-                ui,
-            },
-            VideoInput::Pointer { over, now },
-        ) => {
-            // A hover shows the strip as it was left: collapsed stays collapsed.
-            let next = match ui {
-                Ui::Hidden(fold) if over == Over::Away => Ui::Hidden(fold),
-                Ui::Hidden(fold) => Ui::showing(fold, over, now),
-                Ui::Shown { speeds, .. } => Ui::Shown {
-                    over,
-                    hide_at: hide_after(over, speeds, now),
-                    speeds,
-                },
-                Ui::Collapsed { .. } => Ui::showing(Fold::Tucked, over, now),
-                Ui::Dismissed => Ui::Dismissed,
+        (state @ Overlay::Video { ui, .. }, VideoInput::Pointer { over }) => {
+            // a hover shows the controls as they were left: collapsed stays collapsed
+            let fx = match ui {
+                Ui::Dismissed => vec![],
+                _ => vec![Hold(hold(over, state.speeds_open()))],
             };
-            let effects = if next.looks_like(ui) {
-                vec![]
-            } else {
-                vec![Redraw]
-            };
-            (
-                Overlay::Video {
-                    video,
-                    rate_set,
-                    ui: next,
-                },
-                effects,
-            )
+            (state, fx)
         }
         (
             Overlay::Video {
                 video,
                 rate_set,
-                ui,
+                ui: Ui::Strip { .. },
             },
-            VideoInput::Tick(now),
-        ) => {
-            let next = expire(ui, now);
-            let effects = if next.looks_like(ui) {
-                vec![]
-            } else {
-                vec![Redraw]
-            };
-            (
-                Overlay::Video {
-                    video,
-                    rate_set,
-                    ui: next,
-                },
-                effects,
-            )
-        }
+            VideoInput::Hidden,
+        ) => (
+            Overlay::Video {
+                video,
+                rate_set,
+                ui: Ui::Strip { speeds: false },
+            },
+            vec![Redraw],
+        ),
+        (state @ Overlay::Video { .. }, VideoInput::Hidden) => (state, vec![Redraw]),
         (
             Overlay::Video {
                 mut video,
                 rate_set,
-                ui,
+                mut ui,
             },
-            VideoInput::Command { cmd, now, can_save },
+            VideoInput::Command {
+                cmd,
+                over,
+                can_save,
+            },
         ) => {
-            // A control used while nothing shows (a key, the smoke) shows the strip, or its
-            // tab, for a while.
-            let mut ui = match ui {
-                Ui::Hidden(fold) => Ui::showing(fold, Over::Away, now),
-                ui => ui,
-            };
             let mut effects = vec![];
             match cmd {
                 VideoCmd::PlayPause => {
@@ -530,19 +473,19 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                     effects.push(VideoEffect::Page(PageCmd::Toggle));
                 }
                 VideoCmd::Speeds => {
-                    if let Ui::Shown { speeds, .. } = &mut ui {
+                    if let Ui::Strip { speeds } = &mut ui {
                         *speeds = !*speeds;
                     }
                 }
                 VideoCmd::Collapse => {
-                    if let Ui::Shown { over, .. } = ui {
-                        ui = Ui::showing(Fold::Tucked, over, now);
+                    if let Ui::Strip { .. } = ui {
+                        ui = Ui::Tab;
                         effects.push(VideoEffect::RememberCollapsed(true));
                     }
                 }
                 VideoCmd::Expand => {
-                    if let Ui::Collapsed { over, .. } = ui {
-                        ui = Ui::showing(Fold::Open, over, now);
+                    if ui == Ui::Tab {
+                        ui = Ui::Strip { speeds: false };
                         effects.push(VideoEffect::RememberCollapsed(false));
                     }
                 }
@@ -554,7 +497,7 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 VideoCmd::Rate(rate) => {
                     let rate = clamp_rate(rate);
                     video.rate = rate;
-                    if let Ui::Shown { speeds, .. } = &mut ui {
+                    if let Ui::Strip { speeds } = &mut ui {
                         *speeds = false;
                     }
                     effects.push(VideoEffect::Page(PageCmd::SetRate(rate)));
@@ -585,15 +528,15 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 VideoCmd::Save { x, y } if can_save => effects.push(VideoEffect::Save { x, y }),
                 VideoCmd::Save { .. } => {}
             }
-            // The menu opening holds the strip, closing it starts the clock again.
-            if let Ui::Shown {
-                over,
-                speeds,
-                hide_at,
-            } = &mut ui
-            {
-                *hide_at = hide_after(*over, *speeds, now);
-            }
+            // A control used shows the controls for a while (a key, the smoke, with nothing
+            // shown); the menu opening holds them, closing it starts the clock again; a
+            // dismissal ends them.
+            let speeds = matches!(ui, Ui::Strip { speeds: true });
+            effects.push(Hold(match (ui, hold(over, speeds)) {
+                (Ui::Dismissed, _) => Cue::Dismiss,
+                (_, Cue::Leave) => Cue::ShowFor(LEAVE_MS),
+                (_, cue) => cue,
+            }));
             effects.push(Redraw);
             (
                 Overlay::Video {
@@ -604,7 +547,7 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 effects,
             )
         }
-        // Pointer, ticks and controls with no video: nothing to show.
+        // Pointer, controls and hides with no video: nothing to show.
         (state @ Overlay::NoVideo { .. }, _) => (state, vec![]),
     }
 }
@@ -678,26 +621,6 @@ impl Save {
     }
 }
 
-fn current_ui(state: &Overlay) -> Option<Ui> {
-    match state {
-        Overlay::Video { ui, .. } => Some(*ui),
-        Overlay::NoVideo { .. } => None,
-    }
-}
-
-/// The controls after `now`: gone once their time is up, folded as they were.
-fn expire(ui: Ui, now: u64) -> Ui {
-    match ui {
-        Ui::Shown {
-            hide_at: Some(at), ..
-        } if now >= at => Ui::Hidden(Fold::Open),
-        Ui::Collapsed {
-            hide_at: Some(at), ..
-        } if now >= at => Ui::Hidden(Fold::Tucked),
-        ui => ui,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,46 +645,169 @@ mod tests {
         }
     }
 
-    fn snap(state: Overlay, rate: f64, now: u64) -> (Overlay, Vec<VideoEffect>) {
-        transition(
-            state,
-            VideoInput::Snapshot {
-                video: Some(video()),
-                site_rate: rate,
-                fold: Fold::Open,
-                now,
-            },
-        )
+    use crate::overlay::{self, Action, Effect, Env, Key, Kind, Layer, Surface};
+    use crate::tab::TabId;
+    use crate::window::{WindowId, WindowKind};
+
+    /// Nothing of the overlays: the video slot needs no other owner.
+    struct NoEnv;
+    impl Env for NoEnv {
+        fn shown(&self, _: WindowId) -> Option<TabId> {
+            None
+        }
+        fn showing(&self, _: TabId) -> Option<WindowId> {
+            None
+        }
+        fn kind(&self, _: WindowId) -> WindowKind {
+            WindowKind::Main
+        }
+        fn page_has_keys(&self, _: WindowId) -> bool {
+            false
+        }
+        fn others(&self, _: WindowId) -> Vec<Layer> {
+            vec![]
+        }
+        fn machine(&self, _: Kind) -> bool {
+            false
+        }
     }
 
-    fn cmd(state: Overlay, cmd: VideoCmd, now: u64) -> (Overlay, Vec<VideoEffect>) {
-        transition(
-            state,
+    const TAB: TabId = TabId(1);
+    const SLOT: Surface = Surface {
+        w: WindowId(1),
+        kind: Kind::VideoStrip,
+    };
+
+    /// The machine with the store's video slot, as the host runs them: each `Hold` a cue for
+    /// the slot, each hide of the slot `VideoInput::Hidden`; `over`, the host's pointer.
+    #[derive(Clone, Debug, PartialEq)]
+    struct Run {
+        s: Overlay,
+        ui: overlay::Ui,
+        over: Over,
+    }
+
+    impl Run {
+        fn up(&self) -> bool {
+            self.ui.shown(SLOT).is_some()
+        }
+        fn shown(&self) -> bool {
+            self.up() && self.s.strip()
+        }
+        fn collapsed(&self) -> bool {
+            self.up() && self.s.collapsed()
+        }
+        fn speeds_open(&self) -> bool {
+            self.up() && self.s.speeds_open()
+        }
+    }
+
+    fn store(mut r: Run, action: Action) -> Run {
+        let (ui, fx) = overlay::reduce(r.ui, &NoEnv, action);
+        r.ui = ui;
+        if fx.contains(&Effect::Unshow(SLOT)) {
+            r.s = transition(r.s, VideoInput::Hidden).0;
+        }
+        r
+    }
+
+    fn step(mut r: Run, input: VideoInput, now: u64) -> (Run, Vec<VideoEffect>) {
+        let (s, fx) = transition(r.s, input);
+        r.s = s;
+        for f in &fx {
+            if let VideoEffect::Hold(cue) = *f {
+                let (at, key) = (SLOT, Key::Tab(TAB));
+                r = store(r, Action::Hover { at, key, cue, now });
+            }
+        }
+        (r, fx)
+    }
+
+    fn start() -> Run {
+        Run {
+            s: Overlay::default(),
+            ui: overlay::Ui::default(),
+            over: Over::Away,
+        }
+    }
+
+    fn snap(r: Run, rate: f64, now: u64) -> (Run, Vec<VideoEffect>) {
+        snap_with(r, Some(video()), rate, Fold::Open, now)
+    }
+
+    fn snap_with(
+        r: Run,
+        video: Option<VideoState>,
+        site_rate: f64,
+        fold: Fold,
+        now: u64,
+    ) -> (Run, Vec<VideoEffect>) {
+        let input = VideoInput::Snapshot {
+            video,
+            site_rate,
+            fold,
+        };
+        step(r, input, now)
+    }
+
+    fn cmd(r: Run, cmd: VideoCmd, now: u64) -> (Run, Vec<VideoEffect>) {
+        cmd_save(r, cmd, false, now)
+    }
+
+    fn cmd_save(r: Run, cmd: VideoCmd, can_save: bool, now: u64) -> (Run, Vec<VideoEffect>) {
+        let over = r.over;
+        step(
+            r,
             VideoInput::Command {
                 cmd,
-                now,
-                can_save: false,
+                over,
+                can_save,
             },
+            now,
         )
     }
 
-    fn point(state: Overlay, over: Over, now: u64) -> (Overlay, Vec<VideoEffect>) {
-        transition(state, VideoInput::Pointer { over, now })
+    fn point(mut r: Run, over: Over, now: u64) -> (Run, Vec<VideoEffect>) {
+        r.over = over;
+        step(r, VideoInput::Pointer { over }, now)
     }
 
-    fn tick(state: Overlay, now: u64) -> Overlay {
-        transition(state, VideoInput::Tick(now)).0
+    fn tick(r: Run, now: u64) -> Run {
+        store(r, Action::Tick { now })
+    }
+
+    fn page_changed(r: Run) -> Run {
+        let r = step(r, VideoInput::PageChanged, 0).0;
+        store(
+            r,
+            Action::Navigated {
+                w: SLOT.w,
+                tab: TAB,
+            },
+        )
     }
 
     /// A video with the pointer over it at time 1000.
-    fn hovered() -> Overlay {
-        let (s, _) = snap(Overlay::default(), 1.0, 0);
+    fn hovered() -> Run {
+        let (s, _) = snap(start(), 1.0, 0);
         point(s, Over::Video, 1_000).0
     }
 
     #[test]
+    fn the_slot_holds_by_where_the_pointer_is_and_the_menu() {
+        #[rustfmt::skip]
+        let rows = [
+            (Over::Away, false, Cue::Leave), (Over::Video, false, Cue::ShowFor(STILL_MS)), (Over::Strip, false, Cue::Show),
+            (Over::Away, true, Cue::Show), (Over::Video, true, Cue::Show), (Over::Strip, true, Cue::Show),
+        ];
+        for (over, speeds, want) in rows {
+            assert_eq!(hold(over, speeds), want, "{over:?} {speeds}");
+        }
+    }
+
+    #[test]
     fn a_playing_video_shows_no_controls_without_the_pointer() {
-        let (s, e) = snap(Overlay::default(), 1.0, 0);
+        let (s, e) = snap(start(), 1.0, 0);
         assert!(!s.shown());
         assert_eq!(e, vec![VideoEffect::Redraw]);
         // The same snapshot again changes nothing; time passing neither.
@@ -769,8 +815,8 @@ mod tests {
         assert!(e.is_empty());
         assert!(!tick(s.clone(), 100_000).shown());
         // The pointer off a hidden overlay does nothing.
-        let (s2, e) = point(s.clone(), Over::Away, 9);
-        assert_eq!((s2, e), (s, vec![]));
+        let (s2, _) = point(s.clone(), Over::Away, 9);
+        assert_eq!((s2.s, s2.ui), (s.s, s.ui));
     }
 
     #[test]
@@ -778,12 +824,26 @@ mod tests {
         let s = hovered();
         assert!(s.shown());
         assert!(tick(s.clone(), 1_000 + STILL_MS - 1).shown());
-        let (gone, e) = transition(s.clone(), VideoInput::Tick(1_000 + STILL_MS));
-        assert!(!gone.shown());
-        assert_eq!(e, vec![VideoEffect::Redraw]);
-        // Moving again over the video starts the wait over, and a move redraws nothing.
+        assert!(!tick(s.clone(), 1_000 + STILL_MS).shown());
+        // Moving again over the video starts the wait over, re-arming nothing and drawing
+        // nothing: the slot keeps its timer (the stale fire re-arms) and the machine its state.
+        let (ui, fx) = overlay::reduce(
+            s.ui.clone(),
+            &NoEnv,
+            Action::Hover {
+                at: SLOT,
+                key: Key::Tab(TAB),
+                cue: hold(Over::Video, false),
+                now: 2_000,
+            },
+        );
+        assert_eq!(fx, vec![], "a later move: no effect, no Arm");
         let (s, e) = point(s, Over::Video, 2_000);
-        assert!(e.is_empty());
+        assert_eq!(
+            (&s.ui, &e[..]),
+            (&ui, &[VideoEffect::Hold(Cue::ShowFor(STILL_MS))][..])
+        );
+        let s = tick(s, 1_000 + STILL_MS);
         assert!(tick(s.clone(), 2_000 + STILL_MS - 1).shown());
         assert!(!tick(s, 2_000 + STILL_MS).shown());
     }
@@ -817,17 +877,40 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_closes_when_the_controls_hide() {
+        let (s, _) = point(hovered(), Over::Strip, 1_100);
+        let (s, _) = cmd(s, VideoCmd::Speeds, 1_200);
+        let (s, _) = cmd(s, VideoCmd::Speeds, 1_300);
+        let (s, _) = cmd(s, VideoCmd::Speeds, 1_400);
+        // off the strip with the menu open: held; the menu closed by a pick, the clock runs
+        let (s, _) = point(s, Over::Away, 1_500);
+        assert!(s.speeds_open());
+        let (s, _) = cmd(s, VideoCmd::Rate(2.0), 1_600);
+        let s = tick(s, 1_600 + LEAVE_MS);
+        assert!(!s.up() && !s.s.speeds_open());
+        // shown again, the menu is shut
+        let (s, _) = point(s, Over::Video, 3_000);
+        assert!(s.shown() && !s.speeds_open());
+    }
+
+    #[test]
     fn dismissed_stays_hidden_until_navigation() {
         let (s, e) = cmd(hovered(), VideoCmd::Dismiss, 1_100);
-        assert!(!s.shown() && !s.collapsed());
+        assert!(!s.shown() && !s.collapsed() && !s.up());
         assert!(e.contains(&VideoEffect::Redraw) && !e.contains(&VideoEffect::HideSite));
         let (s, _) = point(s, Over::Video, 1_200);
         let (s, _) = snap(s, 1.0, 1_300);
         assert!(!s.shown() && !s.collapsed());
-        let (s, _) = transition(s, VideoInput::PageChanged);
+        let s = page_changed(s);
         let (s, _) = snap(s, 1.0, 2_000);
         let (s, _) = point(s, Over::Video, 2_100);
         assert!(s.shown());
+    }
+
+    #[test]
+    fn a_navigation_hides_the_strip() {
+        let s = page_changed(hovered());
+        assert!(!s.up() && s.ui.idle());
     }
 
     #[test]
@@ -838,7 +921,7 @@ mod tests {
     }
 
     /// The strip collapsed into its tab at 1100, the pointer on the collapse button.
-    fn collapsed() -> Overlay {
+    fn collapsed() -> Run {
         let (s, _) = point(hovered(), Over::Strip, 1_050);
         let (s, e) = cmd(s, VideoCmd::Collapse, 1_100);
         assert!(s.collapsed() && !s.shown());
@@ -887,10 +970,12 @@ mod tests {
         assert!(s.collapsed());
         // A control used while it is hidden (a media key) shows the tab, not the strip.
         let s = tick(s, 7_000 + STILL_MS);
+        let (s, _) = point(s, Over::Away, 8_500);
         let (s, _) = cmd(s, VideoCmd::Mute, 9_000);
         assert!(s.collapsed());
+        assert!(!tick(s.clone(), 9_000 + LEAVE_MS).up(), "for a while");
         // Until the page navigates: the next document's strip opens.
-        let (s, _) = transition(s, VideoInput::PageChanged);
+        let s = page_changed(s);
         let (s, _) = snap(s, 1.0, 10_000);
         let (s, _) = point(s, Over::Video, 10_100);
         assert!(s.shown());
@@ -908,69 +993,46 @@ mod tests {
 
     #[test]
     fn a_remembered_collapse_opens_the_next_hover_as_the_tab() {
-        let (s, _) = transition(
-            Overlay::default(),
-            VideoInput::Snapshot {
-                video: Some(video()),
-                site_rate: 1.0,
-                fold: Fold::Tucked,
-                now: 0,
-            },
-        );
+        let (s, _) = snap_with(start(), Some(video()), 1.0, Fold::Tucked, 0);
         let (s, e) = point(s, Over::Video, 10);
         assert!(s.collapsed() && !s.shown());
-        assert_eq!(e, vec![VideoEffect::Redraw]);
+        assert_eq!(e, vec![VideoEffect::Hold(Cue::ShowFor(STILL_MS))]);
         // The remembered fold counts only for a new video: a snapshot does not refold it.
         let (open, _) = cmd(s, VideoCmd::Expand, 20);
-        let (open, _) = transition(
-            open,
-            VideoInput::Snapshot {
-                video: Some(video()),
-                site_rate: 1.0,
-                fold: Fold::Tucked,
-                now: 30,
-            },
-        );
+        let (open, _) = snap_with(open, Some(video()), 1.0, Fold::Tucked, 30);
         assert!(open.shown());
     }
 
     #[test]
     fn the_video_going_away_hides_everything() {
-        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        let (s, _) = snap(start(), 1.0, 0);
         let (s, _) = point(s, Over::Video, 0);
-        let (s, e) = transition(
-            s,
-            VideoInput::Snapshot {
-                video: None,
-                site_rate: 1.0,
-                fold: Fold::Open,
-                now: 1,
-            },
+        let (s, e) = snap_with(s, None, 1.0, Fold::Open, 1);
+        assert_eq!(s.s, Overlay::NoVideo { rate_set: true });
+        assert_eq!(
+            e,
+            vec![VideoEffect::Hold(Cue::Dismiss), VideoEffect::Redraw]
         );
-        assert_eq!(s, Overlay::NoVideo { rate_set: true });
-        assert_eq!(e, vec![VideoEffect::Redraw]);
+        assert!(!s.up());
         // Without a video, input is ignored.
         for input in [
-            VideoInput::Pointer {
-                over: Over::Video,
-                now: 2,
-            },
-            VideoInput::Tick(3),
+            VideoInput::Pointer { over: Over::Video },
+            VideoInput::Hidden,
             VideoInput::Command {
                 cmd: VideoCmd::Mute,
-                now: 4,
+                over: Over::Strip,
                 can_save: true,
             },
         ] {
-            let (next, e) = transition(s.clone(), input);
-            assert_eq!(next, s);
+            let (next, e) = transition(s.s.clone(), input);
+            assert_eq!(next, s.s);
             assert!(e.is_empty());
         }
     }
 
     #[test]
     fn a_rate_is_set_remembered_and_closes_the_menu() {
-        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        let (s, _) = snap(start(), 1.0, 0);
         let (s, _) = cmd(s, VideoCmd::Speeds, 10);
         assert!(s.speeds_open() && s.shown());
         let (s, e) = cmd(s, VideoCmd::Rate(2.0), 20);
@@ -980,62 +1042,47 @@ mod tests {
             vec![
                 VideoEffect::Page(PageCmd::SetRate(2.0)),
                 VideoEffect::RememberRate(2.0),
+                VideoEffect::Hold(Cue::ShowFor(LEAVE_MS)),
                 VideoEffect::Redraw,
             ]
         );
-        assert_eq!(s.video().map(|v| v.rate), Some(2.0));
+        assert_eq!(s.s.video().map(|v| v.rate), Some(2.0));
         // Out of range: clamped to the table's ends.
         let (_, e) = cmd(s, VideoCmd::Rate(9.0), 30);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetRate(4.0)));
         // A control shows the controls for a while, as a hover would.
-        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        let (s, _) = snap(start(), 1.0, 0);
         let (s, _) = cmd(s, VideoCmd::Loop, 100);
-        let (s, _) = transition(s, VideoInput::Tick(100 + LEAVE_MS));
-        assert!(!s.shown());
+        assert!(s.shown());
+        assert!(!tick(s, 100 + LEAVE_MS).shown());
     }
 
     #[test]
     fn a_new_document_gets_the_site_rate_again() {
-        let (s, _) = snap(Overlay::default(), 1.5, 0);
+        let (s, _) = snap(start(), 1.5, 0);
         // A reload's late answer from the old document took the reset state's turn ...
-        let (s, _) = transition(s, VideoInput::PageChanged);
+        let s = page_changed(s);
         let (s, _) = snap(s, 1.5, 10);
         // ... so the new document, answering next, still gets the speed.
         let new = VideoState {
             doc: 2.0,
             ..video()
         };
-        let (s, e) = transition(
-            s,
-            VideoInput::Snapshot {
-                video: Some(new.clone()),
-                site_rate: 1.5,
-                fold: Fold::Open,
-                now: 20,
-            },
-        );
+        let (s, e) = snap_with(s, Some(new.clone()), 1.5, Fold::Open, 20);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetRate(1.5)));
-        let (_, e) = transition(
-            s,
-            VideoInput::Snapshot {
-                video: Some(new),
-                site_rate: 1.5,
-                fold: Fold::Open,
-                now: 30,
-            },
-        );
+        let (_, e) = snap_with(s, Some(new), 1.5, Fold::Open, 30);
         assert!(!e.contains(&VideoEffect::Page(PageCmd::SetRate(1.5))));
     }
 
     #[test]
     fn the_site_rate_is_applied_once_per_document() {
-        let (s, e) = snap(Overlay::default(), 1.5, 0);
+        let (s, e) = snap(start(), 1.5, 0);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetRate(1.5)));
         // The page set its own speed afterwards: it is not fought.
         let (s, e) = snap(s, 1.5, 10);
         assert!(!e.contains(&VideoEffect::Page(PageCmd::SetRate(1.5))));
-        let (s, _) = transition(s, VideoInput::PageChanged);
-        assert_eq!(s, Overlay::default());
+        let s = page_changed(s);
+        assert_eq!(s.s, Overlay::default());
         let (_, e) = snap(s, 1.5, 20);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetRate(1.5)));
         // A video without metadata yet (duration 0) waits for it.
@@ -1043,15 +1090,7 @@ mod tests {
             duration: 0.0,
             ..video()
         };
-        let (s, e) = transition(
-            Overlay::default(),
-            VideoInput::Snapshot {
-                video: Some(early),
-                site_rate: 2.0,
-                fold: Fold::Open,
-                now: 0,
-            },
-        );
+        let (s, e) = snap_with(start(), Some(early), 2.0, Fold::Open, 0);
         assert!(!e.contains(&VideoEffect::Page(PageCmd::SetRate(2.0))));
         let (_, e) = snap(s, 2.0, 1);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetRate(2.0)));
@@ -1059,7 +1098,7 @@ mod tests {
 
     #[test]
     fn controls_become_page_commands() {
-        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        let (s, _) = snap(start(), 1.0, 0);
         let (s, e) = cmd(s, VideoCmd::Mute, 1);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::SetMuted(true)));
         let (s, e) = cmd(s, VideoCmd::Loop, 2);
@@ -1081,35 +1120,36 @@ mod tests {
         assert_eq!(e[0], VideoEffect::Pip);
         // Save only while the button is offered; it neither pauses, seeks nor folds the strip.
         let save = VideoCmd::Save { x: 3.0, y: 4.0 };
+        let held = VideoEffect::Hold(Cue::ShowFor(LEAVE_MS));
         let (s, e) = cmd(s, save, 7);
-        assert_eq!(e, vec![VideoEffect::Redraw]);
+        assert_eq!(e, vec![held.clone(), VideoEffect::Redraw]);
         let before = s.clone();
-        let (s, e) = transition(
-            s,
-            VideoInput::Command {
-                cmd: save,
-                now: 8,
-                can_save: true,
-            },
-        );
+        let (s, e) = cmd_save(s, save, true, 8);
         assert_eq!(
             e,
-            vec![VideoEffect::Save { x: 3.0, y: 4.0 }, VideoEffect::Redraw]
+            vec![
+                VideoEffect::Save { x: 3.0, y: 4.0 },
+                held.clone(),
+                VideoEffect::Redraw
+            ]
         );
-        assert_eq!(s.video(), before.video());
+        assert_eq!(s.s.video(), before.s.video());
         assert!(s.shown() && !s.collapsed());
         // A live stream cannot be sought.
         let live = VideoState {
             duration: f64::INFINITY,
             ..video()
         };
-        let s = Overlay::Video {
-            video: live,
-            rate_set: true,
-            ui: Ui::Hidden(Fold::Open),
+        let s = Run {
+            s: Overlay::Video {
+                video: live,
+                rate_set: true,
+                ui: Ui::Strip { speeds: false },
+            },
+            ..start()
         };
         let (_, e) = cmd(s, VideoCmd::Seek(0.5), 9);
-        assert_eq!(e, vec![VideoEffect::Redraw]);
+        assert_eq!(e, vec![held, VideoEffect::Redraw]);
     }
 
     fn media(found: &[Found]) -> Vec<Detected> {
