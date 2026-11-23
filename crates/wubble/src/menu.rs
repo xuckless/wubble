@@ -497,9 +497,13 @@ const ROWS: &[Row] = &[
         |c| c.selection() || c.edit(F::CAN_COPY),
         |_| { Command::Engine(cef_id::COPY) }
     ),
-    row!(6, "Copy Link to Highlight", |c| c.highlight().is_some(), always, |c| {
-        Command::CopyText(c.highlight().unwrap_or_default())
-    }),
+    row!(
+        6,
+        "Copy Link to Highlight",
+        |c| c.highlight().is_some(),
+        always,
+        |c| { Command::CopyText(c.highlight().unwrap_or_default()) }
+    ),
     row!(
         6,
         "Paste",
@@ -567,12 +571,18 @@ const ROWS: &[Row] = &[
         always,
         |c| Command::OpenInNewTab(c.frame_source().unwrap_or_default())
     ),
-    row!(10, "Reload Frame", |c| c.frame_source().is_some(), always, |c| {
-        Command::FrameScript {
-            frame: c.menu.frame.clone(),
-            script: "location.reload()",
+    row!(
+        10,
+        "Reload Frame",
+        |c| c.frame_source().is_some(),
+        always,
+        |c| {
+            Command::FrameScript {
+                frame: c.menu.frame.clone(),
+                script: "location.reload()",
+            }
         }
-    }),
+    ),
     row!(
         10,
         "Open Frame in New Tab",
@@ -1894,7 +1904,15 @@ mod tests {
             "-",
             "Inspect",
         ];
-        let bare = ["Back", "Forward", "Reload", "-", "Save Page As\u{2026}", "Print\u{2026}", "-"];
+        let bare = [
+            "Back",
+            "Forward",
+            "Reload",
+            "-",
+            "Save Page As\u{2026}",
+            "Print\u{2026}",
+            "-",
+        ];
         let tail = ["Take Screenshot of Element", "Inspect"];
         let search = "Search Google for \u{201c}hello world\u{201d}";
         let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 10] = [
@@ -1920,14 +1938,21 @@ mod tests {
                 "suggestions, then the dictionary",
                 spelling(&["the", "tea"]),
                 google,
-                [&["the", "tea", "-", "Add to Dictionary", "-"][..], &field_rows].concat(),
+                [
+                    &["the", "tea", "-", "Add to Dictionary", "-"][..],
+                    &field_rows,
+                ]
+                .concat(),
             ),
             (
                 "nothing to suggest",
                 spelling(&[]),
                 google,
-                [&["No Spelling Suggestions", "-", "Add to Dictionary", "-"][..], &field_rows]
-                    .concat(),
+                [
+                    &["No Spelling Suggestions", "-", "Add to Dictionary", "-"][..],
+                    &field_rows,
+                ]
+                .concat(),
             ),
             (
                 "a frame's rows follow the page's source",
@@ -1935,7 +1960,12 @@ mod tests {
                 google,
                 [
                     &bare[..],
-                    &["View Page Source", "View Frame Source", "Reload Frame", "Open Frame in New Tab"],
+                    &[
+                        "View Page Source",
+                        "View Frame Source",
+                        "Reload Frame",
+                        "Open Frame in New Tab",
+                    ],
                     &tail,
                 ]
                 .concat(),
@@ -1956,8 +1986,18 @@ mod tests {
                 "the highlight follows Copy",
                 selection("https://a.test/"),
                 google,
-                [&["Copy", "Copy Link to Highlight", "-", search, "Print\u{2026}", "-"][..], &tail]
-                    .concat(),
+                [
+                    &[
+                        "Copy",
+                        "Copy Link to Highlight",
+                        "-",
+                        search,
+                        "Print\u{2026}",
+                        "-",
+                    ][..],
+                    &tail,
+                ]
+                .concat(),
             ),
             (
                 "none on a page that has no fragments",

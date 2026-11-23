@@ -904,10 +904,7 @@ mod tests {
             route(PageEvent::ZoomChanged { percent: 110 }),
             Routed::Ignore
         );
-        assert_eq!(
-            route(PageEvent::TextInput(false)),
-            Routed::TextInput(false)
-        );
+        assert_eq!(route(PageEvent::TextInput(false)), Routed::TextInput(false));
         assert_eq!(
             route(PageEvent::FullscreenChanged(true)),
             Routed::Fullscreen(true)

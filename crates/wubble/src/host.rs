@@ -3902,8 +3902,7 @@ impl Host {
             return;
         };
         // keys follow the pane that was pressed: the DevTools panel, the peek or a page
-        let to =
-            (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
+        let to = (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
         if self.key_pane != to && self.shown_tabs().contains(&tab) {
             self.key_pane = to;
             if let Some(window) = self.w.window.upgrade() {

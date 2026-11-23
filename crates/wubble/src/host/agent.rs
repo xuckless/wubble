@@ -2855,7 +2855,13 @@ impl Host {
             return self.agent_fail(reply, "the tab has no page");
         };
         // the view's wheel takes positive as up and left
-        view.wheel(point, -step.0 as f32, -step.1 as f32, true, &Modifiers::default());
+        view.wheel(
+            point,
+            -step.0 as f32,
+            -step.1 as f32,
+            true,
+            &Modifiers::default(),
+        );
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
         if left <= 1 {
             let (x, y) = (f64::from(point.x), f64::from(point.y));

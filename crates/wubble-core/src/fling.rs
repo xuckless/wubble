@@ -51,7 +51,12 @@ impl<T> Default for Fling<T> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlingInput<T> {
     /// A scroll of `dx`, `dy` px over `target` at `now`.
-    Scroll { target: T, dx: f64, dy: f64, now: f64 },
+    Scroll {
+        target: T,
+        dx: f64,
+        dy: f64,
+        now: f64,
+    },
     /// The fingers lifted (the scroll's stop).
     Lift { now: f64 },
     /// A frame of the glide.
@@ -108,7 +113,15 @@ pub fn transition<T: Copy + PartialEq>(
             )
         }
         // The first scroll, one over another target, or new fingers during a glide.
-        (state, I::Scroll { target, dx, dy, now }) => {
+        (
+            state,
+            I::Scroll {
+                target,
+                dx,
+                dy,
+                now,
+            },
+        ) => {
             // One point: the speed is measured from the first scroll on, so a short flick's
             // first frame does not count as travel in no time.
             let mut path = Velocity::new();
@@ -226,7 +239,12 @@ mod tests {
         // the glide goes the scroll's way, each step shorter, until it stops itself
         let (mut s, mut last, mut total) = (s, f64::INFINITY, 0.0);
         for i in 1..1000 {
-            let (next, fx) = transition(s, FlingInput::Tick { now: 55.0 + f64::from(i) * 8.0 });
+            let (next, fx) = transition(
+                s,
+                FlingInput::Tick {
+                    now: 55.0 + f64::from(i) * 8.0,
+                },
+            );
             s = next;
             let FlingEffect::Scroll { target: 1, dx, dy } = fx[0] else {
                 panic!("{fx:?}");
@@ -248,7 +266,9 @@ mod tests {
     fn no_glide_after_still_fingers_or_a_slow_scroll() {
         // rested before lifting
         let mut inputs = scroll(6, 20.0);
-        inputs.push(FlingInput::Lift { now: 50.0 + REST_MS + 1.0 });
+        inputs.push(FlingInput::Lift {
+            now: 50.0 + REST_MS + 1.0,
+        });
         let (s, fx) = run(&inputs);
         assert!(matches!(s, Fling::Idle) && fx.is_empty());
         // 0.5 px per 10 ms: 50 px/s
@@ -286,20 +306,45 @@ mod tests {
             (vec![], scroll_on(1, 5.0), "tracking", vec![]),
             (vec![], scroll_on(1, 0.0), "idle", vec![]),
             (vec![], FlingInput::Lift { now: 0.0 }, "idle", vec![]),
-            (vec![], FlingInput::Tick { now: 0.0 }, "idle", vec![FlingEffect::Stop]),
+            (
+                vec![],
+                FlingInput::Tick { now: 0.0 },
+                "idle",
+                vec![FlingEffect::Stop],
+            ),
             (vec![], FlingInput::Interrupt, "idle", vec![]),
             // tracking
             (scroll(3, 20.0), scroll_on(1, 5.0), "tracking", vec![]),
             (scroll(3, 20.0), scroll_on(2, 5.0), "tracking", vec![]),
             (scroll(3, 20.0), scroll_on(1, 0.0), "tracking", vec![]),
-            (scroll(3, 20.0), FlingInput::Tick { now: 30.0 }, "tracking", vec![FlingEffect::Stop]),
+            (
+                scroll(3, 20.0),
+                FlingInput::Tick { now: 30.0 },
+                "tracking",
+                vec![FlingEffect::Stop],
+            ),
             (scroll(3, 20.0), FlingInput::Interrupt, "idle", vec![]),
-            (scroll(3, 20.0), FlingInput::Lift { now: 25.0 }, "gliding", vec![FlingEffect::Start]),
+            (
+                scroll(3, 20.0),
+                FlingInput::Lift { now: 25.0 },
+                "gliding",
+                vec![FlingEffect::Start],
+            ),
             // gliding: new fingers stop it and track; the stop's empty frame does not
-            (flick(), scroll_on(1, 5.0), "tracking", vec![FlingEffect::Stop]),
+            (
+                flick(),
+                scroll_on(1, 5.0),
+                "tracking",
+                vec![FlingEffect::Stop],
+            ),
             (flick(), scroll_on(1, 0.0), "gliding", vec![]),
             (flick(), FlingInput::Lift { now: 60.0 }, "gliding", vec![]),
-            (flick(), FlingInput::Interrupt, "idle", vec![FlingEffect::Stop]),
+            (
+                flick(),
+                FlingInput::Interrupt,
+                "idle",
+                vec![FlingEffect::Stop],
+            ),
         ];
         for (i, (before, input, after, effects)) in rows.into_iter().enumerate() {
             let (s, _) = run(&before);

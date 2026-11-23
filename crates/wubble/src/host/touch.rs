@@ -25,9 +25,7 @@ impl Host {
             .location
             .to_logical::<f32>(window.window().scale_factor().into());
         let at = (at.x, at.y);
-        let pressure = t
-            .force
-            .map_or(UNKNOWN_PRESSURE, |f| f.normalized() as f32);
+        let pressure = t.force.map_or(UNKNOWN_PRESSURE, |f| f.normalized() as f32);
         let id = t.id;
         let input = match t.phase {
             TouchPhase::Started => FingerInput::Down { id, at, pressure },
@@ -41,9 +39,8 @@ impl Host {
         self.fingers(input);
         // Over once Slint has dispatched the event, for input that comes with no raw event of
         // its own after it (a screen reader's click, a smoke's).
-        let _ = slint::invoke_from_event_loop(|| {
-            crate::with_host(|host| host.input.touching = false)
-        });
+        let _ =
+            slint::invoke_from_event_loop(|| crate::with_host(|host| host.input.touching = false));
     }
 
     /// Feeds the fingers one input and sends the page its touch events.

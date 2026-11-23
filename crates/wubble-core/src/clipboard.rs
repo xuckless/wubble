@@ -103,7 +103,11 @@ const RICH: &[Reader] = &[Reader::AsyncApi, Reader::Paste];
 const READS: &[(Kind, &[Reader], &[&str])] = &[
     (Kind::Text, EVERY, dnd::TEXT),
     (Kind::Html, RICH, &[HTML]),
-    (Kind::Files, &[Reader::Paste], &["text/uri-list", GNOME_FILES]),
+    (
+        Kind::Files,
+        &[Reader::Paste],
+        &["text/uri-list", GNOME_FILES],
+    ),
     (Kind::CustomData, &[Reader::Paste], &[CUSTOM_DATA]),
     (Kind::WebMap, &[Reader::AsyncApi], &[WEB_MAP]),
 ];
@@ -206,16 +210,22 @@ pub fn offers(payload: &Payload) -> Vec<(String, Arc<[u8]>)> {
         .iter()
         .find(|f| dnd::image_extension(&f.mime).is_some())
         .map(|f| (f.mime.clone(), bytes(&f.bytes)));
-    let html = payload
-        .html
-        .as_ref()
-        .map(|h| (HTML.to_owned(), bytes(format!("{HTML_HEADER}{h}").as_bytes())));
+    let html = payload.html.as_ref().map(|h| {
+        (
+            HTML.to_owned(),
+            bytes(format!("{HTML_HEADER}{h}").as_bytes()),
+        )
+    });
     let text = payload.text.as_ref().map(|t| bytes(t.as_bytes()));
     let texts = dnd::OFFERED_TEXT
         .iter()
         .filter_map(|mime| Some((mime.to_string(), text.clone()?)));
-    let custom = (!payload.custom.is_empty())
-        .then(|| (CUSTOM_DATA.to_owned(), bytes(&dnd::custom_data(&payload.custom))));
+    let custom = (!payload.custom.is_empty()).then(|| {
+        (
+            CUSTOM_DATA.to_owned(),
+            bytes(&dnd::custom_data(&payload.custom)),
+        )
+    });
     let web = payload.web.iter().take(WEB_MAX).enumerate();
     let names: Map<String, Value> = web
         .clone()
@@ -285,9 +295,10 @@ impl Payload {
             out.insert("html".into(), json!(html));
         }
         if !self.files.is_empty() {
-            let files = self.files.iter().map(|f| {
-                json!({ "name": f.name, "type": f.mime, "data": b64(&f.bytes) })
-            });
+            let files = self
+                .files
+                .iter()
+                .map(|f| json!({ "name": f.name, "type": f.mime, "data": b64(&f.bytes) }));
             out.insert("files".into(), Value::Array(files.collect()));
         }
         if !self.custom.is_empty() {
@@ -311,7 +322,13 @@ impl Payload {
                 .decode(v.as_str()?)
                 .ok()
         };
-        let list = |key: &str| object.get(key).and_then(Value::as_array).into_iter().flatten();
+        let list = |key: &str| {
+            object
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        };
         Some(Payload {
             text: object.get("text").and_then(string),
             html: object.get("html").and_then(string),
@@ -412,7 +429,11 @@ mod tests {
             part(Kind::CustomData, CUSTOM_DATA, &custom),
             part(Kind::WebMap, WEB_MAP, &map),
             part(Kind::Web, "application/web;type=\"custom/format0\"", b"w"),
-            part(Kind::Web, "application/web;type=\"custom/format9\"", b"unmapped"),
+            part(
+                Kind::Web,
+                "application/web;type=\"custom/format9\"",
+                b"unmapped",
+            ),
         ]);
         assert_eq!(
             payload,
@@ -430,8 +451,16 @@ mod tests {
         );
         assert!(paths.is_empty());
         let lists: &[(&str, &[u8], &[&str])] = &[
-            ("text/uri-list", b"file:///tmp/a%20b\r\nfile:///c\r\n", &["/tmp/a b", "/c"]),
-            (GNOME_FILES, b"copy\nfile:///tmp/a\nfile:///tmp/b", &["/tmp/a", "/tmp/b"]),
+            (
+                "text/uri-list",
+                b"file:///tmp/a%20b\r\nfile:///c\r\n",
+                &["/tmp/a b", "/c"],
+            ),
+            (
+                GNOME_FILES,
+                b"copy\nfile:///tmp/a\nfile:///tmp/b",
+                &["/tmp/a", "/tmp/b"],
+            ),
             (GNOME_FILES, b"cut\nfile:///tmp/a", &["/tmp/a"]),
             // A link is no file.
             ("text/uri-list", b"https://a.test/", &[]),
@@ -513,7 +542,14 @@ mod tests {
         };
         assert_eq!(read_back(Reader::Paste), pasted);
         let custom = vec![];
-        assert_eq!(read_back(Reader::AsyncApi), Payload { html, custom, ..payload });
+        assert_eq!(
+            read_back(Reader::AsyncApi),
+            Payload {
+                html,
+                custom,
+                ..payload
+            }
+        );
         // Text alone is three text types; nothing is no offer.
         let text = Payload {
             text: Some("t".into()),
@@ -544,7 +580,10 @@ mod tests {
             },
         ];
         for payload in cases {
-            assert_eq!(Payload::from_json(&payload.to_json()), Some(payload.clone()));
+            assert_eq!(
+                Payload::from_json(&payload.to_json()),
+                Some(payload.clone())
+            );
         }
         assert_eq!(Payload::default().to_json(), "{}");
         // What the page wrote wrong is left out; what is no JSON object is nothing.
@@ -557,7 +596,10 @@ mod tests {
     #[test]
     fn copy_image_markup_escapes_the_url() {
         let cases = [
-            ("https://a.test/cat.png", "<img src=\"https://a.test/cat.png\"/>"),
+            (
+                "https://a.test/cat.png",
+                "<img src=\"https://a.test/cat.png\"/>",
+            ),
             (
                 "https://a.test/?a=1&b=\"<>",
                 "<img src=\"https://a.test/?a=1&amp;b=&quot;&lt;&gt;\"/>",

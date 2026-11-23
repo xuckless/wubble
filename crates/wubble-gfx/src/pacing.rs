@@ -305,7 +305,10 @@ mod tests {
             assert_eq!(large_damage(damage, frame), large, "{name}");
         }
         assert!(large_damage(Some((0, 0)), (0, 0)), "an empty frame");
-        assert!(!large_damage(Some((16, 16)), (u32::MAX, u32::MAX)), "no overflow");
+        assert!(
+            !large_damage(Some((16, 16)), (u32::MAX, u32::MAX)),
+            "no overflow"
+        );
     }
 
     #[test]
@@ -320,12 +323,48 @@ mod tests {
         const LARGE: ContentEvent = Frame { large: true };
         // (name, state, event, time since t, next): one row per state and event
         for (name, state, event, at, next) in [
-            ("a new view's large frame holds", ContentRate::default(), LARGE, ms(0), held),
-            ("a new view's small frame calms it", ContentRate::default(), SMALL, ms(0), Calm),
-            ("a new view's input holds", ContentRate::default(), Input, ms(0), held),
-            ("a small frame inside the hold keeps it", held, SMALL, ms(299), held),
-            ("a small frame at the hold's end calms", held, SMALL, ms(300), Calm),
-            ("a small frame long after calms", held, SMALL, ms(60_000), Calm),
+            (
+                "a new view's large frame holds",
+                ContentRate::default(),
+                LARGE,
+                ms(0),
+                held,
+            ),
+            (
+                "a new view's small frame calms it",
+                ContentRate::default(),
+                SMALL,
+                ms(0),
+                Calm,
+            ),
+            (
+                "a new view's input holds",
+                ContentRate::default(),
+                Input,
+                ms(0),
+                held,
+            ),
+            (
+                "a small frame inside the hold keeps it",
+                held,
+                SMALL,
+                ms(299),
+                held,
+            ),
+            (
+                "a small frame at the hold's end calms",
+                held,
+                SMALL,
+                ms(300),
+                Calm,
+            ),
+            (
+                "a small frame long after calms",
+                held,
+                SMALL,
+                ms(60_000),
+                Calm,
+            ),
             (
                 "a large frame starts the hold again",
                 held,
@@ -344,7 +383,13 @@ mod tests {
                     until: Some(t + ms(500)),
                 },
             ),
-            ("a calm page stays calm on small frames", Calm, SMALL, ms(0), Calm),
+            (
+                "a calm page stays calm on small frames",
+                Calm,
+                SMALL,
+                ms(0),
+                Calm,
+            ),
             ("a large frame wakes a calm page", Calm, LARGE, ms(0), held),
             ("input wakes a calm page", Calm, Input, ms(0), held),
         ] {

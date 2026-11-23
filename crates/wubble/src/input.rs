@@ -827,7 +827,10 @@ mod tests {
             (MouseScrollDelta::LineDelta(0.0, 1.0), false),
             (MouseScrollDelta::LineDelta(-2.0, 0.0), false),
             (MouseScrollDelta::LineDelta(0.0, 0.25), true),
-            (MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 12.0)), true),
+            (
+                MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 12.0)),
+                true,
+            ),
         ] {
             assert_eq!(wheel_is_precise(&delta), precise, "{delta:?}");
         }

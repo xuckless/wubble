@@ -531,7 +531,12 @@ mod tests {
         assert_eq!(effects.last(), Some(&StartTimer(QUIET_TIMER_DELAY)));
         // (name, events from quiet, the tempo after, the last timer armed)
         for (name, events, tempo, timer) in [
-            ("it stays quiet", &[TimerFired][..], Tempo::Quiet, QUIET_TIMER_DELAY),
+            (
+                "it stays quiet",
+                &[TimerFired][..],
+                Tempo::Quiet,
+                QUIET_TIMER_DELAY,
+            ),
             (
                 "work CEF asks for runs at once and keeps it quiet",
                 &[Schedule(0)],

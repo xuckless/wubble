@@ -890,9 +890,7 @@ impl Host {
             .and_then(|t| self.surfaces.get(&t))
             .and_then(|s| s.text_input)
             .unwrap_or(true);
-        window
-            .window()
-            .with_winit_window(|w| w.set_ime_allowed(on));
+        window.window().with_winit_window(|w| w.set_ime_allowed(on));
     }
 
     /// winit's IME events while the page has the keyboard; false when they
@@ -1017,12 +1015,7 @@ impl Host {
 
     /// What `reader` takes from `buffer`: text through the text read every clipboard has, the
     /// rest only where the host carries the pages' clipboard.
-    fn clipboard_payload(
-        &mut self,
-        window: &AppWindow,
-        buffer: Buffer,
-        reader: Reader,
-    ) -> Payload {
+    fn clipboard_payload(&mut self, window: &AppWindow, buffer: Buffer, reader: Reader) -> Payload {
         match reader {
             Reader::Text => Payload {
                 text: self.clipboard.load(window.window(), buffer),

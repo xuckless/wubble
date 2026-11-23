@@ -4,8 +4,8 @@
 //! and the host's commands into [`NavInput`]s, runs [`transition`] and
 //! executes the [`NavEffect`]s. The host only ever sees [`WebEvent`]s.
 
-use welding::CursorShape;
 pub use welding::CursorImage;
+use welding::CursorShape;
 
 use crate::input::KeyId;
 

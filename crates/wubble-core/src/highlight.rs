@@ -58,17 +58,33 @@ mod tests {
         let long_line = format!("alpha beta gamma {long}omega psi chi");
         let cases: [(&str, &str, Option<&str>); 13] = [
             // short, one block: the exact text, whitespace collapsed
-            ("https://a.test/p", "hello  world", Some("https://a.test/p#:~:text=hello%20world")),
-            ("https://a.test/p", "  hi \n", Some("https://a.test/p#:~:text=hi")),
+            (
+                "https://a.test/p",
+                "hello  world",
+                Some("https://a.test/p#:~:text=hello%20world"),
+            ),
+            (
+                "https://a.test/p",
+                "  hi \n",
+                Some("https://a.test/p#:~:text=hi"),
+            ),
             // `-`, `,` and `&` are directive syntax
             (
                 "https://a.test/p",
                 "a-b, c&d",
                 Some("https://a.test/p#:~:text=a%2Db%2C%20c%26d"),
             ),
-            ("https://a.test/", "caf\u{e9}", Some("https://a.test/#:~:text=caf%C3%A9")),
+            (
+                "https://a.test/",
+                "caf\u{e9}",
+                Some("https://a.test/#:~:text=caf%C3%A9"),
+            ),
             // an existing fragment is replaced, the query kept
-            ("https://a.test/p?q=1#top", "x", Some("https://a.test/p?q=1#:~:text=x")),
+            (
+                "https://a.test/p?q=1#top",
+                "x",
+                Some("https://a.test/p?q=1#:~:text=x"),
+            ),
             // long: start and end words
             (
                 "https://a.test/p",
@@ -81,7 +97,11 @@ mod tests {
                 "one two three four\nfive six seven eight",
                 Some("https://a.test/p#:~:text=one%20two%20three,six%20seven%20eight"),
             ),
-            ("https://a.test/p", "Title\nBody", Some("https://a.test/p#:~:text=Title,Body")),
+            (
+                "https://a.test/p",
+                "Title\nBody",
+                Some("https://a.test/p#:~:text=Title,Body"),
+            ),
             // nothing to name, or a page that has no fragments
             ("https://a.test/p", " \n ", None),
             ("https://a.test/p", "", None),

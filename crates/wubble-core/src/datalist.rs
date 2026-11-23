@@ -97,7 +97,11 @@ mod tests {
 
     #[test]
     fn the_typed_text_filters_value_and_label_ignoring_case() {
-        let options = [("Apple", "fruit"), ("banana", "Yellow Thing"), ("cherry", "")];
+        let options = [
+            ("Apple", "fruit"),
+            ("banana", "Yellow Thing"),
+            ("cherry", ""),
+        ];
         let cases: [(&str, &[&str]); 7] = [
             // nothing typed: all of them
             ("", &["Apple", "banana", "cherry"]),
@@ -124,7 +128,13 @@ mod tests {
         want.rect = (10, 20, 300, 32);
         assert_eq!(parse(report), Some(want));
         // nothing offered, and what is not a report
-        for none in ["{}", "", "null", "[]", r#"{"rect":[1,2,3],"value":"","options":[]}"#] {
+        for none in [
+            "{}",
+            "",
+            "null",
+            "[]",
+            r#"{"rect":[1,2,3],"value":"","options":[]}"#,
+        ] {
             assert_eq!(parse(none), None, "{none:?}");
         }
     }

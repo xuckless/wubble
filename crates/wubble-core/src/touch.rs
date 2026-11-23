@@ -199,7 +199,10 @@ pub enum FingerInput {
         pressure: f32,
     },
     /// Slint's press for the finger it is placing reached `pane`'s page, at `point` in it.
-    Landed { pane: TabId, point: (f32, f32) },
+    Landed {
+        pane: TabId,
+        point: (f32, f32),
+    },
     Moved {
         id: u64,
         at: (f32, f32),
@@ -210,7 +213,9 @@ pub enum FingerInput {
         at: (f32, f32),
     },
     /// The platform took the finger back (Wayland's `wl_touch.cancel`).
-    Cancelled { id: u64 },
+    Cancelled {
+        id: u64,
+    },
     /// The pages on screen now: fingers on any other page (closed, switched away, the window
     /// lost) are cancelled there, so no page keeps a finger that will never lift.
     OnScreen(Vec<TabId>),
@@ -292,7 +297,10 @@ pub fn transition(state: Fingers, input: FingerInput) -> (Fingers, Vec<PageTouch
                     effects.push(send(pane, origin, &down[i], TouchKind::Move, pressure));
                 }
                 (I::Up { at, .. }, Some(i)) => {
-                    let f = Finger { at, ..down.remove(i) };
+                    let f = Finger {
+                        at,
+                        ..down.remove(i)
+                    };
                     effects.push(send(pane, origin, &f, TouchKind::Release, 0.0));
                 }
                 (I::Cancelled { .. }, Some(i)) => {
@@ -358,38 +366,183 @@ mod tests {
         // (state, input, next, effects): one row per (state, input).
         let rows = vec![
             // none: a down is placed by Slint; anything else is the shell's
-            (Fingers::None, down(7, (110.0, 20.0)), placing.clone(), vec![]),
-            (Fingers::None, Landed { pane: a, point: (10.0, 10.0) }, Fingers::None, vec![]),
-            (Fingers::None, Moved { id: 7, at: (1.0, 1.0), pressure: 0.5 }, Fingers::None, vec![]),
-            (Fingers::None, Up { id: 7, at: (1.0, 1.0) }, Fingers::None, vec![]),
+            (
+                Fingers::None,
+                down(7, (110.0, 20.0)),
+                placing.clone(),
+                vec![],
+            ),
+            (
+                Fingers::None,
+                Landed {
+                    pane: a,
+                    point: (10.0, 10.0),
+                },
+                Fingers::None,
+                vec![],
+            ),
+            (
+                Fingers::None,
+                Moved {
+                    id: 7,
+                    at: (1.0, 1.0),
+                    pressure: 0.5,
+                },
+                Fingers::None,
+                vec![],
+            ),
+            (
+                Fingers::None,
+                Up {
+                    id: 7,
+                    at: (1.0, 1.0),
+                },
+                Fingers::None,
+                vec![],
+            ),
             (Fingers::None, Cancelled { id: 7 }, Fingers::None, vec![]),
             (Fingers::None, OnScreen(vec![]), Fingers::None, vec![]),
             // placing: landing on a page presses there; the next event otherwise leaves it the shell's
-            (placing.clone(), Landed { pane: a, point: (10.0, 10.0) }, one.clone(), vec![touch(0, Press, (10.0, 10.0), 0.5)]),
-            (placing.clone(), down(8, (5.0, 5.0)), Fingers::Placing { id: 8, at: (5.0, 5.0), pressure: 0.5 }, vec![]),
-            (placing.clone(), Moved { id: 7, at: (1.0, 1.0), pressure: 0.5 }, Fingers::None, vec![]),
-            (placing.clone(), Up { id: 7, at: (1.0, 1.0) }, Fingers::None, vec![]),
+            (
+                placing.clone(),
+                Landed {
+                    pane: a,
+                    point: (10.0, 10.0),
+                },
+                one.clone(),
+                vec![touch(0, Press, (10.0, 10.0), 0.5)],
+            ),
+            (
+                placing.clone(),
+                down(8, (5.0, 5.0)),
+                Fingers::Placing {
+                    id: 8,
+                    at: (5.0, 5.0),
+                    pressure: 0.5,
+                },
+                vec![],
+            ),
+            (
+                placing.clone(),
+                Moved {
+                    id: 7,
+                    at: (1.0, 1.0),
+                    pressure: 0.5,
+                },
+                Fingers::None,
+                vec![],
+            ),
+            (
+                placing.clone(),
+                Up {
+                    id: 7,
+                    at: (1.0, 1.0),
+                },
+                Fingers::None,
+                vec![],
+            ),
             (placing.clone(), Cancelled { id: 7 }, Fingers::None, vec![]),
             (placing.clone(), OnScreen(vec![a]), Fingers::None, vec![]),
             // page: a later finger is the page's wherever it lands, in the next free slot
-            (one.clone(), down(9, (130.0, 20.0)), two.clone(), vec![touch(1, Press, (30.0, 10.0), 0.5)]),
-            (page(vec![f(9, 1, (130.0, 20.0))]), down(7, (2000.0, 20.0)), page(vec![f(9, 1, (130.0, 20.0)), f(7, 0, (2000.0, 20.0))]), vec![touch(0, Press, (1900.0, 10.0), 0.5)]),
+            (
+                one.clone(),
+                down(9, (130.0, 20.0)),
+                two.clone(),
+                vec![touch(1, Press, (30.0, 10.0), 0.5)],
+            ),
+            (
+                page(vec![f(9, 1, (130.0, 20.0))]),
+                down(7, (2000.0, 20.0)),
+                page(vec![f(9, 1, (130.0, 20.0)), f(7, 0, (2000.0, 20.0))]),
+                vec![touch(0, Press, (1900.0, 10.0), 0.5)],
+            ),
             // a down for a held finger cancels its old touch first
-            (one.clone(), down(7, (120.0, 20.0)), page(vec![f(7, 0, (120.0, 20.0))]), vec![touch(0, Cancel, (10.0, 10.0), 0.0), touch(0, Press, (20.0, 10.0), 0.5)]),
+            (
+                one.clone(),
+                down(7, (120.0, 20.0)),
+                page(vec![f(7, 0, (120.0, 20.0))]),
+                vec![
+                    touch(0, Cancel, (10.0, 10.0), 0.0),
+                    touch(0, Press, (20.0, 10.0), 0.5),
+                ],
+            ),
             // Slint's press for the finger left after a two-finger touch is nothing new
-            (two.clone(), Landed { pane: a, point: (30.0, 10.0) }, two.clone(), vec![]),
+            (
+                two.clone(),
+                Landed {
+                    pane: a,
+                    point: (30.0, 10.0),
+                },
+                two.clone(),
+                vec![],
+            ),
             // a move stays with the page, even off it
-            (one.clone(), Moved { id: 7, at: (50.0, 5.0), pressure: 0.8 }, page(vec![f(7, 0, (50.0, 5.0))]), vec![touch(0, Move, (-50.0, -5.0), 0.8)]),
-            (one.clone(), Moved { id: 8, at: (1.0, 1.0), pressure: 0.5 }, one.clone(), vec![]),
+            (
+                one.clone(),
+                Moved {
+                    id: 7,
+                    at: (50.0, 5.0),
+                    pressure: 0.8,
+                },
+                page(vec![f(7, 0, (50.0, 5.0))]),
+                vec![touch(0, Move, (-50.0, -5.0), 0.8)],
+            ),
+            (
+                one.clone(),
+                Moved {
+                    id: 8,
+                    at: (1.0, 1.0),
+                    pressure: 0.5,
+                },
+                one.clone(),
+                vec![],
+            ),
             // a lift releases where it lifts; the last one ends the page's touch
-            (two.clone(), Up { id: 7, at: (115.0, 25.0) }, page(vec![f(9, 1, (130.0, 20.0))]), vec![touch(0, Release, (15.0, 15.0), 0.0)]),
-            (one.clone(), Up { id: 7, at: (115.0, 25.0) }, Fingers::None, vec![touch(0, Release, (15.0, 15.0), 0.0)]),
-            (one.clone(), Up { id: 8, at: (1.0, 1.0) }, one.clone(), vec![]),
+            (
+                two.clone(),
+                Up {
+                    id: 7,
+                    at: (115.0, 25.0),
+                },
+                page(vec![f(9, 1, (130.0, 20.0))]),
+                vec![touch(0, Release, (15.0, 15.0), 0.0)],
+            ),
+            (
+                one.clone(),
+                Up {
+                    id: 7,
+                    at: (115.0, 25.0),
+                },
+                Fingers::None,
+                vec![touch(0, Release, (15.0, 15.0), 0.0)],
+            ),
+            (
+                one.clone(),
+                Up {
+                    id: 8,
+                    at: (1.0, 1.0),
+                },
+                one.clone(),
+                vec![],
+            ),
             // the platform's cancel cancels where the finger last was
-            (two.clone(), Cancelled { id: 9 }, one.clone(), vec![touch(1, Cancel, (30.0, 10.0), 0.0)]),
+            (
+                two.clone(),
+                Cancelled { id: 9 },
+                one.clone(),
+                vec![touch(1, Cancel, (30.0, 10.0), 0.0)],
+            ),
             (one.clone(), Cancelled { id: 8 }, one.clone(), vec![]),
             // the page off screen loses every finger; on screen keeps them
-            (two.clone(), OnScreen(vec![b]), Fingers::None, vec![touch(0, Cancel, (10.0, 10.0), 0.0), touch(1, Cancel, (30.0, 10.0), 0.0)]),
+            (
+                two.clone(),
+                OnScreen(vec![b]),
+                Fingers::None,
+                vec![
+                    touch(0, Cancel, (10.0, 10.0), 0.0),
+                    touch(1, Cancel, (30.0, 10.0), 0.0),
+                ],
+            ),
             (two.clone(), OnScreen(vec![a, b]), two.clone(), vec![]),
         ];
         for (i, (state, input, next, effects)) in rows.into_iter().enumerate() {

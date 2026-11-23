@@ -171,7 +171,13 @@ impl Worker {
     /// Puts `text` on `buffer`.
     pub fn store(&self, buffer: Buffer, text: &str) {
         let text = Some(text.to_owned());
-        self.store_payload(buffer, Payload { text, ..Payload::default() });
+        self.store_payload(
+            buffer,
+            Payload {
+                text,
+                ..Payload::default()
+            },
+        );
     }
 
     /// Puts `payload` on `buffer`, under every type it has (`wubble_core::clipboard::offers`).

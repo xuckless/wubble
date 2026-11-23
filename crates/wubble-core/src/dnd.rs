@@ -617,7 +617,10 @@ mod tests {
         let cases: &[&[(&str, &str)]] = &[
             &[],
             &[("text/x-a", "")],
-            &[("application/x-b", "猫 cat"), ("text/uri-list", "https://a.test/")],
+            &[
+                ("application/x-b", "猫 cat"),
+                ("text/uri-list", "https://a.test/"),
+            ],
             &[("ab", "abc"), ("é", "😀")],
         ];
         for entries in cases {
