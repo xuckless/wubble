@@ -166,20 +166,6 @@ impl Model {
         }
     }
 
-    /// The private Spaces, in order: what a session, the history and every list leave out.
-    pub fn private_spaces(&self) -> Vec<SpaceId> {
-        self.spaces
-            .iter()
-            .filter(|s| s.kind == SpaceKind::Private)
-            .map(|s| s.id)
-            .collect()
-    }
-
-    /// Whether a private window is open.
-    pub fn has_private(&self) -> bool {
-        self.spaces.iter().any(|s| s.kind == SpaceKind::Private)
-    }
-
     /// The Spaces a window showing `space` lists (its sidebar's Spaces, the command bar's open
     /// tabs): a private window only its own, any other window every Space that is not private
     /// (Chrome's incognito window and its tab search stay within one profile).
@@ -444,24 +430,23 @@ impl Model {
         fx
     }
 
-    /// The ephemeral container private windows share: the one there is, else a new one.
-    fn private_container(&mut self) -> ContainerId {
-        if let Some(c) = self.containers.iter().find(|c| c.storage == Storage::Memory) {
-            return c.id;
-        }
-        let id = ContainerId(self.next_container);
-        self.next_container += 1;
-        self.containers.push(Container {
-            id,
-            name: PRIVATE_NAME.into(),
-            storage: Storage::Memory,
-        });
-        id
-    }
-
-    /// A new private Space in the ephemeral container and the Main window showing it, focused.
+    /// A new private Space in the in-memory container private windows share (the one there
+    /// is, else a new one) and the Main window showing it, focused.
     fn add_private_window(&mut self) -> (SpaceId, WindowId) {
-        let container = self.private_container();
+        let shared = self.containers.iter().find(|c| c.storage == Storage::Memory);
+        let container = match shared {
+            Some(c) => c.id,
+            None => {
+                let id = ContainerId(self.next_container);
+                self.next_container += 1;
+                self.containers.push(Container {
+                    id,
+                    name: PRIVATE_NAME.into(),
+                    storage: Storage::Memory,
+                });
+                id
+            }
+        };
         let tint = {
             let [r, g, b] = PRIVATE_TINT;
             Rgb(r, g, b)
@@ -712,7 +697,9 @@ impl Model {
             return Err(format!("private space {:?} shown by no window", s.id));
         }
         // the in-memory container lives exactly as long as the private windows
-        if self.containers.iter().any(|c| c.storage == Storage::Memory) != self.has_private() {
+        if self.containers.iter().any(|c| c.storage == Storage::Memory)
+            != self.spaces.iter().any(|s| s.kind == SpaceKind::Private)
+        {
             return Err("ephemeral container without private windows, or the reverse".into());
         }
         let mut seen: Vec<TabId> = vec![];

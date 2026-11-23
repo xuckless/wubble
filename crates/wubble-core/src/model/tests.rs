@@ -3785,7 +3785,8 @@ fn the_ephemeral_container_lives_with_the_private_windows() {
         storage: Storage::Memory,
     };
     assert!(fx.contains(&gone), "{fx:?}");
-    assert!(!m.has_private() && !m.containers.iter().any(|c| c.storage == Storage::Memory));
+    assert!(!m.spaces.iter().any(|s| s.kind == SpaceKind::Private));
+    assert!(!m.containers.iter().any(|c| c.storage == Storage::Memory));
     let mut bad = m.clone();
     bad.containers.push(crate::space::Container {
         id: ContainerId(99),
@@ -3868,7 +3869,7 @@ fn a_new_window_from_a_private_window_is_a_normal_one() {
     let (m, fx) = run(m, Command::NewPrivateWindow { url: None });
     let w2 = opened(&fx);
     assert!(m.side_of_window(w2) == Side::Private && fx.contains(&Effect::ShowCommandBar));
-    assert_eq!(m.private_spaces().len(), 2);
+    assert_eq!(m.spaces.iter().filter(|s| s.kind == SpaceKind::Private).count(), 2);
     assert_eq!(m.containers.iter().filter(|c| c.storage == Storage::Memory).count(), 1);
 }
 

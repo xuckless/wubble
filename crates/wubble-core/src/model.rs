@@ -1222,7 +1222,13 @@ impl Model {
             m = apply(m, Command::DeleteSpace(space)).0;
             m = apply(m, Command::DeleteContainer(container)).0;
         }
-        for space in m.private_spaces() {
+        let private: Vec<SpaceId> = m
+            .spaces
+            .iter()
+            .filter(|s| s.kind == SpaceKind::Private)
+            .map(|s| s.id)
+            .collect();
+        for space in private {
             let Some(window) = m.space_window(space) else {
                 continue;
             };
