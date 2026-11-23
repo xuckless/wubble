@@ -3972,9 +3972,11 @@ impl Host {
 
 /// Where the window and its monitor are on the desktop. The monitor is the window's, else the
 /// primary or the first listed (Wayland names the window's only once its surface has entered an
-/// output); the window's position is unknown on Wayland (`outer_position` is unsupported), where
-/// the page sees it at the monitor's origin, as in Chrome. winit has no work area, so none is
-/// reported.
+/// output); the window's position is unknown on Wayland (`inner_position` is unsupported), where
+/// the page sees it at the monitor's origin, as in Chrome. The window's place is its content's
+/// (`inner_position`), which the views' offsets are measured from: with a native frame (X11) the
+/// outer corner would put every view a title bar too high. So `window.screenX/Y` is the content's
+/// corner, and winit has no work area, so none is reported.
 fn desktop_of(window: &slint::winit_030::winit::window::Window) -> Option<Desktop> {
     let monitor = window
         .current_monitor()
@@ -3984,7 +3986,7 @@ fn desktop_of(window: &slint::winit_030::winit::window::Window) -> Option<Deskto
     Some(Desktop {
         monitor_origin: (at.x, at.y),
         monitor_size: wubble_gfx::FrameSize::new(size.width, size.height),
-        window_origin: window.outer_position().ok().map(|p| (p.x, p.y)),
+        window_origin: window.inner_position().ok().map(|p| (p.x, p.y)),
     })
 }
 
