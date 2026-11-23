@@ -408,6 +408,7 @@ impl Host {
             let open = |kind| self.ui.phase(w, Layer::new(kind, None)) == Some(Phase::Open);
             window.set_downloads_open(open(Kind::Downloads));
             window.set_spaces_open(open(Kind::Spaces));
+            window.set_extensions_open(open(Kind::Extensions));
             // the drags', the swipe's and the autoscroll's surfaces: the kit shows each while open
             window.set_swipe_on(open(Kind::Swipe));
             window.set_drag_ghost_on(open(Kind::TabGhost));

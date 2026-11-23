@@ -610,7 +610,6 @@ impl Host {
         });
         window.set_settings_extensions_restart(restart);
         let list_open = self.ext_ui.panel == Panel::List && self.panel_here();
-        window.set_extensions_open(list_open);
         if list_open {
             let actions = self.extension_actions();
             crate::bind::sync(window.get_extension_actions(), actions, |m| {

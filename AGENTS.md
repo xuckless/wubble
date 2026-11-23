@@ -75,6 +75,7 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 3. **Effects at the edge.** Transitions return effects as values; only `wubble-engine` and `wubble-gfx` execute them. `wubble-core` stays pure and unit-tested.
 4. **One owner per state.** Each piece of state lives in one place; everything else derives from it.
 5. **No duplicated code.** Reuse or extend before writing new. Per-platform code implements one shared trait. Two copies of a constant, token or table are duplication.
+6. **Surfaces are store rows.** Every shell surface is a row in `wubble_core::overlay::ROWS`; its visibility is decided by the store, never by Slint alone (no `has-hover` feeding `shown`, no shell `Timer`, no Slint-written `*-open`); `tests/surface_lock.rs` holds the count down.
 
 ## Working rules
 
