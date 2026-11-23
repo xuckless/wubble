@@ -21,6 +21,8 @@ export component PipControls inherits Rectangle {
     callback begin-move();
     // The pointer came over the window (true) or left it.
     callback hovered(bool);
+    // Drawn, shown or leaving (the strip stays in the tree, clear, for a screen reader).
+    out property <bool> mounted: strip.shown || strip.progress > 0;
 
     area := MoveArea {
         changed has-hover => {

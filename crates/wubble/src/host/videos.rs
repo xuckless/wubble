@@ -1284,11 +1284,17 @@ impl Host {
         }
     }
 
+    /// The tab whose card this window shows: a Main window's visible tab playing in
+    /// picture-in-picture.
+    pub(super) fn pip_card(&self) -> Option<TabId> {
+        self.model.pip_tab().filter(|&t| {
+            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
+        })
+    }
+
     /// The Main window's card for its tab in picture-in-picture, and the Pip window's controls.
     pub(super) fn render_pip(&mut self, window: &AppWindow) {
-        let card = self.model.pip_tab().filter(|&t| {
-            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
-        });
+        let card = self.pip_card();
         window.set_pip_card(card.is_some());
         let title = card
             .and_then(|t| self.model.tabs.get(&t))

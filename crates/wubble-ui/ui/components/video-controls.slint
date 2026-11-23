@@ -51,6 +51,10 @@ export component VideoControls inherits Rectangle {
     pure function at(p: Point, w: length, h: length) -> bool {
         root.pointer-x >= p.x && root.pointer-x < p.x + w && root.pointer-y >= p.y && root.pointer-y < p.y + h
     }
+    // Drawn, shown or leaving: the strip, the tab, the speed menu (AppWindow's `mounted`).
+    out property <bool> strip-mounted: dock.visible;
+    out property <bool> tab-mounted: tab.visible;
+    out property <bool> speeds-mounted: speeds.mounted;
     // the strip's controls are built while it shows, and kept while it leaves
     property <bool> built: root.video.open || dock.progress > 0;
     changed any-hover => {

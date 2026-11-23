@@ -382,6 +382,41 @@ export struct FindView {
 }
 
 // The page's popup widget (`<select>` list, date picker, autofill) in window coordinates.
+// What of each surface the kit still draws (open, or leaving: its exit not yet over), as
+// AppWindow's `mounted` reports it (the kit components' own `mounted` or `visible`): the host
+// reads it when it derives what covers a page (`wubble_core::overlay::Stack::leaving`), so the
+// end of an exit is the kit's to tell, timed by nobody else. Only the surfaces whose exit the
+// host cannot see otherwise: the menu's runs in the controls registry, the command bar's is the
+// driver's.
+export struct Mounted {
+    permission: bool,
+    find: bool,
+    dialog: bool,
+    bookmark-sheet: bool,
+    print-sheet: bool,
+    extension-sheet: bool,
+    agent-sheet: bool,
+    region: bool,
+    downloads: bool,
+    // the popover or the action popup that replaces its list
+    extensions: bool,
+    spaces: bool,
+    menu: bool,
+    error: bool,
+    toast: bool,
+    tooltip: bool,
+    preview: bool,
+    glance: bool,
+    autofill-menu: bool,
+    autofill-prompt: bool,
+    video-strip: bool,
+    video-tab: bool,
+    video-speeds: bool,
+    pip-strip: bool,
+    reader: bool,
+    boost: bool,
+}
+
 export struct PopupView {
     shown: bool,
     // Where the layer is drawn: window coordinates, kept inside the window.

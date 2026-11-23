@@ -461,6 +461,17 @@ impl Stack {
     pub fn is_open(&self, kind: Kind) -> bool {
         self.layers.iter().any(|l| l.kind == kind)
     }
+
+    /// This stack with what the kit still draws (`drawn`: open, or its exit not yet over): a
+    /// drawn surface with no visible layer of its kind open is leaving.
+    pub fn with_drawn(mut self, drawn: &[Layer]) -> Stack {
+        for d in drawn {
+            if !self.layers.iter().any(|l| l.kind == d.kind && self.visible(l)) {
+                self.leaving.push(*d);
+            }
+        }
+        self
+    }
 }
 
 /// What a page's pane is covered by that its owner, not the stack, knows.
@@ -1133,6 +1144,24 @@ mod tests {
         assert_eq!(next.leaving, fading.leaving);
         let (_, fx) = transition(fading, Event::Escape);
         assert!(fx.is_empty());
+    }
+
+    /// What the kit still draws is leaving unless a visible layer of its kind is open.
+    #[test]
+    fn what_is_drawn_and_not_open_is_leaving() {
+        let with = |open: &[Layer], drawn: &[Layer]| stack(open).with_drawn(drawn).leaving;
+        // open and drawn: not leaving
+        assert!(with(&[on(Find, A)], &[on(Find, A)]).is_empty());
+        // closed, still drawn: leaving
+        assert_eq!(with(&[], &[on(Find, A), win(Menu)]), [on(Find, A), win(Menu)]);
+        // open on a hidden tab, drawn over the visible one as its bar fades: leaving
+        assert_eq!(with(&[on(Find, B)], &[on(Find, A)]), [on(Find, A)]);
+        // a pane's surface open on another pane counts as open: it is drawn there
+        let strip = Layer::new(VideoStrip, Some(B));
+        assert!(with(&[strip], &[Layer::new(VideoStrip, Some(A))]).is_empty());
+        // nothing drawn, nothing leaving; the open layers stay as they are
+        assert!(with(&[on(Find, A)], &[]).is_empty());
+        assert_eq!(stack(&[on(Find, A)]).with_drawn(&[win(Menu)]).layers, [on(Find, A)]);
     }
 
     /// Each row sits at its kind's index (`Kind::row` reads it so); `Specimen` is the last kind,
