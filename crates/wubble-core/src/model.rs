@@ -1242,6 +1242,29 @@ impl Model {
             }
             m = apply(m, Command::CloseWindow(window)).0;
         }
+        // whatever of the private side is left without its window goes too (fails closed)
+        let left: Vec<TabId> = m
+            .tabs
+            .values()
+            .filter(|t| m.side_of_container(t.container) == Side::Private)
+            .map(|t| t.id)
+            .collect();
+        let dead: Vec<WindowId> = m
+            .windows
+            .iter()
+            .filter(|w| match w.shown {
+                Shown::Space(s) => m.side_of_space(s) == Side::Private,
+                Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t) => left.contains(&t),
+            })
+            .map(|w| w.id)
+            .collect();
+        m.windows.retain(|w| !dead.contains(&w.id));
+        for &t in &left {
+            m.detach(t);
+        }
+        m.forget(&left);
+        m.spaces.retain(|s| s.kind != SpaceKind::Private);
+        m.containers.retain(|c| c.storage == Storage::Disk);
         m
     }
 

@@ -4187,8 +4187,14 @@ fn a_private_window_is_no_part_of_a_session() {
     let (m, _, ps) = private_window(m, "https://p.test/");
     let p0 = m.order(ps)[0];
     let (alone, _) = run(m.clone(), Command::CloseWindow(WindowId(0)));
+    let mut windowless = m.clone();
+    windowless.windows.retain(|w| w.space() != Some(ps));
     // (row, the live model)
-    for (row, live) in [("focused", m.clone()), ("the only Main window", alone)] {
+    for (row, live) in [
+        ("focused", m.clone()),
+        ("the only Main window", alone),
+        ("a private Space without its window", windowless),
+    ] {
         let saved = live.for_session(&[]);
         saved.check().unwrap_or_else(|e| panic!("{row}: {e}"));
         assert!(saved.space_idx(ps).is_none(), "{row}");
