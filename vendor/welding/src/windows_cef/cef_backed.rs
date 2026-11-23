@@ -48,11 +48,14 @@ cef::wrap_render_handler! {
                 info.depth = 24;
                 info.depth_per_component = 8;
                 // wubble change (58): the window's monitor, so `screen.*` is
-                // Chrome's; Blink also places popups against it.
+                // Chrome's. The available area is the window: Blink fits a
+                // `<select>`'s list into it (flipping or shrinking it), which
+                // the host can only show inside the window.
                 if let Some((x, y, w, h)) = metrics.screen_rect_dip() {
-                    let rect = cef::Rect { x, y, width: w, height: h };
-                    info.rect = rect.clone();
-                    info.available_rect = rect;
+                    info.rect = cef::Rect { x, y, width: w, height: h };
+                }
+                if let Some((x, y, w, h)) = metrics.root_rect_dip() {
+                    info.available_rect = cef::Rect { x, y, width: w, height: h };
                 }
                 return 1;
             }
