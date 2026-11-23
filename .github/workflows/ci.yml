@@ -28,17 +28,13 @@ jobs:
     # A cold build compiles CEF's wrapper and Slint; a hung step must not hold
     # a runner for the 6 hour default.
     timeout-minutes: 60
-    # Windows is built on CI only and may trail the other platforms: its
-    # failures do not fail the run until it has had a first green run (see
-    # the "Windows CI" item in TODO.md). Drop this line then.
-    continue-on-error: ${{ matrix.experimental }}
+    # Windows is parked (its code is kept, not built): TODO.md "Windows (parked)".
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux, os: ubuntu-latest, experimental: false }
-          - { name: macOS, os: macos-latest, experimental: false }
-          - { name: Windows, os: windows-latest, experimental: true }
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
     defaults:
       run:
         shell: bash
@@ -83,10 +79,6 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
 
-      - name: Install Ninja (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ninja -y --no-progress
-
       # Restore and save are split so the download is stored even when a later
       # step fails (actions/cache alone saves only on success).
       - name: Restore prebuilt CEF
@@ -113,15 +105,11 @@ jobs:
       - name: Put CEF on the loader path
         if: runner.os != 'macOS'
         run: |
-          lib=$(find "$CEF_PATH" \( -name libcef.so -o -name libcef.dll \) -print -quit)
+          lib=$(find "$CEF_PATH" -name libcef.so -print -quit)
           if [ -z "$lib" ]; then echo "no libcef under $CEF_PATH"; exit 1; fi
           dir=$(dirname "$lib")
           echo "CEF at $dir"
-          if [ "$RUNNER_OS" = Windows ]; then
-            cygpath -w "$dir" >> "$GITHUB_PATH"
-          else
-            echo "LD_LIBRARY_PATH=$dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          fi
+          echo "LD_LIBRARY_PATH=$dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       # Headless GPU tests skip themselves when the runner has no adapter. No
       # step here opens a window or measures speed: smoke modes are run by hand.
