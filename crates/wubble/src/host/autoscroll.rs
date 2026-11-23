@@ -72,7 +72,7 @@ impl Host {
         // Ended by a press: CEF asks for the page's cursor again only on the
         // next move, so show the default one until then.
         if next == Autoscroll::Off && input == Input::Pressed {
-            window.set_web_cursor(wubble_engine::nav::Cursor::Default as i32);
+            self.set_page_cursor(window, wubble_engine::nav::Cursor::Default);
             for tab in self.shown_tabs() {
                 if let Some(view) = self.tab_view(tab) {
                     view.reset_cursor();

@@ -321,7 +321,7 @@ impl Host {
             E::Leave { tab } => page(self, tab, DragPhase::Leave, DragOps::NONE),
             E::Drop { tab } => page(self, tab, DragPhase::Drop, DragOps::NONE),
             E::End(op) => {
-                window.set_web_cursor(Cursor::Default as i32);
+                self.set_page_cursor(&window, Cursor::Default);
                 window.set_spaces_drop_line(-1);
                 if let Some(source) = source {
                     let p = self.drag_point_in(&window, source);
@@ -330,7 +330,7 @@ impl Host {
                     }
                 }
             }
-            E::Feedback(op) => window.set_web_cursor(cursor(op) as i32),
+            E::Feedback(op) => self.set_page_cursor(&window, cursor(op)),
             E::Mark(target) => self.drop_mark(&window, target),
             E::OpenTab { text, index } => self.drop_open_tab(&text, index),
             E::FillBar(text) => self.drop_fill_bar(text),

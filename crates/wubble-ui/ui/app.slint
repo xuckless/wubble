@@ -906,10 +906,10 @@ export component AppWindow inherits Window {
         // The edge resizes: n, e, s, w, ne, nw, se, sw.
         MouseCursor.n-resize, MouseCursor.e-resize, MouseCursor.s-resize, MouseCursor.w-resize,
         MouseCursor.ne-resize, MouseCursor.nw-resize, MouseCursor.se-resize, MouseCursor.sw-resize,
-        // What Slint has no cursor for (the host sets the window's own, host/cursor.rs; these
-        // are the nearest shapes): context menu, cell, vertical text, zoom in, zoom out, image.
-        MouseCursor.default, MouseCursor.crosshair, MouseCursor.text,
-        MouseCursor.default, MouseCursor.default, MouseCursor.default,
+        // What Slint has no cursor for: hidden, the host sets the window's own (host/cursor.rs).
+        // Context menu, cell, vertical text, zoom in, zoom out, and the page's image.
+        MouseCursor.none, MouseCursor.none, MouseCursor.none,
+        MouseCursor.none, MouseCursor.none, MouseCursor.none,
     ];
 
     // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first

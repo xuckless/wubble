@@ -65,8 +65,8 @@ pub enum Cursor {
     ResizeNw,
     ResizeSe,
     ResizeSw,
-    /// What it has no cursor for: the host sets the window's own (`host/cursor.rs`).
-    /// The shell shows the nearest shape where that is not in force.
+    /// What Slint has no cursor for: the shell hides it and the host sets the window's own
+    /// (`wubble/src/host/cursor.rs`).
     ContextMenu,
     Cell,
     VerticalText,

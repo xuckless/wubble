@@ -21,6 +21,7 @@ mod ax;
 mod boost;
 mod builtins;
 mod busy;
+mod cursor;
 mod data;
 mod devtools;
 mod downloads;
@@ -1206,7 +1207,7 @@ impl Host {
         self.w.frames.retain(|tab, _| kept.contains(tab));
         window::free_slots(&mut self.w.slots, &kept);
         if self.w.frames.len() != before {
-            window.set_web_cursor(Cursor::Default as i32);
+            self.set_page_cursor(&window, Cursor::Default);
             for tab in self.shown_tabs() {
                 if let Some(view) = self.tab_view(tab) {
                     view.reset_cursor();
@@ -1678,20 +1679,12 @@ impl Host {
                 if !self.shown_tabs().contains(&tab) {
                     return;
                 }
-                window.set_web_cursor(cursor as i32);
+                self.set_page_cursor(window, cursor);
                 self.autoscroll_input(window, wubble_core::autoscroll::Input::Cursor(cursor.pan()));
-                // Slint applies a TouchArea's cursor only while it handles a
-                // mouse event (i-slint-core 1.19 `window.rs`, after
-                // `process_mouse_input`), and CEF reports the shape after
-                // the move that caused it. Replay the pointer where it is,
-                // once the host is free again, so the shape shows without
-                // waiting for the mouse to move.
-                if let Some(position) = self.input.pointer {
-                    let _ = self.w.window.upgrade_in_event_loop(move |window| {
-                        window
-                            .window()
-                            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position })
-                    });
+            }
+            WebEvent::CursorImage(image) => {
+                if self.shown_tabs().contains(&tab) {
+                    self.set_cursor_image(image);
                 }
             }
             WebEvent::UrlChanged(url) => {
@@ -3741,6 +3734,7 @@ impl Host {
         if self.drag_pointer(point, false) {
             return;
         }
+        self.pointer_over_page(true);
         if let (Some(window), Some(tab)) = (self.w.window.upgrade(), crate::shell::tab_id(pane)) {
             self.autoscroll_pointer(&window, tab, point);
         }
@@ -3776,6 +3770,7 @@ impl Host {
     }
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {
+        self.pointer_over_page(false);
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
