@@ -210,7 +210,7 @@ enum SmokeArg {
 /// `--page-layer`: one of `page_layer::MODES`.
 fn parse_page_layer(value: &str) -> Result<PageLayerMode, String> {
     page_layer::mode(value).ok_or_else(|| {
-        let names: Vec<&str> = page_layer::MODES.iter().map(|&(n, _)| n).collect();
+        let names: Vec<&str> = page_layer::MODES.iter().map(|r| r.name).collect();
         format!("one of {}", names.join(", "))
     })
 }
