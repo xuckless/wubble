@@ -1383,6 +1383,19 @@ impl Host {
             .find_map(|(&tab, &id)| (id == view).then_some(tab))
     }
 
+    /// Runs the pump's timer request.
+    pub(super) fn arm_pump(&mut self, timer: Option<PumpTimer>) {
+        match timer {
+            Some(PumpTimer::Start(delay)) => {
+                self.timer.start(slint::TimerMode::SingleShot, delay, || {
+                    deliver(Wake::TimerFired)
+                });
+            }
+            Some(PumpTimer::Cancel) => self.timer.stop(),
+            None => {}
+        }
+    }
+
     pub fn pump(&mut self, wake: Wake) {
         let outcome = match wake {
             Wake::Schedule(delay_ms) => self.engine.schedule_pump(delay_ms),
@@ -1393,17 +1406,16 @@ impl Host {
             worked,
             events,
         } = outcome;
-        match timer {
-            Some(PumpTimer::Start(delay)) => {
-                self.timer.start(slint::TimerMode::SingleShot, delay, || {
-                    deliver(Wake::TimerFired)
-                });
-            }
-            Some(PumpTimer::Cancel) => self.timer.stop(),
-            None => {}
-        }
+        self.arm_pump(timer);
         if !worked {
             return;
+        }
+        // An agent's page no window shows paints at `pacing::UNSHOWN_FRAME_RATE`, and no pane
+        // takes its frames to say so: the pump keeps that rate's pace while one lives.
+        if !self.unshown_painting().is_empty() {
+            let period = Duration::from_secs_f64(1.0 / f64::from(pacing::UNSHOWN_FRAME_RATE));
+            let timer = self.engine.page_painted(period).timer;
+            self.arm_pump(timer);
         }
         measure::count(measure::Count::PumpWorked);
         for (view, event) in events {

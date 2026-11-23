@@ -763,7 +763,8 @@ impl Host {
             measure::count(measure::Count::CefFrame);
             self.pace(PaceEvent::FrameArrived);
             if let Some(refresh) = self.refresh() {
-                self.engine.page_painted(refresh);
+                let timer = self.engine.page_painted(refresh).timer;
+                self.arm_pump(timer);
             }
             let size = frame.size();
             // A frame painted for this layout shows its layout's part (CEF can paint a pixel

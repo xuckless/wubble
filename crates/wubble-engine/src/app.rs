@@ -988,10 +988,9 @@ impl Engine {
 
     /// The host took a page frame; `refresh` is the display's refresh period. While pages
     /// paint the pump waits at most one refresh between runs (`wubble_core::pump::Tempo`), from
-    /// the next timer it arms.
-    pub fn page_painted(&mut self, refresh: Duration) {
-        // A state change only: `Painted` has no effects to run.
-        self.pump = pump::transition(self.pump, PumpEvent::Painted(refresh)).0;
+    /// the next timer it arms; a quiet pump's armed timer is armed again (the outcome's).
+    pub fn page_painted(&mut self, refresh: Duration) -> PumpOutcome {
+        self.pump(PumpEvent::Painted(refresh))
     }
 
     /// Runs CEF's pending work now, for callers without an event loop
