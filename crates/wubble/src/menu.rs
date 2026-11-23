@@ -39,7 +39,6 @@ pub mod cef_id {
     pub const CUT: i32 = 112;
     pub const COPY: i32 = 113;
     pub const PASTE: i32 = 114;
-    pub const PASTE_MATCH_STYLE: i32 = 115;
     pub const DELETE: i32 = 116;
     pub const SELECT_ALL: i32 = 117;
     /// The first spelling suggestion; CEF numbers up to five from here.
@@ -92,6 +91,9 @@ pub enum Command {
     },
     /// Put the image at the URL on the clipboard (`View::download_image`).
     CopyImage(String),
+    /// Paste the clipboard's text in the frame CEF named (empty: none named); not a CEF
+    /// command, so the host can paste it where it carries the pages' clipboard.
+    PastePlain(String),
     /// Put the tab beside the focused page (split view).
     SplitWith(TabId),
     /// Take the tab out of its split.
@@ -444,7 +446,7 @@ const ROWS: &[Row] = &[
         "Paste as Plain Text",
         |c| c.editable(),
         |c| c.edit(F::CAN_PASTE),
-        |_| { Command::Engine(cef_id::PASTE_MATCH_STYLE) }
+        |c| { Command::PastePlain(c.menu.frame.clone()) }
     ),
     row!(
         6,
@@ -1696,6 +1698,7 @@ mod tests {
             let m = ContextMenu {
                 editable: true,
                 edit: EditFlags(bits),
+                frame: "f1".into(),
                 ..page()
             };
             let e = entries(&m, NavFlags::default());
@@ -1717,7 +1720,7 @@ mod tests {
             );
             let plain = e.iter().find(|e| e.label == "Paste as Plain Text").unwrap();
             assert_eq!(plain.enabled, bits & EditFlags::CAN_PASTE != 0);
-            assert_eq!(plain.command, Command::Engine(cef_id::PASTE_MATCH_STYLE));
+            assert_eq!(plain.command, Command::PastePlain("f1".into()));
             for (label, flag) in all {
                 let entry = e.iter().find(|e| e.label == label).unwrap();
                 assert_eq!(entry.enabled, bits & flag != 0, "{label} with {bits:#b}");

@@ -19,7 +19,7 @@ use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
-use wubble_engine::page::{ClipboardRequest, PageEvent, PasteFrom, Rect, RequestId};
+use wubble_engine::page::{ClipboardRequest, EditCommand, PageEvent, PasteFrom, Rect, RequestId};
 use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
@@ -463,6 +463,7 @@ impl Host {
                         view.download_image(&url);
                     }
                 }
+                MenuEffect::Run(MenuCommand::PastePlain(frame)) => self.paste_plain(tab, &frame),
                 MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
@@ -982,6 +983,26 @@ impl Host {
                 .clipboard
                 .load_rich(window.window(), reader)
                 .unwrap_or_default(),
+        }
+    }
+
+    /// The menu's Paste as Plain Text in `frame`. Where the host carries the pages' clipboard it
+    /// pastes the clipboard's text itself (`clipboard.js` cannot tell Chromium's plain paste from
+    /// its paste); elsewhere Chromium's own does it.
+    fn paste_plain(&mut self, tab: TabId, frame: &str) {
+        let ours = crate::clipboard::bridged() && !frame.is_empty();
+        let payload = self
+            .w
+            .window
+            .upgrade()
+            .filter(|_| ours)
+            .map(|window| self.clipboard_payload(&window, Buffer::Clipboard, Reader::Text));
+        let Some(view) = self.tab_view(tab) else {
+            return;
+        };
+        match payload {
+            Some(payload) => view.answer_clipboard(frame, &payload, None),
+            None => view.edit(EditCommand::PasteMatchStyle),
         }
     }
 }
