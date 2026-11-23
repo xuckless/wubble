@@ -22,8 +22,13 @@ pub enum Kind {
     Text,
 }
 
+/// PNG's type: the picture a page's copy may carry, what a paste takes first.
+pub const PNG: &str = "image/png";
+/// A list of URIs: files, or links.
+pub const URI_LIST_TYPE: &str = "text/uri-list";
+
 /// The MIME types each kind is offered as, in preference order.
-const URI_LIST: &[&str] = &["text/uri-list"];
+const URI_LIST: &[&str] = &[URI_LIST_TYPE];
 const HTML: &[&str] = &["text/html"];
 pub(crate) const TEXT: &[&str] = &[
     "text/plain;charset=utf-8",
@@ -157,7 +162,7 @@ pub struct Outgoing {
 /// first, as Firefox offers it, for file managers and the desktop. No `_NETSCAPE_URL`: that is
 /// X11's (Chromium offers it only there).
 pub fn offers(out: &Outgoing) -> Vec<(&'static str, Part)> {
-    let uris = out.uris.then_some(("text/uri-list", Part::UriList));
+    let uris = out.uris.then_some((URI_LIST_TYPE, Part::UriList));
     let moz = out.link.then_some(("text/x-moz-url", Part::MozUrl));
     let picture = out.picture.map(|mime| (mime, Part::Picture));
     let html = out.html.then_some(("text/html", Part::Html));
@@ -175,7 +180,7 @@ pub fn offers(out: &Outgoing) -> Vec<(&'static str, Part)> {
 
 /// Picture types: MIME type, file extension, other extensions it goes by.
 const PICTURES: &[(&str, &str, &[&str])] = &[
-    ("image/png", "png", &[]),
+    (PNG, "png", &[]),
     ("image/jpeg", "jpg", &["jpeg", "jpe", "jfif"]),
     ("image/gif", "gif", &[]),
     ("image/webp", "webp", &[]),
@@ -192,7 +197,7 @@ const PICTURES: &[(&str, &str, &[&str])] = &[
 pub fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
     let at = |offset: usize, magic: &[u8]| bytes.get(offset..offset + magic.len()) == Some(magic);
     Some(if at(0, b"\x89PNG\r\n\x1a\n") {
-        "image/png"
+        PNG
     } else if at(0, &[0xff, 0xd8, 0xff]) {
         "image/jpeg"
     } else if at(0, b"GIF87a") || at(0, b"GIF89a") {
@@ -409,7 +414,7 @@ pub mod pasteboard {
     /// The UTI of a picture type.
     pub fn image_uti(mime: &str) -> Option<&'static str> {
         const UTIS: &[(&str, &str)] = &[
-            ("image/png", "public.png"),
+            (super::PNG, "public.png"),
             ("image/jpeg", "public.jpeg"),
             ("image/gif", "com.compuserve.gif"),
             ("image/webp", "org.webmproject.webp"),

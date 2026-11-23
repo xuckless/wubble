@@ -11,17 +11,21 @@
 // `kind\ntext`:
 //   copy     a trusted copy or cut (the selection's text and HTML, or what the
 //            page's `copy` listener set: text, HTML, other types as Chromium's
-//            custom data), `navigator.clipboard.writeText` or `write` (text,
-//            HTML, PNG, `web ` formats): the page JSON below
+//            custom data): the page JSON below
+//   write    `navigator.clipboard.writeText` or `write` (text, HTML, PNG, `web `
+//            formats) passed Chromium's check: the page JSON (the host drops
+//            its HTML)
 //   image    a copy in an image document: the picture's URL (Chromium copies
 //            the picture there)
-//   primary  the selection changed: the primary selection's text
+//   primary  the selection changed: the primary selection's text (never a
+//            password field's; at most `PRIMARY_CAP`)
 //   paste    Chromium's trusted paste was cancelled: answer with the clipboard
 //            ("primary" after a middle click in a field, "plain" after
 //            Ctrl+Shift+V, Paste as Plain Text)
 //   read     `navigator.clipboard.readText` passed its permission check: the id
 //   items    `navigator.clipboard.read` passed its permission check: the id
-// From the browser, `read id or ""\njson`: the read's answer, or a paste,
+// From the browser, `read id or ""\njson`: the read's answer (`null`: refused,
+// the read's promise rejects), or a paste,
 // pasted as Chromium pastes (a `paste` event carrying it, then, unless the page
 // cancels that, one undoable edit: the HTML, else the picture, into rich text;
 // the text into a field).
@@ -30,7 +34,12 @@
 // [{name, type, data}], custom: [[type, value]], web: [[type, data]]}`, bytes
 // as base64.
 //
-// Isolation: closure capture, as autofill.js; trusted events only.
+// Isolation: closure capture, as autofill.js; trusted events only. The page
+// shares this world's built-ins, so every one used after the page's scripts
+// ran is captured here: no `.then` or `await` on a promise (both look up the
+// page's `Promise.prototype.then`), no global `String`, `Map`, `Promise` or
+// `Array` method. The host serves only the focused frame of the page the user
+// is in (`wubble_core::clipboard::admit`) whatever happens here.
 (function (send, register) {
   'use strict';
   const apply = Reflect.apply;
@@ -45,14 +54,28 @@
   const encoder = new TextEncoder();
   const blobText = Blob.prototype.text;
   const blobBuffer = Blob.prototype.arrayBuffer;
+  const Str = String;
+  const P = Promise;
+  const then = Promise.prototype.then;
+  const all = Promise.all;
+  const resolved = Promise.resolve;
+  const arrayFrom = Array.from;
+  const mapGet = Map.prototype.get;
+  const mapSet = Map.prototype.set;
+  const mapDelete = Map.prototype.delete;
+  const DomException = DOMException;
+  // `promise.then(ok, failed)` without the page's `then`.
+  const after = (promise, ok, failed) => apply(then, promise, [ok, failed]);
+  // The longest primary selection the host takes (`wubble_core::clipboard::PRIMARY_CAP`).
+  const PRIMARY_CAP = 1 << 20;
   // The longest message the browser takes (welding's `MAX_FRAME_MESSAGE_BYTES`, which drops a
   // longer one), less room for the channel's and kind's names.
   const MESSAGE_CAP = (16 << 20) - 64;
   const own = new WeakSet();
   const reads = new Map();
   let nextRead = 1;
-  const post = (kind, text) => send(kind + '\n' + String(text));
-  const toBase64 = (blob) => apply(blobBuffer, blob, []).then((buffer) => {
+  const post = (kind, text) => send(kind + '\n' + Str(text));
+  const toBase64 = (blob) => after(apply(blobBuffer, blob, []), (buffer) => {
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -68,22 +91,25 @@
   };
   // A copy as the page JSON. What would take the message past the cap is left out, the
   // largest kinds first and the text last.
-  const postCopy = (payload) => {
+  const postCopy = (kind, payload) => {
     for (const part of ['files', 'web', 'custom', 'html', 'text']) {
       const json = stringify(payload);
-      if (apply(encode, encoder, [json]).length <= MESSAGE_CAP) return post('copy', json);
+      if (apply(encode, encoder, [json]).length <= MESSAGE_CAP) return post(kind, json);
       delete payload[part];
     }
   };
   const field = (a) => a && (a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement);
+  // The selected text; none in a password field, as Chromium neither copies one nor puts it
+  // on the primary selection.
   const selected = () => {
     const a = document.activeElement;
     if (field(a)) {
+      if (a.type === 'password') return '';
       try {
-        if (typeof a.selectionStart === 'number') return a.value.slice(a.selectionStart, a.selectionEnd);
+        if (typeof a.selectionStart === 'number') return apply(slice, a.value, [a.selectionStart, a.selectionEnd]);
       } catch (e) {}
     }
-    return String(getSelection());
+    return Str(getSelection());
   };
   // The selection's markup (a field's has none). Blink also inlines the computed style and
   // wraps the enclosing elements; this is the selected nodes alone.
@@ -103,7 +129,7 @@
   // `setData`'s type as Blink keeps it (`NormalizeType`).
   const ALIASES = { __proto__: null, text: 'text/plain', url: 'text/uri-list' };
   const normalized = (format) => {
-    const type = String(format).trim().toLowerCase();
+    const type = Str(format).trim().toLowerCase();
     if (apply(startsWith, type, ['text/plain;'])) return 'text/plain';
     return ALIASES[type] || type;
   };
@@ -124,7 +150,7 @@
         const setData = data.setData;
         const clearData = data.clearData;
         data.setData = function (format, value) {
-          set.set(normalized(format), String(value));
+          set.set(normalized(format), Str(value));
           return apply(setData, this, [format, value]);
         };
         data.clearData = function (format) {
@@ -138,11 +164,11 @@
       const image = imageDocument();
       setTimeout(() => {
         if (e.defaultPrevented) {
-          if (set.size) postCopy(fromSetData(set));
+          if (set.size) postCopy('copy', fromSetData(set));
         } else if (image) {
           post('image', image);
         } else if (text || html) {
-          postCopy(html ? { text, html } : { text });
+          postCopy('copy', html ? { text, html } : { text });
         }
       });
     }, true);
@@ -175,7 +201,7 @@
     clearTimeout(primaryTimer);
     primaryTimer = setTimeout(() => {
       const text = selected();
-      if (text) post('primary', text);
+      if (text && text.length <= PRIMARY_CAP) post('primary', text);
     }, 60);
   }, true);
   // Pasted markup without active content: no scripts, frames, plugins, styles or SVG
@@ -236,24 +262,28 @@
   // How a `write`'s types go into the page JSON; `web ` formats by their prefix.
   const WRITES = {
     __proto__: null,
-    'text/plain': (payload, blob) => apply(blobText, blob, []).then((t) => { payload.text = t; }),
-    'text/html': (payload, blob) => apply(blobText, blob, []).then((t) => { payload.html = t; }),
-    'image/png': (payload, blob) => toBase64(blob).then((data) => {
+    'text/plain': (payload, blob) => after(apply(blobText, blob, []), (t) => { payload.text = t; }),
+    'text/html': (payload, blob) => after(apply(blobText, blob, []), (t) => { payload.html = t; }),
+    'image/png': (payload, blob) => after(toBase64(blob), (data) => {
       payload.files = [{ name: 'image.png', type: 'image/png', data }];
     }),
   };
-  const writeWeb = (payload, blob, type) => toBase64(blob).then((data) => {
-    payload.web.push([apply(slice, type, [4]), data]);
+  const writeWeb = (payload, blob, type) => after(toBase64(blob), (data) => {
+    payload.web[payload.web.length] = [apply(slice, type, [4]), data];
   });
   // A `write`'s first item (Chromium writes one) as the page JSON.
+  // `getType` is the page's: `ClipboardItem` is installed after this script, and what a page
+  // hands its own write is its to choose anyway.
   const fromItems = (items) => {
     const item = items && items[0];
-    if (!item) return Promise.resolve();
+    if (!item) return apply(resolved, P, [undefined]);
     const payload = { web: [] };
-    return Promise.all(Array.from(item.types || [], (type) => {
+    const types = apply(arrayFrom, null, [item.types || [], (type) => {
+      type = Str(type);
       const take = WRITES[type] || (apply(startsWith, type, ['web ']) ? writeWeb : null);
-      return take && item.getType(type).then((blob) => take(payload, blob, type));
-    })).then(() => payload);
+      return take && after(apply(resolved, P, [item.getType(type)]), (blob) => take(payload, blob, type));
+    }]);
+    return after(apply(all, P, [types]), () => payload);
   };
   // What a read answers, as `ClipboardItem`s: the text, HTML, the picture if it is a PNG, and
   // the `web ` formats. `ClipboardItem` is put on `window` after this script ran, as
@@ -269,40 +299,49 @@
     }
     return Object.keys(parts).length ? [new window.ClipboardItem(parts)] : [];
   };
-  // Asks the browser for the clipboard; the promise has its answer.
-  const ask = (kind) => new Promise((resolve) => {
+  // Asks the browser for the clipboard: `answered` gets the payload, `refused` an error.
+  const ask = (kind, answered, refused) => {
     const id = nextRead++;
-    reads.set(id, resolve);
+    apply(mapSet, reads, [id, [answered, refused]]);
     post(kind, id);
-  });
+  };
   // Chromium checks a write first (a focused, secure document, the frame allowed
   // `clipboard-write`, a user activation) and resolves it only when it may: then it goes
   // through the window too. A read likewise, after its `clipboard-read` check.
   if (proto && proto.writeText) {
     const writeText = proto.writeText;
     proto.writeText = function (text) {
-      return apply(writeText, this, [text]).then((v) => { postCopy({ text: String(text) }); return v; });
+      const checked = apply(writeText, this, [text]);
+      const copied = { text: Str(text) };
+      return new P((resolve, reject) => after(checked, (v) => {
+        postCopy('write', copied);
+        resolve(v);
+      }, reject));
     };
   }
   if (proto && proto.write) {
     const write = proto.write;
     proto.write = function (items) {
-      return apply(write, this, [items]).then((v) => fromItems(items).then(
-        (payload) => { if (payload) postCopy(payload); return v; },
-        () => v));
+      const checked = apply(write, this, [items]);
+      return new P((resolve, reject) => after(checked, (v) => after(fromItems(items),
+        (payload) => { if (payload) postCopy('write', payload); resolve(v); },
+        () => resolve(v)), reject));
     };
   }
   if (proto && proto.readText) {
     const readText = proto.readText;
     proto.readText = function () {
-      return apply(readText, this, []).then(() => ask('read'))
-        .then((payload) => (typeof payload.text === 'string' ? payload.text : ''));
+      const checked = apply(readText, this, []);
+      return new P((resolve, reject) => after(checked, () => ask('read',
+        (payload) => resolve(typeof payload.text === 'string' ? payload.text : ''), reject), reject));
     };
   }
   if (proto && proto.read) {
     const read = proto.read;
     proto.read = function (...args) {
-      return apply(read, this, args).then(() => ask('items')).then(clipboardItems);
+      const checked = apply(read, this, args);
+      return new P((resolve, reject) => after(checked, () => ask('items',
+        (payload) => resolve(clipboardItems(payload)), reject), reject));
     };
   }
   register((message) => {
@@ -315,13 +354,14 @@
     } catch (e) {
       return;
     }
-    if (!payload || typeof payload !== 'object') return;
     if (id) {
-      const resolve = reads.get(Number(id));
-      reads.delete(Number(id));
-      if (resolve) resolve(payload);
+      const waiting = apply(mapGet, reads, [Number(id)]);
+      apply(mapDelete, reads, [Number(id)]);
+      if (!waiting) return;
+      if (payload && typeof payload === 'object') waiting[0](payload);
+      else waiting[1](new DomException('Read permission denied.', 'NotAllowedError'));
       return;
     }
-    paste(payload);
+    if (payload && typeof payload === 'object') paste(payload);
   });
 })

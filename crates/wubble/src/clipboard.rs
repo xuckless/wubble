@@ -34,7 +34,8 @@ pub fn bridge_needed(wayland_display: Option<&std::ffi::OsStr>) -> bool {
 }
 
 /// Whether this run's pages' clipboard goes through the host ([`bridge_needed`] for its
-/// session).
+/// session): what the engine is started with, before any window. The host's own choices
+/// follow the window ([`Bridge::carries_pages`]).
 pub fn bridged() -> bool {
     bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref())
 }
@@ -50,23 +51,36 @@ pub trait Bridge {
     /// nothing to paste until the selection changes.
     fn open(&mut self, window: &slint::Window);
 
-    /// Puts `text` on `buffer`; false when this window has no host clipboard, and the
-    /// caller copies through Slint instead.
+    /// Puts `text` on `buffer`; false when this window has no host clipboard or it was not set,
+    /// and the caller copies through Slint instead.
     fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool;
 
     /// The text on `buffer`, if any.
     fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String>;
 
+    /// Whether the host carries the pages' clipboard in `window` (its Wayland connection).
+    fn carries_pages(&mut self, _window: &slint::Window) -> bool {
+        false
+    }
+
     /// Puts a page's copy on the clipboard under every type it has; false where the host does
-    /// not carry the pages' clipboard (Chromium's own does), and the caller copies its text.
+    /// not carry the pages' clipboard (Chromium's own does) or it was not set, and the caller
+    /// copies its text.
     fn store_rich(&mut self, _window: &slint::Window, _payload: Payload) -> bool {
         false
     }
 
-    /// What `reader` takes from the clipboard; `None` where the host does not carry the pages'
-    /// clipboard, or it holds nothing `reader` takes.
-    fn load_rich(&mut self, _window: &slint::Window, _reader: Reader) -> Option<Payload> {
-        None
+    /// Reads what `reader` takes from `buffer` and hands it to `done` (on another thread, `None`
+    /// when it holds nothing `reader` takes), without waiting; false where the host does not
+    /// carry the pages' clipboard, and `done` is dropped uncalled.
+    fn load_then(
+        &mut self,
+        _window: &slint::Window,
+        _buffer: Buffer,
+        _reader: Reader,
+        _done: Box<dyn FnOnce(Option<Payload>) + Send>,
+    ) -> bool {
+        false
     }
 
     /// The platform's extras on the same connection (`crate::wl`), once open.
@@ -235,27 +249,34 @@ mod wayland {
         }
 
         fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
-            let Some(worker) = self.get(window) else {
-                return false;
-            };
-            worker.store(buffer, text);
-            true
+            self.get(window).is_some_and(|w| w.store(buffer, text))
         }
 
         fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
             self.get(window)?.load(buffer)
         }
 
+        fn carries_pages(&mut self, window: &slint::Window) -> bool {
+            self.get(window).is_some()
+        }
+
         fn store_rich(&mut self, window: &slint::Window, payload: Payload) -> bool {
+            self.get(window)
+                .is_some_and(|w| w.store_payload(Buffer::Clipboard, payload))
+        }
+
+        fn load_then(
+            &mut self,
+            window: &slint::Window,
+            buffer: Buffer,
+            reader: Reader,
+            done: Box<dyn FnOnce(Option<Payload>) + Send>,
+        ) -> bool {
             let Some(worker) = self.get(window) else {
                 return false;
             };
-            worker.store_payload(Buffer::Clipboard, payload);
+            worker.load_then(buffer, reader, done);
             true
-        }
-
-        fn load_rich(&mut self, window: &slint::Window, reader: Reader) -> Option<Payload> {
-            self.get(window)?.load_payload(Buffer::Clipboard, reader)
         }
 
         fn extras(&self) -> Option<&dyn crate::wl::Aux> {

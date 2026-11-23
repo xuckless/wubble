@@ -49,7 +49,8 @@ fn push(events: &WebEventQueue, event: NavigationEvent) {
 }
 
 /// CEF hands strings back as `CefStringUserfree`, which is empty when unset.
-pub(crate) fn cef_string(s: cef::CefStringUserfree) -> String {
+/// wubble change (63): public, re-exported from `lib.rs`.
+pub fn cef_string(s: cef::CefStringUserfree) -> String {
     let raw: Option<&cef::sys::_cef_string_utf16_t> = (&s).into();
     raw.map(|r| cef::CefStringUtf16::from(*r).to_string())
         .unwrap_or_default()

@@ -98,6 +98,27 @@ const DROP_CAP: u64 = 8 << 20;
 
 /// How long a paste waits for the selection's owner to send it.
 const LOAD_WAIT: Duration = Duration::from_secs(2);
+/// How long a paste reads the offered types (all at once): what arrived by then is the paste,
+/// within [`LOAD_WAIT`].
+const READ_DEADLINE: Duration = Duration::from_millis(1500);
+
+/// What a finished read is given to: a waiting [`Worker::load_payload`] (its serial on the
+/// loads channel), or a callback.
+pub enum Answer {
+    Serial(u64),
+    Then(Box<dyn FnOnce(Option<Payload>) + Send>),
+}
+
+impl Answer {
+    fn give(self, loads: &mpsc::Sender<(u64, Option<Payload>)>, payload: Option<Payload>) {
+        match self {
+            Self::Serial(serial) => {
+                let _ = loads.send((serial, payload));
+            }
+            Self::Then(done) => done(payload),
+        }
+    }
+}
 
 /// `wl_keyboard.modifiers` masks of the keymap's real modifiers. The eight
 /// core modifiers have fixed indices in every xkb keymap (Shift 0, Lock 1,
@@ -120,10 +141,10 @@ enum Command {
         generation: u64,
         data: DragData,
     },
-    Store(Buffer, Payload),
-    /// Read what the reader takes of the selection; the answer goes to the loads channel with
-    /// this serial.
-    Load(Buffer, Reader, u64),
+    /// Set the selection; whether it was set goes back.
+    Store(Buffer, Payload, mpsc::Sender<bool>),
+    /// Read what the reader takes of the selection, for the answer.
+    Load(Buffer, Reader, Answer),
     Exit,
 }
 
@@ -168,8 +189,8 @@ impl Worker {
         })
     }
 
-    /// Puts `text` on `buffer`.
-    pub fn store(&self, buffer: Buffer, text: &str) {
+    /// Puts `text` on `buffer`; false when it was not set ([`Self::store_payload`]).
+    pub fn store(&self, buffer: Buffer, text: &str) -> bool {
         let text = Some(text.to_owned());
         self.store_payload(
             buffer,
@@ -177,12 +198,33 @@ impl Worker {
                 text,
                 ..Payload::default()
             },
-        );
+        )
     }
 
-    /// Puts `payload` on `buffer`, under every type it has (`wubble_core::clipboard::offers`).
-    pub fn store_payload(&self, buffer: Buffer, payload: Payload) {
-        let _ = self.tx.send(Command::Store(buffer, payload));
+    /// Puts `payload` on `buffer`, under every type it has (`wubble_core::clipboard::offers`);
+    /// false when it was not set (no surface of the process has the keyboard, the compositor
+    /// has no such selection, nothing to offer).
+    pub fn store_payload(&self, buffer: Buffer, payload: Payload) -> bool {
+        let (done, stored) = mpsc::channel();
+        self.tx.send(Command::Store(buffer, payload, done)).is_ok()
+            && stored.recv_timeout(LOAD_WAIT).unwrap_or(false)
+    }
+
+    /// Reads what `reader` takes from `buffer` and gives it to `done` on the reading thread,
+    /// without waiting: within [`READ_DEADLINE`], `None` when the selection has nothing for it.
+    pub fn load_then(
+        &self,
+        buffer: Buffer,
+        reader: Reader,
+        done: Box<dyn FnOnce(Option<Payload>) + Send>,
+    ) {
+        // A worker that has stopped answers nothing.
+        if let Err(mpsc::SendError(Command::Load(_, _, Answer::Then(done)))) = self
+            .tx
+            .send(Command::Load(buffer, reader, Answer::Then(done)))
+        {
+            done(None);
+        }
     }
 
     /// The text on `buffer`, waiting a little for its owner to send it.
@@ -195,7 +237,9 @@ impl Worker {
     pub fn load_payload(&self, buffer: Buffer, reader: Reader) -> Option<Payload> {
         let serial = self.load_serial.get() + 1;
         self.load_serial.set(serial);
-        self.tx.send(Command::Load(buffer, reader, serial)).ok()?;
+        self.tx
+            .send(Command::Load(buffer, reader, Answer::Serial(serial)))
+            .ok()?;
         loop {
             match self.loads.recv_timeout(LOAD_WAIT) {
                 Ok((s, payload)) if s == serial => return payload,
@@ -547,12 +591,10 @@ impl State {
                 data,
                 allowed,
             } => self.start_drag(window, data, allowed),
-            Command::Store(buffer, payload) => self.store(buffer, payload),
-            Command::Load(buffer, reader, serial) => {
-                if !self.load(buffer, reader, serial) {
-                    let _ = self.loads.send((serial, None));
-                }
+            Command::Store(buffer, payload, done) => {
+                let _ = done.send(self.store(buffer, payload));
             }
+            Command::Load(buffer, reader, answer) => self.load(buffer, reader, answer),
         }
     }
 
@@ -676,19 +718,20 @@ impl State {
         deliver(window, AuxEvent::DragEnded(op));
     }
 
-    fn store(&mut self, buffer: Buffer, payload: Payload) {
+    /// Sets the selection; false when it could not be.
+    fn store(&mut self, buffer: Buffer, payload: Payload) -> bool {
         if self.focus.is_none() {
-            return;
+            return false;
         }
         let offers: Selection = clipboard::offers(&payload).into();
         if offers.is_empty() {
-            return;
+            return false;
         }
         let mimes = offers.iter().map(|(mime, _)| mime.as_str());
         match buffer {
             Buffer::Clipboard => {
                 let (Some(manager), Some(device)) = (&self.manager, &self.device) else {
-                    return;
+                    return false;
                 };
                 self.clipboard = None;
                 let source = manager.create_copy_paste_source(&self.qh, mimes);
@@ -698,7 +741,7 @@ impl State {
             Buffer::Primary => {
                 let (Some(manager), Some(device)) = (&self.primary_manager, &self.primary_device)
                 else {
-                    return;
+                    return false;
                 };
                 self.primary = None;
                 let source = manager.create_selection_source(&self.qh, mimes);
@@ -706,11 +749,12 @@ impl State {
                 self.primary = Some((source, offers));
             }
         }
+        true
     }
 
     /// Starts reading what `reader` takes of `buffer` (the primary selection: its text, as on
-    /// Chrome); false when there is nothing to read.
-    fn load(&mut self, buffer: Buffer, reader: Reader, serial: u64) -> bool {
+    /// Chrome), for `answer`: at once with `None` when there is nothing to read.
+    fn load(&mut self, buffer: Buffer, reader: Reader, answer: Answer) {
         let pipes = match buffer {
             Buffer::Clipboard => self
                 .device
@@ -731,37 +775,25 @@ impl State {
         }
         .unwrap_or_default();
         if pipes.is_empty() {
-            return false;
+            return answer.give(&self.loads, None);
         }
-        let loads = self.loads.clone();
-        std::thread::Builder::new()
+        // Shared so that a thread that could not start still answers.
+        let answer = Arc::new(std::sync::Mutex::new(Some(answer)));
+        let (loads, theirs) = (self.loads.clone(), answer.clone());
+        let spawned = std::thread::Builder::new()
             .name("wubble-paste".into())
             .spawn(move || {
-                let parts = pipes
-                    .into_iter()
-                    .filter_map(|(kind, mime, file)| {
-                        let mut bytes = vec![];
-                        file.take(kind.cap()).read_to_end(&mut bytes).ok()?;
-                        Some((kind, mime, bytes))
-                    })
-                    .collect();
-                let (mut payload, paths) = clipboard::read(parts);
-                // A file manager's copy: the files' bytes, as Chromium hands a pasted file to
-                // the page (only a `paste` event's reader takes them).
-                for path in paths {
-                    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned())
-                    else {
-                        continue;
-                    };
-                    let fits = std::fs::metadata(&path)
-                        .is_ok_and(|m| m.is_file() && m.len() <= clipboard::FILES_CAP);
-                    if let Some(bytes) = fits.then(|| std::fs::read(&path).ok()).flatten() {
-                        clipboard::add_file(&mut payload, name, bytes);
-                    }
+                let payload = read_pipes(pipes);
+                if let Some(answer) = theirs.lock().ok().and_then(|mut a| a.take()) {
+                    answer.give(&loads, Some(payload));
                 }
-                let _ = loads.send((serial, Some(payload)));
-            })
-            .is_ok()
+            });
+        if let Err(e) = spawned {
+            eprintln!("wubble: paste: {e}");
+            if let Some(answer) = answer.lock().ok().and_then(|mut a| a.take()) {
+                answer.give(&self.loads, None);
+            }
+        }
     }
 
     /// Writes the stored selection's `mime` to a paste's pipe.
@@ -774,6 +806,58 @@ impl State {
             let _ = file.write_all(&bytes);
         });
     }
+}
+
+/// What the offered types' pipes hold, read all at once under one [`READ_DEADLINE`]: a slow
+/// source loses only its late types, in the plan's order (text first). A type past its cap is
+/// dropped whole, never cut. Then a file manager's copy: the files' bytes, as Chromium hands a
+/// pasted file to the page (only a `paste` event's reader takes them), within
+/// `clipboard::FILES_CAP` together; empty or special files (`/proc`'s, a FIFO) are skipped.
+fn read_pipes(pipes: Vec<(clipboard::Kind, String, std::fs::File)>) -> Payload {
+    let deadline = std::time::Instant::now() + READ_DEADLINE;
+    let (tx, rx) = mpsc::channel();
+    let mut arrived = vec![None; pipes.len()];
+    let mut reading = 0;
+    for (i, (kind, mime, file)) in pipes.into_iter().enumerate() {
+        let tx = tx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wubble-paste-type".into())
+            .spawn(move || {
+                let mut bytes = vec![];
+                let read = file.take(kind.cap() + 1).read_to_end(&mut bytes);
+                let whole = read.is_ok() && bytes.len() as u64 <= kind.cap();
+                let _ = tx.send((i, whole.then_some((kind, mime, bytes))));
+            });
+        reading += usize::from(spawned.is_ok());
+    }
+    for _ in 0..reading {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((i, part)) => arrived[i] = part,
+            Err(_) => break,
+        }
+    }
+    let (mut payload, paths) = clipboard::read(arrived.into_iter().flatten().collect());
+    let mut total = 0;
+    for path in paths {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() == 0 || total + meta.len() > clipboard::FILES_CAP {
+            continue;
+        }
+        let mut bytes = vec![];
+        let read =
+            std::fs::File::open(&path).and_then(|f| f.take(meta.len()).read_to_end(&mut bytes));
+        if read.is_ok() {
+            total += bytes.len() as u64;
+            clipboard::add_file(&mut payload, name, bytes);
+        }
+    }
+    payload
 }
 
 /// The read ends of the types `plan` names, as files, each with its entry; `receive` asks the

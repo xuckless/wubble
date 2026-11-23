@@ -11,8 +11,9 @@ use std::path::PathBuf;
 
 use wubble_core::action::Action;
 use wubble_core::busy::Reason;
-use wubble_core::clipboard::{Payload, Reader};
+use wubble_core::clipboard::{self, Ask, Asker, Payload, Reader};
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
+use wubble_core::dnd;
 use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
 use wubble_core::site::{Decision, Permission};
@@ -498,7 +499,7 @@ impl Host {
                         view.download_image(&url);
                     }
                 }
-                MenuEffect::Run(MenuCommand::PastePlain(frame)) => self.paste_plain(tab, &frame),
+                MenuEffect::Run(MenuCommand::PastePlain(frame)) => self.paste_plain(tab, frame),
                 MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
@@ -971,7 +972,8 @@ impl Host {
 
     /// A frame's clipboard request (wubble-helper `clipboard.js`): copies go to the system
     /// clipboard with every type they have, pastes and reads come from it with the types their
-    /// reader takes, or from the primary selection after a middle click.
+    /// reader takes, or from the primary selection after a middle click. Only the frame the
+    /// user is in is served (`clipboard::admit`); a refused read is answered with a refusal.
     fn clipboard_request(
         &mut self,
         window: &AppWindow,
@@ -979,8 +981,29 @@ impl Host {
         frame: String,
         request: ClipboardRequest,
     ) {
+        let ask = match &request {
+            ClipboardRequest::Copy(_) | ClipboardRequest::CopyImage(_) => Ask::Write,
+            ClipboardRequest::Primary(_) => Ask::Primary,
+            ClipboardRequest::Paste(_) | ClipboardRequest::Read(..) => Ask::Read,
+        };
+        let asker = Asker {
+            key_page: self.key_page() == Some(tab),
+            window_focused: self.input.window_focused && self.model.focused() == self.w.id,
+            frame_focused: self
+                .tab_view(tab)
+                .and_then(|v| v.focused_frame())
+                .is_some_and(|f| f == frame),
+            reading: self.clipboard_reads.contains(&tab),
+        };
+        if !clipboard::admit(ask, asker) {
+            if let (ClipboardRequest::Read(id, _), Some(view)) = (&request, self.tab_view(tab)) {
+                view.answer_clipboard(&frame, None, Some(*id));
+            }
+            return;
+        }
         let (buffer, reader, read) = match request {
             ClipboardRequest::Copy(payload) => {
+                let payload = page_copy(payload);
                 let text = payload.text.clone();
                 if !self.clipboard.store_rich(window.window(), payload)
                     && let Some(text) = text
@@ -1007,46 +1030,77 @@ impl Host {
             },
             ClipboardRequest::Read(id, reader) => (Buffer::Clipboard, reader, Some(id)),
         };
-        let payload = self.clipboard_payload(window, buffer, reader);
-        if let Some(view) = self.tab_view(tab) {
-            view.answer_clipboard(&frame, &payload, read);
-        }
+        self.clipboard_fetch(window, tab, frame, (buffer, reader), read);
     }
 
-    /// What `reader` takes from `buffer`: text through the text read every clipboard has, the
-    /// rest only where the host carries the pages' clipboard.
-    fn clipboard_payload(&mut self, window: &AppWindow, buffer: Buffer, reader: Reader) -> Payload {
-        match reader {
-            Reader::Text => Payload {
-                text: self.clipboard.load(window.window(), buffer),
-                ..Payload::default()
-            },
-            Reader::AsyncApi | Reader::Paste => self
-                .clipboard
-                .load_rich(window.window(), reader)
-                .unwrap_or_default(),
+    /// Reads what `reader` takes of `buffer` off the window's thread and answers `frame` of
+    /// `tab` with it (`read`: the read's id; none: a paste); one at a time per tab.
+    fn clipboard_fetch(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        frame: String,
+        (buffer, reader): (Buffer, Reader),
+        read: Option<u32>,
+    ) {
+        let id = self.w.id;
+        let answer = frame.clone();
+        let done = Box::new(move |payload: Option<Payload>| {
+            let _ = slint::invoke_from_event_loop(move || {
+                crate::with_host_in(id, |host| {
+                    host.clipboard_reads.remove(&tab);
+                    if let Some(view) = host.tab_view(tab) {
+                        view.answer_clipboard(&answer, Some(&payload.unwrap_or_default()), read);
+                    }
+                });
+            });
+        });
+        if self
+            .clipboard
+            .load_then(window.window(), buffer, reader, done)
+        {
+            self.clipboard_reads.insert(tab);
+        } else if let Some(view) = self.tab_view(tab) {
+            view.answer_clipboard(&frame, Some(&Payload::default()), read);
         }
     }
 
     /// The menu's Paste as Plain Text in `frame`. Where the host carries the pages' clipboard it
     /// pastes the clipboard's text itself (`clipboard.js` cannot tell Chromium's plain paste from
     /// its paste); elsewhere Chromium's own does it.
-    fn paste_plain(&mut self, tab: TabId, frame: &str) {
-        let ours = crate::clipboard::bridged() && !frame.is_empty();
-        let payload = self
-            .w
-            .window
-            .upgrade()
-            .filter(|_| ours)
-            .map(|window| self.clipboard_payload(&window, Buffer::Clipboard, Reader::Text));
-        let Some(view) = self.tab_view(tab) else {
-            return;
-        };
-        match payload {
-            Some(payload) => view.answer_clipboard(frame, &payload, None),
-            None => view.edit(EditCommand::PasteMatchStyle),
+    fn paste_plain(&mut self, tab: TabId, frame: String) {
+        let window = self.w.window.upgrade();
+        match window {
+            Some(window) if !frame.is_empty() && self.clipboard.carries_pages(window.window()) => {
+                self.clipboard_fetch(&window, tab, frame, (Buffer::Clipboard, Reader::Text), None)
+            }
+            _ => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.edit(EditCommand::PasteMatchStyle);
+                }
+            }
         }
     }
+}
+
+/// A page's copy as the host puts it on the clipboard: its pictures only as PNG, decoded and
+/// encoded again, so no page hands another app a malformed or other image file through it.
+fn page_copy(payload: Payload) -> Payload {
+    let files = payload
+        .files
+        .into_iter()
+        .filter(|f| f.mime.eq_ignore_ascii_case(dnd::PNG))
+        .filter_map(|f| {
+            let (width, height, rgba) = crate::shot_io::rgba(&f.bytes).ok()?;
+            let bytes = crate::shot_io::encode_png(width, height, &rgba).ok()?;
+            Some(clipboard::File {
+                mime: dnd::PNG.to_owned(),
+                bytes,
+                ..f
+            })
+        })
+        .collect();
+    Payload { files, ..payload }
 }
 
 /// Puts the IME candidate window next to the composition (CEF reports it

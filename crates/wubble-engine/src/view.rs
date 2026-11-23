@@ -1676,16 +1676,30 @@ impl View {
     }
 
     /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): what to paste, or a
-    /// read's result. Also a paste the host starts itself (no request: Paste as Plain Text).
+    /// read's result; `None` refuses the read (the page's promise rejects). Also a paste the
+    /// host starts itself (no request: Paste as Plain Text).
     pub fn answer_clipboard(
         &mut self,
         frame: &str,
-        payload: &wubble_core::clipboard::Payload,
+        payload: Option<&wubble_core::clipboard::Payload>,
         read: Option<u32>,
     ) {
         let id = read.map(|r| r.to_string()).unwrap_or_default();
-        let message = format!("{id}\n{}", payload.to_json());
-        self.send_frame_message(frame, FrameChannel::Clipboard, &message);
+        let json = payload.map_or_else(|| "null".to_owned(), |p| p.to_json());
+        self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{json}"));
+    }
+
+    /// The identifier of the page's focused frame (CEF's `GetFocusedFrame`), as frame messages
+    /// name their frame.
+    pub fn focused_frame(&mut self) -> Option<String> {
+        let mut id = None;
+        self.send(|host| {
+            id = host
+                .browser()
+                .and_then(|b| b.focused_frame())
+                .map(|f| welding::cef_string(f.identifier()));
+        });
+        id
     }
 
     // ── Editing, IME, drags, popup frames.
@@ -1987,8 +2001,16 @@ fn clipboard_request(body: &str) -> Option<ClipboardRequest> {
     let (kind, text) = body.split_once('\n')?;
     Some(match kind {
         "copy" => ClipboardRequest::Copy(Payload::from_json(text)?),
+        // `navigator.clipboard.write`'s markup is the page's own, never the user's selection:
+        // Chromium sanitises it, and the host has no sanitiser, so it is left out.
+        "write" => ClipboardRequest::Copy(Payload {
+            html: None,
+            ..Payload::from_json(text)?
+        }),
         "image" => ClipboardRequest::CopyImage(text.into()),
-        "primary" => ClipboardRequest::Primary(text.into()),
+        "primary" if text.len() <= wubble_core::clipboard::PRIMARY_CAP => {
+            ClipboardRequest::Primary(text.into())
+        }
         "paste" => ClipboardRequest::Paste(
             PASTES
                 .iter()
@@ -2771,6 +2793,13 @@ mod tests {
             ),
             ("clipboard\ncopy\na\nb", None),
             (
+                "clipboard\nwrite\n{\"text\":\"a\\nb\",\"html\":\"<b>x</b>\"}",
+                Some(ClipboardRequest::Copy(Payload {
+                    text: Some("a\nb".into()),
+                    ..Payload::default()
+                })),
+            ),
+            (
                 "clipboard\nimage\nhttps://a.test/c.png",
                 Some(ClipboardRequest::CopyImage("https://a.test/c.png".into())),
             ),
@@ -2799,6 +2828,13 @@ mod tests {
                 Some(ClipboardRequest::Read(5, Reader::AsyncApi)),
             ),
             ("clipboard\nread\nx", None),
+            (
+                &*format!(
+                    "clipboard\nprimary\n{}",
+                    "a".repeat(wubble_core::clipboard::PRIMARY_CAP + 1)
+                ),
+                None,
+            ),
             ("clipboard\nformat\nc:", None),
         ];
         for (text, want) in cases {

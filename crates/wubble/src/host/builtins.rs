@@ -744,7 +744,7 @@ impl Host {
                 return self.toast(window, COPY_IMAGE_FAILED);
             }
         };
-        if crate::clipboard::bridged() {
+        if self.clipboard.carries_pages(window.window()) {
             let html = wubble_core::clipboard::image_markup(url);
             let spawned = std::thread::Builder::new()
                 .name("wubble-copy-image".into())
@@ -759,7 +759,7 @@ impl Host {
                                 html: Some(html),
                                 files: vec![wubble_core::clipboard::File {
                                     name: "image.png".into(),
-                                    mime: "image/png".into(),
+                                    mime: wubble_core::dnd::PNG.into(),
                                     bytes,
                                 }],
                                 ..Default::default()

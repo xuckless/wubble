@@ -106,11 +106,53 @@ const READS: &[(Kind, &[Reader], &[&str])] = &[
     (
         Kind::Files,
         &[Reader::Paste],
-        &["text/uri-list", GNOME_FILES],
+        &[dnd::URI_LIST_TYPE, GNOME_FILES],
     ),
     (Kind::CustomData, &[Reader::Paste], &[CUSTOM_DATA]),
     (Kind::WebMap, &[Reader::AsyncApi], &[WEB_MAP]),
 ];
+
+/// The longest primary selection a page sets (`clipboard.js` caps it too); a longer one is
+/// dropped, as no one middle-click pastes a book.
+pub const PRIMARY_CAP: usize = 1 << 20;
+
+/// What a page asks of the host's clipboard, for [`admit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// Puts something on the clipboard: a copy or cut, `write`, `writeText`, an image
+    /// document's copy.
+    Write,
+    /// Sets the primary selection.
+    Primary,
+    /// Takes the clipboard: a paste, `readText`, `read`.
+    Read,
+}
+
+/// What the host knows of the frame that asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asker {
+    /// Its tab is the page the window's keys go to.
+    pub key_page: bool,
+    /// That window has the keyboard.
+    pub window_focused: bool,
+    /// It is CEF's focused frame of that page.
+    pub frame_focused: bool,
+    /// A read for its tab is still being answered.
+    pub reading: bool,
+}
+
+/// Whether the host does what a frame asks of the clipboard. Only the frame the user is in
+/// reaches it, as Chromium lets only a focused document use the clipboard: never a background
+/// tab, an unfocused window or another frame of the page (a cross-origin iframe), whatever the
+/// page's script did to the bridge. One read at a time per tab, so no page holds the window
+/// waiting on reads.
+pub fn admit(ask: Ask, asker: Asker) -> bool {
+    let present = asker.key_page && asker.window_focused && asker.frame_focused;
+    match ask {
+        Ask::Write | Ask::Primary => present,
+        Ask::Read => present && !asker.reading,
+    }
+}
 
 /// The types `reader` reads from a clipboard offering `mimes`, each with its kind, as offered.
 pub fn plan<S: AsRef<str>>(mimes: &[S], reader: Reader) -> Vec<(Kind, String)> {
@@ -360,6 +402,27 @@ impl Payload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_frame_the_user_is_in_reaches_the_clipboard() {
+        // Every fact: a write or the primary selection needs the three, a read also no read
+        // of its tab in flight.
+        for bits in 0u8..16 {
+            let asker = Asker {
+                key_page: bits & 8 != 0,
+                window_focused: bits & 4 != 0,
+                frame_focused: bits & 2 != 0,
+                reading: bits & 1 != 0,
+            };
+            for (ask, allowed) in [
+                (Ask::Write, bits >> 1 == 0b111),
+                (Ask::Primary, bits >> 1 == 0b111),
+                (Ask::Read, bits == 0b1110),
+            ] {
+                assert_eq!(admit(ask, asker), allowed, "{ask:?} {asker:?}");
+            }
+        }
+    }
 
     #[test]
     fn a_paste_reads_each_kind_once_from_its_best_type() {

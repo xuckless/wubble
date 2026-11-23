@@ -135,6 +135,9 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 // wubble change 40: whether a URL is Chromium's to load or another app's.
 #[cfg(feature = "cef-runtime")]
 pub use handlers::chromium_handles;
+// wubble change 63: CEF's returned strings as Rust's, for the host's own CEF calls.
+#[cfg(feature = "cef-runtime")]
+pub use handlers::cef_string;
 pub use auth::AuthId;
 pub use view::{Desktop, ScreenArea};
 pub use downloads::DownloadId;

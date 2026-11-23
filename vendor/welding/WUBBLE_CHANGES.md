@@ -597,6 +597,11 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     count. The renderer's `send` uses the same cap. Test: the byte budget in
     `frame_messages_keep_order_and_respect_the_caps`.
 
+63. **`cef_string` is public.** `handlers.rs`: `cef_string` (a
+    `CefStringUserfree` as a `String`) is `pub`, re-exported from `lib.rs`, for
+    wubble's own CEF calls (the focused frame's identifier, which the host
+    checks a page's clipboard request against).
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
