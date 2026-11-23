@@ -455,10 +455,11 @@ impl Host {
                     self.open_routed(url, Some(tab));
                 }
                 MenuEffect::Run(MenuCommand::OpenInNewWindow(url)) => {
-                    let before = self.model.visible_tab();
+                    let before: Vec<TabId> = self.model.tabs.keys().copied().collect();
                     self.open_routed(url, Some(tab));
-                    // A link another app takes opens no tab: only a new one is torn out.
-                    if let Some(new) = self.model.visible_tab().filter(|t| Some(*t) != before) {
+                    // Only a tab the link made is torn out: a link another app takes opens none,
+                    // and one routed to another Space shows that Space's tab if none was made.
+                    if let Some(new) = self.model.visible_tab().filter(|t| !before.contains(t)) {
                         self.dispatch(Command::MoveTabToWindow {
                             tab: new,
                             to: WindowTarget::New,
