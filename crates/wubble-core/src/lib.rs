@@ -43,6 +43,7 @@ pub mod neterror;
 pub mod omnibox;
 pub mod orb;
 pub mod overlay;
+pub mod page_layer;
 pub mod pagedrag;
 pub mod pages;
 pub mod pagetheme;
