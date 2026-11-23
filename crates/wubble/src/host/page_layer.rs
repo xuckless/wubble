@@ -1,5 +1,7 @@
-//! The page on its own OS layer (`wubble_core::page_layer`; stage 1, `--page-layer=fullscreen`:
-//! a page in fullscreen and the picture-in-picture window, macOS). Each pane's route has one
+//! The page on its own OS layer (`wubble_core::page_layer`, macOS; `--page-layer=fullscreen`: a
+//! page in fullscreen and the picture-in-picture window, over the shell; `--page-layer=window`:
+//! every pane, under the shell, which draws a hole where the pane's layer shows: its
+//! `SplitPane.hole`, from [`PageLayers::holed`]). Each pane's route has one
 //! owner, its window's [`PageLayers`]; its effects have one executor, [`Host::run_layer`], fed
 //! from the frame path: a frame taken (`present_panes`), each render before it draws
 //! (`panes_frame`: what is over the page now), the same render just before it is presented
@@ -13,12 +15,12 @@
 use std::collections::BTreeMap;
 
 use slint::ComponentHandle;
-use wubble_core::page_layer::{self, Effect, Event, Mode, Needs, Owners, Route};
+use wubble_core::page_layer::{self, Effect, Event, Mode, Needs, Order, Owners, Route};
 use wubble_core::stretch::after_frame;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_engine::view::Layout;
-use wubble_gfx::layer::PageLayer;
+use wubble_gfx::layer::{PageLayer, Unsupported};
 use wubble_gfx::{FrameSize, NativeFrame};
 use wubble_ui::AppWindow;
 
@@ -35,17 +37,29 @@ pub(crate) struct PageLayers {
     capable: Option<bool>,
     /// The panes with a layer, made at their first frame that could use one.
     panes: BTreeMap<TabId, LayerPane>,
+    /// Layers that went while the shell's last frame still has their pane's hole (a tab left, a
+    /// layer failed): still shown under the shell until the window's next present, which draws
+    /// no hole there, then hidden with it and dropped (`Host::presenting`).
+    retired: Vec<Box<dyn PageLayer>>,
 }
 
 impl PageLayers {
-    /// No pane of the window has a layer.
+    /// No pane of the window has a layer, and none is retired.
     pub(super) fn is_empty(&self) -> bool {
-        self.panes.is_empty()
+        self.panes.is_empty() && self.retired.is_empty()
     }
 
-    /// A layer of the window is visible: the shell presents with its transaction.
+    /// A layer of the window is visible (a retired one too): the shell presents with its
+    /// transaction.
     fn on_layer(&self) -> bool {
-        self.panes.values().any(|p| p.route.on_layer())
+        !self.retired.is_empty() || self.panes.values().any(|p| p.route.on_layer())
+    }
+
+    /// The shell draws `tab`'s pane as a hole (`Route::holed`): its layer under the shell shows
+    /// the page.
+    pub(super) fn holed(&self, tab: TabId) -> bool {
+        let mode = crate::page_layer();
+        self.panes.get(&tab).is_some_and(|p| p.route.holed(mode))
     }
 }
 
@@ -70,8 +84,10 @@ struct Arrival {
 
 impl Host {
     /// `tab`'s new frame through its route: the shell's presenter, or its layer. Whether the
-    /// shell drew it (the caller then renders the panes). A pane gets its layer at its first
-    /// frame as the window's whole content while the mode allows one.
+    /// shell's panes must be written again (the caller renders them): it was given the frame, or
+    /// a hole opened or closed. A pane gets its layer at its first frame where the mode lets
+    /// it use one (`page_layer::layer_unused`: the window's whole content in `fullscreen`, any
+    /// pane of its own in `window`).
     pub(super) fn route_frame(
         &mut self,
         window: &AppWindow,
@@ -80,13 +96,20 @@ impl Host {
         wanted: FrameSize,
         frame: NativeFrame,
     ) -> Result<bool, String> {
-        // with the mode off nothing here runs, and the map below stays empty
-        if crate::page_layer() != Mode::Off
+        let mode = crate::page_layer();
+        let (page_fullscreen, pip_window) = self.whole_window(tab);
+        // with the mode off nothing here runs, and the map below stays empty; a pane without a
+        // layer is asked only where it is
+        if mode != Mode::Off
             && self.w.layers.capable != Some(false)
             && !self.w.layers.panes.contains_key(&tab)
-            && matches!(self.whole_window(tab), (true, _) | (_, true))
+            && !page_layer::layer_unused(
+                Route::Unsupported,
+                Needs::from_place(page_fullscreen || pip_window, self.placed(window, tab)),
+                mode,
+            )
         {
-            match make_layer(window) {
+            match make_layer(window, mode.row().order == Order::Below) {
                 Ok(layer) => {
                     self.w.layers.capable = Some(true);
                     let pane = LayerPane {
@@ -121,7 +144,7 @@ impl Host {
     }
 
     /// The needs of every pane with a layer were derived again (`Event::Changed`), `pixels`:
-    /// with a pixel reader's. Whether the shell was given a frame.
+    /// with a pixel reader's. Whether the shell's panes must be written again.
     pub(super) fn layers_changed(&mut self, window: &AppWindow, pixels: bool) -> bool {
         let tabs: Vec<TabId> = self.w.layers.panes.keys().copied().collect();
         let mut drew = false;
@@ -131,10 +154,12 @@ impl Host {
                 Err(e) => eprintln!("wubble: page layer: {e}"),
             }
         }
-        // a page that left fullscreen keeps no layer (it is made again at the next one)
+        // a page where it may not use one keeps no layer (it is made again where it may)
+        let mode = crate::page_layer();
         self.layers_gone(window, |host, tab| {
             host.w.layers.panes.get(&tab).is_some_and(|p| {
-                page_layer::layer_unused(p.route, host.layer_needs(window, tab, None, false))
+                let needs = host.layer_needs(window, tab, None, false);
+                page_layer::layer_unused(p.route, needs, mode)
             })
         });
         drew
@@ -206,7 +231,8 @@ impl Host {
     }
 
     /// The renderer is about to present a frame of `window` (the vendored renderer's hook):
-    /// each of its panes with a layer hears what that render drew of it.
+    /// each of its panes with a layer hears what that render drew of it, and the layers retired
+    /// before it (it draws no hole of theirs) go with it.
     pub(crate) fn presenting(&mut self, window: &slint::Window) {
         let id =
             self.window_where(|w| std::ptr::eq(w.handle.window(), window) && !w.layers.is_empty());
@@ -230,6 +256,13 @@ impl Host {
                 }
             }
         }
+        let retired = std::mem::take(&mut self.w.layers.retired);
+        let on = self.w.layers.on_layer();
+        for mut layer in retired {
+            // in this present's transaction (the shell still presents with it), then dropped
+            layer.hide();
+            layer.present_in_transaction(on);
+        }
         self.enter(here);
     }
 
@@ -248,6 +281,12 @@ impl Host {
             matches!(self.w.screen, Screen::Page { tab: t, .. } if t == tab),
             self.w.kind == WindowKind::Pip,
         )
+    }
+
+    /// Whether `tab` is one of this window's panes, drawn as a `SplitPane` (`render_panes_with`):
+    /// not the peek's page, an extension's popup or a start page.
+    fn placed(&self, window: &AppWindow, tab: TabId) -> bool {
+        self.pane_rects(window).iter().any(|r| r.tab == tab) && !self.start_page(tab)
     }
 
     /// What keeps `tab`'s page on the shell's path now, read from each owner: the window's
@@ -270,6 +309,7 @@ impl Host {
         Needs::from_owners(&Owners {
             page_fullscreen,
             pip_window,
+            placed: self.placed(window, tab),
             coverage: self.page_covered(window, tab),
             view_live,
             pixels: pixels || crate::shot::pending() || self.checks.check_pixels,
@@ -277,8 +317,9 @@ impl Host {
     }
 
     /// The one executor: `event` for `tab`'s pane through `page_layer::transition` with the
-    /// needs as they hold now, each effect carried out in order; a failure goes back to the
-    /// table once (it always ends on the shell's path). Whether the shell was given a frame.
+    /// needs as they hold now in the mode, each effect carried out in order; a failure goes back
+    /// to the table once (it always ends on the shell's path). Whether the shell's panes must be
+    /// written again: it was given a frame, or the pane's hole opened or closed.
     fn run_layer(
         &mut self,
         window: &AppWindow,
@@ -291,16 +332,19 @@ impl Host {
         // hook returns: the shell stops presenting with the transaction at the next run that is
         // not one (the next render's start, before it acquires its drawable)
         let presenting = matches!(event, Event::Presenting { .. });
+        // a render begins (`panes_frame`): a layer under the shell follows its pane into it
+        let changed = matches!(event, Event::Changed);
+        let mode = crate::page_layer();
         let mut drew = false;
         // the first failure, returned once every effect ran (a `Hide` after it must still run)
         let mut error = None;
         let mut next = Some(event);
         while let Some(event) = next.take() {
-            let Some(route) = self.w.layers.panes.get(&tab).map(|p| p.route) else {
+            let Some(before) = self.w.layers.panes.get(&tab).map(|p| p.route) else {
                 break;
             };
             let needs = self.layer_needs(window, tab, arrival.as_ref(), pixels);
-            let (route, effects) = page_layer::transition(route, needs, event);
+            let (route, effects) = page_layer::transition(before, needs.hold(mode), event);
             if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
                 pane.route = route;
             }
@@ -318,35 +362,10 @@ impl Host {
                             continue;
                         };
                         let size = a.frame.size();
-                        let clip = frame_clip(size, &a.layout);
-                        let (_, height) = content_size(window);
-                        let (cx, cy) = (window.get_content_x(), window.get_content_y());
-                        let rect = self.pane_rects(window).into_iter().find(|r| r.tab == tab);
-                        let scale = f64::from(window.window().scale_factor());
-                        let radius = f64::from(pane_radius(window));
+                        self.place_layer(window, tab, size, &a.layout);
                         let Some(pane) = self.w.layers.panes.get_mut(&tab) else {
                             continue;
                         };
-                        if let Some(r) = rect {
-                            let (root_h, flipped) = pane.layer.root();
-                            let pane_rect = page_layer::Rect {
-                                x: f64::from(cx) + r.x,
-                                y: f64::from(cy),
-                                w: r.width,
-                                h: height,
-                            };
-                            let buffer = (size.width, size.height);
-                            let shown = (clip.width, clip.height);
-                            let p =
-                                page_layer::place(pane_rect, root_h, flipped, scale, buffer, shown);
-                            let (f, c) = (p.frame, p.contents);
-                            pane.layer.place(
-                                [f.x, f.y, f.w, f.h],
-                                [c.x, c.y, c.w, c.h],
-                                p.scale,
-                                radius,
-                            );
-                        }
                         match pane.layer.show(&a.frame) {
                             // the stretch follows a frame on the layer as it does the shell's
                             // (a refused one reaches the shell, which advances it then)
@@ -365,7 +384,15 @@ impl Host {
                     }
                     Effect::Hide => {
                         if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
-                            pane.layer.hide();
+                            if before.holed(mode) {
+                                // the shell's last frame still has the hole over it: it stays
+                                // under the shell until the next present (`retired`)
+                                let none: Box<dyn PageLayer> = Box::new(Unsupported);
+                                let layer = std::mem::replace(&mut pane.layer, none);
+                                self.w.layers.retired.push(layer);
+                            } else {
+                                pane.layer.hide();
+                            }
                             pane.latest = None;
                         }
                     }
@@ -416,6 +443,8 @@ impl Host {
                     }
                 }
             }
+            // the hole opened or closed: the shell's panes say so
+            drew |= before.holed(mode) != route.holed(mode);
             if failed && route != Route::Unsupported {
                 next = Some(Event::Failed);
             }
@@ -426,13 +455,55 @@ impl Host {
                 pane.layer.present_in_transaction(on);
             }
         }
+        // the pane may have moved without a frame (no resize holds it): its layer follows, in
+        // the transaction of the render that draws the hole there
+        let latest = self
+            .w
+            .layers
+            .panes
+            .get(&tab)
+            .and_then(|p| p.latest.as_ref())
+            .map(|f| f.size());
+        if let Some(size) = latest.filter(|_| changed && self.w.layers.holed(tab)) {
+            let layout = self.pane_layout(window, tab);
+            self.place_layer(window, tab, size, &layout);
+        }
         error.map_or(Ok(drew), Err)
+    }
+
+    /// `tab`'s layer where its pane is (the rect its `SplitPane` is drawn at: the content's
+    /// origin plus the pane's x, the content's top and height), showing the part of a frame of
+    /// `size` that a pane laid out as `layout` shows, with the pane's corners (`pane_radius`: the
+    /// generated `Radius.md` the kit's `SplitView` draws with; none in page fullscreen). Nothing
+    /// for a tab without a pane.
+    fn place_layer(&mut self, window: &AppWindow, tab: TabId, size: FrameSize, layout: &Layout) {
+        let clip = frame_clip(size, layout);
+        let (_, height) = content_size(window);
+        let (cx, cy) = (window.get_content_x(), window.get_content_y());
+        let rect = self.pane_rects(window).into_iter().find(|r| r.tab == tab);
+        let scale = f64::from(window.window().scale_factor());
+        let radius = f64::from(pane_radius(window));
+        let (Some(r), Some(pane)) = (rect, self.w.layers.panes.get_mut(&tab)) else {
+            return;
+        };
+        let (root_h, flipped) = pane.layer.root();
+        let pane_rect = page_layer::Rect {
+            x: f64::from(cx) + r.x,
+            y: f64::from(cy),
+            w: r.width,
+            h: height,
+        };
+        let buffer = (size.width, size.height);
+        let shown = (clip.width, clip.height);
+        let p = page_layer::place(pane_rect, root_h, flipped, scale, buffer, shown);
+        let (f, c) = (p.frame, p.contents);
+        pane.layer.place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius);
     }
 }
 
-/// A layer over the shell's in `window`'s view.
+/// A layer over the shell's in `window`'s view, or under it (`below`).
 #[cfg(target_os = "macos")]
-fn make_layer(window: &AppWindow) -> Result<Box<dyn PageLayer>, String> {
+fn make_layer(window: &AppWindow, below: bool) -> Result<Box<dyn PageLayer>, String> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use slint::winit_030::WinitWindowAccessor;
     let view = window
@@ -444,14 +515,16 @@ fn make_layer(window: &AppWindow) -> Result<Box<dyn PageLayer>, String> {
         .flatten()
         .ok_or("the window has no AppKit view")?;
     // SAFETY: winit's NSView for this window, alive while the window is; the window's host
-    // drops its layers before the window goes (`Host::close_window`).
-    let layer = unsafe { wubble_gfx::layer::CaLayer::new(view) }.map_err(|e| e.to_string())?;
+    // drops its panes' layers before the window goes (`Host::close_window`); a retired one may
+    // outlive the view, and touches only the layers it retains, never the view.
+    let layer =
+        unsafe { wubble_gfx::layer::CaLayer::new(view, below) }.map_err(|e| e.to_string())?;
     Ok(Box::new(layer))
 }
 
 /// No page layer here: the shell draws every frame.
 #[cfg(not(target_os = "macos"))]
-fn make_layer(_window: &AppWindow) -> Result<Box<dyn PageLayer>, String> {
+fn make_layer(_window: &AppWindow, _below: bool) -> Result<Box<dyn PageLayer>, String> {
     Err("no page layer on this platform".into())
 }
 

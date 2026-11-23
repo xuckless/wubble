@@ -124,6 +124,7 @@ fn same_pane(a: &SplitPane, b: &SplitPane) -> bool {
         && a.status_shown == b.status_shown
         && a.status_host == b.status_host
         && a.status_rest == b.status_rest
+        && a.hole == b.hole
         && wubble_ui::same_image(&a.frame, &b.frame)
         && wubble_ui::same_image(&a.edge, &b.edge)
         && wubble_ui::same_image(&a.prev, &b.prev)
@@ -580,6 +581,15 @@ impl Host {
         });
     }
 
+    /// Whether `tab` shows the start page: no frame and no pane fill, the scene's living layer
+    /// shows there (no `SplitPane`).
+    pub(super) fn start_page(&self, tab: TabId) -> bool {
+        self.model.tabs.get(&tab).is_some_and(|t| {
+            wubble_core::pages::InternalPage::from_url(&t.url)
+                == Some(wubble_core::pages::InternalPage::Start)
+        })
+    }
+
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
     /// seam's grab mid-drag, survives).
     pub(super) fn render_panes(&mut self, window: &AppWindow) {
@@ -594,16 +604,9 @@ impl Host {
         let focused = self.shown();
         let fill = rects.len() == 1;
         let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
-        // a start page has no frame and no pane fill: the scene's living layer shows there
-        let start = |t| {
-            self.model.tabs.get(&t).is_some_and(|t| {
-                wubble_core::pages::InternalPage::from_url(&t.url)
-                    == Some(wubble_core::pages::InternalPage::Start)
-            })
-        };
         let panes: Vec<SplitPane> = rects
             .iter()
-            .filter(|r| !start(r.tab))
+            .filter(|r| !self.start_page(r.tab))
             .map(|r| {
                 let frame = self.w.frames.get(&r.tab);
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
@@ -639,13 +642,14 @@ impl Host {
                     status_shown,
                     status_host: status_host.into(),
                     status_rest: status_rest.into(),
+                    hole: self.w.layers.holed(r.tab),
                 }
             })
             .collect();
         // a bubble of a pane that left cannot report its fade: its layer goes with the pane
         let live: Vec<TabId> = rects
             .iter()
-            .filter(|r| !start(r.tab))
+            .filter(|r| !self.start_page(r.tab))
             .map(|r| r.tab)
             .collect();
         self.panes_gone(window, &live);
