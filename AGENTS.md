@@ -105,6 +105,8 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - [docs/research/agent-widgets.md](docs/research/agent-widgets.md): Ultra Reactivate's thinking orb (ported) and bot mascots (researched): drawing, cost, roads, where they go.
 - [docs/research/extensions.md](docs/research/extensions.md): extensions on CEF 156 windowless: what works unpatched (loading, service workers, content scripts), the patches P1 to P4.
 - [docs/research/tts.md](docs/research/tts.md): tiny-voca as an on-device voice for a Read aloud feature (shelved; not a screen reader).
+- [docs/research/surface-store.md](docs/research/surface-store.md): one store for every shell surface (an extension of `wubble_core::overlay`): the inventory, the rows, the migration in steps.
+- [docs/research/page-layer.md](docs/research/page-layer.md): the page on its own OS layer (a `CALayer` on an IOSurface, a Wayland subsurface): facts, state, stages.
 
 ## Batches
 
