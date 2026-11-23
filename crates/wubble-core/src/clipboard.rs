@@ -132,7 +132,13 @@ pub fn plan<S: AsRef<str>>(mimes: &[S], reader: Reader) -> Vec<(Kind, String)> {
     let web = mimes
         .iter()
         .map(|m| m.as_ref())
-        .filter(|m| reader == Reader::AsyncApi && m.starts_with(WEB_FORMAT))
+        .filter(|m| {
+            // A format's index, not the map, which shares the prefix.
+            reader == Reader::AsyncApi
+                && m.strip_prefix(WEB_FORMAT)
+                    .and_then(|i| i.strip_suffix('"'))
+                    .is_some_and(|i| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit()))
+        })
         .filter(|_| offered(WEB_MAP).is_some())
         .take(WEB_MAX)
         .map(|m| (Kind::Web, m));
