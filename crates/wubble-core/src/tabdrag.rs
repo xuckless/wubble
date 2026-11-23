@@ -188,6 +188,8 @@ pub enum Input {
     },
     /// Esc, or the platform took the pointer away.
     Cancel,
+    /// The tab closed (or its window did): a drag of it ends as a cancel; any other tab's goes on.
+    Gone(TabId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +339,11 @@ pub fn transition(d: Drag, input: Input) -> (Drag, Vec<Effect>) {
                 .collect(),
         ),
         (Drag::Pressed { .. }, Input::Release { .. } | Input::Cancel) => (Drag::Idle, vec![]),
+        (Drag::Pressed { tab, .. } | Drag::Dragging { tab, .. }, Input::Gone(gone))
+            if tab == gone =>
+        {
+            transition(d, Input::Cancel)
+        }
         (d, _) => (d, vec![]),
     }
 }
@@ -604,6 +611,46 @@ mod tests {
         );
         assert_eq!(transition(d, Input::Cancel), (Drag::Idle, vec![]));
         assert_eq!(transition(Drag::Idle, Input::Cancel), (Drag::Idle, vec![]));
+    }
+
+    /// The tab closing ends a drag of it as a cancel (and takes the popup it opened down); another
+    /// tab's closing is nothing.
+    #[test]
+    fn a_tab_gone_ends_its_drag() {
+        let pressed = Drag::Pressed {
+            tab: T,
+            at: at(0.0, 10.0),
+        };
+        let other = TabId(8);
+        let table = [
+            ("pressed", pressed, T, Drag::Idle, vec![]),
+            ("pressed, other tab", pressed, other, pressed, vec![]),
+            (
+                "dragging",
+                dragging(DropTarget::Outside),
+                T,
+                Drag::Idle,
+                vec![Effect::CancelRows],
+            ),
+            (
+                "dragging, other tab",
+                dragging(DropTarget::Outside),
+                other,
+                dragging(DropTarget::Outside),
+                vec![],
+            ),
+            (
+                "popup open",
+                opened(),
+                T,
+                Drag::Idle,
+                vec![Effect::CancelRows, Effect::CloseSpaces],
+            ),
+            ("idle", Drag::Idle, T, Drag::Idle, vec![]),
+        ];
+        for (name, from, gone, next, fx) in table {
+            assert_eq!(transition(from, Input::Gone(gone)), (next, fx), "{name}");
+        }
     }
 
     #[test]

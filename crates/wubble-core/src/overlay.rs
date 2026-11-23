@@ -282,6 +282,13 @@ pub struct Row {
     /// One in the window: opening it closes its kind's other one, on this window's tab or a
     /// hidden one (another window's stays).
     pub one_per_window: bool,
+    /// Opening it closes these surfaces when they are open. A [`Pointer::Grab`] row opens only
+    /// when every other open grab is among them: one owner holds the pointer, and a held
+    /// button is never stolen by a key.
+    pub ends: &'static [Kind],
+    /// Its window losing the keys (focus gone, a drag's window closed) closes it, its owner
+    /// answering as cancelled ([`Action::Lost`]).
+    pub on_lost: bool,
 }
 
 /// How long a plain toast stays (wubble-only: no design counterpart).
@@ -331,6 +338,8 @@ const HOLDS: &[Group] = &[Group::Holds];
 /// What a modal sheet holds off: the find bar and an agent's sheet wait for either.
 const MODALS: &[Group] = &[Group::Modal, Group::Holds];
 const POPOVERS: &[Group] = &[Group::Exclusive];
+/// What a drag's start ends: a region pick and an autoscroll.
+const DRAGS_END: &[Kind] = &[Kind::Region, Kind::Autoscroll];
 
 /// A popover or menu the user opened: one at a time, a press outside closes it.
 const DISMISSED: Row = Row {
@@ -352,6 +361,8 @@ const DISMISSED: Row = Row {
     refused_under: HOLDS,
     closes: USERS,
     one_per_window: false,
+    ends: &[],
+    on_lost: false,
 };
 
 /// A modal sheet: it asks, the page waits under its scrim.
@@ -398,7 +409,7 @@ pub const ROWS: &[Row] = &[
     // an agent's sheet never replaces the user's sheet, which it waits for
     Row { kind: Kind::AgentSheet, z: 69, group: Group::Holds, glass: Some("agent-sheet"), on_leave: false,
         refused_under: MODALS, closes: POPOVERS, ..SHEET },
-    Row { kind: Kind::Region, scope: Scope::Tab, z: 56, pointer: Pointer::Grab, glass: Some("shot"), on_nav: true, ..DISMISSED },
+    Row { kind: Kind::Region, scope: Scope::Tab, z: 56, pointer: Pointer::Grab, glass: Some("shot"), on_nav: true, ends: &[Kind::Autoscroll], on_lost: true, ..DISMISSED },
     // the page draws the labels: nothing of the shell over it, no exit of the kit's
     Row { kind: Kind::Hints, scope: Scope::Tab, z: 5, pointer: Pointer::PassThrough, cover: Coverage::None, on_nav: true, tail: false, ..DISMISSED },
     Row { kind: Kind::CommandBar, z: 74, glass: Some("command-bar"), on_leave: false, ..DISMISSED },
@@ -431,7 +442,7 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::PipCard, scope: Scope::Tab, z: 46, pointer: Pointer::OwnRect, windows: MAIN, ..FREE },
     Row { kind: Kind::Reader, scope: Scope::Tab, z: 54, pointer: Pointer::OwnRect, glass: Some("reader"), tail: true, ..FREE },
     Row { kind: Kind::Glance, z: 64, keys: Keys::OnAsk, pointer: Pointer::Scrim, glass: Some("glance"), life: Life::Dismiss, escape: Esc::Any, ..FREE },
-    Row { kind: Kind::Swipe, z: 70, life: Life::Drag, ..FREE },
+    Row { kind: Kind::Swipe, z: 70, life: Life::Drag, on_lost: true, ..FREE },
     Row { kind: Kind::ExitPage, z: 10, ..FREE },
     Row { kind: Kind::Entrance, z: 20, cover: Coverage::Pixels, ..FREE },
     Row { kind: Kind::Peek, z: 80, pointer: Pointer::OwnRect, glass: Some("peek"), life: Life::Hover(PEEK), windows: PAGES, ..FREE },
@@ -439,11 +450,13 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::SplitRing, z: 34, ..FREE },
     Row { kind: Kind::SplitSeams, z: 36, pointer: Pointer::Grab, ..FREE },
     Row { kind: Kind::DevTools, scope: Scope::Pane, z: 32, pointer: Pointer::OwnRect, ..FREE },
-    Row { kind: Kind::TabGhost, z: 108, life: Life::Drag, escape: Esc::Any, ..FREE },
-    Row { kind: Kind::DropZone, z: 106, life: Life::Drag, ..FREE },
-    Row { kind: Kind::PageGhost, z: 109, life: Life::Drag, escape: Esc::Any, ..FREE },
-    Row { kind: Kind::DropMark, z: 107, life: Life::Drag, ..FREE },
-    Row { kind: Kind::Autoscroll, z: 92, ..FREE },
+    // a drag holds the pointer until its release; its start closes a pick and an autoscroll
+    Row { kind: Kind::TabGhost, z: 108, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, on_lost: true, ..FREE },
+    Row { kind: Kind::DropZone, z: 106, life: Life::Drag, on_lost: true, ..FREE },
+    Row { kind: Kind::PageGhost, z: 109, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, on_lost: true, ..FREE },
+    Row { kind: Kind::DropMark, z: 107, life: Life::Drag, on_lost: true, ..FREE },
+    // Chromium runs it and ends it on any press or key: the pointer is the page's
+    Row { kind: Kind::Autoscroll, z: 92, on_lost: true, ..FREE },
     Row { kind: Kind::Specimen, z: 112, ..FREE },
 ];
 

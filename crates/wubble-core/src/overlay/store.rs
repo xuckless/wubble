@@ -158,6 +158,9 @@ pub enum Action {
     ViewGone(TabId),
     /// The window closed.
     WindowGone(WindowId),
+    /// Window `w` lost the keys (focus gone): what its rows end with the window ([`super::Row::on_lost`])
+    /// is cancelled.
+    Lost { w: WindowId },
     /// A hover or timed surface's cue, at `now` on the host's clock.
     Hover {
         at: Surface,
@@ -280,14 +283,15 @@ impl Ui {
             .max_by_key(|l| l.kind)
     }
 
-    /// Who takes a press outside every overlay's own rect: the topmost scrim or dismissing one.
+    /// Who takes a press outside every overlay's own rect: the topmost scrim, dismissing or
+    /// grabbing one (a drag or a pick holds the pointer while it is open).
     pub fn pointer_owner(&self, env: &impl Env, w: WindowId) -> PointerOwner {
         self.visible(env, w)
             .into_iter()
             .filter(|l| {
                 matches!(
                     l.kind.row().pointer,
-                    Pointer::Scrim | Pointer::DismissOutside
+                    Pointer::Scrim | Pointer::DismissOutside | Pointer::Grab
                 )
             })
             .max_by_key(|l| l.kind.row().z)
@@ -600,6 +604,22 @@ impl<E: Env> Step<'_, E> {
             .into_iter()
             .filter(|o| row.closes.contains(&o.kind.row().group))
             .collect();
+        // what it ends is closed wherever it is; another grab it does not end refuses it
+        let live = self.ui.live(env, w);
+        let held = |o: &&Layer| o.kind != l.kind && o.kind.row().pointer == Pointer::Grab;
+        if row.pointer == Pointer::Grab
+            && live
+                .iter()
+                .filter(held)
+                .any(|o| !row.ends.contains(&o.kind))
+        {
+            return;
+        }
+        let ended: Vec<Layer> = live
+            .into_iter()
+            .filter(|o| row.ends.contains(&o.kind) && !gone.contains(o))
+            .collect();
+        gone.extend(ended);
         if row.one_per_window {
             // this window's: its own, its tab's and the hidden tabs' (another window's stay)
             let here = |o: &Layer| o.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
@@ -698,7 +718,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         | Action::Exited { w, layer }
         | Action::Placed { w, layer, .. } => at(w, layer.tab),
         Action::Navigated { w, tab } => at(w, Some(tab)),
-        Action::Escape { w } | Action::Switched { w, .. } => w,
+        Action::Escape { w } | Action::Switched { w, .. } | Action::Lost { w } => w,
         Action::ViewGone(tab) => {
             let fx = ui.drop_home(Home::Tab(tab), false);
             return (ui, fx);
@@ -771,6 +791,15 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         Action::Navigated { tab, .. } => {
             for l in s.ui.live(env, w) {
                 if l.tab == Some(tab) && l.kind.row().on_nav {
+                    s.close(l, true);
+                }
+            }
+        }
+        Action::Lost { .. } => {
+            // this window's: its own, its tab's and the hidden tabs' (another window's stay)
+            let here = |l: &Layer| l.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
+            for l in s.ui.live(env, w) {
+                if l.kind.row().on_lost && here(&l) {
                     s.close(l, true);
                 }
             }

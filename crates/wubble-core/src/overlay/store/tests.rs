@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::super::{Esc, Group, Keys, Kind, Layer, ROWS};
+use super::super::{Esc, Group, Keys, Kind, Layer, Pointer, ROWS};
 use super::*;
 use crate::start::rand::{Random, Rng};
 use Kind::*;
@@ -252,6 +252,38 @@ fn store_table() {
         ("Escape never closes the panels", A, false, vec![open(on(ErrorPanel, A)), open(on(Boost, A))], ESC, vec![], vec![on(ErrorPanel, A), on(Boost, A)]),
         ("Escape cancels an agent's sheet over a dialog", A, false, vec![open(agent), open(on(Dialog, A))], ESC,
             vec![Cancel(agent), focus(Some(on(Dialog, A)))], vec![on(Dialog, A)]),
+        // a drag holds the pointer: it ends a pick and an autoscroll, and no other grab opens beside it
+        ("a tab drag's ghost opens alone", A, false, vec![], open(win(TabGhost)), vec![Mount(win(TabGhost))], vec![win(TabGhost)]),
+        ("a tab drag ends a pick and an autoscroll", A, false, vec![open(on(Region, A)), open(win(Autoscroll))], open(win(TabGhost)),
+            vec![Cancel(win(Autoscroll)), Unmount(win(Autoscroll)), Cancel(on(Region, A)), Mount(win(TabGhost)), focus(None)], vec![win(TabGhost)]),
+        ("a page drag ends a pick and an autoscroll", A, false, vec![open(on(Region, A)), open(win(Autoscroll))], open(win(PageGhost)),
+            vec![Cancel(win(Autoscroll)), Unmount(win(Autoscroll)), Cancel(on(Region, A)), Mount(win(PageGhost)), focus(None)], vec![win(PageGhost)]),
+        ("a pick is refused under a drag", A, false, vec![open(win(TabGhost))], open(on(Region, A)), vec![], vec![win(TabGhost)]),
+        ("a page drag is refused under a tab drag", A, false, vec![open(win(TabGhost))], open(win(PageGhost)), vec![], vec![win(TabGhost)]),
+        ("a tab drag is refused under a page drag", A, false, vec![open(win(PageGhost))], open(win(TabGhost)), vec![], vec![win(PageGhost)]),
+        ("the drop zone and mark are no grab", A, false, vec![open(win(TabGhost)), open(win(PageGhost))], open(win(DropZone)),
+            vec![Mount(win(DropZone))], vec![win(TabGhost), win(DropZone)]),
+        ("a pick ends an autoscroll", A, false, vec![open(win(Autoscroll))], open(on(Region, A)),
+            vec![Cancel(win(Autoscroll)), Unmount(win(Autoscroll)), Mount(on(Region, A)), focus(Some(on(Region, A)))], vec![on(Region, A)]),
+        ("an autoscroll runs under a pick", A, false, vec![open(on(Region, A))], open(win(Autoscroll)), vec![Mount(win(Autoscroll))], vec![on(Region, A), win(Autoscroll)]),
+        // Escape ends a drag, a pick and link hints through the one target
+        ("Escape cancels a tab drag over a menu", A, false, vec![open(menu), open(win(TabGhost))], ESC,
+            vec![Cancel(win(TabGhost)), Unmount(win(TabGhost))], vec![menu]),
+        ("Escape cancels a page drag, the page's keys too", A, true, vec![open(win(PageGhost))], ESC,
+            vec![Cancel(win(PageGhost)), Unmount(win(PageGhost))], vec![]),
+        ("Escape ends the pick, the page's Escape too, and not the notice", A, true, vec![open(on(Notice, A)), open(on(Region, A))], ESC,
+            vec![Cancel(on(Region, A)), focus(None)], vec![on(Notice, A)]),
+        ("Escape ends link hints before the find bar", A, false, vec![open(on(Find, A)), open(on(Hints, A))], ESC,
+            vec![Cancel(on(Hints, A)), Unmount(on(Hints, A)), focus(None)], vec![on(Find, A)]),
+        ("Escape on the zone or the chip alone is the page's", A, false, vec![open(win(DropZone)), open(win(Swipe)), open(win(Autoscroll))], ESC,
+            vec![], vec![win(DropZone), win(Swipe), win(Autoscroll)]),
+        // the window lost: what ends with it is cancelled, a menu stays; another window's loss is none of ours
+        ("a lost window cancels its drag, swipe and autoscroll", A, false,
+            vec![open(menu), open(win(TabGhost)), open(win(DropZone)), open(win(Swipe)), open(win(Autoscroll))], Action::Lost { w: W1 },
+            vec![Cancel(win(Swipe)), Unmount(win(Swipe)), Cancel(win(TabGhost)), Unmount(win(TabGhost)), Cancel(win(DropZone)), Unmount(win(DropZone)),
+                Cancel(win(Autoscroll)), Unmount(win(Autoscroll))], vec![menu]),
+        ("a lost window ends its pick", A, false, vec![open(on(Region, A))], Action::Lost { w: W1 }, vec![Cancel(on(Region, A)), focus(None)], vec![]),
+        ("another window's loss changes nothing", A, false, vec![open(win(PageGhost)), open(on(Region, B))], Action::Lost { w: W2 }, vec![], vec![win(PageGhost)]),
         // a tab switch (window 1 shows B now)
         ("a switch closes sheets, hides what stays, reveals the new tab's", B, false,
             vec![open(on(Notice, A)), open(on(Find, A)), open(on(Dialog, A)), open(on(BookmarkSheet, A)), open(on(Find, B)), open(dl)], switched(A, B),
@@ -1184,5 +1216,102 @@ fn pointer_at_rects() {
     ];
     for (name, got, want) in rows {
         assert_eq!(got, want, "{name}");
+    }
+}
+
+/// One grab owns the pointer in a window: every sequence of up to four opens, closes, Escapes
+/// and losses over the grabbing surfaces leaves at most one of them open, and a drag's rows are
+/// all gone once its window is lost.
+#[test]
+fn one_grab_per_window() {
+    let kinds = [
+        Region, TabGhost, PageGhost, Autoscroll, SeamBow, SplitSeams, DropZone,
+    ];
+    let layer = |k: Kind| Layer::new(k, (k == Region).then_some(A));
+    let mut alphabet: Vec<Action> = kinds.iter().map(|&k| open(layer(k))).collect();
+    alphabet.extend(kinds.iter().map(|&k| close(layer(k))));
+    alphabet.extend([ESC, Action::Lost { w: W1 }, Action::WindowGone(W1)]);
+    let e = env(A);
+    let grabs = |ui: &Ui| {
+        ui.live(&e, W1)
+            .into_iter()
+            .filter(|l| l.kind.row().pointer == Pointer::Grab)
+            .count()
+    };
+    let mut walks = vec![vec![]];
+    for len in 1..=4 {
+        let longer: Vec<Vec<Action>> = walks
+            .iter()
+            .filter(|w| w.len() == len - 1)
+            .flat_map(|w| {
+                alphabet.iter().map(|&a| {
+                    let mut n = w.clone();
+                    n.push(a);
+                    n
+                })
+            })
+            .collect();
+        for walk in &longer {
+            let (ui, _) = run(&e, walk);
+            assert!(grabs(&ui) <= 1, "two grabs after {walk:?}");
+        }
+        walks.extend(longer);
+    }
+}
+
+/// Every surface a drag or a pick holds ends with its window ([`Row::on_lost`]): applying the
+/// loss leaves none open and cancels each.
+#[test]
+fn window_lost_table() {
+    for kind in [
+        TabGhost, DropZone, PageGhost, DropMark, Autoscroll, Swipe, Region,
+    ] {
+        assert!(kind.row().on_lost, "{kind:?}");
+        let l = Layer::new(
+            kind,
+            (kind.scope() == super::super::Scope::Tab).then_some(A),
+        );
+        let e = env(A);
+        let (ui, _) = run(&e, &[open(l)]);
+        let (ui, fx) = reduce(ui, &e, Action::Lost { w: W1 });
+        assert!(fx.contains(&Cancel(l)), "{kind:?} cancelled: {fx:?}");
+        assert_eq!(ui.live(&e, W1), vec![], "{kind:?} gone");
+    }
+}
+
+/// The surface that holds the pointer owns it while it is open.
+#[test]
+fn the_grab_owns_the_pointer() {
+    let table = [
+        ("none", vec![], PointerOwner::Page),
+        (
+            "a pick",
+            vec![open(on(Region, A))],
+            PointerOwner::Layer(on(Region, A)),
+        ),
+        (
+            "a tab drag",
+            vec![open(win(TabGhost))],
+            PointerOwner::Layer(win(TabGhost)),
+        ),
+        (
+            "a page drag",
+            vec![open(win(PageGhost))],
+            PointerOwner::Layer(win(PageGhost)),
+        ),
+        (
+            "the swipe's chip is no grab",
+            vec![open(win(Swipe))],
+            PointerOwner::Page,
+        ),
+        (
+            "an ended drag",
+            vec![open(win(TabGhost)), close(win(TabGhost))],
+            PointerOwner::Page,
+        ),
+    ];
+    let e = env(A);
+    for (name, actions, want) in table {
+        assert_eq!(run(&e, &actions).0.pointer_owner(&e, W1), want, "{name}");
     }
 }
