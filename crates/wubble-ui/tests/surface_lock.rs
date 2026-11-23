@@ -15,7 +15,7 @@
 //! held as the kit lock's are (`lock::Lock::ratchet`): the baseline only shrinks, as the steps
 //! that move the surfaces into the store clear them. `SURFACE_LOCK_WRITE=1 cargo test -p
 //! wubble-ui --test surface_lock` rewrites it, only when no count went up. Two `GlassKeys` sharing
-//! a value, or a row naming a key `GlassKeys` lacks, fail outright.
+//! a value, a row naming a key `GlassKeys` lacks, or a surface's key no row names, fail outright.
 //!
 //! Pure string scans; no timing.
 
@@ -128,11 +128,16 @@ fn surface_violations(
 
 fn violations() -> Counts {
     let mut counts = BTreeMap::new();
-    for (rel, text) in ui_files().into_iter().filter(|(rel, _)| !rel.starts_with("kit/")) {
+    for (rel, text) in ui_files()
+        .into_iter()
+        .filter(|(rel, _)| !rel.starts_with("kit/"))
+    {
         let written = (rel == "app.slint").then(|| slint_written(&text));
         for line in text.lines() {
             for (rule, token) in surface_violations(line, written.as_ref()) {
-                *counts.entry((rel.clone(), rule.to_string(), token)).or_insert(0) += 1;
+                *counts
+                    .entry((rel.clone(), rule.to_string(), token))
+                    .or_insert(0) += 1;
             }
         }
     }
@@ -179,14 +184,14 @@ fn the_scanner_finds_each_rule() {
     assert_eq!(slint_written(text), want);
 }
 
-/// `GlassKeys`' entries in model.slint, as (name, value).
-fn glass_keys() -> Vec<(String, i64)> {
-    let text =
-        fs::read_to_string(ui_dir().join("components/model.slint")).expect("read model.slint");
-    let start = text.find("export global GlassKeys {").expect("GlassKeys in model.slint");
+/// `GlassKeys`' entries in a model.slint text, as (name, value).
+fn glass_keys(text: &str) -> Vec<(String, i64)> {
+    let start = text
+        .find("export global GlassKeys {")
+        .expect("GlassKeys in model.slint");
     let body = &text[start..];
     let end = body.find("\n}").expect("GlassKeys ends");
-    let keys: Vec<(String, i64)> = body[..end]
+    body[..end]
         .lines()
         .filter_map(|line| {
             let code = code(line);
@@ -195,28 +200,64 @@ fn glass_keys() -> Vec<(String, i64)> {
             let value = value.trim().trim_end_matches(';').trim().parse().ok()?;
             Some((name.trim().to_string(), value))
         })
-        .collect();
-    assert!(keys.len() > 10, "GlassKeys read as {keys:?}");
-    keys
+        .collect()
 }
 
-/// A key is one glass: two panels sharing a value would take each other's glass away.
-#[test]
-fn no_two_glass_keys_share_a_value() {
+/// The glass of the chrome and the scene's base: no surface's.
+const CHROME_GLASS: [&str; 4] = ["sidebar", "address", "favourites", "overlays"];
+
+/// What is wrong between `GlassKeys` (`keys`) and the rows' glass (`glass`): two keys sharing a
+/// value (they would take each other's glass away), a row naming a key `GlassKeys` lacks, a
+/// surface's key no row names (a surface without its row).
+fn glass_faults(keys: &[(String, i64)], glass: &[&str]) -> Vec<String> {
+    let mut faults = vec![];
     let mut seen = BTreeMap::new();
-    for (name, value) in glass_keys() {
-        if let Some(other) = seen.insert(value, name.clone()) {
-            panic!("GlassKeys.{name} and GlassKeys.{other} are both {value}");
+    for (name, value) in keys {
+        if let Some(other) = seen.insert(value, name) {
+            faults.push(format!(
+                "GlassKeys.{name} and GlassKeys.{other} are both {value}"
+            ));
         }
     }
+    let names: BTreeSet<&str> = keys.iter().map(|(name, _)| name.as_str()).collect();
+    for name in glass.iter().filter(|name| !names.contains(*name)) {
+        faults.push(format!("a row's glass {name} is no GlassKeys key"));
+    }
+    for name in names
+        .iter()
+        .filter(|n| !CHROME_GLASS.contains(n) && !glass.contains(n))
+    {
+        faults.push(format!("GlassKeys.{name} is no row's glass"));
+    }
+    faults
+}
+
+/// `GlassKeys` and `ROWS` agree: each surface's glass is a key of its own, each surface key a
+/// row's.
+#[test]
+fn every_glass_key_is_a_row() {
+    let text =
+        fs::read_to_string(ui_dir().join("components/model.slint")).expect("read model.slint");
+    let keys = glass_keys(&text);
+    assert!(keys.len() > 10, "GlassKeys read as {keys:?}");
+    let glass: Vec<&str> = ROWS.iter().filter_map(|row| row.glass).collect();
+    assert_eq!(glass_faults(&keys, &glass), Vec::<String>::new());
 }
 
 #[test]
-fn every_glass_row_names_a_glass_key() {
-    let keys: BTreeSet<String> = glass_keys().into_iter().map(|(name, _)| name).collect();
-    for row in ROWS {
-        if let Some(name) = row.glass {
-            assert!(keys.contains(name), "{:?}: no GlassKeys.{name}", row.kind);
-        }
+fn the_glass_check_finds_each_fault() {
+    let text = "export global GlassKeys {\n    out property <int> sidebar: 1;\n    \
+                out property <int> find: 2;\n    out property <int> menu: 3;\n}";
+    let keys = glass_keys(text);
+    let dup = [keys.clone(), vec![("print".to_string(), 2)]].concat();
+    #[rustfmt::skip]
+    let rows: &[(&str, &[(String, i64)], &[&str], &[&str])] = &[
+        ("clean", &keys, &["find", "menu", "find"], &[]),
+        ("two keys alike", &dup, &["find", "menu", "print"], &["GlassKeys.print and GlassKeys.find are both 2"]),
+        ("a row names a missing key", &keys, &["find", "menu", "toast"], &["a row's glass toast is no GlassKeys key"]),
+        ("a key no row names", &keys, &["find"], &["GlassKeys.menu is no row's glass"]),
+    ];
+    for (name, keys, glass, want) in rows {
+        assert_eq!(glass_faults(keys, glass), *want, "{name}");
     }
 }
