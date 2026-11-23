@@ -544,10 +544,10 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     `desktop: Option<Desktop>` (new `Desktop { monitor_origin, monitor_size,
     window_origin }`, physical, the platform's global space; re-exported from
     `lib.rs`), supersedes change 24's "the window is the screen" when set. Pure
-    in `ViewMetrics`: `screen_rect_dip` is the monitor, new `root_rect_dip` is
-    the window's outer rectangle on the desktop, which is also the
-    `available_rect` (Blink fits a `<select>`'s list into it, and the host
-    shows pop-ups inside the window only), `view_rect_dip` and
+    in `ViewMetrics`: `screen_rect_dip` is the monitor (no work area is known,
+    so `available_rect` is the monitor too, as Chrome reports it; a `<select>`
+    list Blink places past the window is clamped into it by the host), new
+    `root_rect_dip` is the window's rectangle on the desktop, `view_rect_dip` and
     `screen_point` add the window's origin (unknown on Wayland: the monitor's
     origin, as Chrome reports it there); without `desktop` the window is the
     screen at 0,0 as in change 24. All three render handlers: `screen_info`
