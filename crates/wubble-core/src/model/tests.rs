@@ -3906,3 +3906,273 @@ fn a_close_ends_the_private_tabs_it_takes_with_it() {
     let (m, _) = run(m, Command::CloseWindow(w2));
     assert_eq!(sorted(m.private_tabs_ended(Closing::Window(w1))), sorted(p1));
 }
+
+/// What a command came to across the private line ([`crossing`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Came {
+    /// Refused: the model is as it was and nothing is owed to the engine (no effect).
+    Refused,
+    Applied,
+    /// Done in the last normal window (window 0), which shows the Space, focused.
+    ToNormalWindow,
+}
+
+/// Every command that could cross the private line, from each side to each: a normal window
+/// (0) on s0 with tab n0, a normal Space s1 (tab n1) and a Work container; a private window
+/// on ps with tab p0 in the Memory container. One row per command x side pair.
+#[test]
+fn every_command_keeps_to_its_side_of_the_private_line() {
+    use Came::*;
+    let (m, n) = with_tabs(1);
+    let n0 = n[0];
+    let (m, _) = run(m, Command::NewContainer { name: "Work".into() });
+    let work = m.containers.last().unwrap().id;
+    let (m, s1) = add_space(m, D);
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s1,
+            url: "https://n1.test/".into(),
+        },
+    );
+    let (m, pw, ps) = private_window(m, "https://p.test/");
+    let p0 = m.order(ps)[0];
+    let mem = m.containers.iter().find(|c| c.storage == Storage::Memory).unwrap().id;
+    let w0 = WindowId(0);
+    let url = || "https://x.test/".to_string();
+    let to = |space| Dest::Normal { space, index: 0 };
+    // (row, the window focused first, command, what it comes to)
+    let rows: Vec<(&str, WindowId, Command, Came)> = vec![
+        ("move N->P", w0, Command::MoveTab { tab: n0, to: to(ps) }, Refused),
+        ("move P->N", pw, Command::MoveTab { tab: p0, to: to(s0()) }, Refused),
+        ("move N->N", w0, Command::MoveTab { tab: n0, to: to(s1) }, Applied),
+        (
+            "to window N->P",
+            w0,
+            Command::MoveTabToWindow {
+                tab: n0,
+                to: WindowTarget::Existing(pw),
+            },
+            Refused,
+        ),
+        (
+            "to window P->N",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::Existing(w0),
+            },
+            Refused,
+        ),
+        ("switch N->P", w0, Command::SwitchSpace(ps), Refused),
+        ("switch P->N", pw, Command::SwitchSpace(s1), ToNormalWindow),
+        ("switch N->N", w0, Command::SwitchSpace(s1), Applied),
+        (
+            "new tab, normal container, in P",
+            pw,
+            Command::NewTab {
+                url: url(),
+                container: Some(work),
+                opener: None,
+            },
+            Refused,
+        ),
+        (
+            "new tab, memory container, in N",
+            w0,
+            Command::NewTab {
+                url: url(),
+                container: Some(mem),
+                opener: None,
+            },
+            Refused,
+        ),
+        (
+            "new tab, memory container, in P",
+            pw,
+            Command::NewTab {
+                url: url(),
+                container: Some(mem),
+                opener: None,
+            },
+            Applied,
+        ),
+        (
+            "space container P<-N",
+            w0,
+            Command::SetSpaceContainer {
+                space: ps,
+                container: work,
+            },
+            Refused,
+        ),
+        (
+            "space container N<-P",
+            w0,
+            Command::SetSpaceContainer {
+                space: s1,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "space container N<-N",
+            w0,
+            Command::SetSpaceContainer {
+                space: s1,
+                container: work,
+            },
+            Applied,
+        ),
+        (
+            "reopen P in N",
+            pw,
+            Command::ReopenInContainer {
+                tab: p0,
+                container: work,
+            },
+            Refused,
+        ),
+        (
+            "reopen N in P",
+            w0,
+            Command::ReopenInContainer {
+                tab: n0,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "reopen N in N",
+            w0,
+            Command::ReopenInContainer {
+                tab: n0,
+                container: work,
+            },
+            Applied,
+        ),
+        ("delete container P", w0, Command::DeleteContainer(mem), Refused),
+        ("delete container N", w0, Command::DeleteContainer(work), Applied),
+        ("delete space P", w0, Command::DeleteSpace(ps), Refused),
+        ("delete space N", w0, Command::DeleteSpace(s1), Applied),
+        ("mark agent P", w0, Command::MarkAgentSpace(ps), Refused),
+        ("mark agent N", w0, Command::MarkAgentSpace(s1), Applied),
+        (
+            "agent tab in P",
+            w0,
+            Command::OpenInSpace {
+                space: ps,
+                url: url(),
+            },
+            Refused,
+        ),
+        (
+            "agent tab in N",
+            pw,
+            Command::OpenInSpace {
+                space: s1,
+                url: url(),
+            },
+            Applied,
+        ),
+        (
+            "extension tab in P",
+            pw,
+            Command::ExtensionTab {
+                url: url(),
+                container: work,
+                space: Some(ps),
+                show: true,
+            },
+            Refused,
+        ),
+        (
+            "extension tab of the memory profile",
+            w0,
+            Command::ExtensionTab {
+                url: url(),
+                container: mem,
+                space: None,
+                show: true,
+            },
+            Refused,
+        ),
+        (
+            "extension tab, no Space, from P",
+            pw,
+            Command::ExtensionTab {
+                url: url(),
+                container: work,
+                space: None,
+                show: false,
+            },
+            Applied,
+        ),
+        (
+            "app link in P",
+            pw,
+            Command::OpenLittle {
+                url: url(),
+                space: Some(ps),
+                container: None,
+            },
+            Refused,
+        ),
+        (
+            "app link, no Space, from P",
+            pw,
+            Command::OpenLittle {
+                url: url(),
+                space: None,
+                container: None,
+            },
+            Applied,
+        ),
+    ];
+    for (row, focus, command, want) in rows {
+        let (before, _) = run(m.clone(), Command::FocusWindow(focus));
+        let (after, fx) = run(before.clone(), command);
+        let came = if after == before && fx.is_empty() {
+            Refused
+        } else if focus == pw
+            && after.focused() == w0
+            && after.window(w0).and_then(Window::space) == Some(s1)
+        {
+            ToNormalWindow
+        } else {
+            Applied
+        };
+        assert_eq!(came, want, "{row}: {fx:?}");
+        // whatever was applied, nothing crossed: every private tab is still in Memory
+        for t in after.tabs.keys() {
+            let private = after.location(*t).is_some_and(|(s, _)| after.side_of_space(s) == Side::Private);
+            assert_eq!(after.side_of_tab(*t) == Side::Private, private, "{row}: {t:?}");
+        }
+    }
+    // a Little window's page never becomes a private window's tab
+    let (m, fx) = run(
+        m,
+        Command::OpenLittle {
+            url: url(),
+            space: None,
+            container: None,
+        },
+    );
+    let little = opened(&fx);
+    let (same, fx) = run(
+        m.clone(),
+        Command::PromoteLittle {
+            window: little,
+            space: ps,
+        },
+    );
+    assert!(same == m && fx.is_empty(), "{fx:?}");
+    let (m, _) = run(
+        m,
+        Command::PromoteLittle {
+            window: little,
+            space: s1,
+        },
+    );
+    assert!(m.window(little).is_none());
+}

@@ -41,7 +41,10 @@ use crate::tab::{Liveness, Tab, TabId};
 use crate::tidy;
 use crate::window::{Geometry, Shown, Window, WindowId, WindowTarget};
 
+mod crossing;
 mod windows;
+
+pub use crossing::{Crossing, Reach, crossing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -998,12 +1001,15 @@ impl Model {
         space: Option<SpaceId>,
         show: bool,
     ) -> Vec<Effect> {
-        // extensions do not run in private windows (Chrome's default: "Allow in Incognito" off)
-        if space.is_some_and(|s| self.side_of_space(s) == Side::Private) {
+        // extensions do not run in private windows (Chrome's default: "Allow in Incognito" off);
+        // with no Space named, the last normal window's
+        let space = space.unwrap_or_else(|| self.normal_space());
+        let (src, dst) = (self.side_of_container(container), self.side_of_space(space));
+        if crossing(Reach::ExtensionTab, src, dst) != Crossing::Allow {
             return vec![];
         }
-        let space = Some(space.unwrap_or_else(|| self.normal_space()));
-        let Some((id, si, create)) = self.place_new_tab(url, Some(container), None, space) else {
+        let Some((id, si, create)) = self.place_new_tab(url, Some(container), None, Some(space))
+        else {
             return vec![];
         };
         let mut fx = vec![create];
@@ -1037,14 +1043,15 @@ impl Model {
         let inherited = opener.and_then(|o| self.tabs.get(&o)).map(|t| t.container);
         let opener = opener.filter(|_| opener_space == Some(si));
         let default = self.spaces[si].container;
-        let eff = container.or(inherited).unwrap_or(default);
-        // a private Space's tabs are all in its in-memory container, and no other tab is
-        let eff = if self.spaces[si].kind == SpaceKind::Private {
-            default
-        } else if self.side_of_container(eff) == Side::Private {
-            return None;
-        } else {
-            eff
+        let side = self.side_of_container(default);
+        // a container named for the tab must be on the Space's side (a normal closed tab never
+        // reopens private); an opener's on the other side gives way to the Space's
+        let eff = match container {
+            Some(c) if crossing(Reach::NewTab, side, self.side_of_container(c)) == Crossing::Allow => c,
+            Some(_) => return None,
+            None => inherited
+                .filter(|&c| self.side_of_container(c) == side)
+                .unwrap_or(default),
         };
         let id = self.fresh_tab();
         let tab = Tab {
@@ -1341,8 +1348,11 @@ impl Model {
         let (Some((src, _)), Some(dst)) = (self.place_of(tab), self.dest_space(to)) else {
             return vec![];
         };
-        // a tab never crosses between a private Space and a normal one
-        if (self.spaces[src].kind == SpaceKind::Private) != (self.spaces[dst].kind == SpaceKind::Private) {
+        let sides = (
+            self.side_of_container(self.spaces[src].container),
+            self.side_of_container(self.spaces[dst].container),
+        );
+        if crossing(Reach::MoveTab, sides.0, sides.1) != Crossing::Allow {
             return vec![];
         }
         let src_was_active = self.spaces[src].active == Some(tab);
@@ -1417,9 +1427,12 @@ impl Model {
         let Some(si) = self.space_idx(space) else {
             return vec![];
         };
+        let sides = (
+            self.side_of_container(self.spaces[si].container),
+            self.side_of_container(container),
+        );
         if !self.has_container(container)
-            || self.spaces[si].kind == SpaceKind::Private
-            || self.side_of_container(container) == Side::Private
+            || crossing(Reach::SetSpaceContainer, sides.0, sides.1) != Crossing::Allow
         {
             return vec![];
         }
@@ -1436,7 +1449,10 @@ impl Model {
         };
         // a private Space goes with its window (`Command::CloseWindow`), and the last Space
         // that is not private stays
-        if self.spaces[si].kind == SpaceKind::Private || self.spaces.iter().filter(|s| s.kind != SpaceKind::Private).count() == 1 {
+        let side = self.side_of_container(self.spaces[si].container);
+        if crossing(Reach::DeleteSpace, side, side) != Crossing::Allow
+            || self.spaces.iter().filter(|s| s.kind != SpaceKind::Private).count() == 1
+        {
             return vec![];
         }
         let gone = self.order_idx(si);
@@ -1468,8 +1484,10 @@ impl Model {
         if self.active_space() == space {
             return vec![];
         }
-        // a private window is locked to its Space, and no switcher reaches a private Space
-        if self.spaces[si].kind == SpaceKind::Private || self.side_of_space(self.active_space()) == Side::Private {
+        // no switcher reaches a private Space; a private window is locked to its own, so a
+        // normal Space it asks for shows in the last normal window (`set_active_space` does it)
+        let (src, dst) = (self.side_of_space(self.active_space()), self.side_of_space(space));
+        if crossing(Reach::SwitchSpace, src, dst) == Crossing::Refuse {
             return vec![];
         }
         let mut fx = self.set_active_space(space);
@@ -1479,9 +1497,10 @@ impl Model {
 
     fn delete_container(&mut self, container: ContainerId) -> Vec<Effect> {
         // the in-memory container goes with the last private window, never by itself
+        let side = self.side_of_container(container);
         if container == ContainerId::DEFAULT
             || !self.has_container(container)
-            || self.side_of_container(container) == Side::Private
+            || crossing(Reach::DeleteContainer, side, side) != Crossing::Allow
         {
             return vec![];
         }
@@ -1513,10 +1532,10 @@ impl Model {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
         };
+        let sides = (self.side_of_tab(tab), self.side_of_container(container));
         if !self.has_container(container)
             || self.tabs[&tab].container == container
-            || self.spaces[si].kind == SpaceKind::Private
-            || self.side_of_container(container) == Side::Private
+            || crossing(Reach::ReopenInContainer, sides.0, sides.1) != Crossing::Allow
         {
             return vec![];
         }
@@ -2015,7 +2034,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             show,
         } => m.extension_tab(url, container, space, show),
         // an agent session never works in a private Space
-        Command::OpenInSpace { space, .. } if m.side_of_space(space) == Side::Private => vec![],
+        Command::OpenInSpace { space, .. }
+            if crossing(Reach::OpenInSpace, Side::Normal, m.side_of_space(space))
+                != Crossing::Allow =>
+        {
+            vec![]
+        }
         Command::OpenInSpace { space, url } => m
             .place_new_tab(url, None, None, Some(space))
             .map(|(id, si, create)| {
@@ -2174,7 +2198,10 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             vec![]
         }
         Command::MarkAgentSpace(space) => {
-            if let Some(si) = m.space_idx(space).filter(|&si| m.spaces[si].kind != SpaceKind::Private) {
+            let side = m.side_of_space(space);
+            if let Some(si) = m.space_idx(space)
+                && crossing(Reach::MarkAgentSpace, side, side) == Crossing::Allow
+            {
                 m.spaces[si].kind = SpaceKind::Agent;
             }
             vec![]

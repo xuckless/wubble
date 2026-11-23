@@ -1,6 +1,6 @@
 //! The window half of [`Model`]: which window shows what, and the window commands.
 
-use super::{DEFAULT_TINT, Dest, Effect, Model};
+use super::{Crossing, DEFAULT_TINT, Dest, Effect, Model, Reach, crossing};
 use crate::space::{
     Container, ContainerId, PRIVATE_NAME, Rgb, Side, Space, SpaceIcon, SpaceId, SpaceKind,
     SplitGroup, Storage,
@@ -519,7 +519,9 @@ impl Model {
         let target = match to {
             WindowTarget::Existing(w) => match self.window(w) {
                 Some(win)
-                    if win.kind() == WindowKind::Main && self.side_of_window(w) == side =>
+                    if win.kind() == WindowKind::Main
+                        && crossing(Reach::MoveToWindow, side, self.side_of_window(w))
+                            == Crossing::Allow =>
                 {
                     w
                 }
@@ -600,12 +602,12 @@ impl Model {
         container: Option<ContainerId>,
     ) -> Vec<Effect> {
         // a link from another app never opens in a private window (Chrome opens it in the last
-        // normal one)
-        if space.is_some_and(|s| self.side_of_space(s) == Side::Private) {
+        // normal one, as it does here with no Space named)
+        let space = space.unwrap_or_else(|| self.normal_space());
+        if crossing(Reach::OpenLittle, Side::Normal, self.side_of_space(space)) != Crossing::Allow {
             return vec![];
         }
-        let space = Some(space.unwrap_or_else(|| self.normal_space()));
-        let Some((tab, _, create)) = self.place_new_tab(url, container, None, space) else {
+        let Some((tab, _, create)) = self.place_new_tab(url, container, None, Some(space)) else {
             return vec![];
         };
         let id = self.push_window(Shown::Little(tab), None);
@@ -616,7 +618,12 @@ impl Model {
     pub(super) fn promote_little(&mut self, window: WindowId, space: SpaceId) -> Vec<Effect> {
         let tab = match self.window(window).map(|w| w.shown) {
             Some(Shown::Little(t))
-                if self.space_idx(space).is_some() && self.side_of_space(space) != Side::Private =>
+                if self.space_idx(space).is_some()
+                    && crossing(
+                        Reach::PromoteLittle,
+                        self.side_of_tab(t),
+                        self.side_of_space(space),
+                    ) == Crossing::Allow =>
             {
                 t
             }

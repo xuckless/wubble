@@ -2231,14 +2231,20 @@ impl Host {
     }
 
     /// Opens `url` again, the one way a tab comes back: in `space` if it still exists (the view
-    /// moves there), else the active one; in `container` if that still exists.
+    /// moves there), else the last normal window's; in `container` if that still exists. A
+    /// closed tab is a normal one (private tabs are never kept), so it never reopens in a
+    /// private window: from one, its Space shows in the last normal window
+    /// (`Crossing::ToNormalWindow`), and a container on the other side is refused.
     pub(super) fn reopen(
         &mut self,
         url: String,
         space: Option<SpaceId>,
         container: Option<ContainerId>,
     ) {
-        self.open_in(url, space, container, None);
+        let space = space
+            .filter(|s| self.model.spaces.iter().any(|k| k.id == *s))
+            .unwrap_or_else(|| self.model.normal_space());
+        self.open_in(url, Some(space), container, None);
     }
 
     fn open_in(
