@@ -1150,6 +1150,12 @@ pub fn quit() {
     let _ = slint::quit_event_loop();
 }
 
+/// macOS's `terminate:` (Cmd+Q, the menu bar's Quit, the Dock's): the Quit action's plan,
+/// which asks first when quitting would cancel private downloads (`Host::close_asks`).
+fn quit_asked() {
+    with_host(|host| host.perform(wubble_core::action::Action::Quit));
+}
+
 /// The window's display refresh rate. Wayland names the current monitor only
 /// once the surface has entered an output, so fall back to the fastest
 /// connected display: the CEF frame rate is a ceiling, so too high only costs
@@ -1395,6 +1401,12 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_extension_install_folder(move || with_host_in(win, Host::extension_install_folder));
     window.on_extension_toggled(move |id, on| {
         with_host_in(win, |host| host.extension_toggled(&id, on))
+    });
+    window.on_extension_private_toggled(move |id, on| {
+        with_host_in(win, |host| host.extension_private_toggled(&id, on))
+    });
+    window.on_extension_prompt_private(move |on| {
+        with_host_in(win, |host| host.extension_prompt_private(on))
     });
     window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
     window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
@@ -2251,7 +2263,7 @@ fn run(
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
     measure::mark(measure::Stage::SessionRestored);
-    wubble_engine::app::set_quit_handler(Some(quit));
+    wubble_engine::app::set_quit_handler(Some(quit_asked));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {

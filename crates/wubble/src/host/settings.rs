@@ -18,7 +18,7 @@ use wubble_core::model::Command;
 use wubble_core::pages::{self, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
-use wubble_core::space::{Rgb, SpaceIcon, SpaceId};
+use wubble_core::space::{Rgb, SpaceIcon, SpaceId, SpaceKind};
 use wubble_store::{KeybindingOverrides, SiteZoom, text_of};
 use wubble_ui::{AboutView, AppWindow, CaptureView, FilterListItem, SpaceSetting};
 
@@ -103,7 +103,10 @@ impl Host {
                 }
             }
             Applied::BlockerEnabled(on) => self.blocking.set_enabled(on),
-            Applied::BlockerExceptions(hosts) => self.blocking.set_exceptions(&hosts),
+            Applied::BlockerExceptions(hosts) => {
+                self.blocker_hosts = hosts;
+                self.run_site_lists();
+            }
             Applied::BlockerLists {
                 lists,
                 cookie_banners,
@@ -133,9 +136,8 @@ impl Host {
                 }
             }
             Applied::NeverSleepSites(sites) => {
-                if sites != self.model.never_sites() {
-                    self.dispatch(Command::SetNeverSleepSites(sites));
-                }
+                self.never_sleep_sites = sites;
+                self.run_site_lists();
             }
             Applied::ArchiveAfter(after) => self.archive_after = after,
             Applied::RoutingRules(rules) => self.routing_rules = rules,
@@ -220,7 +222,12 @@ impl Host {
                 // an agent Space goes as the Spaces popup's dustbin takes it: its session is
                 // stopped (its teardown deletes the Space and the container), never left
                 // holding a Space that is gone
-                if self.model.spaces.iter().any(|s| s.id == id && s.agent) {
+                if self
+                    .model
+                    .spaces
+                    .iter()
+                    .any(|s| s.id == id && s.kind == SpaceKind::Agent)
+                {
                     self.agent_space_cleared(id);
                 } else {
                     self.dispatch(Command::DeleteSpace(id));
@@ -547,13 +554,15 @@ fn render_page(window: &AppWindow, host: &Host) {
         .model
         .spaces
         .iter()
+        // a private window's Space is no Space to manage: it goes with its window
+        .filter(|s| s.kind != SpaceKind::Private)
         .filter_map(|s| {
             Some(SpaceSetting {
                 id: i32::try_from(s.id.0).ok()?,
                 name: s.name.as_str().into(),
                 tint: slint::Color::from_rgb_u8(s.tint.0, s.tint.1, s.tint.2),
                 icon: s.icon.id().into(),
-                tile_icon: wubble_core::space::glyph_id(s.icon, s.agent).into(),
+                tile_icon: wubble_core::space::glyph_id(s.icon, s.kind == SpaceKind::Agent).into(),
                 colour: wubble_core::space::swatch_name(s.tint)
                     .unwrap_or_else(|| "Custom".into())
                     .into(),

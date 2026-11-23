@@ -9,7 +9,7 @@
 //! the list (a rule between groups, the rows, the sticky row). Until then there is no Sessions
 //! group at all (owner: hidden until the MCP server is built).
 
-use crate::space::{Rgb, Space, SpaceIcon, SpaceId, glyph_id};
+use crate::space::{Rgb, Space, SpaceIcon, SpaceId, SpaceKind, glyph_id};
 use crate::tabdrag::Rect;
 
 /// A group of rows.
@@ -87,16 +87,22 @@ pub struct Geometry {
     pub rule: f64,
 }
 
-/// The popup for a window showing Space `current`, over the model's Spaces in order.
+/// The popup for a window showing Space `current`, over the model's Spaces in order. Private
+/// Spaces are no rows (each is locked in its own window), and a private window's popup lists
+/// nothing: it cannot switch Space.
 pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
+    let locked = spaces
+        .iter()
+        .any(|s| s.id == current && s.kind == SpaceKind::Private);
     let rows: Vec<Row> = spaces
         .iter()
+        .filter(|s| s.kind != SpaceKind::Private && !locked)
         .map(|s| Row {
             target: Target::Space(s.id),
             name: s.name.clone(),
             tint: s.tint,
             icon: s.icon,
-            agent: s.agent,
+            agent: s.kind == SpaceKind::Agent,
             current: s.id == current,
         })
         .collect();
@@ -186,7 +192,7 @@ mod tests {
             active: None,
             split: None,
             never_sleep: false,
-            agent: false,
+            kind: SpaceKind::Normal,
         }
     }
 
@@ -209,7 +215,7 @@ mod tests {
     #[test]
     fn an_agent_space_row_draws_the_agent_glyph_and_has_the_dustbin() {
         let mut spaces = [space(0, "Home"), space(1, "Session")];
-        spaces[1].agent = true;
+        spaces[1].kind = SpaceKind::Agent;
         let p = popup(&spaces, SpaceId(0));
         let rows = &p.sections[0].rows;
         assert_eq!((rows[0].agent, rows[0].glyph()), (false, "personal"));

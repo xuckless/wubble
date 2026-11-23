@@ -1,5 +1,5 @@
 use super::*;
-use crate::space::{SplitGroup, even};
+use crate::space::{Side, SplitGroup, Storage, even};
 use crate::tab::Tab;
 use crate::window::{Window, WindowId};
 
@@ -492,7 +492,13 @@ fn delete_container_resets_spaces_and_overrides() {
             .all(|t| closed.contains(t) && !m.tabs.contains_key(t))
     );
     // Its storage goes too, after its pages closed.
-    assert_eq!(fx.last(), Some(&Effect::ContainerDeleted(work)));
+    assert_eq!(
+        fx.last(),
+        Some(&Effect::ContainerDeleted {
+            id: work,
+            storage: Storage::Disk,
+        })
+    );
     // Default is not deletable.
     let (m2, fx) = run(m.clone(), Command::DeleteContainer(D));
     assert_eq!((m2, fx), (m, vec![]));
@@ -2992,7 +2998,13 @@ fn never_sleep_sites_cover_subdomains_and_follow_the_url() {
     let m = Model::new(t0());
     let (m, a) = tab_at(m, "https://docs.example.com/x");
     let (m, b) = tab_at(m, "https://other.test/");
-    let (m, _) = run(m, Command::SetNeverSleepSites(vec!["example.com".into()]));
+    let (m, _) = run(
+        m,
+        Command::SetNeverSleepSites {
+            side: Side::Normal,
+            sites: vec!["example.com".into()],
+        },
+    );
     assert_eq!(m.tabs[&a].lifecycle.keep, Keep::Awake);
     assert_eq!(m.tabs[&b].lifecycle.keep, Keep::Normal);
     let (m, _) = tick(m, Duration::from_secs(3600));
@@ -3013,7 +3025,13 @@ fn a_frozen_tab_turned_awake_is_unfrozen() {
     let (m, a, _) = hidden_pair();
     let (m, _) = tick(m, Duration::from_secs(120));
     assert_eq!(liveness(&m, a), Liveness::Frozen);
-    let (m, fx) = run_all(m, Command::SetNeverSleepSites(vec!["a.test".into()]));
+    let (m, fx) = run_all(
+        m,
+        Command::SetNeverSleepSites {
+            side: Side::Normal,
+            sites: vec!["a.test".into()],
+        },
+    );
     assert_eq!(liveness(&m, a), Liveness::Background);
     assert_eq!(lifecycle_effects(&fx), vec![life(a, Life::Unfreeze)]);
 }
@@ -3634,9 +3652,9 @@ fn an_extension_tab_in_a_gone_container_or_space_opens_nothing() {
 #[test]
 fn an_agent_space_stays_one() {
     let (m, _) = with_tabs(1);
-    assert!(!m.spaces[0].agent);
+    assert!(m.spaces[0].kind != SpaceKind::Agent);
     let (m, fx) = run(m, Command::MarkAgentSpace(s0()));
-    assert!(m.spaces[0].agent && fx.is_empty());
+    assert!(m.spaces[0].kind == SpaceKind::Agent && fx.is_empty());
     // the session's Space outlives it: nothing but deleting the Space ends the mark
     let (m, _) = run(
         m,
@@ -3645,8 +3663,11 @@ fn an_agent_space_stays_one() {
             on: false,
         },
     );
-    assert!(m.spaces[0].agent);
-    assert!(m.for_session(&[]).spaces[0].agent, "saved like any Space");
+    assert!(m.spaces[0].kind == SpaceKind::Agent);
+    assert!(
+        m.for_session(&[]).spaces[0].kind == SpaceKind::Agent,
+        "saved like any Space"
+    );
 }
 
 /// A link from another app that a routing rule sends to a container opens in that container from
@@ -3864,4 +3885,710 @@ fn moving_a_glance_tab_to_another_space_or_window_promotes_it() {
     assert!(m.glance_of(win).is_none());
     assert_eq!(m.spaces[1].active, Some(g_tab));
     assert!(m.check().is_ok(), "{:?}", m.check());
+}
+
+/// A private window on `url` (focused), its window and Space.
+fn private_window(m: Model, url: &str) -> (Model, WindowId, SpaceId) {
+    let (m, fx) = run(
+        m,
+        Command::NewPrivateWindow {
+            url: Some(url.into()),
+        },
+    );
+    let w = opened(&fx);
+    let s = m.window(w).and_then(Window::space).expect("a Main window");
+    (m, w, s)
+}
+
+/// Each window lists the Spaces of its own side of the private line, and a normal window made
+/// while every normal Space is shown is named among the normal Spaces only.
+#[test]
+fn a_window_lists_the_spaces_of_its_own_side() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, _, p1) = private_window(m, "https://p.test/");
+    let (m, _, p2) = private_window(m, "https://q.test/");
+    let listed =
+        |m: &Model, s: SpaceId| -> Vec<SpaceId> { m.listed_spaces(s).map(|s| s.id).collect() };
+    for (from, want) in [
+        (s0(), vec![s0(), s1]),
+        (s1, vec![s0(), s1]),
+        (p1, vec![p1]),
+        (p2, vec![p2]),
+    ] {
+        assert_eq!(listed(&m, from), want, "from {from:?}");
+    }
+    let (m, _) = run(m, Command::NewWindow { space: Some(s1) });
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    let s = m.window(w).and_then(Window::space).unwrap();
+    let si = m.space_idx(s).unwrap();
+    assert_eq!(
+        m.spaces[si].name, "Space 3",
+        "the two private Spaces are not counted"
+    );
+}
+
+/// The in-memory container lives exactly as long as a private window does.
+#[test]
+fn the_ephemeral_container_lives_with_the_private_windows() {
+    let (m, _) = with_tabs(1);
+    let (m, w, _) = private_window(m, "https://p.test/");
+    let c = m
+        .containers
+        .iter()
+        .find(|c| c.storage == Storage::Memory)
+        .map(|c| c.id)
+        .unwrap();
+    let (m, fx) = run(m, Command::CloseWindow(w));
+    let gone = Effect::ContainerDeleted {
+        id: c,
+        storage: Storage::Memory,
+    };
+    assert!(fx.contains(&gone), "{fx:?}");
+    assert!(!m.spaces.iter().any(|s| s.kind == SpaceKind::Private));
+    assert!(!m.containers.iter().any(|c| c.storage == Storage::Memory));
+    let mut bad = m.clone();
+    bad.containers.push(crate::space::Container {
+        id: ContainerId(99),
+        name: "Private".into(),
+        storage: Storage::Memory,
+    });
+    assert!(
+        bad.check().is_err(),
+        "an ephemeral container without a private window"
+    );
+}
+
+/// Moving the last tab out of a private window closes that window (into another private
+/// window, or torn out into a new one); a normal window emptied so stays on its Space.
+#[test]
+fn an_emptied_private_window_closes_and_a_normal_one_stays() {
+    let (m, t) = with_tabs(1);
+    let (m, w1, s1) = private_window(m, "https://p.test/");
+    let (m, w2, s2) = private_window(m, "https://q.test/");
+    let moved = m.order(s2)[0];
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: moved,
+            to: WindowTarget::Existing(w1),
+        },
+    );
+    assert!(fx.contains(&Effect::WindowClosed(w2)), "{fx:?}");
+    assert!(m.window(w2).is_none() && m.space_idx(s2).is_none());
+    assert_eq!((m.window_tab(w1), m.order(s1).len()), (Some(moved), 2));
+    // one of two torn out: the window keeps the other
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: moved,
+            to: WindowTarget::New,
+        },
+    );
+    let w3 = opened(&fx);
+    assert!(m.side_of_window(w3) == Side::Private && m.window(w1).is_some());
+    // the last one torn out: a new private window takes it and the old one closes, the
+    // container staying with the new one
+    let last = m.order(s1)[0];
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: last,
+            to: WindowTarget::New,
+        },
+    );
+    let w4 = opened(&fx);
+    assert!(fx.contains(&Effect::WindowClosed(w1)), "{fx:?}");
+    assert!(
+        !fx.iter()
+            .any(|e| matches!(e, Effect::ContainerDeleted { .. }))
+    );
+    assert!(m.side_of_window(w4) == Side::Private && m.side_of_tab(last) == Side::Private);
+    // a normal window emptied so stays, on its empty Space
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: t[0],
+            to: WindowTarget::New,
+        },
+    );
+    assert!(!fx.contains(&Effect::WindowClosed(WindowId(0))), "{fx:?}");
+    assert_eq!(m.window(WindowId(0)).and_then(Window::space), Some(s0()));
+    assert!(m.order(s0()).is_empty());
+}
+
+/// Mod+N in a private window opens a normal window on a normal Space (neither the private
+/// Space nor refused); Mod+Shift+N opens another private window sharing the one container.
+#[test]
+fn a_new_window_from_a_private_window_is_a_normal_one() {
+    let (m, _) = with_tabs(1);
+    let (m, p, _) = private_window(m, "https://p.test/");
+    assert_eq!(m.focused(), p);
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    let s = m.active_space();
+    assert_eq!(m.focused(), w);
+    assert!(
+        m.side_of_window(w) != Side::Private && m.side_of_space(s) != Side::Private && s != s0()
+    );
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].container, D);
+    let (m, t) = open(m, None);
+    assert!(m.side_of_tab(t) != Side::Private && m.location(t).map(|(s, _)| s) == Some(s));
+    let (m, fx) = run(m, Command::NewPrivateWindow { url: None });
+    let w2 = opened(&fx);
+    assert!(m.side_of_window(w2) == Side::Private && fx.contains(&Effect::ShowCommandBar));
+    assert_eq!(
+        m.spaces
+            .iter()
+            .filter(|s| s.kind == SpaceKind::Private)
+            .count(),
+        2
+    );
+    assert_eq!(
+        m.containers
+            .iter()
+            .filter(|c| c.storage == Storage::Memory)
+            .count(),
+        1
+    );
+}
+
+/// Which private tabs a close ends (their downloads ask first): a private window's own, every
+/// one when the app quits or its last Main window closes, none for a normal window.
+#[test]
+fn a_close_ends_the_private_tabs_it_takes_with_it() {
+    use crate::window::Closing;
+    let (m, _) = with_tabs(1);
+    let (m, w1, s1) = private_window(m, "https://p.test/");
+    let (m, w2, s2) = private_window(m, "https://q.test/");
+    let (m, _) = open(m, None);
+    let p1 = m.order(s1);
+    let p2 = m.order(s2);
+    let p12 = [p1.clone(), p2.clone()].concat();
+    let sorted = |mut v: Vec<TabId>| {
+        v.sort();
+        v
+    };
+    for (closing, want) in [
+        (Closing::Window(w1), p1.clone()),
+        (Closing::Window(w2), p2.clone()),
+        (Closing::Window(WindowId(0)), vec![]),
+        (Closing::Window(WindowId(99)), vec![]),
+        (Closing::App, p12.clone()),
+    ] {
+        assert_eq!(
+            sorted(m.private_tabs_ended(closing)),
+            sorted(want),
+            "{closing:?}"
+        );
+    }
+    // with the normal window gone, closing the one Main window left quits: every private tab
+    let (m, _) = run(m, Command::CloseWindow(WindowId(0)));
+    let (m, _) = run(m, Command::CloseWindow(w2));
+    assert_eq!(
+        sorted(m.private_tabs_ended(Closing::Window(w1))),
+        sorted(p1)
+    );
+}
+
+/// What a command came to across the private line ([`crossing`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Came {
+    /// Refused: the model is as it was and nothing is owed to the engine (no effect).
+    Refused,
+    Applied,
+    /// Done in the last normal window (window 0), which shows the Space, focused.
+    ToNormalWindow,
+}
+
+/// Every command that could cross the private line, from each side to each: a normal window
+/// (0) on s0 with tab n0, a normal Space s1 (tab n1) and a Work container; a private window
+/// on ps with tab p0 in the Memory container. One row per command x side pair.
+#[test]
+fn every_command_keeps_to_its_side_of_the_private_line() {
+    use Came::*;
+    let (m, n) = with_tabs(1);
+    let n0 = n[0];
+    let (m, _) = run(
+        m,
+        Command::NewContainer {
+            name: "Work".into(),
+        },
+    );
+    let work = m.containers.last().unwrap().id;
+    let (m, s1) = add_space(m, D);
+    let (m, _) = run(
+        m,
+        Command::OpenInSpace {
+            space: s1,
+            url: "https://n1.test/".into(),
+        },
+    );
+    let (m, pw, ps) = private_window(m, "https://p.test/");
+    let (m, pw2, ps2) = private_window(m, "https://q.test/");
+    let p0 = m.order(ps)[0];
+    let n1 = m.order(s1)[0];
+    let mem = m
+        .containers
+        .iter()
+        .find(|c| c.storage == Storage::Memory)
+        .unwrap()
+        .id;
+    let w0 = WindowId(0);
+    let url = || "https://x.test/".to_string();
+    let to = |space| Dest::Normal { space, index: 0 };
+    // (row, the window focused first, command, what it comes to)
+    let rows: Vec<(&str, WindowId, Command, Came)> = vec![
+        (
+            "move N->P",
+            w0,
+            Command::MoveTab {
+                tab: n0,
+                to: to(ps),
+            },
+            Refused,
+        ),
+        (
+            "move P->N",
+            pw,
+            Command::MoveTab {
+                tab: p0,
+                to: to(s0()),
+            },
+            Refused,
+        ),
+        (
+            "move N->N",
+            w0,
+            Command::MoveTab {
+                tab: n0,
+                to: to(s1),
+            },
+            Applied,
+        ),
+        (
+            "move P->P",
+            pw,
+            Command::MoveTab {
+                tab: p0,
+                to: to(ps2),
+            },
+            Applied,
+        ),
+        (
+            "to window P->P",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::Existing(pw2),
+            },
+            Applied,
+        ),
+        (
+            "tear out P",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::New,
+            },
+            Applied,
+        ),
+        ("activate P from N", w0, Command::ActivateTab(p0), Applied),
+        (
+            "activate N from P",
+            pw,
+            Command::ActivateTab(n1),
+            ToNormalWindow,
+        ),
+        ("activate N from N", w0, Command::ActivateTab(n1), Applied),
+        (
+            "new space in the memory container",
+            w0,
+            Command::NewSpace {
+                name: "X".into(),
+                tint: DEFAULT_TINT,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "new space in a normal container",
+            w0,
+            Command::NewSpace {
+                name: "X".into(),
+                tint: DEFAULT_TINT,
+                container: work,
+            },
+            Applied,
+        ),
+        (
+            "new window on P from N",
+            w0,
+            Command::NewWindow { space: Some(ps) },
+            Refused,
+        ),
+        (
+            "new window on N from P",
+            pw,
+            Command::NewWindow { space: Some(s1) },
+            Applied,
+        ),
+        (
+            "to window N->P",
+            w0,
+            Command::MoveTabToWindow {
+                tab: n0,
+                to: WindowTarget::Existing(pw),
+            },
+            Refused,
+        ),
+        (
+            "to window P->N",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::Existing(w0),
+            },
+            Refused,
+        ),
+        ("switch N->P", w0, Command::SwitchSpace(ps), Refused),
+        ("switch P->N", pw, Command::SwitchSpace(s1), ToNormalWindow),
+        ("switch N->N", w0, Command::SwitchSpace(s1), Applied),
+        (
+            "new tab, normal container, in P",
+            pw,
+            Command::NewTab {
+                url: url(),
+                container: Some(work),
+                opener: None,
+            },
+            Refused,
+        ),
+        (
+            "new tab, memory container, in N",
+            w0,
+            Command::NewTab {
+                url: url(),
+                container: Some(mem),
+                opener: None,
+            },
+            Refused,
+        ),
+        (
+            "new tab, memory container, in P",
+            pw,
+            Command::NewTab {
+                url: url(),
+                container: Some(mem),
+                opener: None,
+            },
+            Applied,
+        ),
+        (
+            "space container P<-N",
+            w0,
+            Command::SetSpaceContainer {
+                space: ps,
+                container: work,
+            },
+            Refused,
+        ),
+        (
+            "space container N<-P",
+            w0,
+            Command::SetSpaceContainer {
+                space: s1,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "space container N<-N",
+            w0,
+            Command::SetSpaceContainer {
+                space: s1,
+                container: work,
+            },
+            Applied,
+        ),
+        (
+            "reopen P in N",
+            pw,
+            Command::ReopenInContainer {
+                tab: p0,
+                container: work,
+            },
+            Refused,
+        ),
+        (
+            "reopen N in P",
+            w0,
+            Command::ReopenInContainer {
+                tab: n0,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "reopen N in N",
+            w0,
+            Command::ReopenInContainer {
+                tab: n0,
+                container: work,
+            },
+            Applied,
+        ),
+        (
+            "delete container P",
+            w0,
+            Command::DeleteContainer(mem),
+            Refused,
+        ),
+        (
+            "delete container N",
+            w0,
+            Command::DeleteContainer(work),
+            Applied,
+        ),
+        ("delete space P", w0, Command::DeleteSpace(ps), Refused),
+        ("delete space N", w0, Command::DeleteSpace(s1), Applied),
+        ("mark agent P", w0, Command::MarkAgentSpace(ps), Refused),
+        ("mark agent N", w0, Command::MarkAgentSpace(s1), Applied),
+        (
+            "agent tab in P",
+            w0,
+            Command::OpenInSpace {
+                space: ps,
+                url: url(),
+            },
+            Refused,
+        ),
+        (
+            "agent tab in N",
+            pw,
+            Command::OpenInSpace {
+                space: s1,
+                url: url(),
+            },
+            Applied,
+        ),
+        (
+            "extension tab in P",
+            pw,
+            Command::ExtensionTab {
+                url: url(),
+                container: work,
+                space: Some(ps),
+                show: true,
+            },
+            Refused,
+        ),
+        (
+            "extension tab of the memory profile",
+            w0,
+            Command::ExtensionTab {
+                url: url(),
+                container: mem,
+                space: None,
+                show: true,
+            },
+            Refused,
+        ),
+        (
+            "extension tab, no Space, from P",
+            pw,
+            Command::ExtensionTab {
+                url: url(),
+                container: work,
+                space: None,
+                show: false,
+            },
+            Applied,
+        ),
+        (
+            "app link in P",
+            pw,
+            Command::OpenLittle {
+                url: url(),
+                space: Some(ps),
+                container: None,
+            },
+            Refused,
+        ),
+        (
+            "app link, no Space, from P",
+            pw,
+            Command::OpenLittle {
+                url: url(),
+                space: None,
+                container: None,
+            },
+            Applied,
+        ),
+    ];
+    for (row, focus, command, want) in rows {
+        let (before, _) = run(m.clone(), Command::FocusWindow(focus));
+        let (after, fx) = run(before.clone(), command);
+        let came = if after == before && fx.is_empty() {
+            Refused
+        } else if focus == pw
+            && after.focused() == w0
+            && after.window(w0).and_then(Window::space) == Some(s1)
+        {
+            ToNormalWindow
+        } else {
+            Applied
+        };
+        assert_eq!(came, want, "{row}: {fx:?}");
+        // whatever was applied, nothing crossed: every private tab is still in Memory
+        for t in after.tabs.keys() {
+            let private = after
+                .location(*t)
+                .is_some_and(|(s, _)| after.side_of_space(s) == Side::Private);
+            assert_eq!(
+                after.side_of_tab(*t) == Side::Private,
+                private,
+                "{row}: {t:?}"
+            );
+        }
+    }
+    // a Little window's page never becomes a private window's tab
+    let (m, fx) = run(
+        m,
+        Command::OpenLittle {
+            url: url(),
+            space: None,
+            container: None,
+        },
+    );
+    let little = opened(&fx);
+    let (same, fx) = run(
+        m.clone(),
+        Command::PromoteLittle {
+            window: little,
+            space: ps,
+        },
+    );
+    assert!(same == m && fx.is_empty(), "{fx:?}");
+    let (m, _) = run(
+        m,
+        Command::PromoteLittle {
+            window: little,
+            space: s1,
+        },
+    );
+    assert!(m.window(little).is_none());
+}
+
+/// A session (what the store writes, the import's write too) holds nothing of a private
+/// window: its Space, tabs, window and in-memory container go, focused or not, and the last
+/// normal window stays (or is made, when every normal window was closed).
+#[test]
+fn a_private_window_is_no_part_of_a_session() {
+    let (m, n) = with_tabs(1);
+    let (m, _, ps) = private_window(m, "https://p.test/");
+    let p0 = m.order(ps)[0];
+    let (alone, _) = run(m.clone(), Command::CloseWindow(WindowId(0)));
+    let mut windowless = m.clone();
+    windowless.windows.retain(|w| w.space() != Some(ps));
+    // (row, the live model)
+    for (row, live) in [
+        ("focused", m.clone()),
+        ("the only Main window", alone),
+        ("a private Space without its window", windowless),
+    ] {
+        let saved = live.for_session(&[]);
+        saved.check().unwrap_or_else(|e| panic!("{row}: {e}"));
+        assert!(saved.space_idx(ps).is_none(), "{row}");
+        assert!(!saved.tabs.contains_key(&p0), "{row}");
+        assert!(
+            saved.containers.iter().all(|c| c.storage == Storage::Disk),
+            "{row}"
+        );
+        assert!(
+            saved.spaces.iter().all(|s| s.kind != SpaceKind::Private),
+            "{row}"
+        );
+        assert!(
+            saved.windows.iter().any(|w| w.kind() == WindowKind::Main),
+            "{row}: a normal window to come back to"
+        );
+        assert_eq!(
+            saved.side_of_space(saved.active_space()),
+            Side::Normal,
+            "{row}"
+        );
+        assert!(
+            live.tabs.contains_key(&p0),
+            "{row}: the live model keeps it"
+        );
+    }
+    assert!(
+        m.for_session(&[]).tabs.contains_key(&n[0]),
+        "the normal tab stays"
+    );
+}
+
+/// A download row is the private side's only while its container is a known Memory one; a row
+/// of a deleted container stays with the normal side, where it was stored.
+#[test]
+fn a_record_is_private_only_in_a_known_memory_container() {
+    let (m, _) = with_tabs(1);
+    let (m, _) = run(
+        m,
+        Command::NewContainer {
+            name: "Work".into(),
+        },
+    );
+    let work = m.containers.last().unwrap().id;
+    let (m, _, _) = private_window(m, "https://p.test/");
+    let mem = m
+        .containers
+        .iter()
+        .find(|c| c.storage == Storage::Memory)
+        .unwrap()
+        .id;
+    let (gone, _) = run(m.clone(), Command::DeleteContainer(work));
+    // (row, model, container, the record's side, the container's own side)
+    for (row, m, c, record, own) in [
+        ("default", &m, D, Side::Normal, Side::Normal),
+        ("memory", &m, mem, Side::Private, Side::Private),
+        ("deleted", &gone, work, Side::Normal, Side::Private),
+        (
+            "never known",
+            &m,
+            ContainerId(999),
+            Side::Normal,
+            Side::Private,
+        ),
+    ] {
+        assert_eq!(m.side_of_record(c), record, "{row}");
+        assert_eq!(m.side_of_container(c), own, "{row}");
+    }
+}
+
+/// Each side's tabs run its own never-sleep list: a site kept awake from a private window
+/// leaves the same site's normal tab to sleep, and the reverse.
+#[test]
+fn never_sleep_sites_hold_per_side() {
+    let m = Model::new(t0());
+    let (m, n) = tab_at(m, "https://a.test/");
+    let (m, _, ps) = private_window(m, "https://a.test/");
+    let p = m.order(ps)[0];
+    // (row, side the list is set for, normal tab's keep, private tab's keep)
+    for (row, side, normal, private) in [
+        ("normal list", Side::Normal, Keep::Awake, Keep::Normal),
+        ("private list", Side::Private, Keep::Normal, Keep::Awake),
+    ] {
+        let (m, _) = run(
+            m.clone(),
+            Command::SetNeverSleepSites {
+                side,
+                sites: vec!["a.test".into()],
+            },
+        );
+        assert_eq!(m.tabs[&n].lifecycle.keep, normal, "{row}");
+        assert_eq!(m.tabs[&p].lifecycle.keep, private, "{row}");
+    }
 }

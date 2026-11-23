@@ -26,7 +26,8 @@ use wubble_core::autofill::{
     Policy, SaveKind, SaveVerdict, ScriptMessage, View,
 };
 use wubble_core::secret::Secret;
-use wubble_core::site::{Decision, Permission};
+use wubble_core::site::{Decision, Permission, SiteChange};
+use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_engine::page::{FrameChannel, FrameInfo};
 use wubble_ui::{AppWindow, AutofillAnswer, AutofillView};
@@ -163,7 +164,10 @@ impl Host {
     fn autofill_policy(&mut self, tab: TabId, origin: Option<String>) -> Policy {
         let origin = origin.or_else(|| self.page_url(tab).and_then(|u| autofill::web_origin(&u)));
         let never_save = origin.is_some_and(|o| {
-            self.site_permissions.get(&o, Permission::SavePasswords) == Some(Decision::Block)
+            self.site_view(tab)
+                .permissions()
+                .get(&o, Permission::SavePasswords)
+                == Some(Decision::Block)
         });
         // an agent session's tab: the key menu only on a site whose sign-ins the owner shared
         // with it (for the owner watching; what it fills is the agent's as `fill_secret`'s
@@ -217,6 +221,8 @@ impl Host {
                 password_field,
             } => {
                 let top = self.page_origin(tab);
+                // a fill in a private tab (or an unknown one) leaves no last-used stamp
+                let stamp = self.model.side_of_tab(tab) == Side::Normal;
                 self.store.vault(move |vault| {
                     let id = RecordId(record);
                     let mut fields: Vec<(FieldId, Secret)> = username_field
@@ -228,7 +234,9 @@ impl Host {
                         let Ok(password) = vault.reveal(&id) else {
                             return;
                         };
-                        let _ = vault.mark_used(&id, now_ms());
+                        if stamp {
+                            let _ = vault.mark_used(&id, now_ms());
+                        }
                         fields.push((field, Secret::new(password.as_str())));
                     }
                     let _ = slint::invoke_from_event_loop(move || {
@@ -283,15 +291,11 @@ impl Host {
                     vault_failed("updated", &e);
                 }
             }),
+            // from a private window "Never" lasts while its private windows do, and is not stored
             Effect::Never { origin } => {
-                self.site_permissions
-                    .set(&origin, Permission::SavePasswords, Decision::Block);
-                self.store.set_site_permission(
-                    &origin,
-                    Permission::SavePasswords,
-                    Decision::Block,
-                    now_ms(),
-                );
+                let change =
+                    SiteChange::Permission(origin, Permission::SavePasswords, Decision::Block);
+                self.write_site(tab, change);
             }
         }
     }

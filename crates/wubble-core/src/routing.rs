@@ -11,7 +11,7 @@
 use std::cmp::Reverse;
 
 use crate::model::Model;
-use crate::space::{ContainerId, SpaceId};
+use crate::space::{ContainerId, SpaceId, SpaceKind};
 
 /// Which hosts a rule covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,11 +178,12 @@ pub struct Routed {
 /// container that does not exist, is skipped, so the next most specific rule may apply.
 pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed {
     // an agent Space and its container are the session's: a link of the user's never lands there,
-    // where the agent could read it (a hand-off makes them the owner's, but still never by rule)
+    // where the agent could read it (a hand-off makes them the owner's, but still never by rule).
+    // A private window's Space and its in-memory container are no rule's either.
     let agent_containers: Vec<ContainerId> = model
         .spaces
         .iter()
-        .filter(|s| s.agent)
+        .filter(|s| s.kind == SpaceKind::Agent || s.kind == SpaceKind::Private)
         .map(|s| s.container)
         .collect();
     let rules: Vec<(Rule, Routed)> = entries
@@ -194,7 +195,11 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .spaces
                         .iter()
-                        .find(|s| !s.agent && s.name.eq_ignore_ascii_case(n))?
+                        .find(|s| {
+                            s.kind != SpaceKind::Agent
+                                && s.kind != SpaceKind::Private
+                                && s.name.eq_ignore_ascii_case(n)
+                        })?
                         .id,
                 ),
                 None => None,

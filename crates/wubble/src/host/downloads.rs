@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use slint::ComponentHandle;
 use wubble_core::agent::log::Outcome;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
-use wubble_core::space::ContainerId;
+use wubble_core::model::Command;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
+use wubble_core::window::{Closing, WindowId};
 use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
 use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
@@ -22,6 +24,9 @@ use super::{Host, now_ms};
 #[derive(Debug)]
 struct Inflight {
     tab: TabId,
+    /// The tab's container when the download was asked for: its row's, even if the tab
+    /// closes before the engine starts it.
+    container: ContainerId,
     /// Reserved, so two at once never get the same name before either file
     /// exists.
     path: PathBuf,
@@ -184,11 +189,19 @@ impl Host {
                 total,
                 ..
             } => {
+                // the container at request time, else the tab's; with neither it is cancelled
                 let container = self
-                    .model
-                    .tabs
-                    .get(&tab)
-                    .map_or(ContainerId::DEFAULT, |t| t.container);
+                    .downloads
+                    .inflight
+                    .get(&download)
+                    .map(|f| f.container)
+                    .or_else(|| self.model.container_of(tab));
+                let Some(container) = container else {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.cancel_download(download);
+                    }
+                    return;
+                };
                 let d = &mut self.downloads;
                 let entry = DownloadEntry {
                     id: d.next_id,
@@ -208,13 +221,13 @@ impl Host {
                     .entry(download)
                     .or_insert_with(|| Inflight {
                         tab,
+                        container,
                         path: entry.path.clone(),
                         entry: None,
                     })
                     .entry = Some(entry.id);
-                self.store.add_download(&entry);
                 let text = format!("Downloading {}", entry.name);
-                self.downloads.list.insert(0, entry);
+                self.push_entry(entry, self.model.side_of_container(container));
                 self.toast(window, &text);
                 self.render_downloads(window);
                 self.report_busy(tab);
@@ -298,13 +311,17 @@ impl Host {
         download: DownloadId,
         path: Option<PathBuf>,
     ) {
+        // an unknown tab's download is cancelled (no Default stand-in)
+        let container = self.model.container_of(tab);
+        let path = path.filter(|_| container.is_some());
         let Some(view) = self.tab_view(tab) else {
             return;
         };
         let ok = view.answer_download_path(id, path.as_deref());
-        if ok && let Some(path) = path {
+        if ok && let (Some(path), Some(container)) = (path, container) {
             let reserved = Inflight {
                 tab,
+                container,
                 path,
                 entry: None,
             };
@@ -369,7 +386,7 @@ impl Host {
     /// "Clear finished": every entry that is done goes, through the one remove path (none while
     /// the page's search hides rows: `download::clearable_ids`).
     pub(crate) fn downloads_cleared(&mut self) {
-        for id in download::clearable_ids(&self.downloads.list, &self.downloads.query) {
+        for id in download::clearable_ids(&self.listed_downloads(), &self.downloads.query) {
             self.apply_download(id, DownloadEvent::Remove);
         }
     }
@@ -407,6 +424,106 @@ impl Host {
         self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
+    /// The downloads still running that `closing` cancels: the engine's from the private tabs
+    /// it ends, and when it ends every private tab, the media jobs of the private windows'
+    /// container too (they outlive their tab, not the container: `forget_private_downloads`).
+    fn private_downloads_ending(&self, closing: Closing) -> Vec<i64> {
+        let ended = self.model.private_tabs_ended(closing);
+        let every = self
+            .model
+            .tabs
+            .keys()
+            .all(|&t| self.model.side_of_tab(t) == Side::Normal || ended.contains(&t));
+        let media = self.downloads.list.iter().filter(|e| {
+            every
+                && self.media.owns(e.id)
+                && self.model.side_of_record(e.container) == Side::Private
+        });
+        ended
+            .iter()
+            .flat_map(|&tab| self.downloads.running_in(tab))
+            .chain(media.map(|e| e.id))
+            .filter(|&id| self.downloads.get(id).is_some_and(|e| e.state.is_active()))
+            .collect()
+    }
+
+    /// Whether `closing` waits for an answer: while it would cancel private downloads, the
+    /// question (`menu::close_entries`) opens over a page and nothing closes yet. It asks in
+    /// the closing window when it shows a page, else in a private window showing a tab the
+    /// close ends (raised), else in this window; with no page there it closes. A normal
+    /// window's page never carries it unless the close is that window's or the app's.
+    pub(super) fn close_asks(&mut self, closing: Closing) -> bool {
+        let count = self.private_downloads_ending(closing).len();
+        if count == 0 {
+            return false;
+        }
+        let shows = |w: WindowId| !self.model.window_tabs(w).is_empty();
+        let closing_window = match closing {
+            Closing::Window(w) => Some(w).filter(|&w| shows(w)),
+            Closing::App => None,
+        };
+        let holding = self
+            .model
+            .private_tabs_ended(closing)
+            .iter()
+            .filter_map(|&t| self.model.location(t))
+            .find_map(|(space, _)| self.model.space_window(space))
+            .filter(|&w| shows(w));
+        let here = matches!(closing, Closing::App).then_some(self.w.id);
+        let Some(window) = closing_window.or(holding).or(here) else {
+            return false;
+        };
+        if window != self.w.id {
+            self.raise_window(window);
+            self.enter(window);
+        }
+        match self.shown() {
+            Some(tab) => self.ask_in_menu(tab, crate::menu::close_entries(closing, count)),
+            None => false,
+        }
+    }
+
+    /// The question's "Cancel Downloads and Close": the private downloads `closing` ends are
+    /// cancelled, then it closes (and asks nothing again: none is running).
+    pub(super) fn close_cancelling_downloads(&mut self, closing: Closing) {
+        for id in self.private_downloads_ending(closing) {
+            self.apply_download(id, DownloadEvent::Cancel);
+        }
+        match closing {
+            Closing::Window(w) => self.dispatch(Command::CloseWindow(w)),
+            Closing::App => crate::quit(),
+        }
+    }
+
+    /// The in-memory container `container` (the private windows') is gone with the last private
+    /// window: its downloads leave the list, as Chrome's off-the-record download manager goes
+    /// with its profile. A media job still running is cancelled first (the close asked:
+    /// `close_asks`). Their files stay; none of them was stored.
+    pub(super) fn forget_private_downloads(&mut self, container: ContainerId) {
+        let gone: Vec<i64> = self
+            .downloads
+            .list
+            .iter()
+            .filter(|e| e.container == container)
+            .map(|e| e.id)
+            .collect();
+        if gone.is_empty() {
+            return;
+        }
+        for &id in &gone {
+            if self.media.owns(id) && self.downloads.get(id).is_some_and(|e| e.state.is_active()) {
+                self.apply_download(id, DownloadEvent::Cancel);
+            }
+        }
+        self.downloads.list.retain(|e| e.container != container);
+        for id in &gone {
+            self.downloads.unsaved.remove(id);
+        }
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_downloads(&window);
+        }
+    }
+
     /// A new running entry of the list (a media download from a tab of `container`), stored and
     /// shown; its id.
     pub(super) fn add_download_entry(
@@ -429,9 +546,8 @@ impl Host {
             container,
         };
         d.next_id += 1;
-        self.store.add_download(&entry);
         let (id, text) = (entry.id, format!("Downloading {}", entry.name));
-        self.downloads.list.insert(0, entry);
+        self.push_entry(entry, self.model.side_of_container(container));
         if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, &text);
             self.render_downloads(&window);
@@ -439,9 +555,15 @@ impl Host {
         id
     }
 
-    /// A file wubble wrote itself (a print saved as PDF), listed as a finished download of `url`.
-    pub(super) fn add_finished_download(&mut self, url: &str, path: &Path) {
+    /// A file wubble wrote itself (a print saved as PDF), listed as a finished download of `url`
+    /// in `tab`'s container (stored only for a normal tab: `push_entry`).
+    pub(super) fn add_finished_download(&mut self, url: &str, path: &Path, tab: Option<TabId>) {
         let size = std::fs::metadata(path).map_or(0, |m| m.len());
+        // the printed tab closed meanwhile: its file stays, unlisted (no Default stand-in)
+        let Some(container) = tab.and_then(|t| self.model.container_of(t)) else {
+            return;
+        };
+        let side = self.model.side_of_container(container);
         let d = &mut self.downloads;
         let entry = DownloadEntry {
             id: d.next_id,
@@ -452,14 +574,23 @@ impl Host {
             total: Some(size),
             state: DownloadState::Complete,
             started_ms: now_ms(),
-            container: ContainerId::DEFAULT,
+            container,
         };
         d.next_id += 1;
-        self.store.add_download(&entry);
-        self.downloads.list.insert(0, entry);
+        self.push_entry(entry, side);
         if let Some(window) = self.w.window.upgrade() {
             self.render_downloads(&window);
         }
+    }
+
+    /// `entry` goes to the top of the list, and to the store only from the normal `side`: a
+    /// private window's downloads are listed for this run only (their files stay). An unknown
+    /// tab's side is private, so its entry is never stored (fails closed).
+    fn push_entry(&mut self, entry: DownloadEntry, side: Side) {
+        if side == Side::Normal {
+            self.store.add_download(&entry);
+        }
+        self.downloads.list.insert(0, entry);
     }
 
     /// The entry's file moved to `path` (a media download's final name).
@@ -600,23 +731,36 @@ impl Host {
     }
 
     pub(super) fn render_downloads(&self, window: &AppWindow) {
-        let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
+        let listed = self.listed_downloads();
+        let items: Vec<DownloadItem> = listed.iter().map(item).collect();
         crate::bind::sync(window.get_downloads(), items, |m| window.set_downloads(m));
-        if self.downloads.list.is_empty() {
+        if listed.is_empty() {
             window.set_downloads_open(false);
         }
-        let filtered: Vec<DownloadItem> =
-            download::filter_entries(&self.downloads.list, &self.downloads.query)
-                .iter()
-                .map(item)
-                .collect();
+        let filtered: Vec<DownloadItem> = download::filter_entries(&listed, &self.downloads.query)
+            .iter()
+            .map(item)
+            .collect();
         crate::bind::sync(window.get_downloads_page_items(), filtered, |m| {
             window.set_downloads_page_items(m)
         });
         window.set_downloads_searching(!self.downloads.query.trim().is_empty());
         window.set_downloads_has_finished(
-            !download::clearable_ids(&self.downloads.list, &self.downloads.query).is_empty(),
+            !download::clearable_ids(&listed, &self.downloads.query).is_empty(),
         );
+    }
+
+    /// The entries this window lists: a private window's downloads in private windows only,
+    /// every other one in normal windows only (Chrome's off-the-record profile has a download
+    /// manager of its own).
+    fn listed_downloads(&self) -> Vec<DownloadEntry> {
+        let side = self.model.side_of_window(self.w.id);
+        self.downloads
+            .list
+            .iter()
+            .filter(|e| self.model.side_of_record(e.container) == side)
+            .cloned()
+            .collect()
     }
 }
 

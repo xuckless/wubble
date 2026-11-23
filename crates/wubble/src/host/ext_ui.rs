@@ -18,10 +18,10 @@ use wubble_core::extensions::shell::{
     Clicked, POPUP_MAX, POPUP_TAB, Panel, PanelEffect, PanelEvent, Prompt, PromptEffect,
     PromptEvent, options_url, panel_transition, prompt_text, prompt_transition, summary,
 };
-use wubble_core::extensions::{Event, ExtensionId, Installed, restart_needed};
+use wubble_core::extensions::{Event, ExtensionId, Installed, reaches, restart_needed};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::window::WindowId;
 use wubble_engine::app::ViewId;
 use wubble_engine::cdp::EvalId;
@@ -280,6 +280,18 @@ impl Host {
         }
     }
 
+    /// An extension's "Allow in Private Windows" switch.
+    pub(crate) fn extension_private_toggled(&mut self, id: &str, on: bool) {
+        if let Some(id) = ExtensionId::parse(id) {
+            self.extension_change(Event::AllowPrivate(id, on));
+        }
+    }
+
+    /// The install prompt's "Allow in private windows" box.
+    pub(crate) fn extension_prompt_private(&mut self, on: bool) {
+        self.prompt_event(PromptEvent::AllowPrivate(on));
+    }
+
     pub(crate) fn extension_removed(&mut self, id: &str) {
         if let Some(id) = ExtensionId::parse(id) {
             self.extension_change(Event::Remove(id));
@@ -315,11 +327,19 @@ impl Host {
         self.panel_event(PanelEvent::Toggle);
     }
 
-    /// A press on an extension's row: its action runs on the visible tab.
+    /// A press on an extension's row: its action runs on the visible tab, in a private window
+    /// only for an extension allowed there (`reaches`; the popover lists no other).
     pub fn extension_pressed(&mut self, id: &str) {
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
+        let allowed = ExtensionId::parse(id)
+            .and_then(|id| self.ext_ui.list.get(&id))
+            .is_some_and(|e| reaches(e, private));
         let Some(view) = self.shown().and_then(|t| self.views.get(&t)).copied() else {
             return;
         };
+        if !allowed {
+            return;
+        }
         let clicked = match self.engine.action_click(id, view) {
             ActionClick::None => Clicked::Nothing,
             ActionClick::Clicked => Clicked::Ran,
@@ -398,6 +418,7 @@ impl Host {
             begin_frames: self.begin_frames(),
             gpu: self.w.presenters[0].context().clone(),
             container,
+            storage: self.model.storage_of(container),
         };
         match self.engine.open_view(config) {
             Ok(id) => {
@@ -598,12 +619,17 @@ impl Host {
                 note: summary(e).into(),
                 enabled: e.enabled,
                 options: options_url(e).is_some(),
+                private: e.private,
             })
             .collect();
         let restart = restart_needed(&ui.at_start, &ui.list);
         // the engine's fact (`ext_api::available`): without its patches no extension is offered
         let available = self.engine.ext_apis();
-        window.set_has_extensions(wubble_core::extensions::footer_button(available, &ui.list));
+        // a private window shows the button only for extensions allowed there
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
+        window.set_has_extensions(wubble_core::extensions::footer_button(
+            available, &ui.list, private,
+        ));
         window.set_settings_extensions_available(available);
         crate::bind::sync(window.get_settings_extensions(), items, |m| {
             window.set_settings_extensions(m)
@@ -629,6 +655,7 @@ impl Host {
                     title: title.into(),
                     message: message.into(),
                     serial: self.ext_ui.prompt_serial,
+                    private: ext.private,
                 }
             }
             // a sheet that closes keeps its words while it leaves
@@ -640,17 +667,19 @@ impl Host {
         self.render_popup(window);
     }
 
-    /// The popover's rows: each enabled extension's action as the visible tab sees it.
+    /// The popover's rows: each enabled extension's action as the visible tab sees it; in a
+    /// private window only those allowed there (`reaches`).
     fn extension_actions(&self) -> Vec<ExtensionAction> {
         if let Some((_, rows)) = &self.ext_ui.gallery {
             return rows.clone();
         }
         let view = self.shown().and_then(|t| self.views.get(&t)).copied();
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
         self.ext_ui
             .list
             .extensions()
             .iter()
-            .filter(|e| e.enabled)
+            .filter(|e| reaches(e, private))
             .map(|e| {
                 let state = view.and_then(|v| self.engine.action_state(e.id.as_str(), v));
                 action_row(e.id.as_str(), &e.name, e.dir(), state)
@@ -714,6 +743,7 @@ fn gallery_list() -> Installed {
             },
             permissions: permissions.into_iter().map(str::to_owned).collect(),
             options_page: (name == "Page Notes").then(|| "options.html".to_owned()),
+            private: name == "Page Notes",
         };
         list = wubble_core::extensions::transition(list, Event::Install(ext)).0;
     }
@@ -758,6 +788,7 @@ fn gallery_asked() -> wubble_core::extensions::Extension {
         .map(str::to_owned)
         .to_vec(),
         options_page: None,
+        private: false,
     }
 }
 

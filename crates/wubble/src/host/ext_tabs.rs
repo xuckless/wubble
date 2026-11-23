@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use wubble_core::extensions::{opened_url, project};
 use wubble_core::model::{Command, Model};
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowId;
 use wubble_engine::app::{Engine, ViewId};
@@ -60,7 +60,9 @@ impl ExtHost for Host {
 }
 
 /// The command that opens `url` for an extension in `container`: in the Space of the Main
-/// window `window` names, else in the active Space; shown when `active`.
+/// window `window` names, else in the active Space (a private window is none of an
+/// extension's: its tab opens in the last normal window, `Model::normal_space`); shown when
+/// `active`.
 fn open_command(
     model: &Model,
     url: &str,
@@ -70,7 +72,8 @@ fn open_command(
 ) -> Command {
     let space = window
         .and_then(|w| model.windows.iter().find(|x| x.id == w))
-        .and_then(|w| w.space());
+        .and_then(|w| w.space())
+        .filter(|&s| model.side_of_space(s) != Side::Private);
     Command::ExtensionTab {
         url: opened_url(url).to_owned(),
         container,
@@ -119,8 +122,17 @@ pub(crate) fn serve(host: &mut impl ExtHost) {
                 host.engine().answer_open_tab(request, answer);
                 continue;
             }
-            ExtRequest::CloseTab(view) => host.tab_of(view).map(Command::CloseTab),
-            ExtRequest::ActivateTab(view) => host.tab_of(view).map(Command::ActivateTab),
+            // a private window's tab is none of an extension's: the request does not say which
+            // extension asks, so "Allow in Private Windows" cannot let one through here (an
+            // allowed extension's reach is the engine's: docs/research/extensions.md)
+            ExtRequest::CloseTab(view) => host
+                .tab_of(view)
+                .filter(|&t| host.model().side_of_tab(t) != Side::Private)
+                .map(Command::CloseTab),
+            ExtRequest::ActivateTab(view) => host
+                .tab_of(view)
+                .filter(|&t| host.model().side_of_tab(t) != Side::Private)
+                .map(Command::ActivateTab),
             ExtRequest::ActionChanged { extension } => {
                 let _ = extension;
                 host.action_changed();
@@ -160,7 +172,6 @@ impl Host {
 mod tests {
     use super::*;
     use std::time::Instant;
-    use wubble_core::space::SpaceId;
     use wubble_core::window::Window;
 
     fn open(model: &Model, url: &str, window: Option<WindowId>, active: bool) -> Command {
@@ -184,7 +195,9 @@ mod tests {
     #[test]
     fn an_open_in_a_main_window_goes_to_its_space_and_a_popup_window_to_the_active_one() {
         let mut m = Model::new(Instant::now());
-        m.windows.push(Window::main(WindowId(7), SpaceId(1)));
+        // a Space the model has: an unknown one is taken as private (`Model::side_of_space`)
+        let s = m.active_space();
+        m.windows.push(Window::main(WindowId(7), s));
         m.windows.push(Window {
             id: WindowId(8),
             shown: wubble_core::window::Shown::Popup(TabId(1)),
@@ -194,7 +207,7 @@ mod tests {
             Command::ExtensionTab { space, .. } => space,
             c => panic!("{c:?}"),
         };
-        assert_eq!(space(7), Some(SpaceId(1)));
+        assert_eq!(space(7), Some(s));
         assert_eq!(space(8), None);
         assert_eq!(space(99), None);
     }

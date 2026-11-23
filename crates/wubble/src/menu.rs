@@ -25,10 +25,10 @@ use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
 use wubble_core::omnibox;
 use wubble_core::pagetheme::PageTheme;
-use wubble_core::space::{ContainerId, SpaceId};
+use wubble_core::space::{ContainerId, Side, SpaceId, SpaceKind};
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
-use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
+use wubble_core::window::{Closing, Shown, WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -79,6 +79,8 @@ pub enum Command {
     OpenInNewWindow(String),
     /// Run a script in the frame CEF named (`View::run_script_in`).
     FrameScript { frame: String, script: &'static str },
+    /// Open the URL in a new private window (`Command::NewPrivateWindow`).
+    OpenInPrivateWindow(String),
     /// Put the text on the clipboard.
     CopyText(String),
     /// Download the URL with the page's cookies, asking where to save it.
@@ -145,6 +147,10 @@ pub enum Command {
     EditBoost(i64),
     /// Delete browsing data (`clear_entries`).
     ClearData(ClearData),
+    /// Cancel the private downloads this close would end, then close (`close_entries`).
+    CancelDownloadsAndClose(Closing),
+    /// A question's "keep" answer: the menu closes, nothing else happens.
+    Dismiss,
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -173,6 +179,9 @@ pub struct NavFlags {
     pub search: Option<&'static str>,
     /// The chosen engine's search by image URL (`omnibox::EngineInfo::image`).
     pub image: Option<&'static str>,
+    /// The page is a private window's: "Open Link in Private Window" is not offered there
+    /// (Chrome's incognito window has no "Open link in incognito window").
+    pub private: bool,
 }
 
 /// The context a row's predicates read.
@@ -371,6 +380,14 @@ const ROWS: &[Row] = &[
     row!(1, "Open Link in New Window", |c| c.link(), always, |c| {
         Command::OpenInNewWindow(c.menu.link_url.clone())
     }),
+    // Chromium's IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD, left out in an incognito window
+    row!(
+        1,
+        "Open Link in Private Window",
+        |c| c.link() && !c.nav.private,
+        always,
+        |c| { Command::OpenInPrivateWindow(c.menu.link_url.clone()) }
+    ),
     row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
         Command::SaveAs(c.menu.link_url.clone())
     }),
@@ -832,7 +849,7 @@ pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         })
     {
         let listed = model
-            .never_sites()
+            .never_sites(model.side_of_tab(tab))
             .iter()
             .find(|s| wubble_core::routing::host_in(&[s.as_str()], &host));
         out.push(match listed {
@@ -861,10 +878,14 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         danger: false,
     };
     let own = model.window_of(tab);
+    // a private window's tab moves only among private windows (a new one is private too), a
+    // normal tab only among normal ones
+    let side = model.side_of_tab(tab);
     let others = model.windows.iter().filter(|w| {
         w.kind() == WindowKind::Main
             && Some(w.id) != own
             && w.space() != model.location(tab).map(|l| l.0)
+            && model.side_of_window(w.id) == side
     });
     std::iter::once(entry("Move to New Window".into(), WindowTarget::New))
         .chain(others.filter_map(|w| {
@@ -892,26 +913,86 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
         shortcut: String::new(),
         danger: false,
     };
-    let active = model.active_space();
+    // a Little window's page is never a private window's: it goes to the last normal Space
+    let active = model.normal_space();
     match w.shown {
         Shown::Little(_) => std::iter::once(entry(
             "Open as Tab".into(),
             Command::PromoteLittle(window, active),
         ))
-        .chain(model.spaces.iter().filter(|s| s.id != active).map(|s| {
-            entry(
-                format!("Open in {}", s.name),
-                Command::PromoteLittle(window, s.id),
-            )
-        }))
+        .chain(
+            model
+                .spaces
+                .iter()
+                .filter(|s| s.id != active && s.kind != SpaceKind::Private)
+                .map(|s| {
+                    entry(
+                        format!("Open in {}", s.name),
+                        Command::PromoteLittle(window, s.id),
+                    )
+                }),
+        )
         .collect(),
-        Shown::Popup(tab) => vec![entry(
-            "Open as Tab".into(),
-            Command::MoveToWindow(tab, WindowTarget::Existing(model.main_window())),
-        )],
+        // a private window's pop-up becomes a tab of the private window it came from, any other
+        // one a tab of the focused Main window, or of the last normal one when that is private
+        Shown::Popup(tab) => {
+            let main = model.main_window();
+            let to = if model.side_of_tab(tab) == Side::Private {
+                model
+                    .location(tab)
+                    .and_then(|(space, _)| model.space_window(space))
+                    .unwrap_or(main)
+            } else if model.side_of_window(main) == Side::Private {
+                model.space_window(model.normal_space()).unwrap_or(main)
+            } else {
+                main
+            };
+            vec![entry(
+                "Open as Tab".into(),
+                Command::MoveToWindow(tab, WindowTarget::Existing(to)),
+            )]
+        }
         // its controls are its way out
         Shown::Space(_) | Shown::Pip(_) => vec![],
     }
+}
+
+/// The question a close asks while it would cancel `count` downloads of private tabs (Chrome's
+/// "If you close all Incognito windows now, N downloads will be cancelled"): what goes, then
+/// the answers. Dismissing it keeps the window, as "keep" does.
+pub fn close_entries(closing: Closing, count: usize) -> Vec<Entry> {
+    let (what, them) = if count == 1 {
+        ("1 download".to_owned(), "Download")
+    } else {
+        (format!("{count} downloads"), "Downloads")
+    };
+    let (close, keep) = match closing {
+        Closing::Window(_) => ("Close", "Keep Window Open"),
+        Closing::App => ("Quit", "Keep wubble Open"),
+    };
+    let entry = |label: String, command, enabled, danger| Entry {
+        label,
+        command,
+        enabled,
+        icon: "",
+        shortcut: String::new(),
+        danger,
+    };
+    vec![
+        entry(
+            format!("{what} from private windows will be cancelled"),
+            Command::Info,
+            false,
+            false,
+        ),
+        entry(
+            format!("Cancel {them} and {close}"),
+            Command::CancelDownloadsAndClose(closing),
+            true,
+            true,
+        ),
+        entry(keep.into(), Command::Dismiss, true, false),
+    ]
 }
 
 /// The address pill's pop-up menu: open what the page asked for, or allow the site.
@@ -1041,6 +1122,15 @@ pub enum ClearData {
 /// goes, and choosing one is the confirmation; dismissing it clears nothing.
 pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Entry> {
     let container = model.tabs.get(&tab).map(|t| t.container);
+    // the containers on the tab's side of the private line: a private window clears its
+    // in-memory container only, a normal one never names it
+    let mine = model.side_of_tab(tab);
+    let side: Vec<ContainerId> = model
+        .containers
+        .iter()
+        .filter(|c| c.storage.side() == mine)
+        .map(|c| c.id)
+        .collect();
     let name = container
         .and_then(|c| model.containers.iter().find(|k| k.id == c))
         .map_or("this container", |c| c.name.as_str());
@@ -1067,21 +1157,19 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
             Command::ClearData(ClearData::Site(origin.to_owned())),
         ));
     }
-    if let Some(c) = container.filter(|_| model.containers.len() > 1) {
+    if let Some(c) = container.filter(|_| side.len() > 1) {
         out.push(row(
             format!("Clear {name}"),
             Command::ClearData(ClearData::Containers(vec![c])),
         ));
     }
     out.push(row(
-        if model.containers.len() > 1 {
+        if side.len() > 1 {
             "Clear All Containers".into()
         } else {
             "Clear Cookies and Cache".into()
         },
-        Command::ClearData(ClearData::Containers(
-            model.containers.iter().map(|c| c.id).collect(),
-        )),
+        Command::ClearData(ClearData::Containers(side)),
     ));
     out
 }
@@ -1609,6 +1697,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_close_that_cancels_private_downloads_asks_first() {
+        let w = WindowId(3);
+        for (closing, count, want) in [
+            (
+                Closing::Window(w),
+                1,
+                [
+                    "1 download from private windows will be cancelled",
+                    "Cancel Download and Close",
+                    "Keep Window Open",
+                ],
+            ),
+            (
+                Closing::App,
+                3,
+                [
+                    "3 downloads from private windows will be cancelled",
+                    "Cancel Downloads and Quit",
+                    "Keep wubble Open",
+                ],
+            ),
+        ] {
+            let e = close_entries(closing, count);
+            assert_eq!(labels(&e), want);
+            assert_eq!(
+                e.iter().map(|e| (e.enabled, e.danger)).collect::<Vec<_>>(),
+                [(false, false), (true, true), (true, false)]
+            );
+            assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
+            assert_eq!(e[2].command, Command::Dismiss);
+        }
+    }
+
     fn labels(entries: &[Entry]) -> Vec<&str> {
         entries
             .iter()
@@ -1695,6 +1817,7 @@ mod tests {
             [
                 "Open Link in New Tab",
                 "Open Link in New Window",
+                "Open Link in Private Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -1706,6 +1829,10 @@ mod tests {
         for (label, command) in [
             ("Open Link in New Tab", Command::OpenInNewTab(next())),
             ("Open Link in New Window", Command::OpenInNewWindow(next())),
+            (
+                "Open Link in Private Window",
+                Command::OpenInPrivateWindow(next()),
+            ),
             ("Save Link As\u{2026}", Command::SaveAs(next())),
             ("Copy Link Address", Command::CopyText(next())),
             ("Take Screenshot of Element", Command::ShotElement((10, 20))),
@@ -1730,6 +1857,7 @@ mod tests {
             [
                 "Open Link in New Tab",
                 "Open Link in New Window",
+                "Open Link in Private Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -1742,9 +1870,10 @@ mod tests {
                 "Inspect"
             ]
         );
+        let copy = e.iter().find(|e| e.label == "Copy Image");
         assert_eq!(
-            e[7].command,
-            Command::CopyImage("https://a.test/i.png".into())
+            copy.map(|e| &e.command),
+            Some(&Command::CopyImage("https://a.test/i.png".into()))
         );
         // An image that has not loaded has nothing to copy.
         let unloaded = ContextMenu {
@@ -2434,7 +2563,13 @@ mod tests {
             ]
         );
         let (m, _) = apply(m, Cmd::SetSpaceNeverSleep { space, on: true });
-        let (m, _) = apply(m, Cmd::SetNeverSleepSites(vec![host.clone()]));
+        let (m, _) = apply(
+            m,
+            Cmd::SetNeverSleepSites {
+                side: Side::Normal,
+                sites: vec![host.clone()],
+            },
+        );
         assert_eq!(
             rows(&m),
             [

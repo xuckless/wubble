@@ -9,7 +9,7 @@
 
 use crate::busy::Reason;
 use crate::model::{Command, Dest, Model, Place};
-use crate::space::{FolderId, Item};
+use crate::space::{FolderId, Item, Side, SpaceKind};
 use crate::tab::TabId;
 
 /// One kind of row. Order in [`ROWS`] is the menu's order.
@@ -177,7 +177,14 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                 }
             }
             Some(Row::MoveToSpace) => {
-                for s in model.spaces.iter().filter(|s| s.id != space) {
+                // a tab never crosses a private window's line: no private Space is a target, and
+                // a private window's tab has none
+                let private = model.side_of_space(space) == Side::Private;
+                for s in model
+                    .spaces
+                    .iter()
+                    .filter(|s| s.id != space && s.kind != SpaceKind::Private && !private)
+                {
                     out.push(mk(
                         format!("Move to {}", s.name),
                         Run::Model(Command::MoveTab {

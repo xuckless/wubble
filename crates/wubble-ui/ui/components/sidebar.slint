@@ -406,6 +406,7 @@ export component Sidebar inherits Rectangle {
                         text: root.spaces[root.space-index].name;
                         enter: root.space-enter;
                         agent: root.spaces[root.space-index].agent;
+                        private: root.spaces[root.space-index].private;
                         agent-stop => {
                             root.action("stop-agents");
                         }

@@ -18,7 +18,7 @@ use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
-    SplitGroup,
+    SpaceKind, SplitGroup, Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 use wubble_core::window::{Geometry, Shown, Window, WindowId, WindowState};
@@ -55,6 +55,7 @@ impl Store {
             containers.push(Container {
                 id: ContainerId(narrow(r.get(0)?, "container id")?),
                 name: r.get(1)?,
+                storage: Storage::Disk,
             });
         }
 
@@ -88,7 +89,12 @@ impl Store {
                     .transpose()?,
                 split: None,
                 never_sleep: r.get::<i64>(6)? != 0,
-                agent: r.get::<i64>(7)? != 0,
+                // the `agent` column is the kind (a private Space is never written)
+                kind: if r.get::<i64>(7)? != 0 {
+                    SpaceKind::Agent
+                } else {
+                    SpaceKind::Normal
+                },
             });
         }
         if spaces.is_empty() {
@@ -365,7 +371,9 @@ fn split_group(space: &Space, tabs: Vec<TabId>, stops: Vec<Option<f64>>) -> Opti
 }
 
 /// Delete the whole stored session and write `model` in its place, inside `tx`. The caller has
-/// run `Model::check`. Shared by `save_session` and `apply_import`.
+/// run `Model::check`. Shared by `save_session` and `apply_import`. The caller passes a
+/// session (`Model::for_session`): nothing of a private window is in it (Chrome never writes
+/// an off-the-record profile's session).
 pub(crate) async fn write_model(
     tx: &turso::transaction::Transaction<'_>,
     model: &Model,
@@ -469,7 +477,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             active,
             s.icon.id(),
             i64::from(s.never_sleep),
-            i64::from(s.agent),
+            i64::from(s.kind == SpaceKind::Agent),
         ))
         .await?;
     }
@@ -1097,7 +1105,7 @@ mod tests {
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
             assert!(m.spaces[2].never_sleep && !m.spaces[0].never_sleep);
-            assert!(m.spaces[1].agent && !m.spaces[0].agent);
+            assert!(m.spaces[1].kind == SpaceKind::Agent && m.spaces[0].kind != SpaceKind::Agent);
             assert!(m.tabs.values().any(|t| t.last_active_ms == 5_000));
             store.save_session(&m).await.unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
@@ -1321,7 +1329,7 @@ mod tests {
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                     split: None,
                     never_sleep: false,
-                    agent: false,
+                    kind: SpaceKind::Normal,
                 },
                 Space {
                     id: SpaceId(1),
@@ -1334,17 +1342,19 @@ mod tests {
                     active: Some(TabId(21)), // the saved active tab
                     split: None,
                     never_sleep: false,
-                    agent: false,
+                    kind: SpaceKind::Normal,
                 },
             ];
             let containers = vec![
                 Container {
                     id: D,
                     name: "Default".into(),
+                    storage: Storage::Disk,
                 },
                 Container {
                     id: ContainerId(1),
                     name: "Work".into(),
+                    storage: Storage::Disk,
                 },
             ];
             let mut tabs = vec![
@@ -1510,7 +1520,7 @@ mod tests {
             for (i, s) in m.spaces.iter_mut().enumerate() {
                 s.icon = SpaceIcon::nth(i);
                 s.never_sleep = false; // no such column before v12
-                s.agent = false; // nor this one before v15
+                s.kind = SpaceKind::Normal; // nor this one before v15
             }
             m.tabs.values_mut().for_each(|t| t.last_active_ms = 0);
             let tx = store.conn.transaction().await.unwrap();
