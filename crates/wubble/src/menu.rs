@@ -1699,21 +1699,18 @@ mod tests {
                 "Inspect"
             ]
         );
-        assert_eq!(
-            e[0].command,
-            Command::OpenInNewTab("https://a.test/next".into())
-        );
-        assert_eq!(
-            e[1].command,
-            Command::OpenInNewWindow("https://a.test/next".into())
-        );
-        assert_eq!(e[2].command, Command::SaveAs("https://a.test/next".into()));
-        assert_eq!(
-            e[3].command,
-            Command::CopyText("https://a.test/next".into())
-        );
-        assert_eq!(e[5].command, Command::ShotElement((10, 20)));
-        assert_eq!(e[6].command, Command::Inspect { x: 10, y: 20 });
+        let next = || "https://a.test/next".to_owned();
+        for (label, command) in [
+            ("Open Link in New Tab", Command::OpenInNewTab(next())),
+            ("Open Link in New Window", Command::OpenInNewWindow(next())),
+            ("Save Link As\u{2026}", Command::SaveAs(next())),
+            ("Copy Link Address", Command::CopyText(next())),
+            ("Take Screenshot of Element", Command::ShotElement((10, 20))),
+            ("Inspect", Command::Inspect { x: 10, y: 20 }),
+        ] {
+            let row = e.iter().find(|e| e.label == label);
+            assert_eq!(row.map(|e| &e.command), Some(&command), "{label}");
+        }
     }
 
     #[test]
@@ -1775,14 +1772,19 @@ mod tests {
             ]
         );
         assert!(e[0].enabled);
-        assert_eq!(e[3].command, Command::Search("hello".into()));
+        let search = |e: &[Entry]| {
+            e.iter()
+                .position(|e| matches!(&e.command, Command::Search(t) if t == "hello"))
+        };
+        assert!(search(&e).is_some());
         let named = NavFlags {
             search: Some("DuckDuckGo"),
             ..NavFlags::default()
         };
+        let named = entries(&m, named);
         assert_eq!(
-            entries(&m, named)[3].label,
-            "Search DuckDuckGo for \u{201c}hello\u{201d}"
+            search(&named).map(|i| named[i].label.as_str()),
+            Some("Search DuckDuckGo for \u{201c}hello\u{201d}")
         );
     }
 
