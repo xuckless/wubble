@@ -38,6 +38,20 @@ pub(crate) const TEXT: &[&str] = &[
     "TEXT",
 ];
 
+/// The text types that are Latin-1, not UTF-8 (X11's ICCCM `STRING`, and `TEXT`, which an
+/// owner answers in its own encoding: Latin-1 is what it may be read as).
+const LATIN1_TEXT: &[&str] = &["STRING", "TEXT"];
+
+/// What a text type's bytes say: Latin-1 for [`LATIN1_TEXT`], else UTF-8 (a bad sequence a
+/// replacement character).
+pub fn text_of(mime: &str, bytes: &[u8]) -> String {
+    if LATIN1_TEXT.contains(&mime) {
+        bytes.iter().map(|&b| char::from(b)).collect()
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
 /// The text types a drag out (and a copy, `crate::clipboard`) offers: the UTF-8 ones of [`TEXT`].
 pub(crate) const OFFERED_TEXT: &[&str] = TEXT.split_at(3).0;
 
@@ -343,7 +357,9 @@ pub fn read_custom_data(bytes: &[u8]) -> Option<Vec<(String, String)>> {
             .chunks_exact(2)
             .map(|u| u16::from_le_bytes([u[0], u[1]]))
             .collect();
-        String::from_utf16(&units).ok()
+        // A lone surrogate (a page's string cut mid-pair) is a replacement character, as
+        // Chromium's own UTF-16 strings tolerate it.
+        Some(String::from_utf16_lossy(&units))
     };
     (0..count)
         .map(|_| Some((string16(&mut at)?, string16(&mut at)?)))
@@ -445,6 +461,19 @@ pub mod pasteboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_is_read_in_its_types_encoding() {
+        for (mime, bytes, text) in [
+            ("UTF8_STRING", "café".as_bytes(), "café"),
+            ("text/plain;charset=utf-8", "café".as_bytes(), "café"),
+            ("STRING", b"caf\xe9".as_slice(), "café"),
+            ("TEXT", b"caf\xe9".as_slice(), "café"),
+            ("text/plain", b"caf\xe9".as_slice(), "caf\u{fffd}"),
+        ] {
+            assert_eq!(text_of(mime, bytes), text, "{mime}");
+        }
+    }
 
     #[test]
     fn file_uris_encode_and_read_back() {
@@ -645,6 +674,14 @@ mod tests {
         for bytes in broken {
             assert_eq!(read_custom_data(bytes), None, "{bytes:?}");
         }
+        // A lone surrogate in a value (a page's string cut mid-pair): a replacement character.
+        let lone = [
+            20, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 1, 0, 0, 0, 0, 0xd8, 0, 0,
+        ];
+        assert_eq!(
+            read_custom_data(&lone),
+            Some(vec![("a".into(), "\u{fffd}".into())])
+        );
     }
 
     #[test]

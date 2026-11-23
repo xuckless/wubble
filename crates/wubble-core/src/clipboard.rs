@@ -207,7 +207,7 @@ pub fn read(parts: Vec<(Kind, String, Vec<u8>)>) -> (Payload, Vec<PathBuf>) {
         .unwrap_or_default();
     for (kind, mime, bytes) in parts {
         match kind {
-            Kind::Text => payload.text = Some(normalize_to_lf(&String::from_utf8_lossy(&bytes))),
+            Kind::Text => payload.text = Some(normalize_to_lf(&dnd::text_of(&mime, &bytes))),
             Kind::Html => payload.html = Some(html_text(&bytes)),
             Kind::Picture => payload.files.push(File {
                 name: format!("image.{}", dnd::image_extension(&mime).unwrap_or("png")),

@@ -1048,12 +1048,12 @@ fn read_drop(
         .name("wubble-drop".into())
         .spawn(move || {
             let mut data = DragData::default();
-            for (kind, _, file) in pipes {
+            for (kind, mime, file) in pipes {
                 let mut bytes = vec![];
                 if file.take(DROP_CAP).read_to_end(&mut bytes).is_err() {
                     continue;
                 }
-                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let text = dnd::text_of(&mime, &bytes);
                 match kind {
                     Kind::UriList => match dnd::parse_uri_list(&text) {
                         Some(UriList::Files(files)) => data.files = files,
