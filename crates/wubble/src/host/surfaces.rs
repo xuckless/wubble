@@ -168,7 +168,7 @@ impl Host {
             }
             Routed::Fullscreen(false) => {
                 self.pip_fullscreen_left(tab);
-                self.apply_screen(window, ScreenEvent::PageLeft(tab));
+                self.page_left(tab);
             }
             Routed::Muted(muted) => {
                 self.audio.entry(tab).or_default().muted = muted;
@@ -591,13 +591,13 @@ impl Host {
     /// fullscreen is the page's).
     pub(super) fn apply_screen(&mut self, window: &AppWindow, event: ScreenEvent) -> bool {
         let full = window.window().is_fullscreen();
-        let state = screen::observe(self.screen, full);
+        let state = screen::observe(self.w.screen, full);
         let (next, effects, consumed) = screen::transition(state, event);
-        self.screen = next;
+        self.w.screen = next;
         for effect in effects {
             match effect {
                 ScreenEffect::SetWindowFullscreen(on) => window.window().set_fullscreen(on),
-                // `render_surfaces` draws the chrome from `self.screen`.
+                // `render_surfaces` draws the chrome from `self.w.screen`.
                 ScreenEffect::HideChrome(_) => {}
                 ScreenEffect::ExitPage(tab) => {
                     if let Some(v) = self.tab_view(tab) {
@@ -630,9 +630,25 @@ impl Host {
         self.forget_gone_blocks();
         self.audio.remove(&tab);
         self.busy_view_gone(tab);
-        if let Some(window) = self.w.window.upgrade() {
+        self.page_left(tab);
+    }
+
+    /// `tab`'s page left fullscreen (or its view closed, or it stopped being visible): the
+    /// window that holds it leaves page fullscreen, whichever window the host is in; the host
+    /// comes back to the one it was in.
+    pub(super) fn page_left(&mut self, tab: TabId) {
+        let here = self.w.id;
+        let screens = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .map(|w| (w.id, w.screen));
+        // a tab no window holds: the current window's (`(_, PageLeft(_))`) ignores it
+        let owner = screen::page_owner(screens, tab).unwrap_or(here);
+        if self.enter(owner)
+            && let Some(window) = self.w.window.upgrade()
+        {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
         }
+        self.enter(here);
     }
 
     /// The tab stopped being the visible one: the overlays follow their rules (menus and
@@ -640,11 +656,11 @@ impl Host {
     /// wubble_core::overlay), its page leaves fullscreen.
     fn left_visible(&mut self, window: &AppWindow, tab: TabId, now: Option<TabId>) {
         self.overlay_event(window, Some(tab), OverlayEvent::Switched(now));
-        if matches!(self.screen, Screen::Page { tab: t, .. } if t == tab) {
+        if matches!(self.w.screen, Screen::Page { tab: t, .. } if t == tab) {
             if let Some(v) = self.tab_view(tab) {
                 v.exit_fullscreen();
             }
-            self.apply_screen(window, ScreenEvent::PageLeft(tab));
+            self.page_left(tab);
         }
     }
 
@@ -709,7 +725,7 @@ impl Host {
         if popup.is_none() {
             window.set_popup_frame(slint::Image::default());
         }
-        window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
+        window.set_page_fullscreen(matches!(self.w.screen, Screen::Page { .. }));
         self.render_autofill(window, tab);
         self.w.drawn = Drawn {
             tab,
@@ -933,14 +949,9 @@ impl Host {
         window.set_toast_action(action.into());
         window.set_toast_sticky(sticky);
         window.set_toast_shown(true);
-        if sticky {
+        let Some(ms) = wubble_core::overlay::toast_ms(!action.is_empty(), sticky) else {
             self.w.toast.stop();
             return;
-        }
-        let ms = if action.is_empty() {
-            wubble_core::overlay::TOAST_SHOWN_MS
-        } else {
-            wubble_core::sponsor::TOAST_MS
         };
         let shown = window.as_weak();
         self.w.toast.start(

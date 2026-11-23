@@ -474,8 +474,6 @@ pub struct Host {
     drag_window: WindowId,
     /// Asks the drag again once the pointer has rested on a Space's icon for the hover delay.
     drag_timer: slint::Timer,
-    /// Window and page fullscreen.
-    screen: Screen,
     /// The page's IME composition.
     ime: Ime,
     /// Sound per live tab, as its view reported it.
@@ -729,7 +727,6 @@ impl Host {
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
             drag_window: WindowId(0),
             drag_timer: slint::Timer::default(),
-            screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
             favicons,
@@ -3617,7 +3614,7 @@ impl Host {
         // when no shell field, sheet or menu holds the focus.
         if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) {
             match input::esc_to(
-                matches!(self.screen, Screen::Page { .. }),
+                matches!(self.w.screen, Screen::Page { .. }),
                 window.get_web_focused(),
                 self.model.glance_of(self.w.id).is_some(),
             ) {
@@ -3658,7 +3655,7 @@ impl Host {
             .then(|| input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref()))
             .flatten()
             .and_then(|chord| self.keymap.action_for(chord));
-        let binding = if matches!(self.screen, Screen::Page { .. }) {
+        let binding = if matches!(self.w.screen, Screen::Page { .. }) {
             input::page_fullscreen_binding(binding)
         } else {
             binding

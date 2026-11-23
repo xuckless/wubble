@@ -13,8 +13,13 @@
 //! The window's mode is owned by the window: whenever the screen is not in
 //! page fullscreen, [`observe`] rereads it, so the green light toggling the
 //! window behind the shell's back is never stale here.
+//!
+//! Each window has its own [`Screen`] (as each Chromium `Browser` has its own
+//! `FullscreenController`): a page fullscreen is its window's only, and a page
+//! leaving goes to the window that holds it ([`page_owner`]).
 
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
@@ -104,6 +109,17 @@ pub fn transition(state: Screen, event: ScreenEvent) -> (Screen, Vec<ScreenEffec
         // tab's.
         (_, PageLeft(_)) => (state, vec![], true),
     }
+}
+
+/// The window whose page fullscreen is `tab`'s, of each window's screen.
+pub fn page_owner(
+    screens: impl IntoIterator<Item = (WindowId, Screen)>,
+    tab: TabId,
+) -> Option<WindowId> {
+    screens
+        .into_iter()
+        .find(|&(_, s)| matches!(s, Screen::Page { tab: t, .. } if t == tab))
+        .map(|(id, _)| id)
 }
 
 #[cfg(test)]
@@ -198,6 +214,94 @@ mod tests {
         assert_eq!(fx, [ExitPage(T)]);
         let (s, fx, _) = transition(s, PageLeft(T));
         assert_eq!((s, fx), (Window, vec![HideChrome(false)]));
+    }
+
+    const WA: WindowId = WindowId(1);
+    const WB: WindowId = WindowId(2);
+
+    #[test]
+    fn a_page_belongs_to_the_window_that_holds_it() {
+        let other = Page {
+            tab: OTHER,
+            restore_window: false,
+        };
+        let rows: &[(&str, &[(WindowId, Screen)], TabId, Option<WindowId>)] = &[
+            (
+                "one window holds it",
+                &[(WA, page(true)), (WB, Windowed)],
+                T,
+                Some(WA),
+            ),
+            (
+                "the second window's",
+                &[(WA, Windowed), (WB, page(false))],
+                T,
+                Some(WB),
+            ),
+            (
+                "both in page fullscreen: T",
+                &[(WA, page(true)), (WB, other)],
+                T,
+                Some(WA),
+            ),
+            (
+                "both in page fullscreen: OTHER",
+                &[(WA, page(true)), (WB, other)],
+                OTHER,
+                Some(WB),
+            ),
+            (
+                "a tab no window holds",
+                &[(WA, page(true)), (WB, Windowed)],
+                OTHER,
+                None,
+            ),
+            (
+                "windowed and full screen hold no tab",
+                &[(WA, Windowed), (WB, Window)],
+                T,
+                None,
+            ),
+            ("no windows", &[], T, None),
+        ];
+        for &(name, screens, tab, want) in rows {
+            assert_eq!(page_owner(screens.iter().copied(), tab), want, "{name}");
+        }
+    }
+
+    /// Two windows, each its own screen: A's page and B's page go full screen and leave apart,
+    /// and B's keys never reach A's page.
+    #[test]
+    fn independent_windows() {
+        let (a, _, _) = transition(Windowed, PageEntered(T));
+        let (b, _, _) = transition(Window, PageEntered(OTHER));
+        assert!(
+            matches!((a, b), (Page { tab: T, .. }, Page { tab: OTHER, .. })),
+            "both full screen"
+        );
+        // B's Escape and F11 ask B's page, never A's
+        assert_eq!(transition(b, Escape).1, [ExitPage(OTHER)]);
+        assert_eq!(transition(b, Toggle).1, [ExitPage(OTHER)]);
+        // A's page leaves in A (its owner): A restores its window, B stays
+        let screens = [(WA, a), (WB, b)];
+        assert_eq!(page_owner(screens, T), Some(WA));
+        let (a, fx, _) = transition(a, PageLeft(T));
+        assert_eq!(
+            (a, fx),
+            (
+                Windowed,
+                vec![SetWindowFullscreen(false), HideChrome(false)]
+            )
+        );
+        assert_eq!(
+            page_owner([(WA, a), (WB, b)], OTHER),
+            Some(WB),
+            "B still holds its page"
+        );
+        // F11 on a windowed B while A's page is full screen: B's window only
+        assert_eq!(transition(Windowed, Toggle).1, [SetWindowFullscreen(true)]);
+        let (b, fx, _) = transition(b, PageLeft(OTHER));
+        assert_eq!((b, fx), (Window, vec![HideChrome(false)]));
     }
 
     #[test]

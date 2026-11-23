@@ -138,7 +138,7 @@ fn framed_tabs(model: &Model, screen: &Screen, window: WindowId) -> Vec<TabId> {
 
 impl Host {
     pub(super) fn framed_tabs(&self) -> Vec<TabId> {
-        let mut tabs = framed_tabs(&self.model, &self.screen, self.w.id);
+        let mut tabs = framed_tabs(&self.model, &self.w.screen, self.w.id);
         tabs.extend((self.panel_width() > 0.0).then_some(PANEL_TAB));
         tabs.extend(self.popup_open().then_some(POPUP_TAB));
         tabs
@@ -146,7 +146,7 @@ impl Host {
 
     /// The tabs on screen, left to right: a fullscreen page alone, else the model's.
     pub(super) fn shown_tabs(&self) -> Vec<TabId> {
-        match self.screen {
+        match self.w.screen {
             Screen::Page { tab, .. } if self.model.window_of(tab) == Some(self.w.id) => vec![tab],
             _ => {
                 let mut tabs = self.model.window_tabs(self.w.id);
@@ -163,7 +163,7 @@ impl Host {
     pub(super) fn pane_rects(&self, window: &AppWindow) -> Vec<PageRect> {
         let (width, _) = content_size(window);
         let scale = window.window().scale_factor();
-        let rects = match self.screen {
+        let rects = match self.w.screen {
             Screen::Page { tab, .. } if self.model.window_of(tab) == Some(self.w.id) => {
                 vec![PageRect { tab, x: 0.0, width }]
             }
@@ -460,7 +460,7 @@ impl Host {
     fn mask_panes(&mut self, window: &AppWindow, rects: &[PageRect]) -> bool {
         let (_, height) = content_size(window);
         let scale = window.window().scale_factor();
-        let fullscreen = matches!(self.screen, Screen::Page { .. });
+        let fullscreen = matches!(self.w.screen, Screen::Page { .. });
         // the sidebar's string, in the panes' heights (they start at the content's top)
         let seam = (!fullscreen)
             .then(|| seam_edge(window))
@@ -605,7 +605,7 @@ impl Host {
                 }
             })
             .collect();
-        let fullscreen = matches!(self.screen, Screen::Page { .. });
+        let fullscreen = matches!(self.w.screen, Screen::Page { .. });
         let seams: Vec<SplitSeam> = if fullscreen {
             vec![]
         } else {
