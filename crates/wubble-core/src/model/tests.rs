@@ -492,7 +492,13 @@ fn delete_container_resets_spaces_and_overrides() {
             .all(|t| closed.contains(t) && !m.tabs.contains_key(t))
     );
     // Its storage goes too, after its pages closed.
-    assert_eq!(fx.last(), Some(&Effect::ContainerDeleted(work)));
+    assert_eq!(
+        fx.last(),
+        Some(&Effect::ContainerDeleted {
+            id: work,
+            storage: Storage::Disk,
+        })
+    );
     // Default is not deletable.
     let (m2, fx) = run(m.clone(), Command::DeleteContainer(D));
     assert_eq!((m2, fx), (m, vec![]));
@@ -3576,9 +3582,9 @@ fn an_extension_tab_in_a_gone_container_or_space_opens_nothing() {
 #[test]
 fn an_agent_space_stays_one() {
     let (m, _) = with_tabs(1);
-    assert!(!m.spaces[0].agent);
+    assert!(m.spaces[0].kind != SpaceKind::Agent);
     let (m, fx) = run(m, Command::MarkAgentSpace(s0()));
-    assert!(m.spaces[0].agent && fx.is_empty());
+    assert!(m.spaces[0].kind == SpaceKind::Agent && fx.is_empty());
     // the session's Space outlives it: nothing but deleting the Space ends the mark
     let (m, _) = run(
         m,
@@ -3587,8 +3593,8 @@ fn an_agent_space_stays_one() {
             on: false,
         },
     );
-    assert!(m.spaces[0].agent);
-    assert!(m.for_session(&[]).spaces[0].agent, "saved like any Space");
+    assert!(m.spaces[0].kind == SpaceKind::Agent);
+    assert!(m.for_session(&[]).spaces[0].kind == SpaceKind::Agent, "saved like any Space");
 }
 
 /// A link from another app that a routing rule sends to a container opens in that container from
@@ -3772,15 +3778,19 @@ fn a_window_lists_the_spaces_of_its_own_side() {
 fn the_ephemeral_container_lives_with_the_private_windows() {
     let (m, _) = with_tabs(1);
     let (m, w, _) = private_window(m, "https://p.test/");
-    let c = m.containers.iter().find(|c| c.ephemeral).map(|c| c.id).unwrap();
+    let c = m.containers.iter().find(|c| c.storage == Storage::Memory).map(|c| c.id).unwrap();
     let (m, fx) = run(m, Command::CloseWindow(w));
-    assert!(fx.contains(&Effect::ContainerDeleted(c)), "{fx:?}");
-    assert!(!m.has_private() && !m.containers.iter().any(|c| c.ephemeral));
+    let gone = Effect::ContainerDeleted {
+        id: c,
+        storage: Storage::Memory,
+    };
+    assert!(fx.contains(&gone), "{fx:?}");
+    assert!(!m.has_private() && !m.containers.iter().any(|c| c.storage == Storage::Memory));
     let mut bad = m.clone();
     bad.containers.push(crate::space::Container {
         id: ContainerId(99),
         name: "Private".into(),
-        ephemeral: true,
+        storage: Storage::Memory,
     });
     assert!(bad.check().is_err(), "an ephemeral container without a private window");
 }
@@ -3825,7 +3835,7 @@ fn an_emptied_private_window_closes_and_a_normal_one_stays() {
     );
     let w4 = opened(&fx);
     assert!(fx.contains(&Effect::WindowClosed(w1)), "{fx:?}");
-    assert!(!fx.iter().any(|e| matches!(e, Effect::ContainerDeleted(_))));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::ContainerDeleted { .. })));
     assert!(m.is_private_window(w4) && m.is_private_tab(last));
     // a normal window emptied so stays, on its empty Space
     let (m, fx) = run(
@@ -3859,7 +3869,7 @@ fn a_new_window_from_a_private_window_is_a_normal_one() {
     let w2 = opened(&fx);
     assert!(m.is_private_window(w2) && fx.contains(&Effect::ShowCommandBar));
     assert_eq!(m.private_spaces().len(), 2);
-    assert_eq!(m.containers.iter().filter(|c| c.ephemeral).count(), 1);
+    assert_eq!(m.containers.iter().filter(|c| c.storage == Storage::Memory).count(), 1);
 }
 
 /// Which private tabs a close ends (their downloads ask first): a private window's own, every

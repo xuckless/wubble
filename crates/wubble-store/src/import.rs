@@ -20,7 +20,8 @@ use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
 use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
 use wubble_core::space::{
-    Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId,
+    Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId, SpaceKind,
+    Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 
@@ -124,7 +125,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             containers.push(Container {
                 id,
                 name: c.name.clone(),
-                ephemeral: false,
+                storage: Storage::Disk,
             });
             sum.containers_added += 1;
             id
@@ -187,8 +188,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             active: None,
             split: None,
             never_sleep: false,
-            agent: false,
-            private: false,
+            kind: SpaceKind::Normal,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));
@@ -612,12 +612,12 @@ mod tests {
                 Container {
                     id: D,
                     name: "Default".into(),
-                    ephemeral: false,
+                    storage: Storage::Disk,
                 },
                 Container {
                     id: ContainerId(3),
                     name: "Work".into(),
-                    ephemeral: false,
+                    storage: Storage::Disk,
                 },
             ],
             spaces: vec![

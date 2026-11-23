@@ -173,6 +173,7 @@ fn load(engine: &mut Engine, gpu: &GpuContext, url: &str, turns: u32) -> Result<
             begin_frames: false,
             gpu: gpu.presenter().context().clone(),
             container: ContainerId::DEFAULT,
+            storage: wubble_core::space::Storage::Disk,
         })
         .map_err(|e| e.to_string())?;
     for _ in 0..turns {

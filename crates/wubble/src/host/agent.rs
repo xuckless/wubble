@@ -34,7 +34,7 @@ use wubble_core::agent::{MoreAnswer, Refusal, StopReason, Token};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
 use wubble_core::secret::Secret;
-use wubble_core::space::{ContainerId, SpaceId};
+use wubble_core::space::{ContainerId, SpaceId, SpaceKind};
 use wubble_core::tab::TabId;
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
@@ -936,7 +936,7 @@ fn source_spaces(model: &wubble_core::model::Model) -> Vec<(SpaceId, String, Con
         .spaces
         .iter()
         // a private window's sign-ins are never an agent's to copy
-        .filter(|s| !s.agent && !s.private)
+        .filter(|s| s.kind != SpaceKind::Agent && s.kind != SpaceKind::Private)
         .map(|s| (s.id, s.name.clone(), s.container))
         .collect()
 }
@@ -1929,7 +1929,7 @@ impl Host {
             .model
             .spaces
             .iter()
-            .find(|s| s.id == space && s.agent)
+            .find(|s| s.id == space && s.kind == SpaceKind::Agent)
             .map(|s| s.container)
         else {
             return;
@@ -5081,7 +5081,7 @@ impl Host {
             .find(|s| self.model.order(s.id).contains(&kept));
         // the owner's tabs now, in a Space that stays an agent Space
         let ok = space
-            .is_some_and(|s| !self.agents.spaces().contains(&s.id) && !s.never_sleep && s.agent)
+            .is_some_and(|s| !self.agents.spaces().contains(&s.id) && !s.never_sleep && s.kind == SpaceKind::Agent)
             && !self.agent_drives(kept);
         if !ok {
             return self.fail(format!(
@@ -5265,7 +5265,7 @@ impl Host {
             .model
             .spaces
             .iter()
-            .filter(|s| !s.agent)
+            .filter(|s| s.kind != SpaceKind::Agent)
             .map(|s| s.name.clone())
             .collect();
         self.spaces_menu_requested();

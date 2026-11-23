@@ -94,7 +94,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{Decision, Permission, PrivateChoices, SitePermissions};
-use wubble_core::space::{ContainerId, Item, SpaceId};
+use wubble_core::space::{ContainerId, Item, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
 use wubble_core::window::{WindowId, WindowKind};
@@ -174,7 +174,7 @@ pub enum Call {
     /// The last Main window closed.
     Quit,
     /// Delete the container's web storage (`Engine::forget_container`).
-    ForgetContainer(ContainerId),
+    ForgetContainer(ContainerId, Storage),
     Nothing,
 }
 
@@ -207,7 +207,7 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
         Effect::FocusWindow(w) => Call::FocusWindow(*w),
         Effect::LastWindowClosed => Call::Quit,
         Effect::Tidied { .. } => Call::Nothing,
-        Effect::ContainerDeleted(c) => Call::ForgetContainer(*c),
+        Effect::ContainerDeleted { id, storage } => Call::ForgetContainer(*id, *storage),
         Effect::Lifecycle { tab, effect } => match effect {
             Life::Show => Call::SetVisible {
                 tab: *tab,
@@ -1072,10 +1072,6 @@ impl Host {
                             .tabs
                             .get(&tab)
                             .map_or(ContainerId::DEFAULT, |t| t.container);
-                        // a private window's container is kept in memory only
-                        if self.model.is_ephemeral(container) {
-                            self.engine.set_ephemeral(container);
-                        }
                         let config = ViewConfig {
                             url: url.clone(),
                             layout,
@@ -1083,6 +1079,8 @@ impl Host {
                             begin_frames: self.begin_frames(),
                             gpu: self.w.presenters[0].context().clone(),
                             container,
+                            // a private window's container is kept in memory only
+                            storage: self.model.storage_of(container),
                         };
                         self.engine.open_view(config)
                     }
@@ -1180,14 +1178,14 @@ impl Host {
                 });
             }
             Call::Quit => quit(),
-            Call::ForgetContainer(c) => {
+            Call::ForgetContainer(c, storage) => {
                 // the private windows' container leaves no download rows and no site choices
                 // behind
-                if self.engine.is_ephemeral(c) {
+                if storage == Storage::Memory {
                     self.forget_private_downloads(c);
                     self.private_choices = PrivateChoices::default();
                 }
-                self.engine.forget_container(c);
+                self.engine.forget_container(c, storage);
             }
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
@@ -1847,12 +1845,11 @@ impl Host {
         use crate::menu::ClearData;
         let done = match what {
             ClearData::Containers(containers) => {
-                // a private window's container, if named, is brought up in memory, never on disk
-                for &c in &containers {
-                    if self.model.is_ephemeral(c) {
-                        self.engine.set_ephemeral(c);
-                    }
-                }
+                // each brought up with its own storage: a private one in memory, never on disk
+                let containers: Vec<_> = containers
+                    .iter()
+                    .map(|&c| (c, self.model.storage_of(c)))
+                    .collect();
                 match self.engine.clear_browsing_data(&containers) {
                     Ok(()) => Some("Cookies and cached files deleted"),
                     Err(e) => {
@@ -4158,8 +4155,18 @@ mod tests {
             ),
             (Effect::LastWindowClosed, Call::Quit),
             (
-                Effect::ContainerDeleted(ContainerId(3)),
-                Call::ForgetContainer(ContainerId(3)),
+                Effect::ContainerDeleted {
+                    id: ContainerId(3),
+                    storage: Storage::Disk,
+                },
+                Call::ForgetContainer(ContainerId(3), Storage::Disk),
+            ),
+            (
+                Effect::ContainerDeleted {
+                    id: ContainerId(4),
+                    storage: Storage::Memory,
+                },
+                Call::ForgetContainer(ContainerId(4), Storage::Memory),
             ),
         ];
         for (effect, want) in cases {
@@ -4242,7 +4249,7 @@ mod tests {
                 | Call::CloseWindow(_)
                 | Call::FocusWindow(_)
                 | Call::Quit
-                | Call::ForgetContainer(_)
+                | Call::ForgetContainer(..)
                 | Call::Nothing => {}
             }
         }

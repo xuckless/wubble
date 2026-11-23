@@ -2,7 +2,8 @@
 
 use super::{DEFAULT_TINT, Dest, Effect, Model};
 use crate::space::{
-    Container, ContainerId, PRIVATE_NAME, Rgb, Space, SpaceIcon, SpaceId, SplitGroup,
+    Container, ContainerId, PRIVATE_NAME, Rgb, Side, Space, SpaceIcon, SpaceId, SpaceKind,
+    SplitGroup, Storage,
 };
 use crate::tab::TabId;
 use crate::window::{Closing, Geometry, Shown, Window, WindowId, WindowKind, WindowTarget};
@@ -128,14 +129,21 @@ impl Model {
 
     /// Whether `space` is a private window's ([`Space::private`]).
     pub fn is_private_space(&self, space: SpaceId) -> bool {
-        self.space_idx(space).is_some_and(|si| self.spaces[si].private)
+        self.space_idx(space).is_some_and(|si| self.spaces[si].kind == SpaceKind::Private)
     }
 
-    /// Whether `container` is the in-memory one private windows share ([`Container::ephemeral`]).
-    pub fn is_ephemeral(&self, container: ContainerId) -> bool {
+    /// Where `container` keeps its data ([`Container::storage`]). An unknown container is
+    /// [`Storage::Memory`]: what nobody knows is never written to disk (fails closed).
+    pub fn storage_of(&self, container: ContainerId) -> Storage {
         self.containers
             .iter()
-            .any(|c| c.id == container && c.ephemeral)
+            .find(|c| c.id == container)
+            .map_or(Storage::Memory, |c| c.storage)
+    }
+
+    /// Whether `container` is the in-memory one private windows share ([`Storage::Memory`]).
+    pub fn is_ephemeral(&self, container: ContainerId) -> bool {
+        self.storage_of(container) == Storage::Memory
     }
 
     /// Whether `tab` is a private window's: placed in a private Space, or (the same, by
@@ -163,14 +171,14 @@ impl Model {
     pub fn private_spaces(&self) -> Vec<SpaceId> {
         self.spaces
             .iter()
-            .filter(|s| s.private)
+            .filter(|s| s.kind == SpaceKind::Private)
             .map(|s| s.id)
             .collect()
     }
 
     /// Whether a private window is open.
     pub fn has_private(&self) -> bool {
-        self.spaces.iter().any(|s| s.private)
+        self.spaces.iter().any(|s| s.kind == SpaceKind::Private)
     }
 
     /// The Spaces a window showing `space` lists (its sidebar's Spaces, the command bar's open
@@ -180,7 +188,7 @@ impl Model {
         let private = self.is_private_space(space);
         self.spaces
             .iter()
-            .filter(move |s| if private { s.id == space } else { !s.private })
+            .filter(move |s| if private { s.id == space } else { s.kind != SpaceKind::Private })
     }
 
     /// The Space of the last focused Main window that is not private, else the first Space that
@@ -192,7 +200,7 @@ impl Model {
             .rev()
             .filter_map(Window::space)
             .find(|&s| !self.is_private_space(s))
-            .or_else(|| self.spaces.iter().find(|s| !s.private).map(|s| s.id))
+            .or_else(|| self.spaces.iter().find(|s| s.kind != SpaceKind::Private).map(|s| s.id))
             .expect("a Space that is not private")
     }
 
@@ -294,7 +302,7 @@ impl Model {
     pub(super) fn free_space(&self, near: usize) -> Option<SpaceId> {
         // a private Space is its own window's, never another's
         let free =
-            |i: &usize| !self.spaces[*i].private && self.shown_by(self.spaces[*i].id).is_none();
+            |i: &usize| self.spaces[*i].kind != SpaceKind::Private && self.shown_by(self.spaces[*i].id).is_none();
         let n = self.spaces.len();
         (0..=near.min(n.saturating_sub(1)))
             .rev()
@@ -318,8 +326,7 @@ impl Model {
             active: None,
             split: None,
             never_sleep: false,
-            agent: false,
-            private: false,
+            kind: SpaceKind::Normal,
         });
         id
     }
@@ -332,7 +339,7 @@ impl Model {
         // private Spaces are not counted: they are no Space of the user's list
         let name = format!(
             "Space {}",
-            self.spaces.iter().filter(|s| !s.private).count() + 1
+            self.spaces.iter().filter(|s| s.kind != SpaceKind::Private).count() + 1
         );
         self.add_space(name, DEFAULT_TINT, ContainerId::DEFAULT)
     }
@@ -424,7 +431,10 @@ impl Model {
             && !self.tabs.values().any(|t| t.container == container)
         {
             self.containers.retain(|c| c.id != container);
-            fx.push(Effect::ContainerDeleted(container));
+            fx.push(Effect::ContainerDeleted {
+                id: container,
+                storage: Storage::Memory,
+            });
         }
         if was_focused {
             let active = self.active_space();
@@ -437,7 +447,7 @@ impl Model {
 
     /// The ephemeral container private windows share: the one there is, else a new one.
     fn private_container(&mut self) -> ContainerId {
-        if let Some(c) = self.containers.iter().find(|c| c.ephemeral) {
+        if let Some(c) = self.containers.iter().find(|c| c.storage == Storage::Memory) {
             return c.id;
         }
         let id = ContainerId(self.next_container);
@@ -445,7 +455,7 @@ impl Model {
         self.containers.push(Container {
             id,
             name: PRIVATE_NAME.into(),
-            ephemeral: true,
+            storage: Storage::Memory,
         });
         id
     }
@@ -459,7 +469,7 @@ impl Model {
         };
         let space = self.add_space(PRIVATE_NAME.into(), tint, container);
         let si = self.space_idx(space).expect("just added");
-        self.spaces[si].private = true;
+        self.spaces[si].kind = SpaceKind::Private;
         let id = self.push_window(Shown::Space(space), None);
         (space, id)
     }
@@ -691,12 +701,12 @@ impl Model {
         if let Some(s) = self
             .spaces
             .iter()
-            .find(|s| s.private && self.shown_by(s.id).is_none())
+            .find(|s| s.kind == SpaceKind::Private && self.shown_by(s.id).is_none())
         {
             return Err(format!("private space {:?} shown by no window", s.id));
         }
         // the in-memory container lives exactly as long as the private windows
-        if self.containers.iter().any(|c| c.ephemeral) != self.has_private() {
+        if self.containers.iter().any(|c| c.storage == Storage::Memory) != self.has_private() {
             return Err("ephemeral container without private windows, or the reverse".into());
         }
         let mut seen: Vec<TabId> = vec![];

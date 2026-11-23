@@ -18,7 +18,7 @@ use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
-    SplitGroup,
+    SpaceKind, SplitGroup, Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 use wubble_core::window::{Geometry, Window, WindowId};
@@ -55,7 +55,7 @@ impl Store {
             containers.push(Container {
                 id: ContainerId(narrow(r.get(0)?, "container id")?),
                 name: r.get(1)?,
-                ephemeral: false,
+                storage: Storage::Disk,
             });
         }
 
@@ -89,9 +89,12 @@ impl Store {
                     .transpose()?,
                 split: None,
                 never_sleep: r.get::<i64>(6)? != 0,
-                agent: r.get::<i64>(7)? != 0,
-                // a private Space is never written (`write_model`)
-                private: false,
+                // the `agent` column is the kind (a private Space is never written)
+                kind: if r.get::<i64>(7)? != 0 {
+                    SpaceKind::Agent
+                } else {
+                    SpaceKind::Normal
+                },
             });
         }
         if spaces.is_empty() {
@@ -396,7 +399,7 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
     let mut st = tx
         .prepare("INSERT INTO containers(id, name, position) VALUES (?1, ?2, ?3)")
         .await?;
-    for (i, c) in m.containers.iter().filter(|c| !c.ephemeral).enumerate() {
+    for (i, c) in m.containers.iter().filter(|c| c.storage != Storage::Memory).enumerate() {
         st.execute((c.id.0, c.name.as_str(), i as i64)).await?;
     }
     Ok(())
@@ -409,7 +412,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
              agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
-    for (i, s) in m.spaces.iter().filter(|s| !s.private).enumerate() {
+    for (i, s) in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private).enumerate() {
         // A Space whose only tabs are in Little or Popup windows has no active tab; those
         // windows are not kept, so its first tab is shown after a restart.
         let active = s.active.or_else(|| m.order(s.id).first().copied());
@@ -423,7 +426,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             active,
             s.icon.id(),
             i64::from(s.never_sleep),
-            i64::from(s.agent),
+            i64::from(s.kind == SpaceKind::Agent),
         ))
         .await?;
     }
@@ -434,7 +437,7 @@ async fn write_folders(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
     let mut st = tx
         .prepare("INSERT INTO tab_folders(id, space_id, name, position) VALUES (?1, ?2, ?3, ?4)")
         .await?;
-    for s in m.spaces.iter().filter(|s| !s.private) {
+    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
         for (i, item) in s.items.iter().enumerate() {
             if let Item::Folder(f) = item {
                 st.execute((f.id.0, s.id.0, f.name.as_str(), i as i64))
@@ -468,7 +471,7 @@ async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Resu
         .await?;
         Ok::<(), Error>(())
     };
-    for s in m.spaces.iter().filter(|s| !s.private) {
+    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
         for (i, &t) in s.pinned.iter().enumerate() {
             put(t, s.id, None, true, i).await?;
         }
@@ -492,7 +495,7 @@ async fn write_splits(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             "INSERT INTO split_panes(space_id, position, tab_id, stop) VALUES (?1, ?2, ?3, ?4)",
         )
         .await?;
-    for s in m.spaces.iter().filter(|s| !s.private) {
+    for s in m.spaces.iter().filter(|s| s.kind != SpaceKind::Private) {
         let Some(g) = &s.split else { continue };
         for (i, &t) in g.tabs.iter().enumerate() {
             st.execute((s.id.0, i as i64, tab_id(t)?, g.stops.get(i).copied()))
@@ -788,7 +791,7 @@ mod tests {
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
             assert!(m.spaces[2].never_sleep && !m.spaces[0].never_sleep);
-            assert!(m.spaces[1].agent && !m.spaces[0].agent);
+            assert!(m.spaces[1].kind == SpaceKind::Agent && m.spaces[0].kind != SpaceKind::Agent);
             assert!(m.tabs.values().any(|t| t.last_active_ms == 5_000));
             store.save_session(&m).await.unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
@@ -1012,8 +1015,7 @@ mod tests {
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                     split: None,
                     never_sleep: false,
-                    agent: false,
-                    private: false,
+                    kind: SpaceKind::Normal,
                 },
                 Space {
                     id: SpaceId(1),
@@ -1026,20 +1028,19 @@ mod tests {
                     active: Some(TabId(21)), // the saved active tab
                     split: None,
                     never_sleep: false,
-                    agent: false,
-                    private: false,
+                    kind: SpaceKind::Normal,
                 },
             ];
             let containers = vec![
                 Container {
                     id: D,
                     name: "Default".into(),
-                    ephemeral: false,
+                    storage: Storage::Disk,
                 },
                 Container {
                     id: ContainerId(1),
                     name: "Work".into(),
-                    ephemeral: false,
+                    storage: Storage::Disk,
                 },
             ];
             let mut tabs = vec![
@@ -1205,7 +1206,7 @@ mod tests {
             for (i, s) in m.spaces.iter_mut().enumerate() {
                 s.icon = SpaceIcon::nth(i);
                 s.never_sleep = false; // no such column before v12
-                s.agent = false; // nor this one before v15
+                s.kind = SpaceKind::Normal; // nor this one before v15
             }
             m.tabs.values_mut().for_each(|t| t.last_active_ms = 0);
             let tx = store.conn.transaction().await.unwrap();

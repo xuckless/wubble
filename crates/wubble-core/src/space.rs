@@ -22,11 +22,58 @@ pub struct FolderId(pub u32);
 pub struct Container {
     pub id: ContainerId,
     pub name: String,
-    /// Kept in memory only, never on disk: the one container every private window's tabs share
-    /// (an off-the-record profile, CEF's own unique one: `OTRProfileID::CreateUniqueForCEF`).
-    /// The engine opens it without a storage directory; it is never saved and goes when the
-    /// last private window closes ([`crate::model::Command::NewPrivateWindow`]).
-    pub ephemeral: bool,
+    /// Where its cookies, storage and cache live: the one owner of a container's privacy.
+    pub storage: Storage,
+}
+
+/// Where a container keeps its data. A container's storage is set when it is made and never
+/// changes; the engine opens its context from this value (`wubble_engine::view::ViewConfig`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Storage {
+    /// Its own directory on disk (every saved container; the default of an old session).
+    #[default]
+    Disk,
+    /// In memory only, never on disk: the one container every private window's tabs share (an
+    /// off-the-record profile, CEF's own unique one: `OTRProfileID::CreateUniqueForCEF`). It is
+    /// never saved and goes when the last private window closes
+    /// ([`crate::model::Command::NewPrivateWindow`]).
+    Memory,
+}
+
+/// Which side of the private line a container, a Space, a tab or a window is on. Derived from
+/// the container's [`Storage`]; nothing crosses between sides (`crate::model::crossing`), and
+/// nothing of the private side is saved, recorded or listed on the normal one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    Normal,
+    Private,
+}
+
+impl Storage {
+    pub fn side(self) -> Side {
+        match self {
+            Storage::Disk => Side::Normal,
+            Storage::Memory => Side::Private,
+        }
+    }
+}
+
+/// What a Space is for: the one field of a Space's kind (an agent Space is never private).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpaceKind {
+    /// The user's.
+    #[default]
+    Normal,
+    /// An agent session made the Space: it stays an agent Space for its life (its tile draws
+    /// the agent glyph, its row in the Spaces popup has the dustbin), also after the session
+    /// ended and left its tabs to the owner ([`crate::agent::clear`]). Set once
+    /// (`Command::MarkAgentSpace`), never cleared, saved with the session.
+    Agent,
+    /// A private window's Space (Chrome's incognito window): shown by exactly one Main window
+    /// for its life, in the [`Storage::Memory`] container, and none of it saved, recorded or
+    /// listed elsewhere. Set at creation (`Command::NewPrivateWindow`); the Space goes when its
+    /// window closes.
+    Private,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,16 +152,8 @@ pub struct Space {
     pub split: Option<SplitGroup>,
     /// Tabs of this Space are never put to sleep.
     pub never_sleep: bool,
-    /// An agent session made the Space: it stays an agent Space for its life (its tile draws
-    /// the agent glyph, its row in the Spaces popup has the dustbin), also after the session
-    /// ended and left its tabs to the owner ([`crate::agent::clear`]). Set once
-    /// (`Command::MarkAgentSpace`), never cleared, saved with the session.
-    pub agent: bool,
-    /// A private window's Space (Chrome's incognito window): shown by exactly one Main window
-    /// for its life, its tabs in the ephemeral container ([`Container::ephemeral`]), and none
-    /// of it saved, recorded or listed elsewhere. Set at creation
-    /// (`Command::NewPrivateWindow`), never changed; the Space goes when its window closes.
-    pub private: bool,
+    /// Normal, an agent's, or a private window's.
+    pub kind: SpaceKind,
 }
 
 /// What a private Space and its window are called (the window title's suffix, the sidebar

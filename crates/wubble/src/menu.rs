@@ -23,7 +23,7 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
 use wubble_core::pagetheme::PageTheme;
-use wubble_core::space::{ContainerId, SpaceId};
+use wubble_core::space::{ContainerId, SpaceId, SpaceKind, Storage};
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
 use wubble_core::window::{Closing, Shown, WindowId, WindowKind, WindowTarget};
@@ -819,7 +819,7 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
             "Open as Tab".into(),
             Command::PromoteLittle(window, active),
         ))
-        .chain(model.spaces.iter().filter(|s| s.id != active && !s.private).map(|s| {
+        .chain(model.spaces.iter().filter(|s| s.id != active && s.kind != SpaceKind::Private).map(|s| {
             entry(
                 format!("Open in {}", s.name),
                 Command::PromoteLittle(window, s.id),
@@ -1021,7 +1021,7 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
     let side: Vec<ContainerId> = model
         .containers
         .iter()
-        .filter(|c| c.ephemeral == private)
+        .filter(|c| (c.storage == Storage::Memory) == private)
         .map(|c| c.id)
         .collect();
     let name = container

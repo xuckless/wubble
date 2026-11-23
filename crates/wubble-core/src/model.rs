@@ -34,8 +34,8 @@ use crate::pages::InternalPage;
 use crate::routing::host_in;
 use crate::sleep::{Pressure, SleepPolicy};
 use crate::space::{
-    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
-    SplitGroup, even,
+    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Side, Space, SpaceIcon,
+    SpaceId, SpaceKind, SplitGroup, Storage, even,
 };
 use crate::tab::{Liveness, Tab, TabId};
 use crate::tidy;
@@ -378,8 +378,9 @@ pub enum Effect {
         space: SpaceId,
         before: Vec<Item>,
     },
-    /// The container is gone: its cookies, storage and cache go with it.
-    ContainerDeleted(ContainerId),
+    /// The container is gone: its cookies, storage and cache go with it (`storage` says
+    /// whether any is on disk).
+    ContainerDeleted { id: ContainerId, storage: Storage },
 }
 
 /// One per app: every window's tabs and Spaces.
@@ -427,7 +428,7 @@ impl Model {
         let (name, tint) = crate::space::next_space(
             self.spaces
                 .iter()
-                .filter(|s| !s.private)
+                .filter(|s| s.kind != SpaceKind::Private)
                 .map(|s| (s.name.as_str(), s.tint)),
         );
         Command::NewSpace {
@@ -452,8 +453,7 @@ impl Model {
             active: None,
             split: None,
             never_sleep: false,
-            agent: false,
-            private: false,
+            kind: SpaceKind::Normal,
         };
         Self {
             windows: vec![Window::main(WindowId(0), space.id)],
@@ -461,7 +461,7 @@ impl Model {
             containers: vec![Container {
                 id: ContainerId::DEFAULT,
                 name: "Default".into(),
-                ephemeral: false,
+                storage: Storage::Disk,
             }],
             tabs: BTreeMap::new(),
             glances: vec![],
@@ -704,7 +704,7 @@ impl Model {
         let ids: Vec<SpaceId> = self
             .spaces
             .iter()
-            .filter(|s| !s.private)
+            .filter(|s| s.kind != SpaceKind::Private)
             .map(|s| s.id)
             .collect();
         cycle(&ids, Some(self.active_space()), delta)
@@ -714,7 +714,7 @@ impl Model {
     pub fn nth_space(&self, index: usize) -> Option<SpaceId> {
         self.spaces
             .iter()
-            .filter(|s| !s.private)
+            .filter(|s| s.kind != SpaceKind::Private)
             .nth(index)
             .map(|s| s.id)
     }
@@ -732,10 +732,10 @@ impl Model {
         let mut placed = BTreeMap::new();
         let mut space_ids = vec![];
         let mut folder_ids = vec![];
-        if self.spaces.iter().all(|s| s.private) {
+        if self.spaces.iter().all(|s| s.kind == SpaceKind::Private) {
             return Err("no spaces but private ones".into());
         }
-        if self.containers.iter().filter(|c| c.ephemeral).count() > 1 {
+        if self.containers.iter().filter(|c| c.storage == Storage::Memory).count() > 1 {
             return Err("two ephemeral containers".into());
         }
         if self.containers.first().map(|c| c.id) != Some(ContainerId::DEFAULT) {
@@ -755,10 +755,10 @@ impl Model {
                 return Err(format!("space {:?} has unknown container", s.id));
             }
             // a private Space's tabs, and only theirs, live in the in-memory container
-            if s.private != self.is_ephemeral(s.container) {
-                return Err(format!("space {:?} private={} container", s.id, s.private));
+            if (s.kind == SpaceKind::Private) != self.is_ephemeral(s.container) {
+                return Err(format!("space {:?} private={} container", s.id, s.kind == SpaceKind::Private));
             }
-            let private = s.private;
+            let private = s.kind == SpaceKind::Private;
             let mut place = |t: TabId| -> Result<(), String> {
                 if placed.insert(t, si).is_some() {
                     return Err(format!("tab {t:?} placed twice"));
@@ -1039,7 +1039,7 @@ impl Model {
         let default = self.spaces[si].container;
         let eff = container.or(inherited).unwrap_or(default);
         // a private Space's tabs are all in its in-memory container, and no other tab is
-        let eff = if self.spaces[si].private {
+        let eff = if self.spaces[si].kind == SpaceKind::Private {
             default
         } else if self.is_ephemeral(eff) {
             return None;
@@ -1186,7 +1186,7 @@ impl Model {
         let deleted_agent_space = match command {
             Command::DeleteSpace(space) => {
                 self.location(tab).is_some_and(|(at, _)| at == *space)
-                    && self.spaces.iter().any(|s| s.id == *space && s.agent)
+                    && self.spaces.iter().any(|s| s.id == *space && s.kind == SpaceKind::Agent)
             }
             _ => false,
         };
@@ -1342,7 +1342,7 @@ impl Model {
             return vec![];
         };
         // a tab never crosses between a private Space and a normal one
-        if self.spaces[src].private != self.spaces[dst].private {
+        if (self.spaces[src].kind == SpaceKind::Private) != (self.spaces[dst].kind == SpaceKind::Private) {
             return vec![];
         }
         let src_was_active = self.spaces[src].active == Some(tab);
@@ -1418,7 +1418,7 @@ impl Model {
             return vec![];
         };
         if !self.has_container(container)
-            || self.spaces[si].private
+            || self.spaces[si].kind == SpaceKind::Private
             || self.is_ephemeral(container)
         {
             return vec![];
@@ -1436,7 +1436,7 @@ impl Model {
         };
         // a private Space goes with its window (`Command::CloseWindow`), and the last Space
         // that is not private stays
-        if self.spaces[si].private || self.spaces.iter().filter(|s| !s.private).count() == 1 {
+        if self.spaces[si].kind == SpaceKind::Private || self.spaces.iter().filter(|s| s.kind != SpaceKind::Private).count() == 1 {
             return vec![];
         }
         let gone = self.order_idx(si);
@@ -1469,7 +1469,7 @@ impl Model {
             return vec![];
         }
         // a private window is locked to its Space, and no switcher reaches a private Space
-        if self.spaces[si].private || self.is_private_space(self.active_space()) {
+        if self.spaces[si].kind == SpaceKind::Private || self.is_private_space(self.active_space()) {
             return vec![];
         }
         let mut fx = self.set_active_space(space);
@@ -1496,7 +1496,10 @@ impl Model {
             .into_iter()
             .flat_map(|t| self.reopen_in_container(t, ContainerId::DEFAULT))
             .collect();
-        fx.push(Effect::ContainerDeleted(container));
+        fx.push(Effect::ContainerDeleted {
+            id: container,
+            storage: Storage::Disk,
+        });
         self.containers.retain(|c| c.id != container);
         for s in &mut self.spaces {
             if s.container == container {
@@ -1512,7 +1515,7 @@ impl Model {
         };
         if !self.has_container(container)
             || self.tabs[&tab].container == container
-            || self.spaces[si].private
+            || self.spaces[si].kind == SpaceKind::Private
             || self.is_ephemeral(container)
         {
             return vec![];
@@ -2107,7 +2110,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             m.containers.push(Container {
                 id,
                 name,
-                ephemeral: false,
+                storage: Storage::Disk,
             });
             vec![]
         }
@@ -2171,8 +2174,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             vec![]
         }
         Command::MarkAgentSpace(space) => {
-            if let Some(si) = m.space_idx(space).filter(|&si| !m.spaces[si].private) {
-                m.spaces[si].agent = true;
+            if let Some(si) = m.space_idx(space).filter(|&si| m.spaces[si].kind != SpaceKind::Private) {
+                m.spaces[si].kind = SpaceKind::Agent;
             }
             vec![]
         }

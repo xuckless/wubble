@@ -380,6 +380,7 @@ impl ExtHost for Stand<'_> {
                         begin_frames: false,
                         gpu: self.gpu.presenter().context().clone(),
                         container: container.unwrap_or(ContainerId::DEFAULT),
+                        storage: wubble_core::space::Storage::Disk,
                     };
                     match self.engine.open_view(config) {
                         Ok(view) => {

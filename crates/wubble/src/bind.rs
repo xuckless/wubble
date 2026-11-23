@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
-use wubble_core::space::Rgb;
+use wubble_core::space::{Rgb, SpaceKind};
 use wubble_core::tab::TabId;
 use wubble_core::tabmarks::{Marks, Sound};
 use wubble_engine::nav::Page;
@@ -115,8 +115,8 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             name: s.name.as_str().into(),
             tint: color(s.tint),
             icon: wubble_core::space::glyph_id(s.icon, s.agent_space).into(),
-            agent: s.agent,
-            private: s.private,
+            agent: s.kind == SpaceKind::Agent,
+            private: s.kind == SpaceKind::Private,
         })
         .collect();
     changed |= sync(window.get_spaces(), spaces, |m| window.set_spaces(m));

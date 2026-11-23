@@ -87,6 +87,7 @@ fn run(dir: &Path) -> Result<(), String> {
                 begin_frames: false,
                 gpu: presenter.context().clone(),
                 container: wubble_core::space::ContainerId::DEFAULT,
+                storage: wubble_core::space::Storage::Disk,
             })
             .map_err(|e| e.to_string())
     };

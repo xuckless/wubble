@@ -6,7 +6,7 @@
 
 use crate::ImportError;
 use serde_json::Value;
-use wubble_core::space::{Container, ContainerId};
+use wubble_core::space::{Container, ContainerId, Storage};
 
 /// The four built-in identities store only an l10n id, not a name.
 const DEFAULT_NAMES: &[(&str, &str)] = &[
@@ -38,7 +38,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Container>, ImportError> {
             Some(Container {
                 id: ContainerId(id),
                 name: name.to_owned(),
-                ephemeral: false,
+                storage: Storage::Disk,
             })
         })
         .collect())

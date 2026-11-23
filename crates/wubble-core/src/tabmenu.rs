@@ -9,7 +9,7 @@
 
 use crate::busy::Reason;
 use crate::model::{Command, Dest, Model, Place};
-use crate::space::{FolderId, Item};
+use crate::space::{FolderId, Item, SpaceKind};
 use crate::tab::TabId;
 
 /// One kind of row. Order in [`ROWS`] is the menu's order.
@@ -183,7 +183,7 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                 for s in model
                     .spaces
                     .iter()
-                    .filter(|s| s.id != space && !s.private && !private)
+                    .filter(|s| s.id != space && s.kind != SpaceKind::Private && !private)
                 {
                     out.push(mk(
                         format!("Move to {}", s.name),

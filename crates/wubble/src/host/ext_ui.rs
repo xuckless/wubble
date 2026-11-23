@@ -418,6 +418,7 @@ impl Host {
             begin_frames: self.begin_frames(),
             gpu: self.w.presenters[0].context().clone(),
             container,
+            storage: self.model.storage_of(container),
         };
         match self.engine.open_view(config) {
             Ok(id) => {

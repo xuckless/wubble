@@ -11,7 +11,7 @@
 use std::cmp::Reverse;
 
 use crate::model::Model;
-use crate::space::{ContainerId, SpaceId};
+use crate::space::{ContainerId, SpaceId, SpaceKind};
 
 /// Which hosts a rule covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +183,7 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
     let agent_containers: Vec<ContainerId> = model
         .spaces
         .iter()
-        .filter(|s| s.agent || s.private)
+        .filter(|s| s.kind == SpaceKind::Agent || s.kind == SpaceKind::Private)
         .map(|s| s.container)
         .collect();
     let rules: Vec<(Rule, Routed)> = entries
@@ -195,7 +195,7 @@ pub fn resolve<S: AsRef<str>>(model: &Model, entries: &[S], url: &str) -> Routed
                     model
                         .spaces
                         .iter()
-                        .find(|s| !s.agent && !s.private && s.name.eq_ignore_ascii_case(n))?
+                        .find(|s| s.kind != SpaceKind::Agent && s.kind != SpaceKind::Private && s.name.eq_ignore_ascii_case(n))?
                         .id,
                 ),
                 None => None,

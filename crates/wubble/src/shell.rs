@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use wubble_core::model::{Dest, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{FolderId, Item, Rgb, SpaceIcon, SpaceId};
+use wubble_core::space::{FolderId, Item, Rgb, SpaceIcon, SpaceId, SpaceKind};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
 use wubble_core::window::WindowId;
@@ -170,9 +170,9 @@ pub fn view_model(
                 name: s.name.clone(),
                 tint: s.tint,
                 icon: s.icon,
-                agent_space: s.agent,
+                agent_space: s.kind == SpaceKind::Agent,
                 agent: false,
-                private: s.private,
+                private: s.kind == SpaceKind::Private,
             })
         })
         .collect();
