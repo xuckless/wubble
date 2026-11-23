@@ -1422,9 +1422,17 @@ impl Host {
         if !worked {
             return;
         }
-        // An agent's page no window shows paints at `pacing::UNSHOWN_FRAME_RATE`, and no pane
-        // takes its frames to say so: the pump keeps that rate's pace while one lives.
-        if !self.unshown_painting().is_empty() {
+        // An agent's page no window shows paints at most at `pacing::UNSHOWN_FRAME_RATE`, and
+        // no pane takes its frames: taken here (and dropped), a frame keeps the pump at that
+        // pace, and a page that paints nothing lets it go quiet.
+        let mut painted = false;
+        for id in self.unshown_painting() {
+            painted |= self
+                .engine
+                .view(id)
+                .is_some_and(|v| v.take_frame().is_some());
+        }
+        if painted {
             let period = Duration::from_secs_f64(1.0 / f64::from(pacing::UNSHOWN_FRAME_RATE));
             let timer = self.engine.page_painted(period).timer;
             self.arm_pump(timer);

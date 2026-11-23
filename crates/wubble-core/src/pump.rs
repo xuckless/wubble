@@ -104,6 +104,9 @@ impl Tempo {
 pub struct PumpState {
     /// A single-shot timer is armed and will report [`PumpEvent::TimerFired`].
     pub timer_pending: bool,
+    /// The delay that timer was armed with (meaningless while none is): a frame re-arms only
+    /// a fallback longer than one refresh, never CEF's own sooner request.
+    pub armed: Duration,
     /// [`PumpEffect::RunWork`] was emitted and its [`PumpEvent::WorkDone`]
     /// has not arrived yet.
     pub active: bool,
@@ -150,26 +153,36 @@ pub fn transition(state: PumpState, event: PumpEvent) -> (PumpState, Vec<PumpEff
             },
             &mut effects,
         ),
-        // Takes effect at the next timer (re)arm, except a quiet pump's armed timer, which
+        // Takes effect at the next timer (re)arm, except a quiet pump's fallback timer, which
         // would hold a page that just began to paint (an animation CEF does not announce)
         // for up to `QUIET_TIMER_DELAY`: it is armed again at one refresh.
-        // Pages painting at different rates (a shown one, an agent's unshown one) keep the
-        // faster one's.
         PumpEvent::Painted(refresh) => {
-            let refresh = match state.tempo {
-                Tempo::Painting { refresh: was, .. } => refresh.min(was),
-                _ => refresh,
+            let painting = match state.tempo {
+                // A slower page's frame (an agent's unshown one beside a shown one) neither
+                // slows the faster one's pace nor holds it: once that one stops, its hold runs
+                // out and the slower pace follows.
+                Tempo::Painting { refresh: was, left } if refresh > was => {
+                    Tempo::Painting { refresh: was, left }
+                }
+                _ => Tempo::Painting {
+                    refresh,
+                    left: PAINTING_HOLD,
+                },
             };
-            let painting = Tempo::Painting {
-                refresh,
-                left: PAINTING_HOLD,
-            };
-            if state.timer_pending && state.tempo == Tempo::Quiet {
+            let rearm = state.timer_pending
+                && state.tempo == Tempo::Quiet
+                && state.armed > painting.ceiling();
+            if rearm {
                 effects.push(PumpEffect::CancelTimer);
                 effects.push(PumpEffect::StartTimer(painting.ceiling()));
             }
             PumpState {
                 tempo: painting,
+                armed: if rearm {
+                    painting.ceiling()
+                } else {
+                    state.armed
+                },
                 ..state
             }
         }
@@ -192,6 +205,7 @@ pub fn transition(state: PumpState, event: PumpEvent) -> (PumpState, Vec<PumpEff
                 effects.push(PumpEffect::StartTimer(Duration::ZERO));
                 PumpState {
                     timer_pending: true,
+                    armed: Duration::ZERO,
                     ..idle
                 }
             } else if !state.timer_pending {
@@ -223,6 +237,7 @@ fn schedule(state: PumpState, delay_ms: i64, effects: &mut Vec<PumpEffect>) -> P
     effects.push(PumpEffect::StartTimer(delay));
     PumpState {
         timer_pending: true,
+        armed: delay,
         ..state
     }
 }
@@ -262,6 +277,7 @@ mod tests {
     fn settled(state: PumpState) -> PumpState {
         PumpState {
             tempo: Tempo::default(),
+            armed: Duration::ZERO,
             ..state
         }
     }
@@ -500,27 +516,72 @@ mod tests {
 
     #[test]
     fn a_frame_rearms_only_a_quiet_pumps_timer() {
-        let at = |tempo, timer_pending| PumpState {
+        let at = |tempo, timer_pending, armed| PumpState {
             tempo,
             timer_pending,
+            armed,
             ..PumpState::default()
         };
-        // (tempo before, a timer armed, the effects of a frame)
-        for (tempo, pending, effects) in [
-            (Tempo::Quiet, true, vec![CancelTimer, StartTimer(REFRESH)]),
-            (Tempo::Quiet, false, vec![]),
-            (Tempo::default(), true, vec![]),
-            (painting(2), true, vec![]),
+        let (quiet, soon) = (QUIET_TIMER_DELAY, Duration::from_millis(5));
+        // (tempo before, a timer armed, its delay, the effects of a frame, the delay after)
+        for (tempo, pending, armed, effects, after) in [
+            (
+                Tempo::Quiet,
+                true,
+                quiet,
+                vec![CancelTimer, StartTimer(REFRESH)],
+                REFRESH,
+            ),
+            // CEF's own sooner request stays
+            (Tempo::Quiet, true, soon, vec![], soon),
+            (Tempo::Quiet, false, quiet, vec![], quiet),
+            (Tempo::default(), true, MAX, vec![], MAX),
+            (painting(2), true, REFRESH, vec![], REFRESH),
         ] {
-            let (state, got) = transition(at(tempo, pending), Painted(REFRESH));
-            assert_eq!(got, effects, "{tempo:?} pending={pending}");
-            assert_eq!(state, at(painting(PAINTING_HOLD), pending), "{tempo:?}");
+            let (state, got) = transition(at(tempo, pending, armed), Painted(REFRESH));
+            assert_eq!(got, effects, "{tempo:?} pending={pending} {armed:?}");
+            assert_eq!(
+                state,
+                at(painting(PAINTING_HOLD), pending, after),
+                "{tempo:?}"
+            );
         }
-        // a slower page's frame keeps the faster one's refresh
+        // a slower page's frame keeps the faster one's refresh and does not hold it
         let slow = Duration::from_millis(66);
-        let (state, _) = transition(at(painting(2), true), Painted(slow));
+        let (state, _) = transition(at(painting(2), true, REFRESH), Painted(slow));
+        assert_eq!(state.tempo, painting(2));
+        // the same page again holds it anew
+        let (state, _) = transition(at(painting(2), true, REFRESH), Painted(REFRESH));
         assert_eq!(state.tempo, painting(PAINTING_HOLD));
-        let (state, _) = transition(at(Tempo::default(), true), Painted(slow));
+        // with no faster page, the slower one's pace
+        let (state, _) = transition(at(Tempo::default(), true, MAX), Painted(slow));
+        assert_eq!(
+            state.tempo,
+            Tempo::Painting {
+                refresh: slow,
+                left: PAINTING_HOLD
+            }
+        );
+    }
+
+    /// An agent's unshown page that paints nothing keeps no pace: the host reports only the
+    /// frames such a page delivers, so a still one lets the pump go quiet.
+    #[test]
+    fn a_pump_with_no_frames_goes_quiet() {
+        let mut state = PumpState::default();
+        for _ in 0..SETTLE_RUNS {
+            state = drive_from(state, &[TimerFired]).0;
+        }
+        assert_eq!(state.tempo, Tempo::Quiet);
+        // a slower page's frames after a fast one's hold ran out: its own pace, then quiet
+        let slow = Duration::from_millis(66);
+        let (state, _) = drive_from(state, &[Painted(REFRESH)]);
+        let mut state = state;
+        for _ in 0..PAINTING_HOLD {
+            state = drive_from(state, &[TimerFired]).0;
+        }
+        assert_eq!(state.tempo, Tempo::default());
+        let (state, _) = transition(state, Painted(slow));
         assert_eq!(
             state.tempo,
             Tempo::Painting {
