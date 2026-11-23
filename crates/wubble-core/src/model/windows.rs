@@ -336,12 +336,10 @@ impl Model {
         let Some((tab, _, create)) = self.place_new_tab(url, None, Some(opener), None) else {
             return vec![];
         };
-        // `size` is the page's (window.open's width and height: Chromium's content size); the
-        // shell sets the page card `Chrome.inset` in from each edge of the window
-        let frame = 2 * crate::kit_gen::tokens::chrome::inset as u32;
+        // the window's size, from the page's (`window::popup_window`)
         let geometry = size.map(|(width, height)| Geometry {
-            width: width.saturating_add(frame),
-            height: height.saturating_add(frame),
+            width,
+            height,
             ..Geometry::default()
         });
         let id = self.push_window(Shown::Popup(tab), geometry);

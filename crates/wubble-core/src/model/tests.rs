@@ -2565,6 +2565,28 @@ fn closing_windows() {
 }
 
 #[test]
+fn a_new_window_opens_cascaded_from_the_focused_main_window() {
+    let (m, _) = with_tabs(1);
+    let g = Geometry {
+        width: 800,
+        height: 600,
+        pos: Some((100, 50)),
+        monitor: Some("A".into()),
+        ..Geometry::default()
+    };
+    let (m, _) = run(
+        m,
+        Command::ResizeWindow {
+            window: WindowId(0),
+            geometry: g.clone(),
+        },
+    );
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    assert_eq!(m.window(w).unwrap().geometry, Some(g.cascaded()));
+}
+
+#[test]
 fn popup_and_little_windows_own_their_tab() {
     let (m, t) = with_tabs(1);
     let (m, fx) = run(
@@ -2581,11 +2603,10 @@ fn popup_and_little_windows_own_their_tab() {
     assert_eq!(
         m.window(p).unwrap().geometry,
         Some(Geometry {
-            width: 416,
-            height: 316,
+            width: 400,
+            height: 300,
             ..Geometry::default()
-        }),
-        "the page at the size asked for, in the shell's inset"
+        })
     );
     assert_eq!(m.visible_tab(), Some(pt), "the popup has focus");
     assert_eq!(m.spaces[0].active, Some(t[0]), "the Space keeps its page");

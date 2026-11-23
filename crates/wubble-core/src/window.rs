@@ -71,42 +71,25 @@ pub enum WindowState {
     Minimized,
 }
 
+/// Each show state and its stored name (`windows.state`).
+pub const STATES: [(WindowState, &str); 4] = [
+    (WindowState::Normal, "normal"),
+    (WindowState::Maximized, "maximized"),
+    (WindowState::Fullscreen, "fullscreen"),
+    (WindowState::Minimized, "minimized"),
+];
+
 impl WindowState {
-    /// The stored name (`windows.state`).
+    /// The stored name ([`STATES`]).
     pub fn id(self) -> &'static str {
-        match self {
-            WindowState::Normal => "normal",
-            WindowState::Maximized => "maximized",
-            WindowState::Fullscreen => "fullscreen",
-            WindowState::Minimized => "minimized",
-        }
+        STATES
+            .iter()
+            .find(|(s, _)| *s == self)
+            .map_or("normal", |(_, id)| id)
     }
 
     pub fn from_id(id: &str) -> Option<WindowState> {
-        [
-            WindowState::Normal,
-            WindowState::Maximized,
-            WindowState::Fullscreen,
-            WindowState::Minimized,
-        ]
-        .into_iter()
-        .find(|s| s.id() == id)
-    }
-
-    /// The state a window comes back in after a restart: as it was, except that the focused
-    /// window never comes back minimized, so the restored session has a window to look at
-    /// (Chrome's session restore shows the last active browser normally).
-    pub fn restored(self, focused: bool) -> WindowState {
-        match self {
-            WindowState::Minimized if focused => WindowState::Normal,
-            s => s,
-        }
-    }
-
-    /// Whether the size and position the platform reports in this state are not the
-    /// window's own (they are the screen's, or none).
-    fn hides_bounds(self) -> bool {
-        self != WindowState::Normal
+        STATES.iter().find(|(_, i)| *i == id).map(|(s, _)| *s)
     }
 }
 
@@ -133,26 +116,33 @@ pub const CASCADE_PX: i32 = 10;
 
 impl Geometry {
     /// What the platform reported (`now`) kept as the window's geometry, given what was kept
-    /// before (`prev`): the restored bounds stay `prev`'s while the window is not normal.
+    /// before (`prev`). While the window is not normal the reported bounds are the screen's (or
+    /// off screen: Windows moves a minimized window to -32000), not the window's own: its
+    /// restored bounds stay `prev`'s; never seen normal, it keeps the reported size and no
+    /// position, so it comes back where the platform puts a new window.
     pub fn observed(prev: Option<&Geometry>, now: Geometry) -> Geometry {
         match prev {
-            Some(p) if now.state.hides_bounds() => Geometry {
+            _ if now.state == WindowState::Normal => now,
+            Some(p) => Geometry {
                 width: p.width,
                 height: p.height,
                 pos: p.pos,
                 ..now
             },
-            // never seen normal: a minimized window's reported position is off screen
-            // (Windows moves it to -32000), not one to come back at
-            None if now.state == WindowState::Minimized => Geometry { pos: None, ..now },
-            _ => now,
+            None => Geometry { pos: None, ..now },
         }
     }
 
-    /// The geometry a window comes back with after a restart (`WindowState::restored`).
+    /// The geometry a window comes back with after a restart: as it was, except that the
+    /// focused window never comes back minimized, so the restored session has a window to look
+    /// at (Chrome's session restore shows the last active browser normally).
     pub fn restoring(&self, focused: bool) -> Geometry {
+        let state = match self.state {
+            WindowState::Minimized if focused => WindowState::Normal,
+            s => s,
+        };
         Geometry {
-            state: self.state.restored(focused),
+            state,
             ..self.clone()
         }
     }
@@ -172,6 +162,31 @@ impl Geometry {
             monitor: self.monitor.clone(),
         }
     }
+}
+
+/// The least side of a window a page opens, in CSS px (Blink's `create_window.cc` raises a
+/// smaller `window.open` width or height to 100).
+pub const MIN_POPUP_SIDE: u32 = 100;
+
+/// The most a window side gets, in logical px, where no display bounds it: wgpu's default
+/// `max_texture_dimension_2d` (8192, past which the surface fails to configure) at a 2x scale.
+pub const MAX_SIDE: u32 = 4096;
+
+/// `(w, h)` no larger than `display` (logical px, where it is known) nor [`MAX_SIDE`], and at
+/// least 1: a stored or page-chosen size the window can have.
+pub fn bounded((w, h): (u32, u32), display: Option<(u32, u32)>) -> (u32, u32) {
+    let (dw, dh) = display.unwrap_or((MAX_SIDE, MAX_SIDE));
+    let side = |v: u32, d: u32| v.min(d).min(MAX_SIDE).max(1);
+    (side(w, dw), side(h, dh))
+}
+
+/// The window for a page `window.open` asked to be `page` big (its `width` and `height`:
+/// Chromium's content size, CSS px): the page at least [`MIN_POPUP_SIDE`] each way, in the
+/// shell's `Chrome.inset` on every side, [`bounded`] by `display`.
+pub fn popup_window((w, h): (u32, u32), display: Option<(u32, u32)>) -> (u32, u32) {
+    let frame = 2 * crate::kit_gen::tokens::chrome::inset as u32;
+    let side = |v: u32| v.max(MIN_POPUP_SIDE).saturating_add(frame);
+    bounded((side(w), side(h)), display)
 }
 
 /// A rectangle in physical pixels of the virtual screen.
@@ -463,14 +478,33 @@ mod tests {
             monitor: monitor.map(String::from),
         };
         let normal = g(800, 600, Some((10, 20)), Normal, Some("A"));
+        let screen = |state| g(1920, 1080, Some((0, 0)), state, Some("B"));
         // (case, prev, reported, kept)
         let observed = [
             ("first report", None, normal.clone(), normal.clone()),
             (
                 "maximized keeps the normal bounds",
                 Some(&normal),
-                g(1920, 1080, Some((0, 0)), Maximized, Some("B")),
+                screen(Maximized),
                 g(800, 600, Some((10, 20)), Maximized, Some("B")),
+            ),
+            (
+                "fullscreen keeps the normal bounds",
+                Some(&normal),
+                screen(Fullscreen),
+                g(800, 600, Some((10, 20)), Fullscreen, Some("B")),
+            ),
+            (
+                "first seen maximized: the size, no position",
+                None,
+                screen(Maximized),
+                g(1920, 1080, None, Maximized, Some("B")),
+            ),
+            (
+                "first seen fullscreen: the size, no position",
+                None,
+                screen(Fullscreen),
+                g(1920, 1080, None, Fullscreen, Some("B")),
             ),
             (
                 "first seen minimized: no position",
@@ -488,29 +522,52 @@ mod tests {
         for (case, prev, now, kept) in observed {
             assert_eq!(Geometry::observed(prev, now), kept, "{case}");
         }
-        // (state, focused, comes back as)
+        // (case, state, focused, comes back as)
         let restored = [
-            (Minimized, true, Normal),
-            (Minimized, false, Minimized),
-            (Maximized, true, Maximized),
-            (Fullscreen, false, Fullscreen),
+            ("the focused window is never minimized", Minimized, true, Normal),
+            ("another stays minimized", Minimized, false, Minimized),
+            ("maximized stays", Maximized, true, Maximized),
+            ("fullscreen stays", Fullscreen, false, Fullscreen),
         ];
-        for (state, focused, back) in restored {
+        for (case, state, focused, back) in restored {
             let was = Geometry { state, ..normal.clone() };
-            assert_eq!(was.restoring(focused), Geometry { state: back, ..normal.clone() });
+            assert_eq!(was.restoring(focused), Geometry { state: back, ..normal.clone() }, "{case}");
         }
-        // (from, cascaded)
+        // (case, from, cascaded)
         let cascades = [
-            (normal.clone(), g(800, 600, Some((20, 30)), Normal, Some("A"))),
-            (g(800, 600, None, Maximized, None), g(800, 600, None, Maximized, None)),
-            (g(800, 600, Some((0, 0)), Fullscreen, None), g(800, 600, Some((10, 10)), Normal, None)),
+            ("down and right", normal.clone(), g(800, 600, Some((20, 30)), Normal, Some("A"))),
+            ("maximized stays, no position", g(800, 600, None, Maximized, None), g(800, 600, None, Maximized, None)),
+            ("fullscreen opens normal", g(800, 600, Some((0, 0)), Fullscreen, None), g(800, 600, Some((10, 10)), Normal, None)),
         ];
-        for (from, to) in cascades {
-            assert_eq!(from.cascaded(), to);
+        for (case, from, to) in cascades {
+            assert_eq!(from.cascaded(), to, "{case}");
         }
-        for s in [Normal, Maximized, Fullscreen, Minimized] {
-            assert_eq!(WindowState::from_id(s.id()), Some(s));
+        for (s, id) in STATES {
+            assert_eq!((s.id(), WindowState::from_id(id)), (id, Some(s)));
         }
         assert_eq!(WindowState::from_id("hidden"), None);
+    }
+
+    #[test]
+    fn a_popup_window_fits_its_page_and_its_display() {
+        let frame = 2 * crate::kit_gen::tokens::chrome::inset as u32;
+        // (case, page asked for, display, window)
+        let cases = [
+            ("the page in the inset", (500, 600), Some((1920, 1080)), (500 + frame, 600 + frame)),
+            ("too small: 100", (10, 0), Some((1920, 1080)), (100 + frame, 100 + frame)),
+            ("too big: the display", (100_000, 2000), Some((1920, 1080)), (1920, 1080)),
+            ("no display: the most a surface takes", (100_000, u32::MAX), None, (MAX_SIDE, MAX_SIDE)),
+        ];
+        for (case, page, display, window) in cases {
+            assert_eq!(popup_window(page, display), window, "{case}");
+        }
+        // (case, stored size, bounded)
+        let stored = [
+            ("kept", (800, 600), (800, 600)),
+            ("a corrupt row", (u32::MAX, 0), (MAX_SIDE, 1)),
+        ];
+        for (case, size, kept) in stored {
+            assert_eq!(bounded(size, None), kept, "{case}");
+        }
     }
 }
