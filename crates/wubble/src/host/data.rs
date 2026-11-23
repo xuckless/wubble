@@ -81,6 +81,10 @@ pub(crate) struct DataSmoke {
     before: usize,
     /// Notes for the report: what a step observed that is not a failure.
     pub(crate) notes: Vec<String>,
+    /// `--smoke private`'s window and its first and second tab.
+    private_window: Option<wubble_core::window::WindowId>,
+    private_tab: Option<TabId>,
+    second: Option<TabId>,
 }
 
 impl DataSmoke {
@@ -101,6 +105,17 @@ impl DataSmoke {
             key: -1,
             before: 0,
             notes: vec![],
+            private_window: None,
+            private_tab: None,
+            second: None,
+        }
+    }
+
+    /// The script this run follows.
+    fn steps(&self) -> &'static [Step] {
+        match self.ending {
+            Ending::Quit | Ending::Kill => STEPS,
+            Ending::Private => private::STEPS,
         }
     }
 }
@@ -122,6 +137,9 @@ macro_rules! step {
 }
 
 fn nothing(_: &mut Host, _: &mut DataSmoke) {}
+
+// After `step!`, which it uses.
+mod private;
 
 /// Presses what the window's own callback does, later and outside the host it calls into.
 fn ui(host: &Host, f: impl FnOnce(&AppWindow) + Send + 'static) {
@@ -668,7 +686,8 @@ impl Host {
         let Some(mut c) = self.checks.data_smoke.take() else {
             return;
         };
-        let Some(step) = STEPS.get(c.step) else {
+        let steps = c.steps();
+        let Some(step) = steps.get(c.step) else {
             self.checks.data_smoke = Some(c);
             return;
         };
@@ -685,7 +704,7 @@ impl Host {
                 c.step += 1;
                 c.runs = 0;
                 c.entered = false;
-                if c.step == STEPS.len() {
+                if c.step == steps.len() {
                     self.data_end(c.ending, &c.notes);
                     return;
                 }
@@ -732,7 +751,7 @@ impl Host {
             println!("smoke: data: note: {note}");
         }
         match ending {
-            Ending::Quit => {
+            Ending::Quit | Ending::Private => {
                 self.data_passed = true;
                 crate::quit();
             }

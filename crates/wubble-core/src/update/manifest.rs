@@ -444,8 +444,14 @@ pub(crate) mod tests {
         // `preview.json`), and a 0.6.1 build follows Stable
         let release = manifest_for(&s, "0.6.1", ARCHIVE);
         assert_eq!(
-            choose(&release, &v("0.1.0-preview.7"), linux, Channel::Preview, None)
-                .map(|o| o.map(|o| o.version)),
+            choose(
+                &release,
+                &v("0.1.0-preview.7"),
+                linux,
+                Channel::Preview,
+                None
+            )
+            .map(|o| o.map(|o| o.version)),
             Ok(Some(v("0.6.1")))
         );
         assert_eq!(Channel::of(&v("0.6.1")), Channel::Stable);

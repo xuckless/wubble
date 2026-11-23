@@ -2130,17 +2130,21 @@ impl Host {
         }
     }
 
-    /// One event of the live suggestion fetch; re-renders the rows when its list changed.
-    pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
-        let settings = wubble_core::suggest::SuggestSettings {
+    /// What this window's bar consults: a private window's suggests from this machine only.
+    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings {
+        wubble_core::suggest::SuggestSettings {
             engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
-            // a private window's bar suggests from this machine only
             live: wubble_core::suggest::LiveSuggestions::of(
                 self.live_suggestions,
                 self.search_engine.is_some(),
                 self.model.side_of_window(self.w.id),
             ),
-        };
+        }
+    }
+
+    /// One event of the live suggestion fetch; re-renders the rows when its list changed.
+    pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
+        let settings = self.suggest_settings();
         if let Some(list) = self.suggest.event(event, &settings)
             && list != self.bar.suggestions
         {

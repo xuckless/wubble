@@ -318,6 +318,16 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Smoke(Smoke::Private) => match smoke_private() {
+            Ok(()) => {
+                println!("smoke: private ok");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: private FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::DataPhase { ending, profile }) => match smoke_profile(&profile) {
             Ok(()) => with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile)),
             Err(e) => {
@@ -448,6 +458,7 @@ fn main() -> ExitCode {
                 | Smoke::Passwords
                 | Smoke::PasswordsPhase { .. }
                 | Smoke::Data
+                | Smoke::Private
                 | Smoke::DataPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
@@ -750,6 +761,38 @@ fn killed_by(status: &std::process::ExitStatus) -> Option<i32> {
         let _ = status;
         None
     }
+}
+
+/// `--smoke private`: the private-window script on a throwaway profile, ending in a quit; then
+/// the profile is searched for anything of the private pages (`data_smoke::private_leaks`).
+fn smoke_private() -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
+    let no_sandbox = app::no_sandbox_requested(std::env::args_os());
+    let profile = std::env::temp_dir().join(format!("wubble-private-{}", std::process::id()));
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        mark_smoke_profile(&profile)?;
+        let mut args: Vec<std::ffi::OsString> = vec![
+            "--smoke".into(),
+            "data-phase=private".into(),
+            "--profile".into(),
+            profile.clone().into(),
+        ];
+        args.extend(no_sandbox.then(|| app::NO_SANDBOX_ARG.into()));
+        let status = std::process::Command::new(&exe)
+            .args(args)
+            .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+            .status()?;
+        if !status.success() {
+            return Err(format!("the run exited with {status}").into());
+        }
+        let db = Profile {
+            dir: profile.clone(),
+        }
+        .db_path();
+        data_smoke::private_leaks(&profile, &db).map_err(Into::into)
+    })();
+    remove_cache(&profile);
+    result
 }
 
 /// `--smoke data`: the script run twice on throwaway profiles, once ending in a quit and once in
@@ -2017,7 +2060,10 @@ fn run(
             },
         ),
         Mode::Data(ending) => (
-            data_server.as_ref().map(|s| s.url("/page")),
+            data_server.as_ref().map(|s| match ending {
+                data_smoke::Ending::Private => s.url_at(data_smoke::NORMAL_HOST, "/a"),
+                data_smoke::Ending::Quit | data_smoke::Ending::Kill => s.url("/page"),
+            }),
             Checks {
                 data_smoke: data_server.map(|server| host::DataSmoke::new(server, *ending)),
                 ..none
