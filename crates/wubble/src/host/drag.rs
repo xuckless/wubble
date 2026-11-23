@@ -756,9 +756,8 @@ impl Host {
     pub(super) fn pane_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
         let height = window.get_content_height();
         self.pane_rects(window).into_iter().find_map(|r| {
-            let (x, y) = self.view_origin(window, r.tab);
-            let (px, py) = (at.0 - x, at.1 - y);
-            ((0.0..r.width as f32).contains(&px) && (0.0..height).contains(&py)).then_some(r.tab)
+            let p = self.page_point(window, r.tab, at);
+            ((0.0..r.width as f32).contains(&p.x) && (0.0..height).contains(&p.y)).then_some(r.tab)
         })
     }
 
