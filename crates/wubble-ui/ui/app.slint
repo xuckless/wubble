@@ -621,8 +621,11 @@ export component AppWindow inherits Window {
     // The downloads list (newest first) and its buttons: (entry id, what).
     in property <[DownloadItem]> downloads;
     callback download-action(int, DownloadAction);
-    // The popover is open (presentation only; the list is the host's).
-    in-out property <bool> downloads-open: false;
+    // The popover is open: the host's (`wubble_core::overlay`), as are the list and the button
+    // (`downloads-requested`) and a press outside (`downloads-dismissed`) asking it.
+    in property <bool> downloads-open: false;
+    callback downloads-requested();
+    callback downloads-dismissed();
     // The sidebar footer's extensions button (shown once an extension is installed), its popover
     // (the enabled extensions' actions) and the open action's popup, which replaces the list;
     // the host owns which is open (`wubble_core::extensions::shell::Panel`): `extensions-open`
@@ -639,11 +642,13 @@ export component AppWindow inherits Window {
     callback extension-prompt-answered(bool);
     // The sidebar footer's Spaces popup (wubble_core::spacemenu, bound by the host): its lines
     // and the keys' rows (the lines, a separator, New Space). The "^" asks the host
-    // (`spaces-menu-requested`), which opens it through the overlay stack; it closes itself.
+    // (`spaces-menu-requested`), which opens it through the overlays' store; a pick or a press
+    // outside asks it to close (`spaces-dismissed`).
     in property <[SpacesMenuRow]> spaces-menu-rows;
     in property <[MenuEntry]> spaces-menu-entries;
-    in-out property <bool> spaces-open: false;
+    in property <bool> spaces-open: false;
     callback spaces-menu-requested();
+    callback spaces-dismissed();
     // an agent Space row's dustbin (the host clears that Space; the popup stays open)
     callback space-cleared(int);
     // a dragged tab over the popup: the line it would drop on (-1 none), its top in the list,
@@ -670,11 +675,6 @@ export component AppWindow inherits Window {
         rule: spaces-ui.rule-height,
         sticky-top: spaces-ui.sticky-top,
     };
-    changed downloads => {
-        if root.downloads.length == 0 {
-            root.downloads-open = false;
-        }
-    }
     // What of each surface the kit still draws, open or leaving (`Mounted`): the host reads it
     // as it derives what covers a page. `mounted-changed` says one began or ended its exit.
     out property <Mounted> mounted: {
@@ -1646,7 +1646,7 @@ export component AppWindow inherits Window {
                     root.spaces-menu-requested();
                 }
                 downloads-requested => {
-                    root.downloads-open = !root.downloads-open;
+                    root.downloads-requested();
                 }
                 settings-requested => {
                     root.settings-requested();
@@ -1764,7 +1764,7 @@ export component AppWindow inherits Window {
             root.download-action(id, what);
         }
         dismissed => {
-            root.downloads-open = false;
+            root.downloads-dismissed();
         }
     }
 
@@ -1824,19 +1824,18 @@ export component AppWindow inherits Window {
         drop-line: root.spaces-drop-line;
         drop-top: root.spaces-drop-top;
         drop-sticky: root.spaces-drop-sticky;
+        // a pick dismisses it too (the kit's menu machine): the host closes it
         picked(id) => {
-            root.spaces-open = false;
             root.space-switched(id);
         }
         new-space => {
-            root.spaces-open = false;
             root.shell-action("new-space");
         }
         cleared(id) => {
             root.space-cleared(id);
         }
         dismissed => {
-            root.spaces-open = false;
+            root.spaces-dismissed();
         }
     }
 

@@ -378,6 +378,8 @@ pub struct Host {
     pub timer: slint::Timer,
     /// The one owner of tabs and Spaces.
     model: Model,
+    /// The one owner of which overlays are open or leaving (`wubble_core::overlay::Ui`).
+    ui: wubble_core::overlay::Ui,
     /// The view of every live tab.
     views: BTreeMap<TabId, ViewId>,
     /// Effects not yet executed: they wait until the window can size a view.
@@ -793,6 +795,7 @@ impl Host {
             glance_enabled: true,
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
+            ui: Default::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -878,6 +881,14 @@ impl Host {
     /// Closes window `id`'s platform window. Its frames and rings go with it; the tabs it
     /// showed are hidden (or closed) by the model.
     fn close_window(&mut self, id: WindowId) {
+        // its overlays go with it
+        let here = self.w.id;
+        if self.enter(id)
+            && let Some(window) = self.w.window.upgrade()
+        {
+            self.overlay_window_gone(&window);
+        }
+        self.enter(here);
         // its pages' layers go while it is still a window (none with `--page-layer=off`)
         if self
             .window_where(|w| w.id == id && !w.layers.is_empty())

@@ -149,14 +149,16 @@ impl Host {
     }
 
     /// A surface of this window began or ended its exit (`mounted-changed`, which Slint fires
-    /// inside a render: queued to here). Only a window with a layer cares.
+    /// inside a render: queued to here): the overlays' exits end (`layers_mounted`); then only
+    /// a window with a layer cares.
     pub(crate) fn surfaces_mounted(&mut self) {
-        if self.w.layers.is_empty() {
-            return;
-        }
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
+        self.layers_mounted(&window);
+        if self.w.layers.is_empty() {
+            return;
+        }
         if self.layers_changed(&window, false) {
             self.render_panes(&window);
         }

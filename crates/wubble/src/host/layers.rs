@@ -1,33 +1,93 @@
-//! The surfaces over the page (`wubble_core::overlay`): the host derives the stack from each
-//! surface's own owner, runs the overlays' pure transition and carries out its effects through
-//! those owners, and answers what covers a page (`overlay::covers`). Every way an overlay opens
-//! asks here first; Escape, a tab switch and a navigation come here before anything else sees
-//! them.
+//! The surfaces over the page (`wubble_core::overlay`): the host keeps the overlays' one store
+//! (`Host::ui`), runs its pure `reduce` and carries out the effects, derives the stack with the
+//! free surfaces each owner wrote, and answers what covers a page (`overlay::covers`). Every way
+//! an overlay opens asks here first; Escape, a tab switch and a navigation come here before
+//! anything else sees them.
 
 use slint::ComponentHandle;
 use wubble_core::devtools::PANEL_TAB;
-use wubble_core::overlay::{self, Coverage, Effect, Event, Facts, Kind, Layer, Stack};
+use wubble_core::overlay::{self, Action, Coverage, Effect, Env, Facts, Kind, Layer, Phase, Stack};
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
+use wubble_core::window::{WindowId, WindowKind};
 use wubble_ui::{
     AgentWidgets, AppWindow, CommandBarState, CommandPlacement, DropMarkKind, GlassLayer,
 };
 
 use super::Host;
+use super::window::WindowHost;
 use crate::menu::{Menu, MenuEvent};
 use crate::prompt::{Auth, AuthEvent, PermissionEvent, PermissionPrompt};
 use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
 
+/// The overlays the store owns so far: the kit draws each from its phase, which only the host
+/// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
+const STORED: [Kind; 2] = [Kind::Downloads, Kind::Spaces];
+
+/// What the store reads of the host's other owners as an action runs (never copied into it).
+struct HostEnv<'a> {
+    host: &'a Host,
+    window: &'a AppWindow,
+    /// The tab whose menu and panels the current window shows (before a switch: the old one).
+    menu_tab: Option<TabId>,
+}
+
+impl HostEnv<'_> {
+    fn window(&self, w: WindowId) -> Option<&WindowHost> {
+        std::iter::once(&self.host.w)
+            .chain(self.host.parked.values())
+            .find(|x| x.id == w)
+    }
+}
+
+impl Env for HostEnv<'_> {
+    fn shown(&self, w: WindowId) -> Option<TabId> {
+        self.host.model.window_tab(w)
+    }
+
+    fn showing(&self, tab: TabId) -> Option<WindowId> {
+        std::iter::once(&self.host.w)
+            .chain(self.host.parked.values())
+            .map(|x| x.id)
+            .find(|&w| self.host.model.window_tab(w) == Some(tab))
+    }
+
+    fn kind(&self, w: WindowId) -> WindowKind {
+        self.window(w).map_or(WindowKind::Main, |x| x.kind)
+    }
+
+    fn page_has_keys(&self, w: WindowId) -> bool {
+        self.window(w).is_some_and(|x| x.handle.get_web_focused())
+    }
+
+    fn others(&self, w: WindowId) -> Vec<Layer> {
+        if w != self.host.w.id {
+            return vec![];
+        }
+        self.host.machine_layers(self.window, self.menu_tab)
+    }
+
+    fn machine(&self, kind: Kind) -> bool {
+        !STORED.contains(&kind)
+    }
+}
+
 impl Host {
-    /// Every surface on screen in this window now, with `shown` the visible tab: each read from
-    /// its one owner (its machine, the view the host wrote, the driver's), and what the kit
-    /// still draws as it leaves (`AppWindow::mounted`). Derived each time, never kept: no
-    /// surface has a second copy here.
-    fn surface_stack(&self, window: &AppWindow, shown: Option<TabId>) -> Stack {
+    fn env<'a>(&'a self, window: &'a AppWindow, menu_tab: Option<TabId>) -> HostEnv<'a> {
+        HostEnv {
+            host: self,
+            window,
+            menu_tab,
+        }
+    }
+
+    /// TRANSITIONAL (until each kind moves into the store): the overlays open in this window
+    /// whose machine still owns their openness, each read from it (`menu_tab`: the tab whose
+    /// menu and panels count).
+    fn machine_layers(&self, window: &AppWindow, menu_tab: Option<TabId>) -> Vec<Layer> {
         let mut layers = vec![];
         let mut add = |kind, tab| layers.push(Layer::new(kind, tab));
-        // ----- the overlays, from their machines
         if let Some(tab) = self.notice_tab() {
             add(Kind::Notice, Some(tab));
         }
@@ -58,15 +118,10 @@ impl Host {
             add(Kind::Hints, Some(tab));
         }
         // the start page's capsule is the page's own field, not an overlay
-        let bar = window.get_command_bar_state();
-        let overlay_bar = window.get_command_placement() == CommandPlacement::Overlay;
-        if bar == CommandBarState::Open && overlay_bar {
+        if window.get_command_bar_state() == CommandBarState::Open
+            && window.get_command_placement() == CommandPlacement::Overlay
+        {
             add(Kind::CommandBar, None);
-        }
-        // the popover's and the popup's one store is their Slint property (step 2 makes it the
-        // host's); read, not copied
-        if window.get_downloads_open() {
-            add(Kind::Downloads, None);
         }
         if self.ext_ui_prompt_open() {
             add(Kind::ExtensionSheet, None);
@@ -74,22 +129,36 @@ impl Host {
         if self.ext_ui_panel_open() {
             add(Kind::Extensions, None);
         }
-        if window.get_spaces_open() {
-            add(Kind::Spaces, None);
-        }
-        if shown
+        if menu_tab
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| matches!(s.menu, Menu::Open { .. } | Menu::Shell { .. }))
         {
             add(Kind::Menu, None);
         }
+        // the panels the host wrote for the visible tab
+        if window.get_page_error().open {
+            add(Kind::ErrorPanel, menu_tab);
+        }
+        if window.get_boost().open {
+            add(Kind::Boost, menu_tab);
+        }
+        layers
+    }
+
+    /// Every surface on screen in this window now: the overlays from the store (with the
+    /// machines' that still own theirs), the free surfaces from their one owner each (the view
+    /// the host wrote, the driver's), and what the kit still draws as a free surface or a
+    /// machine's overlay leaves (`AppWindow::mounted`). Derived each time, never kept.
+    fn surface_stack(&self, window: &AppWindow) -> Stack {
+        let shown = self.shown();
+        let mut stack = self.ui.stack(&self.env(window, shown), self.w.id);
+        let mut add = |kind, tab| stack.layers.push(Layer::new(kind, tab));
         // ----- the free surfaces, from what their owners wrote into this window
         let key = self.model.window_key_tab(self.w.id);
         let video = window.get_video();
         let autofill = window.get_autofill();
         #[rustfmt::skip]
         let free = [
-            (Kind::ErrorPanel, shown, window.get_page_error().open),
             (Kind::Popup, None, window.get_popup().shown),
             (Kind::Toast, None, window.get_toast_shown()),
             (Kind::Tooltip, None, window.get_tip().shown),
@@ -102,7 +171,6 @@ impl Host {
             (Kind::VideoSpeeds, key, video.w > 0.0 && video.open && video.speeds),
             (Kind::PipStrip, None, window.get_pip_strip()),
             (Kind::Reader, shown, window.get_reader_on()),
-            (Kind::Boost, shown, window.get_boost().open),
             (Kind::Swipe, None, window.get_swipe_progress() != 0.0),
             (Kind::ExitPage, None, window.get_exit_t() < 1.0 && window.get_exit_page().size().width > 0),
             (Kind::Entrance, None, window.get_page_enter() < 1.0),
@@ -129,8 +197,10 @@ impl Host {
         {
             add(Kind::Status, Some(tab));
         }
-        // ----- what the kit still draws: open, or leaving (the command bar's exit is the
-        // driver's, seen in its state)
+        // ----- what the kit still draws of the machines' overlays and the free surfaces: open,
+        // or leaving (the command bar's exit is the driver's, seen in its state)
+        let bar = window.get_command_bar_state() != CommandBarState::Closed
+            && window.get_command_placement() == CommandPlacement::Overlay;
         let m = window.get_mounted();
         #[rustfmt::skip]
         let drawn = [
@@ -142,12 +212,11 @@ impl Host {
             (Kind::ExtensionSheet, None, m.extension_sheet),
             (Kind::AgentSheet, None, m.agent_sheet),
             (Kind::Region, shown, m.region),
-            (Kind::CommandBar, None, bar != CommandBarState::Closed && overlay_bar),
-            (Kind::Downloads, None, m.downloads),
+            (Kind::CommandBar, None, bar),
             (Kind::Extensions, None, m.extensions),
-            (Kind::Spaces, None, m.spaces),
             (Kind::Menu, None, m.menu),
             (Kind::ErrorPanel, shown, m.error),
+            (Kind::Boost, shown, m.boost),
             (Kind::Toast, None, m.toast),
             (Kind::Tooltip, None, m.tooltip),
             (Kind::Preview, None, m.preview),
@@ -158,19 +227,13 @@ impl Host {
             (Kind::VideoSpeeds, key, m.video_speeds),
             (Kind::PipStrip, None, m.pip_strip),
             (Kind::Reader, shown, m.reader),
-            (Kind::Boost, shown, m.boost),
         ];
         let drawn: Vec<Layer> = drawn
             .into_iter()
             .filter(|&(_, _, on)| on)
             .map(|(kind, tab, _)| Layer::new(kind, tab))
             .collect();
-        Stack {
-            shown,
-            layers,
-            leaving: vec![],
-        }
-        .with_drawn(&drawn)
+        stack.with_drawn(&drawn)
     }
 
     /// What the shell draws over the page in `pane` of this window now: the page layer's
@@ -182,44 +245,118 @@ impl Host {
             glance: self.model.glance_of(self.w.id).is_some() || window.get_mounted().glance,
             pip_card: self.pip_card(),
         };
-        overlay::covers(&self.surface_stack(window, self.shown()), &facts, pane)
+        overlay::covers(&self.surface_stack(window), &facts, pane)
     }
 
-    /// Runs `event` with `shown` the visible tab before it; carries out the closes, hides and
-    /// reveals, and returns the effects. The caller redraws.
-    pub(super) fn overlay_event(
-        &mut self,
-        window: &AppWindow,
-        shown: Option<TabId>,
-        event: Event,
-    ) -> Vec<Effect> {
-        let (_, effects) = overlay::transition(self.surface_stack(window, shown), event);
-        for effect in &effects {
-            match *effect {
-                Effect::Close(layer) => self.overlay_close(window, shown, layer),
+    /// Runs `action` through the store, carries out its effects, writes the store's overlays
+    /// into the window and ends the exits the kit no longer draws; returns the effects. The
+    /// caller redraws the machines' surfaces.
+    fn act(&mut self, window: &AppWindow, action: Action) -> Vec<Effect> {
+        let fx = self.step(window, action);
+        self.settle_layers(window);
+        fx
+    }
+
+    /// One reduce. The store is stored before any effect runs, so an owner that answers a
+    /// `Cancel` by closing meets the new state (and its close is ignored).
+    fn step(&mut self, window: &AppWindow, action: Action) -> Vec<Effect> {
+        let menu_tab = match action {
+            Action::Switched { from, .. } => from,
+            _ => self.shown(),
+        };
+        let ui = std::mem::take(&mut self.ui);
+        let (ui, fx) = overlay::reduce(ui, &self.env(window, menu_tab), action);
+        self.ui = ui;
+        for &effect in &fx {
+            match effect {
+                Effect::Cancel(layer) => self.overlay_cancel(menu_tab, layer),
                 Effect::Hide(Layer {
                     kind: Kind::Notice, ..
                 }) => self.notice_shown(false),
                 Effect::Reveal(Layer {
                     kind: Kind::Notice, ..
                 }) => self.notice_shown(true),
-                // the find bar and a dialog are drawn for the visible tab only (render_surfaces)
-                Effect::Hide(_) | Effect::Reveal(_) | Effect::Open(_) => {}
+                // the store's overlays are drawn from their phase (settle_layers), the find bar
+                // and a dialog for the visible tab only (render_surfaces); the keys still follow
+                // `settle-focus` as each *-open changes
+                Effect::Mount(_)
+                | Effect::Unmount(_)
+                | Effect::Focus(..)
+                | Effect::Hide(_)
+                | Effect::Reveal(_) => {}
             }
         }
-        effects
+        fx
+    }
+
+    /// Writes the store's overlays of this window into it (only an open one shows; Slint
+    /// ignores a value that did not change), then ends each exit the kit no longer draws.
+    fn settle_layers(&mut self, window: &AppWindow) {
+        let w = self.w.id;
+        let open = |kind| self.ui.phase(w, Layer::new(kind, None)) == Some(Phase::Open);
+        window.set_downloads_open(open(Kind::Downloads));
+        window.set_spaces_open(open(Kind::Spaces));
+        let m = window.get_mounted();
+        let drawn = |l: Layer| match l.kind {
+            Kind::Downloads => m.downloads,
+            Kind::Spaces => m.spaces,
+            _ => false,
+        };
+        let gone = self.ui.gone(&self.env(window, self.shown()), w, drawn);
+        for layer in gone {
+            self.step(window, Action::Exited { w, layer });
+        }
+    }
+
+    /// A surface began or ended its exit (`mounted-changed`): the store's exits that ended end.
+    pub(super) fn layers_mounted(&mut self, window: &AppWindow) {
+        self.settle_layers(window);
     }
 
     /// Asks to open `kind` (for `tab` when it is the tab's): whatever it replaces is closed;
-    /// false when it may not open now.
+    /// false when it may not open now (true when it is open already: its owner takes the ask).
     pub(super) fn overlay_open(&mut self, kind: Kind, tab: Option<TabId>) -> bool {
         let Some(window) = self.w.window.upgrade() else {
             return true;
         };
-        let layer = Layer::new(kind, tab);
-        let shown = self.shown();
-        self.overlay_event(&window, shown, Event::Open(layer))
-            .contains(&Effect::Open(layer))
+        let (w, layer) = (self.w.id, Layer::new(kind, tab));
+        let env = self.env(&window, self.shown());
+        let already =
+            self.ui.phase(w, layer) == Some(Phase::Open) || env.others(w).contains(&layer);
+        already
+            || self
+                .act(&window, Action::Open { w, layer })
+                .contains(&Effect::Mount(layer))
+    }
+
+    /// The owner of a window's store overlay closed it (a pick, a dismissal, an empty list).
+    pub(super) fn overlay_closed(&mut self, kind: Kind) {
+        if let Some(window) = self.w.window.upgrade() {
+            let (w, layer) = (self.w.id, Layer::new(kind, None));
+            self.act(&window, Action::Close { w, layer });
+        }
+    }
+
+    /// The sidebar's downloads button: the popover opens when the overlays let it, or closes.
+    pub fn downloads_requested(&mut self) {
+        let open = self.ui.phase(self.w.id, Layer::new(Kind::Downloads, None));
+        if open == Some(Phase::Open) {
+            self.overlay_closed(Kind::Downloads);
+        } else if self.overlay_open(Kind::Downloads, None)
+            && let Some(window) = self.w.window.upgrade()
+        {
+            self.render_surfaces(&window);
+        }
+    }
+
+    /// The downloads popover was dismissed (a press outside).
+    pub fn downloads_dismissed(&mut self) {
+        self.overlay_closed(Kind::Downloads);
+    }
+
+    /// The Spaces popup was dismissed, or a pick (a Space, New Space) closed it.
+    pub fn spaces_dismissed(&mut self) {
+        self.overlay_closed(Kind::Spaces);
     }
 
     /// The footer's "^" (or the current Space's tile): the Spaces popup opens when the overlays
@@ -229,11 +366,9 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        if window.get_spaces_open() || !self.overlay_open(Kind::Spaces, None) {
-            return;
+        if self.overlay_open(Kind::Spaces, None) {
+            self.render_surfaces(&window);
         }
-        window.set_spaces_open(true);
-        self.render_surfaces(&window);
     }
 
     /// The dustbin on an agent Space's row: that Space is cleared (`agent_space_cleared`); the
@@ -256,20 +391,46 @@ impl Host {
     /// Escape: closes the topmost overlay that takes it from whoever has the keys (the page's
     /// Escape never answers a notice or a permission prompt); whether one closed.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
-        let shown = self.shown();
-        let event = if window.get_web_focused() {
-            Event::PageEscape
-        } else {
-            Event::Escape
-        };
-        let closed = !self.overlay_event(window, shown, event).is_empty();
-        if closed {
-            self.render_surfaces(window);
+        let w = self.w.id;
+        if self
+            .ui
+            .escape_target(&self.env(window, self.shown()), w)
+            .is_none()
+        {
+            return false;
         }
-        closed
+        self.act(window, Action::Escape { w });
+        self.render_surfaces(window);
+        true
     }
 
-    fn overlay_close(&mut self, window: &AppWindow, shown: Option<TabId>, layer: Layer) {
+    /// The window's tab changed from `from` to `to`: menus and sheets close, a tab's own
+    /// overlays wait hidden for it.
+    pub(super) fn overlay_switched(
+        &mut self,
+        window: &AppWindow,
+        from: Option<TabId>,
+        to: Option<TabId>,
+    ) {
+        let w = self.w.id;
+        self.act(window, Action::Switched { w, from, to });
+    }
+
+    /// The tab committed a new document: its sheets, find bar, hints, picker and notice close.
+    pub(super) fn overlay_navigated(&mut self, window: &AppWindow, tab: TabId) {
+        let w = self.w.id;
+        self.act(window, Action::Navigated { w, tab });
+    }
+
+    /// This window closes: its overlays go with it.
+    pub(super) fn overlay_window_gone(&mut self, window: &AppWindow) {
+        let w = self.w.id;
+        self.act(window, Action::WindowGone(w));
+    }
+
+    /// A rule closed `layer`: its owner answers as cancelled (`shown`: the tab whose menu it
+    /// is). The store's own overlays have no one to answer.
+    fn overlay_cancel(&mut self, shown: Option<TabId>, layer: Layer) {
         match (layer.kind, layer.tab) {
             (Kind::Notice, _) => self.notice_close(),
             (Kind::Permission, Some(tab)) => self.apply_permission(
@@ -303,8 +464,7 @@ impl Host {
                     window.invoke_dismiss_command_bar();
                 });
             }
-            (Kind::Downloads, _) => window.set_downloads_open(false),
-            (Kind::Spaces, _) => window.set_spaces_open(false),
+            (Kind::Downloads | Kind::Spaces, _) => {}
             (Kind::Extensions, _) => self.extensions_dismissed(),
             (Kind::ExtensionSheet, _) => self.extension_prompt_answered(false),
             (Kind::Menu, _) => {
@@ -313,10 +473,11 @@ impl Host {
                 }
             }
             (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
+            // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
+            (Kind::ErrorPanel | Kind::Boost, _) => {}
             // the free surfaces: no rule of the overlays closes one (`overlay::Group::Free`)
             (
-                Kind::ErrorPanel
-                | Kind::Popup
+                Kind::Popup
                 | Kind::Toast
                 | Kind::Tooltip
                 | Kind::Preview
@@ -330,7 +491,6 @@ impl Host {
                 | Kind::PipStrip
                 | Kind::PipCard
                 | Kind::Reader
-                | Kind::Boost
                 | Kind::Glance
                 | Kind::Swipe
                 | Kind::ExitPage

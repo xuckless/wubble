@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use slint::ComponentHandle;
 use wubble_core::autofill::{MenuRow, SaveKind, View};
 use wubble_core::model::Command;
+use wubble_core::overlay::Kind;
 use wubble_engine::page::{JsDialogKind, PermissionKind, RequestId};
 use wubble_ui::{AppWindow, AutofillView};
 
@@ -426,6 +427,21 @@ impl Host {
             scene.page == Some(wubble_core::pages::InternalPage::Settings) && scene.click.is_some();
         // clearing a search puts the page back at its top: only when there is one
         let unsearch = nav_reset && !self.settings_query_text().is_empty();
+        // the popover and the popup open as a click would, through the overlays' store
+        let popovers = [
+            (Kind::Downloads, overlay == Overlay::Downloads),
+            (
+                Kind::Spaces,
+                matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces),
+            ),
+        ];
+        for (kind, on) in popovers {
+            if on {
+                self.overlay_open(kind, None);
+            } else {
+                self.overlay_closed(kind);
+            }
+        }
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             if unsearch {
                 window.invoke_settings_type_query("".into());
@@ -434,8 +450,6 @@ impl Host {
                 window.invoke_settings_nav_to_top();
             }
             window.invoke_dismiss_command_bar();
-            window.set_downloads_open(overlay == Overlay::Downloads);
-            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces));
             window.invoke_sidebar_mode_requested(sidebar.into());
             match overlay {
                 Overlay::CommandBar(query) => {

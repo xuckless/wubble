@@ -37,16 +37,10 @@ export component DownloadsPopover inherits Rectangle {
         }
     }
 
+    // the keys' holder while open; Escape is the host's (`wubble_core::overlay`)
     keys := FocusScope {
         width: 0px;
         height: 0px;
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.dismissed();
-                return accept;
-            }
-            return reject;
-        }
     }
 
     public function take-focus() {

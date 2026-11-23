@@ -5381,7 +5381,7 @@ impl Host {
                          on {live_name:?} (running): that session stopped, its Space gone, the \
                          other runs on; {users:?} has none; the popup stayed open"
                     );
-                    window.set_spaces_open(false);
+                    h.spaces_dismissed();
                     if let Err(e) = h.mcp_smoke_off() {
                         return h.fail(format!("hosting off: {e}"));
                     }

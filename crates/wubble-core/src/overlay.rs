@@ -1,21 +1,17 @@
-//! Every surface the shell draws over a page, as one table ([`ROWS`]), and the rules between the
-//! overlays among them: which is on top, and what opening one, Escape, a tab switch or a
-//! navigation does to the others. The one owner of the surfaces' static properties, of the
-//! overlays' order and scope, and of the answer to "what shell UI covers this page now"
-//! ([`covers`]).
+//! Every surface the shell draws over a page, as one table ([`ROWS`]), and the one store of the
+//! overlays among them ([`Ui`], `store.rs`): which is open or leaving, and what opening one,
+//! Escape, a tab switch or a navigation does to the others ([`reduce`]). The one owner of the
+//! surfaces' static properties, of the overlays' order and scope, and of the answer to "what
+//! shell UI covers this page now" ([`covers`]).
 //!
-//! Each surface keeps its own owner for whether it shows and what it shows (the menu's machine,
-//! the print sheet's settings, the find bar's query, the hover clocks, the driver's tweens); this
-//! module owns the rules between them. The host derives the [`Stack`] from those owners (what is
-//! open, for which tab, and what is still drawn while it leaves) and runs [`transition`] or
-//! [`covers`]; the effects close, hide or reveal overlays through their own machines. So whether
-//! a surface is open has one owner (its machine), which may be open together has one owner
-//! (here), and the stack is a value derived each time, never a copy kept beside them.
+//! A surface's content stays with its machine (the menu's entries, the print sheet's settings,
+//! the find bar's query); the store owns whether it is open. The free surfaces (a tooltip, the
+//! video strip, a drag's ghost) keep their own owners and are in the [`Stack`] only for
+//! [`covers`].
 //!
 //! The rules (Chromium's: one tab-modal sheet or bubble at a time, the find bar belongs to its
-//! tab, Escape closes the innermost) govern the overlays, the rows whose [`Group`] is not
-//! [`Group::Free`]; a free surface (a tooltip, the video strip, a drag's ghost) is in the stack
-//! only for [`covers`]:
+//! tab, Escape closes the innermost) are each row's data ([`Row::refused_under`],
+//! [`Row::closes`], [`Row::escape`], [`Row::on_leave`], [`Row::on_nav`]):
 //! - **Exclusive** overlays show one at a time: opening one closes the other visible one. A
 //!   page's dialog is never closed by another: while one shows, the user's overlays are refused
 //!   (as Chromium's tab-modal dialog), and the dialog itself closes the user's overlays when it
@@ -28,22 +24,26 @@
 //! - A **permission prompt** belongs to its tab and coexists under other overlays; Escape
 //!   dismisses it (denied, not remembered) only when the shell has the keys.
 //! - **Escape** closes the topmost visible overlay that takes it; a second Escape the next. A
-//!   notice and a permission prompt never take the page's Escape ([`Event::PageEscape`]): a key
+//!   notice and a permission prompt never take the page's Escape ([`Esc::ShellOnly`]): a key
 //!   meant for the page (leaving fullscreen, the site's own dialog) must not answer them
 //!   (no keyjacking, docs/research/mcp-server.md).
 //! - **Tab switch**: menus, sheets, link hints and the screenshot picker close; the find bar, a
-//!   page's dialog and a notice stay with their tab, hidden, and are revealed only on it. The
-//!   window's command bar and downloads popover stay.
+//!   page's dialog, a notice, the error panel and the Boost editor stay with their tab, hidden,
+//!   and are revealed only on it. The window's command bar and downloads popover stay.
 //! - **Navigation** (a new document): the tab's sheets, find bar, link hints, screenshot picker
 //!   and notice close; a page's dialog is the engine's to drop.
-//! - A surface **leaving** (its owner closed it, its kit still draws the exit) is closed for
-//!   these rules and still covers the page ([`Stack::leaving`]).
+//! - A surface **leaving** (closed, its kit still draws the exit) is closed for these rules and
+//!   still covers the page ([`Stack::leaving`]).
 //!
 //! A pointer press outside an overlay is the kit's: the menu's and the command bar's scrims
 //! dismiss them, a sheet's scrim holds the page (modal); none of it needs a rule here. A
 //! dismissing press is consumed whole (kit `Scrim`), so a press on the popup's own toggle (the
 //! "^", the downloads button, a chip, a Select's trigger) closes it and is no click that opens
 //! it again.
+
+mod store;
+
+pub use store::{Action, AxRoots, Effect, Env, KeyOwner, Phase, PointerOwner, Ui, reduce};
 
 use crate::tab::TabId;
 use crate::window::WindowKind;
@@ -82,9 +82,12 @@ pub enum Kind {
     Spaces,
     /// A context menu: a tab's, a folder's or the page's.
     Menu,
-    // ----- free surfaces: outside the overlays' rules
+    // ----- the tab's panels: under the rules (a switch hides them) and closing nothing
     /// The page's error panel in place of the page (a failed load, a refused certificate).
     ErrorPanel,
+    /// The Boost editor docked at the page's right edge.
+    Boost,
+    // ----- free surfaces: outside the overlays' rules
     /// The page's own popup widget (a `<select>` list), CEF's second frame stream.
     Popup,
     /// A brief notice ("125%", "Press Esc to exit full screen", a notice with a button).
@@ -113,8 +116,6 @@ pub enum Kind {
     PipCard,
     /// Reader mode's typography strip.
     Reader,
-    /// The Boost editor docked at the page's right edge.
-    Boost,
     /// The window's peek (Shift+click): a page in a card over the page.
     Glance,
     /// The touchpad history swipe's chip.
@@ -265,6 +266,15 @@ pub struct Row {
     pub on_leave: bool,
     /// Closes when its tab's main frame commits a new document.
     pub on_nav: bool,
+    /// Its kit draws an exit: closed, it is [`Phase::Leaving`] until the kit says it is gone
+    /// ([`Action::Exited`]).
+    pub tail: bool,
+    /// It may not open while a visible overlay of one of these groups shows.
+    pub refused_under: &'static [Group],
+    /// Opening it closes the visible overlays of these groups.
+    pub closes: &'static [Group],
+    /// One in the window: opening it closes its kind's other one, on any tab.
+    pub one_per_window: bool,
 }
 
 /// How long a plain toast stays (wubble-only: no design counterpart).
@@ -293,6 +303,13 @@ const PAGES: &[WindowKind] = &[WindowKind::Main, WindowKind::Little, WindowKind:
 const MAIN: &[WindowKind] = &[WindowKind::Main];
 const PIP: &[WindowKind] = &[WindowKind::Pip];
 
+/// The user's overlays: what a popover, a menu or a sheet replaces.
+const USERS: &[Group] = &[Group::Exclusive, Group::Modal];
+const HOLDS: &[Group] = &[Group::Holds];
+/// What a modal sheet holds off: the find bar and an agent's sheet wait for either.
+const MODALS: &[Group] = &[Group::Modal, Group::Holds];
+const POPOVERS: &[Group] = &[Group::Exclusive];
+
 /// A popover or menu the user opened: one at a time, a press outside closes it.
 const DISMISSED: Row = Row {
     kind: Kind::Menu,
@@ -308,6 +325,10 @@ const DISMISSED: Row = Row {
     escape: Esc::Any,
     on_leave: true,
     on_nav: false,
+    tail: true,
+    refused_under: HOLDS,
+    closes: USERS,
+    one_per_window: false,
 };
 
 /// A modal sheet: it asks, the page waits under its scrim.
@@ -326,6 +347,9 @@ const FREE: Row = Row {
     life: Life::Owner,
     escape: Esc::Never,
     on_leave: false,
+    tail: false,
+    refused_under: &[],
+    closes: &[],
     ..DISMISSED
 };
 
@@ -335,26 +359,35 @@ const FREE: Row = Row {
 #[rustfmt::skip]
 pub const ROWS: &[Row] = &[
     Row { kind: Kind::Notice, scope: Scope::Tab, z: 63, group: Group::Coexist, keys: Keys::Never, pointer: Pointer::OwnRect,
-        glass: Some("toast"), life: Life::Answer, escape: Esc::ShellOnly, on_leave: false, on_nav: true, ..DISMISSED },
+        glass: Some("toast"), life: Life::Answer, escape: Esc::ShellOnly, on_leave: false, on_nav: true,
+        // its toast's exit is the plain toast's (`Mounted.toast` is theirs)
+        tail: false, refused_under: &[], closes: &[], one_per_window: true, ..DISMISSED },
     Row { kind: Kind::Permission, scope: Scope::Tab, z: 94, group: Group::Coexist, keys: Keys::Never, pointer: Pointer::OwnRect,
-        glass: Some("permission"), life: Life::Answer, escape: Esc::ShellOnly, on_leave: false, ..DISMISSED },
+        glass: Some("permission"), life: Life::Answer, escape: Esc::ShellOnly, on_leave: false, refused_under: &[], closes: &[], ..DISMISSED },
     Row { kind: Kind::Find, scope: Scope::Tab, z: 50, group: Group::Coexist, keys: Keys::OnAsk, pointer: Pointer::OwnRect,
-        glass: Some("find"), on_leave: false, on_nav: true, ..DISMISSED },
-    Row { kind: Kind::Dialog, scope: Scope::Tab, z: 72, group: Group::Holds, glass: Some("dialog"), on_leave: false, ..SHEET },
+        glass: Some("find"), on_leave: false, on_nav: true, refused_under: MODALS, closes: POPOVERS, ..DISMISSED },
+    // a page's dialog is refused by nothing, and closes no held overlay
+    Row { kind: Kind::Dialog, scope: Scope::Tab, z: 72, group: Group::Holds, glass: Some("dialog"), on_leave: false, refused_under: &[], ..SHEET },
     Row { kind: Kind::BookmarkSheet, scope: Scope::Tab, z: 66, glass: Some("bookmark-sheet"), on_nav: true, ..SHEET },
     Row { kind: Kind::PrintSheet, scope: Scope::Tab, z: 68, glass: Some("print-sheet"), on_nav: true, ..SHEET },
     Row { kind: Kind::ExtensionSheet, z: 67, glass: Some("extension-sheet"), ..SHEET },
-    Row { kind: Kind::AgentSheet, z: 69, group: Group::Holds, glass: Some("agent-sheet"), on_leave: false, ..SHEET },
+    // an agent's sheet never replaces the user's sheet, which it waits for
+    Row { kind: Kind::AgentSheet, z: 69, group: Group::Holds, glass: Some("agent-sheet"), on_leave: false,
+        refused_under: MODALS, closes: POPOVERS, ..SHEET },
     Row { kind: Kind::Region, scope: Scope::Tab, z: 56, pointer: Pointer::Grab, glass: Some("shot"), on_nav: true, ..DISMISSED },
-    // the page draws the labels: nothing of the shell over it
-    Row { kind: Kind::Hints, scope: Scope::Tab, z: 5, pointer: Pointer::PassThrough, cover: Coverage::None, on_nav: true, ..DISMISSED },
+    // the page draws the labels: nothing of the shell over it, no exit of the kit's
+    Row { kind: Kind::Hints, scope: Scope::Tab, z: 5, pointer: Pointer::PassThrough, cover: Coverage::None, on_nav: true, tail: false, ..DISMISSED },
     Row { kind: Kind::CommandBar, z: 74, glass: Some("command-bar"), on_leave: false, ..DISMISSED },
     Row { kind: Kind::Downloads, z: 100, glass: Some("downloads"), on_leave: false, ..DISMISSED },
     Row { kind: Kind::Extensions, z: 102, glass: Some("extensions"), ..DISMISSED },
     Row { kind: Kind::Spaces, z: 104, glass: Some("spaces"), windows: MAIN, ..DISMISSED },
     Row { kind: Kind::Menu, z: 110, glass: Some("menu"), ..DISMISSED },
+    // ----- the tab's panels: its machine opens and closes them; Escape and the overlays leave them
+    Row { kind: Kind::ErrorPanel, scope: Scope::Tab, z: 60, group: Group::Coexist, pointer: Pointer::OwnRect, glass: Some("error"),
+        life: Life::Owner, escape: Esc::Never, on_leave: false, refused_under: &[], closes: &[], ..DISMISSED },
+    Row { kind: Kind::Boost, scope: Scope::Tab, z: 58, group: Group::Coexist, keys: Keys::OnAsk, pointer: Pointer::OwnRect, glass: Some("boost"),
+        escape: Esc::Never, on_leave: false, closes: &[], ..DISMISSED },
     // ----- free
-    Row { kind: Kind::ErrorPanel, scope: Scope::Tab, z: 60, keys: Keys::Take, pointer: Pointer::OwnRect, glass: Some("error"), ..FREE },
     Row { kind: Kind::Popup, z: 90, pointer: Pointer::OwnRect, ..FREE },
     Row { kind: Kind::Toast, z: 62, glass: Some("toast"), life: Life::Timed(TOAST_SHOWN_MS), ..FREE },
     Row { kind: Kind::Tooltip, z: 114, life: Life::Hover, ..FREE },
@@ -369,7 +402,6 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::PipStrip, z: 44, pointer: Pointer::OwnRect, glass: Some("pip-strip"), life: Life::Hover, windows: PIP, ..FREE },
     Row { kind: Kind::PipCard, scope: Scope::Tab, z: 46, pointer: Pointer::OwnRect, windows: MAIN, ..FREE },
     Row { kind: Kind::Reader, scope: Scope::Tab, z: 54, pointer: Pointer::OwnRect, glass: Some("reader"), ..FREE },
-    Row { kind: Kind::Boost, scope: Scope::Tab, z: 58, keys: Keys::OnAsk, pointer: Pointer::OwnRect, glass: Some("boost"), life: Life::Dismiss, ..FREE },
     Row { kind: Kind::Glance, z: 64, keys: Keys::OnAsk, pointer: Pointer::Scrim, glass: Some("glance"), life: Life::Dismiss, escape: Esc::Any, ..FREE },
     Row { kind: Kind::Swipe, z: 70, life: Life::Drag, ..FREE },
     Row { kind: Kind::ExitPage, z: 10, ..FREE },
@@ -405,32 +437,14 @@ impl Kind {
         )
     }
 
-    /// Holds the page under a scrim: the find bar waits for it.
-    fn modal(self) -> bool {
-        matches!(self.row().group, Group::Modal | Group::Holds)
-    }
-
-    fn holds(self) -> bool {
-        self.row().group == Group::Holds
-    }
-
     /// Under the overlays' rules.
     fn ruled(self) -> bool {
         self.row().group != Group::Free
     }
-
-    /// Whether Escape closes it; `from_page`: the page has the keys.
-    fn takes_escape(self, from_page: bool) -> bool {
-        match self.row().escape {
-            Esc::Never => false,
-            Esc::ShellOnly => !from_page,
-            Esc::Any => true,
-        }
-    }
 }
 
 /// One surface on screen: its kind and, unless the window's, its tab (a pane's: the pane's).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Layer {
     pub kind: Kind,
     pub tab: Option<TabId>,
@@ -531,145 +545,6 @@ pub fn covers(stack: &Stack, facts: &Facts, pane: TabId) -> Coverage {
         .unwrap_or(Coverage::None)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Event {
-    /// The user, a key or the page asks for an overlay.
-    Open(Layer),
-    /// Escape while the shell has the keys.
-    Escape,
-    /// Escape while the page has the keys.
-    PageEscape,
-    /// This tab is now the visible one (none: the window shows no tab).
-    Switched(Option<TabId>),
-    /// The tab's main frame committed a new document.
-    Navigated(TabId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Effect {
-    /// Close it through its machine (a sheet or dialog as cancelled, a menu as dismissed).
-    Close(Layer),
-    /// It stays with its tab, which is no longer visible.
-    Hide(Layer),
-    /// Its tab is visible again.
-    Reveal(Layer),
-    /// The asked overlay may open (no effect at all: refused).
-    Open(Layer),
-}
-
-/// One step of the overlays.
-pub fn transition(stack: Stack, event: Event) -> (Stack, Vec<Effect>) {
-    match event {
-        Event::Open(layer) => open(stack, layer),
-        Event::Escape | Event::PageEscape => match stack.top() {
-            Some(top) if top.kind.takes_escape(event == Event::PageEscape) => {
-                close(stack, vec![top], vec![])
-            }
-            _ => (stack, vec![]),
-        },
-        Event::Switched(to) => switched(stack, to),
-        Event::Navigated(tab) => {
-            let gone = stack
-                .layers
-                .iter()
-                .filter(|l| l.tab == Some(tab) && l.kind.row().on_nav)
-                .copied()
-                .collect();
-            close(stack, gone, vec![])
-        }
-    }
-}
-
-fn open(stack: Stack, layer: Layer) -> (Stack, Vec<Effect>) {
-    let layer = Layer::new(layer.kind, layer.tab);
-    // already open: its machine decides (Mod+F again selects the query)
-    if stack.layers.contains(&layer) {
-        return (stack, vec![Effect::Open(layer)]);
-    }
-    // where it shows: a hidden tab's overlay meets nothing that is visible
-    let shows = stack.visible(&layer);
-    let visible: Vec<Layer> = stack
-        .layers
-        .iter()
-        .filter(|l| shows && stack.visible(l))
-        .copied()
-        .collect();
-    let refused = match layer.kind {
-        Kind::Notice | Kind::Permission | Kind::Dialog => false,
-        Kind::Find => visible.iter().any(|l| l.kind.modal()),
-        // an agent's sheet never replaces the user's sheet, which it waits for
-        Kind::AgentSheet => visible.iter().any(|l| l.kind.holds() || l.kind.modal()),
-        _ => visible.iter().any(|l| l.kind.holds()),
-    };
-    if refused {
-        return (stack, vec![]);
-    }
-    let gone: Vec<Layer> = match layer.kind {
-        // one notice in the window
-        Kind::Notice => stack
-            .layers
-            .iter()
-            .filter(|l| l.kind == Kind::Notice)
-            .copied()
-            .collect(),
-        Kind::Permission => vec![],
-        Kind::Find => visible
-            .into_iter()
-            .filter(|l| l.kind.exclusive() && !l.kind.modal())
-            .collect(),
-        // a held overlay (a page's dialog, an agent's sheet) is never closed by another
-        _ => visible
-            .into_iter()
-            .filter(|l| l.kind.exclusive() && !l.kind.holds())
-            .collect(),
-    };
-    let (mut next, effects) = close(stack, gone, vec![]);
-    next.layers.push(layer);
-    let mut effects = effects;
-    effects.push(Effect::Open(layer));
-    (next, effects)
-}
-
-fn switched(stack: Stack, to: Option<TabId>) -> (Stack, Vec<Effect>) {
-    let from = stack.shown;
-    if from == to {
-        return (stack, vec![]);
-    }
-    let mut gone = vec![];
-    let mut effects = vec![];
-    for l in stack.layers.iter().filter(|l| l.kind.ruled()) {
-        let mine = l.tab.is_some() && l.tab == from;
-        if l.kind.row().on_leave && (mine || l.tab.is_none()) {
-            gone.push(*l);
-        } else if mine {
-            effects.push(Effect::Hide(*l));
-        } else if l.tab.is_some() && l.tab == to {
-            effects.push(Effect::Reveal(*l));
-        }
-    }
-    close(Stack { shown: to, ..stack }, gone, effects)
-}
-
-/// Removes `gone` from the stack, each a [`Effect::Close`], before `then`.
-fn close(stack: Stack, gone: Vec<Layer>, then: Vec<Effect>) -> (Stack, Vec<Effect>) {
-    let Stack {
-        shown,
-        layers,
-        leaving,
-    } = stack;
-    let layers = layers.into_iter().filter(|l| !gone.contains(l)).collect();
-    let mut effects: Vec<Effect> = gone.into_iter().map(Effect::Close).collect();
-    effects.extend(then);
-    (
-        Stack {
-            shown,
-            layers,
-            leaving,
-        },
-        effects,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,476 +569,10 @@ mod tests {
         }
     }
 
-    fn step(layers: &[Layer], event: Event) -> (Vec<Layer>, Vec<Effect>) {
-        let (next, effects) = transition(stack(layers), event);
-        (next.layers, effects)
-    }
-
     #[test]
     fn a_window_overlay_keeps_no_tab() {
         assert_eq!(Layer::new(Menu, Some(A)).tab, None);
         assert_eq!(Layer::new(Find, Some(A)).tab, Some(A));
-    }
-
-    #[test]
-    fn the_spaces_popup_is_one_window_overlay_among_the_others() {
-        assert_eq!(Layer::new(Spaces, Some(A)).tab, None);
-        // it replaces the downloads popover, and a menu replaces it
-        let (layers, fx) = step(&[win(Downloads)], Event::Open(win(Spaces)));
-        assert_eq!(layers, [win(Spaces)]);
-        assert_eq!(
-            fx,
-            [Effect::Close(win(Downloads)), Effect::Open(win(Spaces))]
-        );
-        let (layers, _) = step(&[win(Spaces)], Event::Open(win(Menu)));
-        assert_eq!(layers, [win(Menu)]);
-        // refused over a page's dialog; Escape closes it first; a tab switch closes it
-        let (_, fx) = step(&[on(Dialog, A)], Event::Open(win(Spaces)));
-        assert!(fx.is_empty());
-        let (layers, fx) = step(&[on(Find, A), win(Spaces)], Event::Escape);
-        assert_eq!(layers, [on(Find, A)]);
-        assert_eq!(fx, [Effect::Close(win(Spaces))]);
-        let (layers, _) = step(&[win(Spaces)], Event::Switched(Some(B)));
-        assert!(layers.is_empty());
-    }
-
-    #[test]
-    fn the_extensions_popover_is_a_window_overlay_that_follows_the_rules() {
-        assert_eq!(Layer::new(Extensions, Some(A)).tab, None);
-        // it replaces the downloads popover, and the Spaces popup replaces it
-        let (layers, _) = step(&[win(Downloads)], Event::Open(win(Extensions)));
-        assert_eq!(layers, [win(Extensions)]);
-        let (layers, _) = step(&[win(Extensions)], Event::Open(win(Spaces)));
-        assert_eq!(layers, [win(Spaces)]);
-        // refused over a page's dialog; Escape and a tab switch close it
-        let (_, fx) = step(&[on(Dialog, A)], Event::Open(win(Extensions)));
-        assert!(fx.is_empty());
-        let (layers, fx) = step(&[win(Extensions)], Event::Escape);
-        assert!(layers.is_empty());
-        assert_eq!(fx, [Effect::Close(win(Extensions))]);
-        let (layers, _) = step(&[win(Extensions)], Event::Switched(Some(B)));
-        assert!(layers.is_empty());
-    }
-
-    #[test]
-    fn the_install_prompt_is_a_modal_sheet_that_holds_the_find_bar_off() {
-        assert_eq!(Layer::new(ExtensionSheet, Some(A)).tab, None);
-        let (_, fx) = step(&[win(ExtensionSheet)], Event::Open(on(Find, A)));
-        assert!(fx.is_empty());
-        // it replaces a popover; Escape cancels it
-        let (layers, _) = step(&[win(Extensions)], Event::Open(win(ExtensionSheet)));
-        assert_eq!(layers, [win(ExtensionSheet)]);
-        let (layers, fx) = step(&[win(ExtensionSheet)], Event::Escape);
-        assert!(layers.is_empty());
-        assert_eq!(fx, [Effect::Close(win(ExtensionSheet))]);
-    }
-
-    #[test]
-    fn print_over_add_bookmark_replaces_it() {
-        let (layers, fx) = step(&[on(BookmarkSheet, A)], Event::Open(on(PrintSheet, A)));
-        assert_eq!(layers, [on(PrintSheet, A)]);
-        assert_eq!(
-            fx,
-            [
-                Effect::Close(on(BookmarkSheet, A)),
-                Effect::Open(on(PrintSheet, A))
-            ]
-        );
-    }
-
-    #[test]
-    fn every_exclusive_overlay_replaces_the_shown_one() {
-        let exclusive = [
-            on(BookmarkSheet, A),
-            on(PrintSheet, A),
-            win(ExtensionSheet),
-            on(Region, A),
-            on(Hints, A),
-            win(CommandBar),
-            win(Downloads),
-            win(Extensions),
-            win(Menu),
-        ];
-        for old in exclusive {
-            for new in exclusive.iter().filter(|n| **n != old) {
-                let (layers, fx) = step(&[old], Event::Open(*new));
-                assert_eq!(layers, [*new], "{new:?} over {old:?}");
-                assert_eq!(fx, [Effect::Close(old), Effect::Open(*new)]);
-            }
-        }
-    }
-
-    #[test]
-    fn opening_what_is_open_closes_nothing() {
-        let (layers, fx) = step(&[on(Find, A)], Event::Open(on(Find, A)));
-        assert_eq!(layers, [on(Find, A)]);
-        assert_eq!(fx, [Effect::Open(on(Find, A))]);
-    }
-
-    #[test]
-    fn a_page_dialog_refuses_the_user_s_overlays_and_closes_them_on_arrival() {
-        for kind in [
-            BookmarkSheet,
-            PrintSheet,
-            ExtensionSheet,
-            Region,
-            Hints,
-            CommandBar,
-            Downloads,
-            Extensions,
-            Menu,
-            Find,
-        ] {
-            let layer = Layer::new(kind, Some(A));
-            let (layers, fx) = step(&[on(Dialog, A)], Event::Open(layer));
-            assert_eq!(layers, [on(Dialog, A)], "{kind:?}");
-            assert!(fx.is_empty(), "{kind:?} opened over a dialog");
-        }
-        // it closes the user's sheet and menu, keeps the find bar under it
-        let (layers, fx) = step(
-            &[on(Find, A), on(BookmarkSheet, A)],
-            Event::Open(on(Dialog, A)),
-        );
-        assert_eq!(layers, [on(Find, A), on(Dialog, A)]);
-        assert_eq!(
-            fx,
-            [
-                Effect::Close(on(BookmarkSheet, A)),
-                Effect::Open(on(Dialog, A))
-            ]
-        );
-    }
-
-    #[test]
-    fn a_hidden_tab_s_dialog_blocks_nothing_and_closes_nothing() {
-        let (layers, fx) = step(&[on(Dialog, B)], Event::Open(on(PrintSheet, A)));
-        assert_eq!(layers, [on(Dialog, B), on(PrintSheet, A)]);
-        assert_eq!(fx, [Effect::Open(on(PrintSheet, A))]);
-        let (layers, fx) = step(&[win(Menu)], Event::Open(on(Dialog, B)));
-        assert_eq!(layers, [win(Menu), on(Dialog, B)]);
-        assert_eq!(fx, [Effect::Open(on(Dialog, B))]);
-    }
-
-    #[test]
-    fn the_find_bar_stays_under_a_menu_and_waits_for_a_sheet() {
-        // a menu over the find bar: both
-        let (layers, fx) = step(&[on(Find, A)], Event::Open(win(Menu)));
-        assert_eq!(layers, [on(Find, A), win(Menu)]);
-        assert_eq!(fx, [Effect::Open(win(Menu))]);
-        // the find bar opened under a menu or the command bar closes them
-        for kind in [Menu, CommandBar, Downloads] {
-            let (layers, fx) = step(&[win(kind)], Event::Open(on(Find, A)));
-            assert_eq!(layers, [on(Find, A)]);
-            assert_eq!(fx, [Effect::Close(win(kind)), Effect::Open(on(Find, A))]);
-        }
-        // refused under a modal sheet
-        for kind in [BookmarkSheet, PrintSheet] {
-            let (layers, fx) = step(&[on(kind, A)], Event::Open(on(Find, A)));
-            assert_eq!(layers, [on(kind, A)]);
-            assert!(fx.is_empty());
-        }
-    }
-
-    #[test]
-    fn an_agent_sheet_is_a_window_modal_that_nothing_replaces() {
-        let sheet = win(AgentSheet);
-        assert_eq!(Layer::new(AgentSheet, Some(A)).tab, None);
-        // it replaces a menu or the command bar
-        for kind in [Menu, CommandBar, Downloads] {
-            let (layers, fx) = step(&[win(kind)], Event::Open(sheet));
-            assert_eq!(layers, [sheet]);
-            assert_eq!(fx, [Effect::Close(win(kind)), Effect::Open(sheet)]);
-        }
-        // it waits for the user's sheet and for a page's dialog
-        for other in [on(BookmarkSheet, A), on(PrintSheet, A), on(Dialog, A)] {
-            let (layers, fx) = step(&[other], Event::Open(sheet));
-            assert_eq!(layers, [other]);
-            assert!(fx.is_empty());
-        }
-        // while it shows the user's overlays are refused, and a page's dialog does not close it
-        for kind in [Menu, CommandBar, Downloads, Spaces] {
-            let (layers, fx) = step(&[sheet], Event::Open(win(kind)));
-            assert_eq!(layers, [sheet]);
-            assert!(fx.is_empty(), "{kind:?}");
-        }
-        let (layers, fx) = step(&[sheet], Event::Open(on(Find, A)));
-        assert_eq!(layers, [sheet]);
-        assert!(fx.is_empty());
-        let (layers, fx) = step(&[sheet], Event::Open(on(Dialog, A)));
-        assert_eq!(layers, [sheet, on(Dialog, A)]);
-        assert_eq!(fx, [Effect::Open(on(Dialog, A))]);
-        // Escape closes it first (the topmost); a tab switch or navigation leaves it
-        let (layers, fx) = step(&[sheet, on(Dialog, A)], Event::Escape);
-        assert_eq!(layers, [on(Dialog, A)]);
-        assert_eq!(fx, [Effect::Close(sheet)]);
-        let (layers, fx) = step(&[sheet], Event::Switched(Some(B)));
-        assert_eq!(layers, [sheet]);
-        assert!(fx.is_empty());
-        let (layers, fx) = step(&[sheet], Event::Navigated(A));
-        assert_eq!(layers, [sheet]);
-        assert!(fx.is_empty());
-    }
-
-    #[test]
-    fn the_install_prompt_and_an_agent_sheet_show_one_at_a_time() {
-        let agent = win(AgentSheet);
-        let prompt = win(ExtensionSheet);
-        // an agent's sheet waits for the install prompt
-        let (layers, fx) = step(&[prompt], Event::Open(agent));
-        assert_eq!(layers, [prompt]);
-        assert!(fx.is_empty());
-        // while an agent's sheet shows, the install prompt and the popover are refused
-        for kind in [ExtensionSheet, Extensions] {
-            let (layers, fx) = step(&[agent], Event::Open(win(kind)));
-            assert_eq!(layers, [agent], "{kind:?}");
-            assert!(fx.is_empty(), "{kind:?}");
-        }
-        // Escape closes each
-        for sheet in [prompt, agent] {
-            let (layers, fx) = step(&[sheet], Event::Escape);
-            assert!(layers.is_empty());
-            assert_eq!(fx, [Effect::Close(sheet)]);
-        }
-    }
-
-    #[test]
-    fn one_notice_in_the_window_under_everything() {
-        let (layers, fx) = step(
-            &[on(Notice, B), on(PrintSheet, A)],
-            Event::Open(on(Notice, A)),
-        );
-        assert_eq!(layers, [on(PrintSheet, A), on(Notice, A)]);
-        assert_eq!(
-            fx,
-            [Effect::Close(on(Notice, B)), Effect::Open(on(Notice, A))]
-        );
-        // it opens over a dialog too, and is never the top
-        let s = stack(&[on(Dialog, A), on(Notice, A)]);
-        assert_eq!(s.top(), Some(on(Dialog, A)));
-    }
-
-    #[test]
-    fn escape_closes_the_topmost_then_the_next() {
-        let layers = [on(Notice, A), on(Permission, A), on(Find, A), win(Menu)];
-        let (layers, fx) = step(&layers, Event::Escape);
-        assert_eq!(fx, [Effect::Close(win(Menu))]);
-        let (layers, fx) = step(&layers, Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Find, A))]);
-        let (layers, fx) = step(&layers, Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Permission, A))]);
-        // Notice is lowest: Escape dismisses it once nothing sits above it.
-        let (layers, fx) = step(&layers, Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Notice, A))]);
-        assert!(layers.is_empty());
-        // With nothing left, Escape goes on to the page.
-        let (layers, fx) = step(&layers, Event::Escape);
-        assert!(fx.is_empty());
-        assert!(layers.is_empty());
-    }
-
-    /// The page's Escape closes a shell overlay above, but never answers a notice or a
-    /// permission prompt: it goes on to the page (fullscreen, the site's dialog).
-    #[test]
-    fn the_pages_escape_never_answers_a_notice_or_a_prompt() {
-        let layers = [on(Notice, A), on(Permission, A), win(Menu)];
-        let (layers, fx) = step(&layers, Event::PageEscape);
-        assert_eq!(fx, [Effect::Close(win(Menu))]);
-        let (layers, fx) = step(&layers, Event::PageEscape);
-        assert!(fx.is_empty());
-        assert_eq!(layers, [on(Notice, A), on(Permission, A)]);
-        let (layers, fx) = step(&[on(Notice, A)], Event::PageEscape);
-        assert!(fx.is_empty());
-        assert_eq!(layers, [on(Notice, A)]);
-        // with the shell's keys, each closes
-        let (_, fx) = step(&[on(Permission, A)], Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Permission, A))]);
-        let (_, fx) = step(&[on(Notice, A)], Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Notice, A))]);
-    }
-
-    #[test]
-    fn permission_is_tab_scoped_and_coexists_with_other_overlays() {
-        assert_eq!(Layer::new(Permission, Some(A)).tab, Some(A));
-        assert!(!Permission.exclusive());
-        // Opening a menu or find bar leaves a permission prompt in place.
-        let (layers, fx) = step(&[on(Permission, A)], Event::Open(win(Menu)));
-        assert_eq!(layers, [on(Permission, A), win(Menu)]);
-        assert_eq!(fx, [Effect::Open(win(Menu))]);
-        // Switching tabs hides the permission prompt rather than closing it.
-        let (next, fx) = transition(stack(&[on(Permission, A)]), Event::Switched(Some(B)));
-        assert_eq!(next.layers, [on(Permission, A)]);
-        assert_eq!(fx, [Effect::Hide(on(Permission, A))]);
-        // Escape on tab B does not touch tab A's permission prompt.
-        let (after, fx) = transition(next, Event::Escape);
-        assert_eq!(after.layers, [on(Permission, A)]);
-        assert!(fx.is_empty());
-    }
-
-    #[test]
-    fn escape_closes_each_kind() {
-        for kind in [
-            Notice,
-            Permission,
-            Find,
-            Dialog,
-            BookmarkSheet,
-            PrintSheet,
-            Region,
-            Hints,
-            CommandBar,
-            Downloads,
-            Menu,
-        ] {
-            let layer = Layer::new(kind, Some(A));
-            let (layers, fx) = step(&[layer], Event::Escape);
-            assert!(layers.is_empty(), "{kind:?}");
-            assert_eq!(fx, [Effect::Close(layer)]);
-        }
-    }
-
-    #[test]
-    fn escape_skips_a_hidden_tab_s_overlays() {
-        let (layers, fx) = step(&[on(Find, B)], Event::Escape);
-        assert!(fx.is_empty());
-        assert_eq!(layers, [on(Find, B)]);
-    }
-
-    #[test]
-    fn a_tab_switch_closes_sheets_and_menus_and_hides_what_stays() {
-        let layers = [
-            on(Notice, A),
-            on(Find, A),
-            on(Dialog, A),
-            on(BookmarkSheet, A),
-            win(CommandBar),
-            win(Menu),
-            on(Find, B),
-        ];
-        let (next, fx) = transition(stack(&layers), Event::Switched(Some(B)));
-        assert_eq!(next.shown, Some(B));
-        assert_eq!(
-            next.layers,
-            [
-                on(Notice, A),
-                on(Find, A),
-                on(Dialog, A),
-                win(CommandBar),
-                on(Find, B)
-            ]
-        );
-        assert_eq!(
-            fx,
-            [
-                Effect::Close(on(BookmarkSheet, A)),
-                Effect::Close(win(Menu)),
-                Effect::Hide(on(Notice, A)),
-                Effect::Hide(on(Find, A)),
-                Effect::Hide(on(Dialog, A)),
-                Effect::Reveal(on(Find, B)),
-            ]
-        );
-        // back: A's find bar, dialog and notice come back, B's find bar hides
-        let (back, fx) = transition(next, Event::Switched(Some(A)));
-        assert_eq!(back.shown, Some(A));
-        assert_eq!(
-            fx,
-            [
-                Effect::Reveal(on(Notice, A)),
-                Effect::Reveal(on(Find, A)),
-                Effect::Reveal(on(Dialog, A)),
-                Effect::Hide(on(Find, B)),
-            ]
-        );
-        // the other tab's overlays never show on this one
-        assert_eq!(back.top(), Some(win(CommandBar)));
-    }
-
-    #[test]
-    fn print_hints_and_region_close_with_their_tab() {
-        for kind in [PrintSheet, Hints, Region] {
-            let (next, fx) = transition(stack(&[on(kind, A)]), Event::Switched(Some(B)));
-            assert!(next.layers.is_empty(), "{kind:?}");
-            assert_eq!(fx, [Effect::Close(on(kind, A))]);
-        }
-    }
-
-    #[test]
-    fn the_same_tab_again_is_no_switch() {
-        let (next, fx) = transition(stack(&[win(Menu)]), Event::Switched(Some(A)));
-        assert_eq!(next.layers, [win(Menu)]);
-        assert!(fx.is_empty());
-    }
-
-    #[test]
-    fn navigation_closes_the_tab_s_overlays() {
-        let layers = [
-            on(Notice, A),
-            on(Find, A),
-            on(Dialog, A),
-            on(PrintSheet, A),
-            win(Downloads),
-            on(Find, B),
-        ];
-        let (layers, fx) = step(&layers, Event::Navigated(A));
-        assert_eq!(layers, [on(Dialog, A), win(Downloads), on(Find, B)]);
-        assert_eq!(
-            fx,
-            [
-                Effect::Close(on(Notice, A)),
-                Effect::Close(on(Find, A)),
-                Effect::Close(on(PrintSheet, A)),
-            ]
-        );
-        for kind in [BookmarkSheet, Hints, Region] {
-            let (layers, fx) = step(&[on(kind, A)], Event::Navigated(A));
-            assert!(layers.is_empty());
-            assert_eq!(fx, [Effect::Close(on(kind, A))]);
-        }
-    }
-
-    #[test]
-    fn the_top_is_the_latest_drawn_visible_kind() {
-        let s = stack(&[win(Menu), on(Find, A), on(PrintSheet, B)]);
-        assert_eq!(s.top(), Some(win(Menu)));
-        assert!(s.is_open(PrintSheet));
-        assert_eq!(Stack::default().top(), None);
-    }
-
-    /// A free surface and a leaving one are in the stack only for `covers`: no rule sees them.
-    #[test]
-    fn free_and_leaving_surfaces_meet_no_rule() {
-        let free = [
-            win(Tooltip),
-            on(ErrorPanel, A),
-            Layer::new(Status, Some(A)),
-            win(TabGhost),
-        ];
-        // Escape skips them and closes the find bar; again, nothing
-        let mut with_find = free.to_vec();
-        with_find.push(on(Find, A));
-        let (layers, fx) = step(&with_find, Event::Escape);
-        assert_eq!(fx, [Effect::Close(on(Find, A))]);
-        let (_, fx) = step(&layers, Event::Escape);
-        assert!(fx.is_empty());
-        // a menu opens over them and closes none; a switch and a navigation leave them
-        let (_, fx) = step(&free, Event::Open(win(Menu)));
-        assert_eq!(fx, [Effect::Open(win(Menu))]);
-        let (next, fx) = transition(stack(&free), Event::Switched(Some(B)));
-        assert!(fx.is_empty());
-        assert_eq!(next.layers, free);
-        let (_, fx) = step(&free, Event::Navigated(A));
-        assert!(fx.is_empty());
-        // a sheet and a menu leaving neither refuse the find bar nor answer Escape
-        let fading = Stack {
-            shown: Some(A),
-            leaving: vec![on(PrintSheet, A), win(Menu)],
-            ..Stack::default()
-        };
-        let (next, fx) = transition(fading.clone(), Event::Open(on(Find, A)));
-        assert_eq!(fx, [Effect::Open(on(Find, A))]);
-        assert_eq!(next.leaving, fading.leaving);
-        let (_, fx) = transition(fading, Event::Escape);
-        assert!(fx.is_empty());
     }
 
     /// What the kit still draws is leaving unless a visible layer of its kind is open.
@@ -1202,7 +611,7 @@ mod tests {
         let overlays = ROWS.iter().take_while(|r| r.group != Group::Free).count();
         assert_eq!(
             overlays,
-            Menu as usize + 1,
+            Boost as usize + 1,
             "the overlays are the first kinds"
         );
         assert!(

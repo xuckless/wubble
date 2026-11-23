@@ -102,11 +102,21 @@ fn an_anchor_toggles_its_popup() {
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let _wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
 
-    // The host's side: the Spaces popup opens through the overlay stack and an open one stays
-    // open (the anchor never closes it itself); the downloads button is the shell's own toggle;
-    // the address chips open the host's menu at a point, which its dismissal closes.
+    // The host's side: the Spaces popup opens through the overlays' store and an open one stays
+    // open (the anchor never closes it itself); the downloads button asks the host to toggle
+    // the popover; a press outside asks either to close; the address chips open the host's menu
+    // at a point, which its dismissal closes.
     let w = app.as_weak();
     app.on_spaces_menu_requested(move || w.unwrap().set_spaces_open(true));
+    let w = app.as_weak();
+    app.on_spaces_dismissed(move || w.unwrap().set_spaces_open(false));
+    let w = app.as_weak();
+    app.on_downloads_requested(move || {
+        let app = w.unwrap();
+        app.set_downloads_open(!app.get_downloads_open());
+    });
+    let w = app.as_weak();
+    app.on_downloads_dismissed(move || w.unwrap().set_downloads_open(false));
     let w = app.as_weak();
     app.on_address_blocker_requested(move |x, y| menu_at(&w.unwrap(), x, y));
     let w = app.as_weak();

@@ -346,7 +346,7 @@ impl Host {
             }
             E::Activate(tab) => self.dispatch(Command::ActivateTab(tab)),
             E::OpenSpaces => self.spaces_menu_requested(),
-            E::CloseSpaces => window.set_spaces_open(false),
+            E::CloseSpaces => self.spaces_dismissed(),
             E::StartOs(data, allowed) => {
                 if !self.aux().start_drag(self.w.id, &data, allowed) {
                     self.os_drag_ended(DragOps::NONE);

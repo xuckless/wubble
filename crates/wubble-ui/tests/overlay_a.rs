@@ -190,7 +190,10 @@ fn downloads(app: &AppWindow) {
             (2, DownloadAction::Remove)
         ]
     );
-    // a press outside the panel closes it
+    // a press outside the panel asks the host to close it, once; Slint leaves it open
+    let dismissed = Rc::new(RefCell::new(0));
+    let d = dismissed.clone();
+    app.on_downloads_dismissed(move || *d.borrow_mut() += 1);
     let corner = LogicalPosition::new(1270.0, 790.0);
     app.window().dispatch_event(WindowEvent::PointerPressed {
         position: corner,
@@ -200,7 +203,9 @@ fn downloads(app: &AppWindow) {
         position: corner,
         button: PointerEventButton::Left,
     });
-    assert!(!app.get_downloads_open());
+    assert_eq!(*dismissed.borrow(), 1);
+    assert!(app.get_downloads_open());
+    app.set_downloads_open(false);
     settle();
 }
 

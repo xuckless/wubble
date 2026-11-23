@@ -1443,6 +1443,9 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.perform(Action::OpenSettings))
     });
     window.on_spaces_menu_requested(move || with_host_in(win, |host| host.spaces_menu_requested()));
+    window.on_spaces_dismissed(move || with_host_in(win, Host::spaces_dismissed));
+    window.on_downloads_requested(move || with_host_in(win, Host::downloads_requested));
+    window.on_downloads_dismissed(move || with_host_in(win, Host::downloads_dismissed));
     window.on_settings_query_changed(move |q| with_host_in(win, |host| host.settings_query(&q)));
     window.on_setting_changed(move |key, value| {
         with_host_in(win, |host| {
@@ -1600,14 +1603,11 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.pip_command(&name, value))
     });
     window.on_pip_hovered(move |on| with_host_in(win, |host| host.pip_hovered(on)));
-    // A surface began or ended its exit: a page on its layer may have to leave it. Fired
-    // inside a render, so queued; only when the mode can make a layer.
-    if page_layer() != wubble_core::page_layer::Mode::Off {
-        window.on_mounted_changed(move || {
-            let _ =
-                slint::invoke_from_event_loop(move || with_host_in(win, Host::surfaces_mounted));
-        });
-    }
+    // A surface began or ended its exit: the store's exits end, a page on its layer may have to
+    // leave it. Fired inside a render, so queued.
+    window.on_mounted_changed(move || {
+        let _ = slint::invoke_from_event_loop(move || with_host_in(win, Host::surfaces_mounted));
+    });
     window.on_ax_action(move |index, name, value| {
         with_host_in(win, |host| host.ax_action(index, &name, &value))
     });

@@ -193,6 +193,13 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         },
         item("New Space"),
     ])));
+    // the host's side: a pick asks it to close the popup (`spaces-dismissed`), once
+    let closes = Rc::new(RefCell::new(0));
+    let (n, w) = (closes.clone(), app.as_weak());
+    app.on_spaces_dismissed(move || {
+        *n.borrow_mut() += 1;
+        w.unwrap().set_spaces_open(false);
+    });
     app.set_spaces_open(true);
     pump();
     assert_eq!(
@@ -205,12 +212,12 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     assert_eq!(work.accessible_checked(), Some(true));
     home.invoke_accessible_default_action();
     pump();
-    assert!(!app.get_spaces_open(), "a pick closes the popup");
+    assert_eq!(*closes.borrow(), 1, "a pick asks to close the popup");
     app.set_spaces_open(true);
     pump();
     one_as(&app, "New Space", AccessibleRole::ListItem).invoke_accessible_default_action();
     pump();
-    assert!(!app.get_spaces_open());
+    assert_eq!(*closes.borrow(), 2, "New Space asks to close it");
     mock_elapsed_time(Duration::from_millis(300));
 
     // The context menu: a list of items; a disabled one does nothing.

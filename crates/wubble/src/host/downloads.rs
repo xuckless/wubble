@@ -599,11 +599,12 @@ impl Host {
         }
     }
 
-    pub(super) fn render_downloads(&self, window: &AppWindow) {
+    pub(super) fn render_downloads(&mut self, window: &AppWindow) {
         let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
         crate::bind::sync(window.get_downloads(), items, |m| window.set_downloads(m));
+        // nothing to list: the popover closes
         if self.downloads.list.is_empty() {
-            window.set_downloads_open(false);
+            self.overlay_closed(wubble_core::overlay::Kind::Downloads);
         }
         let filtered: Vec<DownloadItem> =
             download::filter_entries(&self.downloads.list, &self.downloads.query)

@@ -165,10 +165,8 @@ impl Host {
             }
             Effect::OpenSpaces => self.spaces_menu_requested(),
             Effect::CloseSpaces => {
-                if self.enter(self.drag_window)
-                    && let Some(window) = self.w.window.upgrade()
-                {
-                    window.set_spaces_open(false);
+                if self.enter(self.drag_window) {
+                    self.spaces_dismissed();
                 }
             }
             Effect::MoveToNewSpace { tab } => {
