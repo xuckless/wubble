@@ -290,6 +290,9 @@ pub struct Surfaces {
     pub permission: PermissionPrompt,
     pub auth: Auth,
     pub error: PageError,
+    /// Whether the focused node takes text, as CEF last said; `None` before it did (the input
+    /// method stays on then: CEF reports changes, and a field may have focus from the start).
+    pub text_input: Option<bool>,
 }
 
 impl Surfaces {
@@ -317,6 +320,7 @@ impl Surfaces {
             permission,
             auth,
             error,
+            text_input: None,
         }
     }
 }
@@ -350,6 +354,8 @@ pub enum Routed {
     TargetId(Result<String, ()>),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
+    /// Whether the focused node takes text (`PageEvent::TextInput`).
+    TextInput(bool),
     /// CEF gave up on these requests: every surface showing one closes.
     Dismissed(Vec<RequestId>),
     Permission(PermissionEvent),
@@ -462,6 +468,7 @@ pub fn route(event: PageEvent) -> Routed {
         // taken before routing (`host/ax.rs`)
         PageEvent::AxTree(_) | PageEvent::AxLocation(_) => Routed::Ignore,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
+        PageEvent::TextInput(on) => Routed::TextInput(on),
         PageEvent::PermissionRequested {
             id,
             origin,
@@ -884,6 +891,10 @@ mod tests {
             Routed::Ignore
         );
         assert_eq!(
+            route(PageEvent::TextInput(false)),
+            Routed::TextInput(false)
+        );
+        assert_eq!(
             route(PageEvent::FullscreenChanged(true)),
             Routed::Fullscreen(true)
         );
@@ -1051,6 +1062,7 @@ mod tests {
                 proxy: false,
             }),
             error: PageError::Crashed,
+            text_input: Some(true),
         };
         assert!(matches!(s.menu, Menu::Open { .. }));
         let gone = s.view_gone();

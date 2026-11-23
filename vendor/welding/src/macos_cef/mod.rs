@@ -671,6 +671,7 @@ impl CefSurfaceProducer for MacosCefProducer {
     fn ime_set_composition(&mut self, text: &str, selection: (u32, u32)) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]
         if let Some(host) = self.browser.host() {
+            let underlines = crate::ime::composition_underlines(text);
             let text: cef::CefString = text.into();
             let selection = cef::Range {
                 from: selection.0,
@@ -688,9 +689,14 @@ impl CefSurfaceProducer for MacosCefProducer {
                 from: u32::MAX,
                 to: u32::MAX,
             };
-            // No underlines: CEF renders the composition inside the page, and
-            // the default styling is what a page author expects.
-            host.ime_set_composition(Some(&text), None, Some(&no_replacement), Some(&selection));
+            // wubble change 58: one underline over the preedit; without any,
+            // Chromium draws the composition as plain text.
+            host.ime_set_composition(
+                Some(&text),
+                Some(&underlines[..]),
+                Some(&no_replacement),
+                Some(&selection),
+            );
             return Ok(());
         }
         Err(WeldError::PlatformUnsupported(

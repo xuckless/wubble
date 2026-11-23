@@ -3,9 +3,10 @@
 //! `ime_finish` / `ime_cancel`, and places its candidate window from
 //! [`PageEvent::ImeBounds`].
 //!
-//! CEF reports character bounds only while a composition is active
-//! (`OnImeCompositionRangeChanged`), so there is no caret rectangle before the
-//! first composed character; welding keeps only the union of the bounds.
+//! CEF names no callback for the text cursor but `OnImeCompositionRangeChanged`, which
+//! reports a caret (a zero-wide bound) too when the page has one; welding keeps only the
+//! union of the bounds. Whether the focused node takes text at all is
+//! [`PageEvent::TextInput`] (`OnVirtualKeyboardRequested`).
 
 use crate::page::{PageEvent, Rect};
 
