@@ -270,8 +270,9 @@ impl Host {
             Action::Switched { from, .. } => from,
             _ => self.shown(),
         };
-        let before = std::mem::take(&mut self.ui);
-        let (ui, fx) = overlay::reduce(before.clone(), &self.env(window, menu_tab), action);
+        let before = self.ui.slots();
+        let ui = std::mem::take(&mut self.ui);
+        let (ui, fx) = overlay::reduce(ui, &self.env(window, menu_tab), action);
         self.ui = ui;
         for &effect in &fx {
             match effect {
@@ -353,9 +354,14 @@ impl Host {
     }
 
     /// A hover slot shows for `key` (or, `None`, hides): drawn into its own window, by its
-    /// surface's one writer. `before`: the store before the step (a tooltip glides from another
+    /// surface's one writer. `before`: the slots before the step (a tooltip glides from another
     /// one or a warm hide, else appears in place; the video strip that hid was this tab's).
-    fn draw_slot(&mut self, at: Surface, key: Option<Key>, before: &overlay::Ui) {
+    fn draw_slot(
+        &mut self,
+        at: Surface,
+        key: Option<Key>,
+        before: &std::collections::BTreeMap<Surface, wubble_core::hovercard::Hover<Key>>,
+    ) {
         let here = self.w.id;
         if !self.enter(at.w) {
             return;
@@ -363,7 +369,7 @@ impl Host {
         let window = self.w.handle();
         match at.kind {
             Kind::Tooltip => {
-                let was = before.hover(at);
+                let was = before.get(&at).copied().unwrap_or_default();
                 let warm = wubble_core::hovercard::shown(was).is_some()
                     || matches!(was, wubble_core::hovercard::Hover::Cooling { .. });
                 self.render_tip(key, !warm);
@@ -374,7 +380,13 @@ impl Host {
             }),
             Kind::Status => self.render_panes(&window),
             Kind::Toast => window.set_toast_shown(key.is_some()),
-            Kind::VideoStrip => self.video_slot(key, before.shown(at)),
+            Kind::VideoStrip => self.video_slot(
+                key,
+                before
+                    .get(&at)
+                    .copied()
+                    .and_then(wubble_core::hovercard::shown),
+            ),
             Kind::PipStrip => window.set_pip_strip(key.is_some()),
             Kind::Peek => window.set_peek(key.is_some()),
             _ => {}

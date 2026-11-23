@@ -1348,7 +1348,7 @@ impl Host {
         let window = self.w.window.upgrade();
         let toast = window
             .as_ref()
-            .map(|w| (self.toast_serial, w.get_toast_text().to_string()))
+            .map(|w| (w.get_toast_shown(), w.get_toast_text().to_string()))
             .unwrap_or_default();
         // what the pointer (`video_smoke_pointer`, the same window) finds: `VideoControls`
         // shows only over a video with a size

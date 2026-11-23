@@ -722,13 +722,17 @@ fn a_leave_after_showing_hides_after_the_sticky_time() {
     );
     let (_, fx) = walk(ui.clone(), &[hv(Tooltip, Key::Page(B), Cue::Enter, 529)]);
     assert_eq!(fx, vec![Show(at(Tooltip), Key::Page(B)), Arm(None)], "warm");
-    // cold: the delay again (the timer, armed for the warm time's end, re-arms when it fires)
+    // cold: the delay again (the warm time's end, armed and past, counts as unarmed: armed anew)
     let (ui, fx) = walk(ui, &[hv(Tooltip, Key::Page(B), Cue::Enter, 530)]);
     let due = Hover::Pending {
         key: Key::Page(B),
         due: 810,
     };
-    assert_eq!((ui.hover(at(Tooltip)), fx), (due, vec![]), "cold");
+    assert_eq!(
+        (ui.hover(at(Tooltip)), fx),
+        (due, vec![Arm(Some(810))]),
+        "cold"
+    );
 }
 
 /// The one timer: armed for the soonest deadline of every slot; a deadline that only moved
@@ -868,4 +872,19 @@ fn the_peek_through_its_slot() {
         let (ui, fx) = walk(Ui::default(), actions);
         assert_eq!((ui.shown(at(Peek)), &fx), (*up, want), "{name}");
     }
+}
+
+/// A timer fire the host lost (it ran inside a busy host) leaves its armed time past: the next
+/// action's clock counts it as unarmed, so the soonest deadline is armed again.
+#[test]
+fn a_lost_timer_fire_rearms_on_the_next_action() {
+    let (_, fx) = walk(
+        Ui::default(),
+        &[
+            hv(Status, Key::Tab(A), Cue::Enter, 0),
+            // no tick at 80: dropped
+            hv(Tooltip, Key::Page(A), Cue::Enter, 100),
+        ],
+    );
+    assert_eq!(fx, vec![Arm(Some(80)), Arm(Some(80))]);
 }

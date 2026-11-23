@@ -178,7 +178,7 @@ pub enum Step {
     StripLoopOff,
     StripLoopOn,
     StripFrame {
-        serial: i32,
+        shown: bool,
     },
     /// The collapse button clicked: waiting for the tab.
     StripCollapse,
@@ -195,7 +195,7 @@ pub enum Step {
     StripLeft,
     StripBack,
     StripLastFrame {
-        serial: i32,
+        shown: bool,
     },
     /// The save control pressed with nothing found: waiting for its explaining menu.
     SaveNothingMenu,
@@ -304,8 +304,8 @@ pub struct Seen {
     pub speeds: bool,
     /// A menu of the shell is open (the save control's explanation, a list of qualities).
     pub menu: bool,
-    /// The window's notice: its serial and text.
-    pub toast: (i32, String),
+    /// The window's notice: shown, and its text.
+    pub toast: (bool, String),
     /// The strip's save button, as the host derives it from the downloader.
     pub save: Option<Save>,
     /// The downloader lists a stream of the page it can save.
@@ -704,14 +704,14 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
             to(s, StripLoopOn, vec![Action::Click(Spot::Button("loop"))])
         }
         (StripLoopOn, Snapshot(seen)) if video.as_ref().is_some_and(|v| v.looped) => {
-            let serial = seen.toast.0;
+            let shown = seen.toast.0;
             to(
                 s,
-                StripFrame { serial },
+                StripFrame { shown },
                 vec![Action::Click(Spot::Button("frame"))],
             )
         }
-        (StripFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial => {
+        (StripFrame { shown }, Snapshot(seen)) if seen.toast.0 && !shown => {
             let line = format!("smoke: strip frame notice {:?}", seen.toast.1);
             to(
                 s,
@@ -751,17 +751,17 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
             to(s, StripBack, vec![Action::PointTo(Spot::Video)])
         }
         (StripBack, Snapshot(seen)) if seen.strip => {
-            let serial = seen.toast.0;
+            let shown = seen.toast.0;
             to(
                 s,
-                StripLastFrame { serial },
+                StripLastFrame { shown },
                 vec![
                     Action::PointTo(Spot::Button("frame")),
                     Action::Click(Spot::Button("frame")),
                 ],
             )
         }
-        (StripLastFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial && seen.strip => {
+        (StripLastFrame { shown }, Snapshot(seen)) if seen.toast.0 && !shown && seen.strip => {
             // The clip is under the downloader's size floor: it offers nothing, and the control
             // is there anyway, saying so when pressed.
             if seen.save != Some(Save::Offered) || seen.ready {
@@ -1269,11 +1269,11 @@ mod tests {
             can_go_forward: false,
         };
         let mut s = VideoSmoke::video("http://127.0.0.1:1".into(), Requests::default());
-        s.step = Step::StripLastFrame { serial: 0 };
+        s.step = Step::StripLastFrame { shown: false };
         let strip = |save, ready| Seen {
             controls: true,
             strip: true,
-            toast: (1, String::new()),
+            toast: (true, String::new()),
             save: Some(save),
             ready,
             ..seen(Some(playing()))

@@ -499,8 +499,7 @@ pub struct Host {
     settings: settings::SettingsPage,
     /// The history, bookmarks and passwords pages.
     pages: pages::PagesState,
-    /// Bumped per notice shown (`--smoke video` sees a new one) and per find-bar focus request.
-    toast_serial: i32,
+    /// Bumped per find-bar focus request.
     find_focus: i32,
     /// The zoom `--smoke page` passed with.
     pub page_zoom: Option<u32>,
@@ -744,7 +743,6 @@ impl Host {
             zoom_default: wubble_core::zoom::DEFAULT_PERCENT,
             settings: settings::SettingsPage::new(settings.stored),
             pages: pages::PagesState::default(),
-            toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
             blocked_seen: None,

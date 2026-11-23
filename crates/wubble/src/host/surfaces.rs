@@ -619,6 +619,9 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
+        // its hover slots (a page tooltip, a card, its video strip) and its overlays go
+        let window = self.w.handle();
+        self.act(&window, overlay::Action::ViewGone(tab));
         self.ax_view_gone(tab);
         // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
         self.print_tab_closed(tab);
@@ -960,7 +963,6 @@ impl Host {
     /// one, for its key, until it is answered or taken away. The window's toast slot of the
     /// store times it; another toast replaces it in place.
     fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, held: Option<Key>) {
-        self.toast_serial = self.toast_serial.wrapping_add(1);
         window.set_toast_text(text.into());
         window.set_toast_action(action.into());
         window.set_toast_sticky(held.is_some());

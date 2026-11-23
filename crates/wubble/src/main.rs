@@ -1458,7 +1458,10 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
             })
         });
     });
-    window.on_peek_cue(move |cue| with_host_in(win, |host| host.peek_cue(cue)));
+    // fired by a `changed` handler inside a render, which may run inside the host: queued
+    window.on_peek_cue(move |cue| {
+        let _ = slint::invoke_from_event_loop(move || with_host_in(win, |host| host.peek_cue(cue)));
+    });
     window.on_setting_reset(move |key| with_host_in(win, |host| host.setting_reset(&key)));
     window.on_setting_entry_removed(move |key, entry| {
         with_host_in(win, |host| host.setting_entry_removed(&key, &entry))

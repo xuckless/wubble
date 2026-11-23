@@ -290,6 +290,12 @@ impl Ui {
     }
 
     /// A hover slot's state.
+    /// Every hover slot's state (a copy: the host draws a slot's change against the state
+    /// before the step).
+    pub fn slots(&self) -> BTreeMap<Surface, Hover<Key>> {
+        self.hover.clone()
+    }
+
     pub fn hover(&self, at: Surface) -> Hover<Key> {
         self.hover.get(&at).copied().unwrap_or_default()
     }
@@ -379,10 +385,12 @@ impl Ui {
 
     /// The timer for the soonest deadline, when it changed. A deadline that only moved later
     /// keeps the timer armed (it fires early, and that tick arms the true one): a pointer
-    /// moving over a video never re-arms it. `fired`: the timer just ran out.
-    fn arm(&mut self, fired: bool) -> Option<Effect> {
+    /// moving over a video never re-arms it. `now`: the action's clock reading; an armed time
+    /// already past is a timer that ran out or whose fire the host lost, so it counts as unarmed
+    /// (the next action re-arms, a lost fire stops nothing). `fired`: the timer just ran out.
+    fn arm(&mut self, now: Option<u64>, fired: bool) -> Option<Effect> {
         let next = self.deadline();
-        let armed = if fired { None } else { self.armed };
+        let armed = self.armed.filter(|&a| !fired && now.is_none_or(|n| a > n));
         if matches!((armed, next), (Some(a), Some(n)) if n > a) {
             return None;
         }
@@ -551,7 +559,11 @@ pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         ui = next;
         fx.extend(more);
     }
-    fx.extend(ui.arm(matches!(action, Action::Tick { .. })));
+    let now = match action {
+        Action::Hover { now, .. } | Action::Tick { now } => Some(now),
+        _ => None,
+    };
+    fx.extend(ui.arm(now, matches!(action, Action::Tick { .. })));
     (ui, fx)
 }
 
