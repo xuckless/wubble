@@ -689,7 +689,7 @@ impl CefSurfaceProducer for MacosCefProducer {
                 from: u32::MAX,
                 to: u32::MAX,
             };
-            // wubble change 58: one underline over the preedit; without any,
+            // wubble change (61): one underline over the preedit; without any,
             // Chromium draws the composition as plain text.
             host.ime_set_composition(
                 Some(&text),

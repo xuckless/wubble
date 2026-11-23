@@ -575,7 +575,7 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     instead of dropping. `CursorImage` is re-exported from `lib.rs`. Test:
     `cursor::tests`.
 
-58. **IME: the caret, the underline, the text-input state.** `ime.rs`:
+61. **IME: the caret, the underline, the text-input state.** `ime.rs`:
     `bounds_union` keeps a zero-wide rectangle (a caret) and drops only
     zero-height padding, so a caret CEF reports before any composition places
     the host's candidate window; new `composition_underlines`, the one thin

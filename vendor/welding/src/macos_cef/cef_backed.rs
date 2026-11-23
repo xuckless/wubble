@@ -224,7 +224,7 @@ cef::wrap_render_handler! {
             });
         }
 
-        // wubble change 58: whether a text field has focus, for the host's input method.
+        // wubble change (61): whether a text field has focus, for the host's input method.
         fn on_virtual_keyboard_requested(
             &self,
             _browser: Option<&mut cef::Browser>,

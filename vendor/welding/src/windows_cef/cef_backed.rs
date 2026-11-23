@@ -217,7 +217,7 @@ cef::wrap_render_handler! {
             // on -- SendKeyEvent needs no such thing, which is why typing can
             // work while IME does nothing.
             log::debug!("on_virtual_keyboard_requested({:?})", *input_mode.as_ref() as i32);
-            // wubble change 58: the host hears it too.
+            // wubble change (61): the host hears it too.
             self.handler.events.push(CefSurfaceEvent::Navigation(
                 crate::surface::NavigationEvent::TextInput {
                     wanted: input_mode != cef::TextInputMode::NONE,

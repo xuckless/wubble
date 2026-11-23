@@ -11,7 +11,7 @@
 //! the candidate window goes. CEF reports it through
 //! `OnImeCompositionRangeChanged`, in DIP.
 //!
-//! wubble change 58: a caret is zero wide, so a report of one (CEF names no
+//! wubble change (61): a caret is zero wide, so a report of one (CEF names no
 //! other callback for where the text cursor is) counts: only a zero-height
 //! rectangle is padding now.
 
@@ -54,7 +54,7 @@ pub(crate) fn bounds_union(rects: &[PopupRect]) -> Option<PopupRect> {
     })
 }
 
-/// wubble change 58: the underline Chromium's own input method puts under a
+/// wubble change (61): the underline Chromium's own input method puts under a
 /// whole preedit (`InputMethodAuraLinux`: one thin span over the text, in the
 /// text's colour: a transparent colour is how Blink says that). With none,
 /// the composition is invisible in the page.
