@@ -285,6 +285,8 @@ pub struct View {
     /// `content.frame_rate(ceiling)` ([`Self::content`], [`Self::set_frame_rate`]).
     content: ContentRate,
     ceiling: u32,
+    /// The begin frames offered so far ([`pacing::begin_frame_due`]).
+    begin_ticks: u32,
 }
 
 /// A view's pop-up switch and, by CEF's pop-up id, the hooks its factory made for each pop-up
@@ -428,6 +430,7 @@ impl View {
             opened: Vec::new(),
             content: ContentRate::default(),
             ceiling,
+            begin_ticks: 0,
         }
     }
 
@@ -874,9 +877,13 @@ impl View {
     }
 
     /// Asks CEF for one frame (`SendExternalBeginFrame`); only for a view
-    /// opened with `begin_frames`.
+    /// opened with `begin_frames`. A calm page takes only its rate's share of them.
     pub fn send_begin_frame(&mut self) {
-        self.send(|host| host.send_external_begin_frame());
+        let tick = self.begin_ticks;
+        self.begin_ticks = tick.wrapping_add(1);
+        if pacing::begin_frame_due(self.ceiling, self.content.frame_rate(self.ceiling), tick) {
+            self.send(|host| host.send_external_begin_frame());
+        }
     }
 
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no

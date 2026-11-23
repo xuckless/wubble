@@ -107,6 +107,14 @@ impl ContentRate {
     }
 }
 
+/// `Pacing::Shell`: whether the `tick`th begin frame the shell offers a view at `ceiling` (its
+/// window's rate) goes to CEF, for a page whose content wants `rate`
+/// ([`ContentRate::frame_rate`]): every `ceiling / rate`th, as CEF's timer would pace it (CEF's
+/// `windowless_frame_rate` does not apply to external begin frames).
+pub fn begin_frame_due(ceiling: u32, rate: u32, tick: u32) -> bool {
+    tick % (ceiling / rate.max(1)).max(1) == 0
+}
+
 /// Who decides when CEF paints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pacing {
@@ -288,6 +296,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_calm_page_takes_a_share_of_the_shells_begin_frames() {
+        // (ceiling, rate, the ticks 0..6 that go to CEF)
+        for (ceiling, rate, due) in [
+            (60, 60, [true; 6]),
+            (120, 120, [true; 6]),
+            (120, 60, [true, false, true, false, true, false]),
+            (240, 60, [true, false, false, false, true, false]),
+            (90, 60, [true; 6]),
+            (15, 15, [true; 6]),
+        ] {
+            let got: Vec<bool> = (0..6).map(|t| begin_frame_due(ceiling, rate, t)).collect();
+            assert_eq!(got, due, "{ceiling} {rate}");
+        }
+    }
 
     #[test]
     fn a_frame_is_large_from_a_twentieth_of_its_area() {
