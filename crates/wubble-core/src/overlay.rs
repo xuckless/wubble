@@ -273,7 +273,8 @@ pub struct Row {
     pub refused_under: &'static [Group],
     /// Opening it closes the visible overlays of these groups.
     pub closes: &'static [Group],
-    /// One in the window: opening it closes its kind's other one, on any tab.
+    /// One in the window: opening it closes its kind's other one, on this window's tab or a
+    /// hidden one (another window's stays).
     pub one_per_window: bool,
 }
 

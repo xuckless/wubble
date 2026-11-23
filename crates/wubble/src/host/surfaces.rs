@@ -15,7 +15,7 @@ use wubble_core::clipboard::{self, Ask, Asker, Payload, Reader};
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::dnd;
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{self, Kind};
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowTarget;
@@ -186,7 +186,8 @@ impl Host {
                 if self.gliding_on() == Some(tab) {
                     self.fling(wubble_core::fling::FlingInput::Interrupt);
                 }
-                self.overlay_navigated(window, tab);
+                let w = self.w.id;
+                self.act(window, overlay::Action::Navigated { w, tab });
                 self.apply_permission(tab, PermissionEvent::PageChanged);
                 self.busy_page_started(tab);
             }
@@ -655,7 +656,15 @@ impl Host {
     /// sheets close; dialogs, the find bar and a notice wait for the tab's return,
     /// wubble_core::overlay), its page leaves fullscreen.
     fn left_visible(&mut self, window: &AppWindow, tab: TabId, now: Option<TabId>) {
-        self.overlay_switched(window, Some(tab), now);
+        let w = self.w.id;
+        self.act(
+            window,
+            overlay::Action::Switched {
+                w,
+                from: Some(tab),
+                to: now,
+            },
+        );
         if matches!(self.w.screen, Screen::Page { tab: t, .. } if t == tab) {
             if let Some(v) = self.tab_view(tab) {
                 v.exit_fullscreen();

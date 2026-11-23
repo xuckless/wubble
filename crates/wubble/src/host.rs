@@ -886,7 +886,7 @@ impl Host {
         if self.enter(id)
             && let Some(window) = self.w.window.upgrade()
         {
-            self.overlay_window_gone(&window);
+            self.act(&window, wubble_core::overlay::Action::WindowGone(id));
         }
         self.enter(here);
         // its pages' layers go while it is still a window (none with `--page-layer=off`)

@@ -155,7 +155,7 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        self.layers_mounted(&window);
+        self.layers_mounted();
         if self.w.layers.is_empty() {
             return;
         }

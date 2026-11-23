@@ -303,11 +303,13 @@ impl<E: Env> Step<'_, E> {
             .filter(|o| row.closes.contains(&o.kind.row().group))
             .collect();
         if row.one_per_window {
+            // this window's: its own, its tab's and the hidden tabs' (another window's stay)
+            let here = |o: &Layer| o.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
             let same: Vec<Layer> = self
                 .ui
                 .live(env, w)
                 .into_iter()
-                .filter(|o| o.kind == l.kind && !gone.contains(o))
+                .filter(|o| o.kind == l.kind && here(o) && !gone.contains(o))
                 .collect();
             gone.extend(same);
         }

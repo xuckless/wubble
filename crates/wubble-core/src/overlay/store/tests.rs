@@ -353,6 +353,17 @@ fn window_entries_are_per_window() {
     let (ui, fx) = reduce(ui, &two, Action::WindowGone(W2));
     assert_eq!(fx, [Cancel(win(Spaces)), Unmount(win(Spaces))]);
     assert_eq!(ui.phase(W1, win(Spaces)), Some(Phase::Open));
+    // one notice per window: window 2's leaves window 1's alone
+    let (ui, _) = reduce(ui, &two, open(on(Notice, A)));
+    let (_, fx) = reduce(
+        ui,
+        &two,
+        Action::Open {
+            w: W2,
+            layer: on(Notice, B),
+        },
+    );
+    assert_eq!(fx, [Mount(on(Notice, B))]);
 }
 
 #[test]
