@@ -302,8 +302,9 @@ pub(crate) struct Profiles {
     /// The containers kept in memory only (private windows',
     /// `wubble_core::space::Container::ephemeral`): opened without a directory,
     /// which CEF's Chrome runtime makes an off-the-record profile
-    /// (`ChromeBrowserContext`: an empty `cache_path` is
-    /// `Profile::GetPrimaryOTRProfile`), and never given a tombstone.
+    /// (`ChromeBrowserContext`: an empty `cache_path` is a new
+    /// `OTRProfileID::CreateUniqueForCEF` profile of the primary user profile,
+    /// destroyed when the context shuts down), and never given a tombstone.
     ephemeral: BTreeSet<ContainerId>,
 }
 

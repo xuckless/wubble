@@ -23,9 +23,9 @@ pub struct Container {
     pub id: ContainerId,
     pub name: String,
     /// Kept in memory only, never on disk: the one container every private window's tabs share
-    /// (Chrome's off-the-record profile, `Profile::GetPrimaryOTRProfile`). The engine opens it
-    /// without a storage directory; it is never saved and goes when the last private window
-    /// closes ([`crate::model::Command::NewPrivateWindow`]).
+    /// (an off-the-record profile, CEF's own unique one: `OTRProfileID::CreateUniqueForCEF`).
+    /// The engine opens it without a storage directory; it is never saved and goes when the
+    /// last private window closes ([`crate::model::Command::NewPrivateWindow`]).
     pub ephemeral: bool,
 }
 
