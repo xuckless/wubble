@@ -619,11 +619,10 @@ impl Host {
     /// answered every held request), its fullscreen, sound and blocked count end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
         self.drag_gone(tab);
-        // an autoscroll over the page that went ends with it
-        if self.shown_tabs().contains(&tab) {
-            let window = self.w.handle();
-            self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
-        }
+        // an autoscroll over the page that went ends with it: it keeps no tab, and a closed tab is
+        // no longer in the model, so any view going ends it (a press ends it anyway)
+        let window = self.w.handle();
+        self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
         if self.devtools.dock.tab() == Some(tab) {
             self.dock_event(DockEvent::TabGone(tab));
         }

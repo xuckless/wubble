@@ -212,12 +212,16 @@ impl Host {
         true
     }
 
-    /// `tab` closed or navigated away mid-drag: a drag of it ends (a page drag whose source it is,
-    /// a tab row held or dragged).
+    /// `tab`'s view closed mid-drag: a page drag whose source it is ends, and a tab row held or
+    /// dragged ends when the tab itself is gone (a discarded or slept tab's row stays in the
+    /// list, so its drag goes on).
     pub(super) fn drag_gone(&mut self, tab: TabId) {
         match self.drag {
             Drag::Page(_) => self.run_drag(Input::Page(pagedrag::Input::Gone(tab))),
-            Drag::Tab(_) => self.run_drag(Input::Tab(tabdrag::Input::Gone(tab))),
+            Drag::Tab(_) if self.model.window_of(tab).is_none() => {
+                self.run_drag(Input::Tab(tabdrag::Input::Gone(tab)))
+            }
+            Drag::Tab(_) => {}
             Drag::Idle => {}
         }
     }

@@ -286,8 +286,9 @@ pub struct Row {
     /// when every other open grab is among them: one owner holds the pointer, and a held
     /// button is never stolen by a key.
     pub ends: &'static [Kind],
-    /// Its window losing the keys (focus gone, a drag's window closed) closes it, its owner
-    /// answering as cancelled ([`Action::Lost`]).
+    /// Its window losing the keys (focus gone) closes it, its owner answering as cancelled
+    /// ([`Action::Lost`]). A drag's rows are not here: `drag::window_lost_actions` decides
+    /// whether its drag survives (a tab torn off keeps going), and the rows follow the drag.
     pub on_lost: bool,
 }
 
@@ -448,13 +449,14 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::Peek, z: 80, pointer: Pointer::OwnRect, glass: Some("peek"), life: Life::Hover(PEEK), windows: PAGES, ..FREE },
     Row { kind: Kind::SeamBow, z: 82, pointer: Pointer::Grab, cover: Coverage::Pixels, life: Life::Drag, windows: PAGES, ..FREE },
     Row { kind: Kind::SplitRing, z: 34, ..FREE },
-    Row { kind: Kind::SplitSeams, z: 36, pointer: Pointer::Grab, ..FREE },
+    // the handles take the pointer over themselves only: a drag opens beside them
+    Row { kind: Kind::SplitSeams, z: 36, pointer: Pointer::OwnRect, ..FREE },
     Row { kind: Kind::DevTools, scope: Scope::Pane, z: 32, pointer: Pointer::OwnRect, ..FREE },
     // a drag holds the pointer until its release; its start closes a pick and an autoscroll
-    Row { kind: Kind::TabGhost, z: 108, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, on_lost: true, ..FREE },
-    Row { kind: Kind::DropZone, z: 106, life: Life::Drag, on_lost: true, ..FREE },
-    Row { kind: Kind::PageGhost, z: 109, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, on_lost: true, ..FREE },
-    Row { kind: Kind::DropMark, z: 107, life: Life::Drag, on_lost: true, ..FREE },
+    Row { kind: Kind::TabGhost, z: 108, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, ..FREE },
+    Row { kind: Kind::DropZone, z: 106, life: Life::Drag, ..FREE },
+    Row { kind: Kind::PageGhost, z: 109, pointer: Pointer::Grab, life: Life::Drag, escape: Esc::Any, ends: DRAGS_END, ..FREE },
+    Row { kind: Kind::DropMark, z: 107, life: Life::Drag, ..FREE },
     // Chromium runs it and ends it on any press or key: the pointer is the page's
     Row { kind: Kind::Autoscroll, z: 92, on_lost: true, ..FREE },
     Row { kind: Kind::Specimen, z: 112, ..FREE },

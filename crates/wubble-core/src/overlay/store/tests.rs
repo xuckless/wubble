@@ -261,6 +261,8 @@ fn store_table() {
         ("a pick is refused under a drag", A, false, vec![open(win(TabGhost))], open(on(Region, A)), vec![], vec![win(TabGhost)]),
         ("a page drag is refused under a tab drag", A, false, vec![open(win(TabGhost))], open(win(PageGhost)), vec![], vec![win(TabGhost)]),
         ("a tab drag is refused under a page drag", A, false, vec![open(win(PageGhost))], open(win(TabGhost)), vec![], vec![win(PageGhost)]),
+        ("a tab drag opens beside the split seams", A, false, vec![open(win(SplitSeams))], open(win(TabGhost)), vec![Mount(win(TabGhost))], vec![win(SplitSeams), win(TabGhost)]),
+        ("a page drag opens beside the split seams", A, false, vec![open(win(SplitSeams))], open(win(PageGhost)), vec![Mount(win(PageGhost))], vec![win(SplitSeams), win(PageGhost)]),
         ("the drop zone and mark are no grab", A, false, vec![open(win(TabGhost)), open(win(PageGhost))], open(win(DropZone)),
             vec![Mount(win(DropZone))], vec![win(TabGhost), win(DropZone)]),
         ("a pick ends an autoscroll", A, false, vec![open(win(Autoscroll))], open(on(Region, A)),
@@ -278,10 +280,10 @@ fn store_table() {
         ("Escape on the zone or the chip alone is the page's", A, false, vec![open(win(DropZone)), open(win(Swipe)), open(win(Autoscroll))], ESC,
             vec![], vec![win(DropZone), win(Swipe), win(Autoscroll)]),
         // the window lost: what ends with it is cancelled, a menu stays; another window's loss is none of ours
-        ("a lost window cancels its drag, swipe and autoscroll", A, false,
+        // a drag's rows follow its machine (`drag::window_lost_actions`: a tab torn off survives a focus loss)
+        ("a lost window cancels its swipe and autoscroll, not its drag", A, false,
             vec![open(menu), open(win(TabGhost)), open(win(DropZone)), open(win(Swipe)), open(win(Autoscroll))], Action::Lost { w: W1 },
-            vec![Cancel(win(Swipe)), Unmount(win(Swipe)), Cancel(win(TabGhost)), Unmount(win(TabGhost)), Cancel(win(DropZone)), Unmount(win(DropZone)),
-                Cancel(win(Autoscroll)), Unmount(win(Autoscroll))], vec![menu]),
+            vec![Cancel(win(Swipe)), Unmount(win(Swipe)), Cancel(win(Autoscroll)), Unmount(win(Autoscroll))], vec![menu, win(TabGhost), win(DropZone)]),
         ("a lost window ends its pick", A, false, vec![open(on(Region, A))], Action::Lost { w: W1 }, vec![Cancel(on(Region, A)), focus(None)], vec![]),
         ("another window's loss changes nothing", A, false, vec![open(win(PageGhost)), open(on(Region, B))], Action::Lost { w: W2 }, vec![], vec![win(PageGhost)]),
         // a tab switch (window 1 shows B now)
@@ -1259,13 +1261,14 @@ fn one_grab_per_window() {
     }
 }
 
-/// Every surface a drag or a pick holds ends with its window ([`Row::on_lost`]): applying the
-/// loss leaves none open and cancels each.
+/// Every surface that ends with its window ([`Row::on_lost`]) is cancelled by the loss and left
+/// none open; a drag's rows are the drag's (its machine decides, `drag::window_lost_actions`).
 #[test]
 fn window_lost_table() {
-    for kind in [
-        TabGhost, DropZone, PageGhost, DropMark, Autoscroll, Swipe, Region,
-    ] {
+    for kind in [TabGhost, DropZone, PageGhost, DropMark] {
+        assert!(!kind.row().on_lost, "{kind:?}");
+    }
+    for kind in [Autoscroll, Swipe, Region] {
         assert!(kind.row().on_lost, "{kind:?}");
         let l = Layer::new(
             kind,
