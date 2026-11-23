@@ -107,5 +107,6 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 
 ## Batches
 
-Roadmap items run as parallel lanes through `.claude/workflows/lane-batch.js`: how, and the rules learned,
-in [docs/orchestration.md](docs/orchestration.md).
+Roadmap items run as lanes through the owner's user-level `lane-batch` workflow (scope contract, implement,
+caveman and adversarial reviews, refix, integrate): how, wubble's arguments and the rules learned, in
+[docs/orchestration.md](docs/orchestration.md).
