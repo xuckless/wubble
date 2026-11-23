@@ -25,6 +25,7 @@ pub mod favicon;
 pub mod gesture;
 pub mod glass;
 pub mod gpu;
+pub mod highlight;
 pub mod hints;
 pub mod hovercard;
 pub mod import;

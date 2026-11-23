@@ -33,6 +33,9 @@ pub struct EngineInfo {
     pub search: &'static str,
     /// OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
     pub suggest: &'static str,
+    /// Search by image URL, for the page menu's "Search <engine> for Image"; `None` for an
+    /// engine with no public one.
+    pub image: Option<&'static str>,
 }
 
 pub const ENGINES: [EngineInfo; 2] = [
@@ -42,6 +45,7 @@ pub const ENGINES: [EngineInfo; 2] = [
         name: "Google",
         search: "https://www.google.com/search?q={q}",
         suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
+        image: Some("https://www.google.com/searchbyimage?image_url={q}"),
     },
     EngineInfo {
         engine: SearchEngine::DuckDuckGo,
@@ -49,6 +53,7 @@ pub const ENGINES: [EngineInfo; 2] = [
         name: "DuckDuckGo",
         search: "https://duckduckgo.com/?q={q}",
         suggest: "https://duckduckgo.com/ac/?type=list&q={q}",
+        image: None,
     },
 ];
 
@@ -620,6 +625,9 @@ mod tests {
         for e in &ENGINES {
             assert_eq!(e.search.matches("{q}").count(), 1, "{}", e.name);
             assert_eq!(e.suggest.matches("{q}").count(), 1, "{}", e.name);
+            if let Some(image) = e.image {
+                assert_eq!(image.matches("{q}").count(), 1, "{}", e.name);
+            }
             assert_eq!(e.engine.info(), e);
         }
         assert_eq!(
