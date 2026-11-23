@@ -960,7 +960,7 @@ impl Host {
         let ask = match &request {
             ClipboardRequest::Copy(_) | ClipboardRequest::CopyImage(_) => Ask::Write,
             ClipboardRequest::Primary(_) => Ask::Primary,
-            ClipboardRequest::Paste(_) | ClipboardRequest::Read(..) => Ask::Read,
+            ClipboardRequest::Paste(..) | ClipboardRequest::Read(..) => Ask::Read,
         };
         let asker = Asker {
             key_page: self.key_page() == Some(tab),
@@ -975,12 +975,12 @@ impl Host {
             ),
         };
         if !clipboard::admit(ask, asker) {
-            if let (ClipboardRequest::Read(id, _), Some(view)) = (&request, self.tab_view(tab)) {
-                view.answer_clipboard(&frame, None, Some(*id));
+            if let (ClipboardRequest::Read(token, _), Some(view)) = (&request, self.tab_view(tab)) {
+                view.answer_clipboard(&frame, None, token);
             }
             return;
         }
-        let (buffer, reader, read) = match request {
+        let (buffer, reader, token) = match request {
             // Its pictures are checked off the window's thread (`page_copy`), then stored.
             ClipboardRequest::Copy(payload) => {
                 let id = self.w.id;
@@ -1018,28 +1018,29 @@ impl Host {
                     .store(window.window(), Buffer::Primary, &text);
                 return;
             }
-            ClipboardRequest::Paste(from) => match from {
-                PasteFrom::Clipboard => (Buffer::Clipboard, Reader::Paste, None),
-                PasteFrom::PlainText => (Buffer::Clipboard, Reader::Text, None),
-                PasteFrom::Primary => (Buffer::Primary, Reader::Text, None),
+            ClipboardRequest::Paste(from, token) => match from {
+                PasteFrom::Clipboard => (Buffer::Clipboard, Reader::Paste, token),
+                PasteFrom::PlainText => (Buffer::Clipboard, Reader::Text, token),
+                PasteFrom::Primary => (Buffer::Primary, Reader::Text, token),
             },
-            ClipboardRequest::Read(id, reader) => (Buffer::Clipboard, reader, Some(id)),
+            ClipboardRequest::Read(token, reader) => (Buffer::Clipboard, reader, token),
         };
-        self.clipboard_fetch(window, tab, frame, (buffer, reader), read);
+        self.clipboard_fetch(window, tab, frame, (buffer, reader), token);
     }
 
     /// Reads what `reader` takes of `buffer` off the window's thread and answers `frame` of
-    /// `tab` with it (`read`: the read's id; none: a paste); one at a time per tab.
+    /// `tab` with it under the asking document's `token` (empty: a paste the host starts); one
+    /// at a time per tab.
     fn clipboard_fetch(
         &mut self,
         window: &AppWindow,
         tab: TabId,
         frame: String,
         (buffer, reader): (Buffer, Reader),
-        read: Option<u32>,
+        token: String,
     ) {
         let (id, started) = (self.w.id, self.input.now());
-        let answer = frame.clone();
+        let (answer, asked) = (frame.clone(), token.clone());
         let done = Box::new(move |payload: Option<Payload>| {
             let _ = slint::invoke_from_event_loop(move || {
                 // Whichever window has the host: the mark goes even when the asking window
@@ -1052,7 +1053,7 @@ impl Host {
                     if host.enter(id)
                         && let Some(view) = host.tab_view(tab)
                     {
-                        view.answer_clipboard(&answer, Some(&payload.unwrap_or_default()), read);
+                        view.answer_clipboard(&answer, Some(&payload.unwrap_or_default()), &asked);
                     }
                 });
             });
@@ -1066,7 +1067,7 @@ impl Host {
                 .retain(|_, s| clipboard::in_flight(Some(*s), started));
             self.clipboard_reads.insert(tab, started);
         } else if let Some(view) = self.tab_view(tab) {
-            view.answer_clipboard(&frame, Some(&Payload::default()), read);
+            view.answer_clipboard(&frame, Some(&Payload::default()), &token);
         }
     }
 
@@ -1077,7 +1078,13 @@ impl Host {
         let window = self.w.window.upgrade();
         match window {
             Some(window) if !frame.is_empty() && self.clipboard.carries_pages(window.window()) => {
-                self.clipboard_fetch(&window, tab, frame, (Buffer::Clipboard, Reader::Text), None)
+                self.clipboard_fetch(
+                    &window,
+                    tab,
+                    frame,
+                    (Buffer::Clipboard, Reader::Text),
+                    String::new(),
+                )
             }
             _ => {
                 if let Some(view) = self.tab_view(tab) {

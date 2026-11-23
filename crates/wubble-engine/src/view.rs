@@ -1676,17 +1676,17 @@ impl View {
     }
 
     /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): what to paste, or a
-    /// read's result; `None` refuses the read (the page's promise rejects). Also a paste the
-    /// host starts itself (no request: Paste as Plain Text).
+    /// read's result, under the request's `token`; `None` refuses it (a read's promise
+    /// rejects). Also a paste the host starts itself (no request, no token: Paste as Plain
+    /// Text).
     pub fn answer_clipboard(
         &mut self,
         frame: &str,
         payload: Option<&wubble_core::clipboard::Payload>,
-        read: Option<u32>,
+        token: &str,
     ) {
-        let id = read.map(|r| r.to_string()).unwrap_or_default();
         let json = payload.map_or_else(|| "null".to_owned(), |p| p.to_json());
-        self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{json}"));
+        self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{token}\n{json}"));
     }
 
     /// The identifier of the page's focused frame (CEF's `GetFocusedFrame`), as frame messages
@@ -1995,6 +1995,11 @@ const PASTES: [(&str, PasteFrom); 2] = [
 fn clipboard_request(body: &str) -> Option<ClipboardRequest> {
     use wubble_core::clipboard::{Payload, Reader};
     let (kind, text) = body.split_once('\n')?;
+    // A document's nonce and a count, as `clipboard.js` makes them; nothing else is echoed.
+    let token = |t: &str| {
+        let fits = !t.is_empty() && t.len() <= 64;
+        (fits && t.bytes().all(|b| b.is_ascii_hexdigit() || b == b'.')).then(|| t.to_owned())
+    };
     Some(match kind {
         "copy" => ClipboardRequest::Copy(Payload::from_json(text)?),
         // `navigator.clipboard.write`'s markup is the page's own, never the user's selection:
@@ -2007,14 +2012,18 @@ fn clipboard_request(body: &str) -> Option<ClipboardRequest> {
         "primary" if text.len() <= wubble_core::clipboard::PRIMARY_CAP => {
             ClipboardRequest::Primary(text.into())
         }
-        "paste" => ClipboardRequest::Paste(
-            PASTES
-                .iter()
-                .find_map(|(t, from)| (*t == text).then_some(*from))
-                .unwrap_or(PasteFrom::Clipboard),
-        ),
-        "read" => ClipboardRequest::Read(text.parse().ok()?, Reader::Text),
-        "items" => ClipboardRequest::Read(text.parse().ok()?, Reader::AsyncApi),
+        "paste" => {
+            let (asked, from) = text.split_once(' ')?;
+            ClipboardRequest::Paste(
+                PASTES
+                    .iter()
+                    .find_map(|(t, f)| (*t == from).then_some(*f))
+                    .unwrap_or(PasteFrom::Clipboard),
+                token(asked)?,
+            )
+        }
+        "read" => ClipboardRequest::Read(token(text)?, Reader::Text),
+        "items" => ClipboardRequest::Read(token(text)?, Reader::AsyncApi),
         _ => return None,
     })
 }
@@ -2803,26 +2812,38 @@ mod tests {
                 Some(ClipboardRequest::Primary("a".into())),
             ),
             (
-                "clipboard\npaste\nprimary",
-                Some(ClipboardRequest::Paste(PasteFrom::Primary)),
+                "clipboard\npaste\nab12.3 primary",
+                Some(ClipboardRequest::Paste(PasteFrom::Primary, "ab12.3".into())),
             ),
             (
-                "clipboard\npaste\nplain",
-                Some(ClipboardRequest::Paste(PasteFrom::PlainText)),
+                "clipboard\npaste\nab12.3 plain",
+                Some(ClipboardRequest::Paste(
+                    PasteFrom::PlainText,
+                    "ab12.3".into(),
+                )),
             ),
             (
-                "clipboard\npaste\n",
-                Some(ClipboardRequest::Paste(PasteFrom::Clipboard)),
+                "clipboard\npaste\nab12.3 ",
+                Some(ClipboardRequest::Paste(
+                    PasteFrom::Clipboard,
+                    "ab12.3".into(),
+                )),
+            ),
+            // a paste names its document
+            ("clipboard\npaste\nprimary", None),
+            ("clipboard\npaste\n plain", None),
+            ("clipboard\nread\nab12.3\nx", None),
+            (
+                "clipboard\nread\nab12.4",
+                Some(ClipboardRequest::Read("ab12.4".into(), Reader::Text)),
             ),
             (
-                "clipboard\nread\n4",
-                Some(ClipboardRequest::Read(4, Reader::Text)),
-            ),
-            (
-                "clipboard\nitems\n5",
-                Some(ClipboardRequest::Read(5, Reader::AsyncApi)),
+                "clipboard\nitems\nab12.5",
+                Some(ClipboardRequest::Read("ab12.5".into(), Reader::AsyncApi)),
             ),
             ("clipboard\nread\nx", None),
+            ("clipboard\nread\n", None),
+            (&*format!("clipboard\nread\n{}", "a".repeat(65)), None),
             (
                 &*format!(
                     "clipboard\nprimary\n{}",

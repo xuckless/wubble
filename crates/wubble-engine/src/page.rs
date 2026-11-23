@@ -312,12 +312,13 @@ pub enum ClipboardRequest {
     CopyImage(String),
     /// The selection changed: the primary selection's text.
     Primary(String),
-    /// The page is pasting: answer with [`crate::view::View::answer_clipboard`].
-    Paste(PasteFrom),
+    /// The page is pasting: answer with [`crate::view::View::answer_clipboard`] and the
+    /// token (the asking document's own, `clipboard.js`).
+    Paste(PasteFrom, String),
     /// `navigator.clipboard.readText` ([`Reader::Text`](wubble_core::clipboard::Reader)) or
     /// `read` ([`Reader::AsyncApi`](wubble_core::clipboard::Reader)) passed its permission
-    /// check: answer with the read's id.
-    Read(u32, wubble_core::clipboard::Reader),
+    /// check: answer with its token.
+    Read(String, wubble_core::clipboard::Reader),
 }
 
 /// Where a page's paste comes from.
