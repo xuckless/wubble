@@ -3784,3 +3784,80 @@ fn the_ephemeral_container_lives_with_the_private_windows() {
     });
     assert!(bad.check().is_err(), "an ephemeral container without a private window");
 }
+
+/// Moving the last tab out of a private window closes that window (into another private
+/// window, or torn out into a new one); a normal window emptied so stays on its Space.
+#[test]
+fn an_emptied_private_window_closes_and_a_normal_one_stays() {
+    let (m, t) = with_tabs(1);
+    let (m, w1, s1) = private_window(m, "https://p.test/");
+    let (m, w2, s2) = private_window(m, "https://q.test/");
+    let moved = m.order(s2)[0];
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: moved,
+            to: WindowTarget::Existing(w1),
+        },
+    );
+    assert!(fx.contains(&Effect::WindowClosed(w2)), "{fx:?}");
+    assert!(m.window(w2).is_none() && m.space_idx(s2).is_none());
+    assert_eq!((m.window_tab(w1), m.order(s1).len()), (Some(moved), 2));
+    // one of two torn out: the window keeps the other
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: moved,
+            to: WindowTarget::New,
+        },
+    );
+    let w3 = opened(&fx);
+    assert!(m.is_private_window(w3) && m.window(w1).is_some());
+    // the last one torn out: a new private window takes it and the old one closes, the
+    // container staying with the new one
+    let last = m.order(s1)[0];
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: last,
+            to: WindowTarget::New,
+        },
+    );
+    let w4 = opened(&fx);
+    assert!(fx.contains(&Effect::WindowClosed(w1)), "{fx:?}");
+    assert!(!fx.iter().any(|e| matches!(e, Effect::ContainerDeleted(_))));
+    assert!(m.is_private_window(w4) && m.is_private_tab(last));
+    // a normal window emptied so stays, on its empty Space
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: t[0],
+            to: WindowTarget::New,
+        },
+    );
+    assert!(!fx.contains(&Effect::WindowClosed(WindowId(0))), "{fx:?}");
+    assert_eq!(m.window(WindowId(0)).and_then(Window::space), Some(s0()));
+    assert!(m.order(s0()).is_empty());
+}
+
+/// Mod+N in a private window opens a normal window on a normal Space (neither the private
+/// Space nor refused); Mod+Shift+N opens another private window sharing the one container.
+#[test]
+fn a_new_window_from_a_private_window_is_a_normal_one() {
+    let (m, _) = with_tabs(1);
+    let (m, p, _) = private_window(m, "https://p.test/");
+    assert_eq!(m.focused(), p);
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    let s = m.active_space();
+    assert_eq!(m.focused(), w);
+    assert!(!m.is_private_window(w) && !m.is_private_space(s) && s != s0());
+    assert_eq!(m.spaces[m.space_idx(s).unwrap()].container, D);
+    let (m, t) = open(m, None);
+    assert!(!m.is_private_tab(t) && m.location(t).map(|(s, _)| s) == Some(s));
+    let (m, fx) = run(m, Command::NewPrivateWindow { url: None });
+    let w2 = opened(&fx);
+    assert!(m.is_private_window(w2) && fx.contains(&Effect::ShowCommandBar));
+    assert_eq!(m.private_spaces().len(), 2);
+    assert_eq!(m.containers.iter().filter(|c| c.ephemeral).count(), 1);
+}

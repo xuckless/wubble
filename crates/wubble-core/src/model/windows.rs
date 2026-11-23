@@ -473,6 +473,12 @@ impl Model {
         // a tab never crosses between private and normal windows (Chrome keeps incognito tabs in
         // incognito windows: `TabStripModel` drags only within one profile)
         let private = self.is_private_tab(tab);
+        // the private window it leaves, which closes once nothing is left in it
+        let left = self
+            .location(tab)
+            .map(|(s, _)| s)
+            .filter(|&s| self.is_private_space(s))
+            .and_then(|s| self.space_window(s));
         let mut fx = vec![];
         let target = match to {
             WindowTarget::Existing(w) => match self.window(w) {
@@ -519,6 +525,14 @@ impl Model {
             fx.extend(self.focus(target));
         } else {
             self.focus(target);
+        }
+        // An emptied private window closes, as Chrome closes a window whose last tab was
+        // dragged out. A normal window stays: it shows a Space, which outlives its tabs.
+        if let Some(w) = left.filter(|&w| w != target)
+            && let Some(s) = self.window(w).and_then(Window::space)
+            && self.order(s).is_empty()
+        {
+            fx.extend(self.close_window(w));
         }
         fx.push(Effect::ActivateTab(tab));
         fx
