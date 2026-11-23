@@ -142,6 +142,14 @@ pub fn transition(view: PaneView, wanted: Px, event: PaneEvent) -> (PaneView, Op
     }
 }
 
+/// A frame of `size` taken for a pane whose view wants `wanted`: the layout it was taken with,
+/// then the frame (the host's one sequence per frame, also read without being kept to ask
+/// whether the pane is live after it).
+pub fn after_frame(view: PaneView, wanted: Px, size: Px) -> (PaneView, Option<PaneEffect>) {
+    let view = transition(view, wanted, PaneEvent::Layout).0;
+    transition(view, wanted, PaneEvent::Frame(size))
+}
+
 /// The extra stretch per axis, on top of filling the pane: it grows with the speed the pane's
 /// size changes and springs back with one or two damped wobbles; and the stale frame's fade.
 #[derive(Clone, Debug)]
@@ -326,6 +334,27 @@ mod tests {
         // Rest only ends a settle: a stretched frame is still stale
         let s = PaneView::Stretching { from: A };
         assert_eq!(view(s, B, PaneEvent::Rest), s);
+    }
+
+    #[test]
+    fn after_frame_is_a_layout_then_a_frame() {
+        use PaneView::*;
+        let fading = Settling {
+            size: B,
+            fading: true,
+        };
+        #[rustfmt::skip]
+        let rows: &[(&str, PaneView, Px, Px, PaneView, Option<PaneEffect>)] = &[
+            ("live, the same size", Live { size: A }, A, A, Live { size: A }, None),
+            ("live, a stale size", Live { size: A }, B, A, Stretching { from: A }, None),
+            ("live, resized and painted at once", Live { size: A }, B, B, fading, Some(PaneEffect::Arrived { from: A })),
+            ("stretching, the right size", Stretching { from: A }, B, B, fading, Some(PaneEffect::Arrived { from: A })),
+            ("stretching, still stale", Stretching { from: A }, C, B, Stretching { from: B }, None),
+            ("settling, a frame ends the fade", fading, B, B, Settling { size: B, fading: false }, None),
+        ];
+        for &(name, view, wanted, size, next, effect) in rows {
+            assert_eq!(after_frame(view, wanted, size), (next, effect), "{name}");
+        }
     }
 
     #[test]

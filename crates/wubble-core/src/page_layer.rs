@@ -41,6 +41,14 @@ pub enum Route {
     Leaving { until: u64 },
 }
 
+impl Route {
+    /// The layer is visible (the invariant): the shell's drawable must land with its changes
+    /// (`presentsWithTransaction` on macOS).
+    pub fn on_layer(self) -> bool {
+        matches!(self, Route::Layer { .. } | Route::Leaving { .. })
+    }
+}
+
 /// A reason the shell must draw the page itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -84,6 +92,30 @@ impl Needs {
     pub fn any(self) -> bool {
         self.0 != 0
     }
+
+    /// The needs as the owners' facts say now; the host reads them on each call and keeps none.
+    pub fn from_owners(o: &Owners) -> Needs {
+        Needs::NONE
+            .with(Need::Windowed, !(o.page_fullscreen || o.pip_window))
+            .covered(o.coverage)
+            .with(Need::Resizing, !o.view_live)
+            .with(Need::Pixels, o.pixels)
+    }
+}
+
+/// What the needs are derived from, each read from its one owner by the host on each call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Owners {
+    /// The pane's tab is its window's page fullscreen (`Screen::Page`).
+    pub page_fullscreen: bool,
+    /// The window is the picture-in-picture window.
+    pub pip_window: bool,
+    /// What the shell draws over the pane (`overlay::covers`).
+    pub coverage: Coverage,
+    /// The pane has a frame shown 1:1 (`stretch::PaneView::is_live`; for a frame, after it).
+    pub view_live: bool,
+    /// A shot, a pixel check or a snapshot wants the page's pixels in the shell's textures.
+    pub pixels: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -503,6 +535,28 @@ mod tests {
                 ],
             ),
             (
+                "handed over by shell UI, then the first render drew it",
+                &[
+                    (false, Capable(true)),
+                    (false, os(5)),
+                    (true, Changed),
+                    (true, drew(5)),
+                ],
+            ),
+            (
+                "renders without the page twice, a frame meanwhile, then drawn",
+                &[
+                    (false, Capable(true)),
+                    (false, os(3)),
+                    (true, Changed),
+                    (true, os(4)),
+                    (true, BLANK),
+                    (true, BLANK),
+                    (true, drew(3)),
+                    (true, drew(4)),
+                ],
+            ),
+            (
                 "the layer breaks while it leaves",
                 &[
                     (false, Capable(true)),
@@ -530,6 +584,97 @@ mod tests {
                     matches!(route, Entering | Layer { .. } | Leaving { .. }),
                     "buffers: {at}"
                 );
+            }
+        }
+    }
+
+    /// Each need from its owner's fact, and a pixel reader sends the layer's frame to the shell.
+    #[test]
+    fn page_layer_needs_from_owners() {
+        use Need::*;
+        let clear = Owners {
+            page_fullscreen: true,
+            pip_window: false,
+            coverage: Coverage::None,
+            view_live: true,
+            pixels: false,
+        };
+        let only = |n: &[Need]| n.iter().fold(Needs::NONE, |s, &n| s.with(n, true));
+        #[rustfmt::skip]
+        let rows: &[(&str, Owners, Needs)] = &[
+            ("fullscreen, nothing over it", clear, Needs::NONE),
+            ("fullscreen, resizing", Owners { view_live: false, ..clear }, only(&[Resizing])),
+            ("fullscreen, shell pixels over it", Owners { coverage: Coverage::Part, ..clear }, only(&[Covered])),
+            ("fullscreen, glass over it", Owners { coverage: Coverage::Pixels, ..clear }, only(&[Covered])),
+            ("the picture-in-picture window", Owners { page_fullscreen: false, pip_window: true, ..clear }, Needs::NONE),
+            ("a pane among the chrome", Owners { page_fullscreen: false, ..clear }, only(&[Windowed])),
+            ("a shot pending", Owners { pixels: true, ..clear }, only(&[Pixels])),
+            ("everything", Owners { page_fullscreen: false, pip_window: false, coverage: Coverage::Part, view_live: false, pixels: true },
+                only(&[Windowed, Covered, Resizing, Pixels])),
+        ];
+        for &(name, owners, want) in rows {
+            assert_eq!(Needs::from_owners(&owners), want, "{name}");
+        }
+        let pixels = Needs::from_owners(&Owners {
+            pixels: true,
+            ..clear
+        });
+        assert_eq!(
+            transition(ON5, pixels, Changed),
+            (FOR5, vec![PresentLatest])
+        );
+    }
+
+    #[test]
+    fn page_layer_route_on_layer() {
+        #[rustfmt::skip]
+        let rows: &[(Route, bool)] = &[
+            (Unsupported, false), (Composited, false), (Entering, false), (ON5, true), (FOR5, true),
+        ];
+        for &(route, on) in rows {
+            assert_eq!(route.on_layer(), on, "{route:?}");
+        }
+    }
+
+    /// Every surface that can appear over a fullscreen page (open, or still drawn as it leaves)
+    /// sends the layer's frame to the shell before the layer goes; the page's own link hints
+    /// do not.
+    #[test]
+    fn page_layer_a_surface_over_a_fullscreen_page_makes_the_pane_leave() {
+        use crate::overlay::{Facts, Kind::*, Layer as Surface, Stack, covers};
+        use crate::tab::TabId;
+        let tab = TabId(1);
+        let facts = Facts {
+            glass: true,
+            ..Facts::default()
+        };
+        let leaves = (FOR5, vec![PresentLatest]);
+        #[rustfmt::skip]
+        let rows = [
+            (VideoStrip, true), (VideoTab, true), (VideoSpeeds, true), (Toast, true), (Popup, true),
+            (AutofillChip, true), (AutofillMenu, true), (AutofillPrompt, true), (Tooltip, true),
+            (TabGhost, true), (PageGhost, true), (PipStrip, true), (Hints, false),
+        ];
+        for (kind, blocks) in rows {
+            let layer = vec![Surface::new(kind, Some(tab))];
+            let open = Stack {
+                shown: Some(tab),
+                layers: layer.clone(),
+                leaving: vec![],
+            };
+            let leaving = Stack {
+                shown: Some(tab),
+                layers: vec![],
+                leaving: layer,
+            };
+            for (state, stack) in [("open", open), ("leaving", leaving)] {
+                let needs = Needs::NONE.covered(covers(&stack, &facts, tab));
+                let want = if blocks {
+                    leaves.clone()
+                } else {
+                    (ON5, vec![])
+                };
+                assert_eq!(transition(ON5, needs, Changed), want, "{kind:?} {state}");
             }
         }
     }
