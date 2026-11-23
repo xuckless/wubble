@@ -148,12 +148,28 @@ impl Model {
             .map_or(Side::Private, |si| self.side_of_container(self.spaces[si].container))
     }
 
+    /// `tab`'s container; `None` for an unknown tab, which its caller refuses or cancels
+    /// (never a Default stand-in).
+    pub fn container_of(&self, tab: TabId) -> Option<ContainerId> {
+        self.tabs.get(&tab).map(|t| t.container)
+    }
+
     /// The side `tab` is on: its container's. An unknown tab is private: nothing of it is
     /// recorded, nothing of it crosses (fails closed).
     pub fn side_of_tab(&self, tab: TabId) -> Side {
-        self.tabs
-            .get(&tab)
-            .map_or(Side::Private, |t| self.side_of_container(t.container))
+        self.container_of(tab)
+            .map_or(Side::Private, |c| self.side_of_container(c))
+    }
+
+    /// The side a record of `container` (a download row) is shown on: private only for a
+    /// known Memory container. A row outlives its container (a deleted, agent or imported
+    /// one), and stays the normal side's then, where it was stored.
+    pub fn side_of_record(&self, container: ContainerId) -> Side {
+        let memory = self
+            .containers
+            .iter()
+            .any(|c| c.id == container && c.storage == Storage::Memory);
+        if memory { Side::Private } else { Side::Normal }
     }
 
     /// The side window `id` is on: its Space's (a Main window), its own tab's (a Little, Popup

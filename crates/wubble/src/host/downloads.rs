@@ -419,7 +419,7 @@ impl Host {
             .keys()
             .all(|&t| self.model.side_of_tab(t) == Side::Normal || ended.contains(&t));
         let media = self.downloads.list.iter().filter(|e| {
-            every && self.media.owns(e.id) && self.model.side_of_container(e.container) == Side::Private
+            every && self.media.owns(e.id) && self.model.side_of_record(e.container) == Side::Private
         });
         ended
             .iter()
@@ -737,7 +737,7 @@ impl Host {
         self.downloads
             .list
             .iter()
-            .filter(|e| self.model.side_of_container(e.container) == side)
+            .filter(|e| self.model.side_of_record(e.container) == side)
             .cloned()
             .collect()
     }

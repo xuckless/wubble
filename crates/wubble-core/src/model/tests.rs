@@ -4256,3 +4256,25 @@ fn a_private_window_is_no_part_of_a_session() {
     }
     assert!(m.for_session(&[]).tabs.contains_key(&n[0]), "the normal tab stays");
 }
+
+/// A download row is the private side's only while its container is a known Memory one; a row
+/// of a deleted container stays with the normal side, where it was stored.
+#[test]
+fn a_record_is_private_only_in_a_known_memory_container() {
+    let (m, _) = with_tabs(1);
+    let (m, _) = run(m, Command::NewContainer { name: "Work".into() });
+    let work = m.containers.last().unwrap().id;
+    let (m, _, _) = private_window(m, "https://p.test/");
+    let mem = m.containers.iter().find(|c| c.storage == Storage::Memory).unwrap().id;
+    let (gone, _) = run(m.clone(), Command::DeleteContainer(work));
+    // (row, model, container, the record's side, the container's own side)
+    for (row, m, c, record, own) in [
+        ("default", &m, D, Side::Normal, Side::Normal),
+        ("memory", &m, mem, Side::Private, Side::Private),
+        ("deleted", &gone, work, Side::Normal, Side::Private),
+        ("never known", &m, ContainerId(999), Side::Normal, Side::Private),
+    ] {
+        assert_eq!(m.side_of_record(c), record, "{row}");
+        assert_eq!(m.side_of_container(c), own, "{row}");
+    }
+}
