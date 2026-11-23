@@ -838,23 +838,41 @@ fn read_pipes(pipes: Vec<(clipboard::Kind, String, std::fs::File)>) -> Payload {
         }
     }
     let (mut payload, paths) = clipboard::read(arrived.into_iter().flatten().collect());
-    let mut total = 0;
-    for path in paths {
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        let Ok(meta) = std::fs::metadata(&path) else {
-            continue;
-        };
-        if !meta.is_file() || meta.len() == 0 || total + meta.len() > clipboard::FILES_CAP {
-            continue;
-        }
-        let mut bytes = vec![];
-        let read =
-            std::fs::File::open(&path).and_then(|f| f.take(meta.len()).read_to_end(&mut bytes));
-        if read.is_ok() {
-            total += bytes.len() as u64;
-            clipboard::add_file(&mut payload, name, bytes);
+    // The files on a thread of their own, under what is left of the deadline: a file on a hung
+    // network or FUSE mount loses the files, not the paste.
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("wubble-paste-files".into())
+        .spawn(move || {
+            let mut total = 0;
+            for path in paths {
+                let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                    continue;
+                };
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue;
+                };
+                if !meta.is_file() || meta.len() == 0 || total + meta.len() > clipboard::FILES_CAP {
+                    continue;
+                }
+                let mut bytes = vec![];
+                let read = std::fs::File::open(&path)
+                    .and_then(|f| f.take(meta.len()).read_to_end(&mut bytes));
+                if read.is_ok() {
+                    total += bytes.len() as u64;
+                    if tx.send((name, bytes)).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+    if spawned.is_ok() {
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match rx.recv_timeout(left) {
+                Ok((name, bytes)) => clipboard::add_file(&mut payload, name, bytes),
+                Err(_) => break,
+            }
         }
     }
     payload

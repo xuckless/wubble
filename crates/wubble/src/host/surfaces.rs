@@ -969,7 +969,10 @@ impl Host {
                 .tab_view(tab)
                 .and_then(|v| v.focused_frame())
                 .is_some_and(|f| f == frame),
-            reading: self.clipboard_reads.contains(&tab),
+            reading: clipboard::in_flight(
+                self.clipboard_reads.get(&tab).copied(),
+                self.input.now(),
+            ),
         };
         if !clipboard::admit(ask, asker) {
             if let (ClipboardRequest::Read(id, _), Some(view)) = (&request, self.tab_view(tab)) {
@@ -1019,13 +1022,20 @@ impl Host {
         (buffer, reader): (Buffer, Reader),
         read: Option<u32>,
     ) {
-        let id = self.w.id;
+        let (id, started) = (self.w.id, self.input.now());
         let answer = frame.clone();
         let done = Box::new(move |payload: Option<Payload>| {
             let _ = slint::invoke_from_event_loop(move || {
-                crate::with_host_in(id, |host| {
-                    host.clipboard_reads.remove(&tab);
-                    if let Some(view) = host.tab_view(tab) {
+                // Whichever window has the host: the mark goes even when the asking window
+                // closed meanwhile (one the host was too busy for expires, `in_flight`).
+                crate::with_host(move |host| {
+                    // this read's mark only: a later read's stays
+                    if host.clipboard_reads.get(&tab) == Some(&started) {
+                        host.clipboard_reads.remove(&tab);
+                    }
+                    if host.enter(id)
+                        && let Some(view) = host.tab_view(tab)
+                    {
                         view.answer_clipboard(&answer, Some(&payload.unwrap_or_default()), read);
                     }
                 });
@@ -1035,7 +1045,10 @@ impl Host {
             .clipboard
             .load_then(window.window(), buffer, reader, done)
         {
-            self.clipboard_reads.insert(tab);
+            // the marks of reads given up for (their tabs closed meanwhile) go too
+            self.clipboard_reads
+                .retain(|_, s| clipboard::in_flight(Some(*s), started));
+            self.clipboard_reads.insert(tab, started);
         } else if let Some(view) = self.tab_view(tab) {
             view.answer_clipboard(&frame, Some(&Payload::default()), read);
         }

@@ -523,8 +523,9 @@ pub struct Host {
     unshown: slint::Timer,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
-    /// The tabs with a page's clipboard read being answered (`wubble_core::clipboard::admit`).
-    clipboard_reads: std::collections::BTreeSet<TabId>,
+    /// When each tab's page's clipboard read started, until it is answered; one past
+    /// `clipboard::READ_IN_FLIGHT` no longer counts (`wubble_core::clipboard::in_flight`).
+    clipboard_reads: BTreeMap<TabId, Duration>,
     /// Auto-archive: how long a tab may go unvisited (`archive.after`).
     archive_after: ArchiveAfter,
     /// Tabs being filed in the Archive: they close once the store has them, and do not go on

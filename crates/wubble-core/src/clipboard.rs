@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
@@ -116,6 +117,18 @@ const READS: &[(Kind, &[Reader], &[&str])] = &[
 /// dropped, as no one middle-click pastes a book.
 pub const PRIMARY_CAP: usize = 1 << 20;
 
+/// How long a page's read counts as in flight ([`Asker::reading`]). Past it the read is given
+/// up for, whatever happened to its answer (dropped while the host was busy, its tab or window
+/// closed, the worker stopped), so no tab is left unable to read. Longer than the worker's own
+/// deadline for reading the clipboard (1.5 s), so a read that is answered is never overtaken.
+pub const READ_IN_FLIGHT: Duration = Duration::from_secs(3);
+
+/// Whether a read started at `started` (the host's clock; `None`: no read) is in flight at
+/// `now`.
+pub fn in_flight(started: Option<Duration>, now: Duration) -> bool {
+    started.is_some_and(|s| now.saturating_sub(s) < READ_IN_FLIGHT)
+}
+
 /// What a page asks of the host's clipboard, for [`admit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ask {
@@ -137,7 +150,7 @@ pub struct Asker {
     pub window_focused: bool,
     /// It is CEF's focused frame of that page.
     pub frame_focused: bool,
-    /// A read for its tab is still being answered.
+    /// A read for its tab is still being answered ([`in_flight`]).
     pub reading: bool,
 }
 
@@ -402,6 +415,27 @@ impl Payload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_is_in_flight_until_answered_or_given_up() {
+        let s = Duration::from_secs;
+        // (started, now, in flight)
+        for (started, now, flight) in [
+            (None, s(10), false),
+            (Some(s(10)), s(10), true),
+            (
+                Some(s(10)),
+                s(10) + READ_IN_FLIGHT - Duration::from_millis(1),
+                true,
+            ),
+            (Some(s(10)), s(10) + READ_IN_FLIGHT, false),
+            (Some(s(10)), s(60), false),
+            // a clock that read earlier than the start: just started
+            (Some(s(10)), s(9), true),
+        ] {
+            assert_eq!(in_flight(started, now), flight, "{started:?} {now:?}");
+        }
+    }
 
     #[test]
     fn only_the_frame_the_user_is_in_reaches_the_clipboard() {
