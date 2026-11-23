@@ -1694,7 +1694,8 @@ impl View {
     }
 
     /// The identifier of the page's focused frame (CEF's `GetFocusedFrame`), as frame messages
-    /// name their frame.
+    /// name their frame. Before any frame took focus it is the main frame (CEF's
+    /// `CefBrowserHostBase::GetFocusedFrame` falls back to it); `None` only without a browser.
     pub fn focused_frame(&mut self) -> Option<String> {
         let mut id = None;
         self.send(|host| {
