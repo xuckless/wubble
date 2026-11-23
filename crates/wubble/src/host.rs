@@ -3391,6 +3391,11 @@ impl Host {
         }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
+            // Slint hands the page a wheel as pixels either way (`TouchArea.scroll-event`), so
+            // what the device sent is read here, before Slint sees the event.
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.input.wheel_precise = input::wheel_is_precise(delta);
+            }
             WindowEvent::Touch(t) => {
                 let at = t
                     .location
@@ -3842,10 +3847,10 @@ impl Host {
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
         self.hints_scrolled();
-        let modifiers = self.input.modifiers();
+        let (modifiers, precise) = (self.input.modifiers(), self.input.wheel_precise);
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
-            view.wheel(point, dx, dy, &modifiers);
+            view.wheel(point, dx, dy, precise, &modifiers);
         }
     }
 

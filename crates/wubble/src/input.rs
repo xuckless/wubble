@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::{KeyEvent, MouseButton as WinitButton};
+use slint::winit_030::winit::event::{KeyEvent, MouseButton as WinitButton, MouseScrollDelta};
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
@@ -303,6 +303,15 @@ pub fn mouse_button(button: PointerEventButton) -> Option<MouseButton> {
     }
 }
 
+/// A wheel event is a touchpad's when it is in pixels, or in lines but not whole ones (X11's
+/// smooth scroll reports a touchpad as fractions of a line); a notch is a whole line.
+pub fn wheel_is_precise(delta: &MouseScrollDelta) -> bool {
+    match delta {
+        MouseScrollDelta::PixelDelta(_) => true,
+        MouseScrollDelta::LineDelta(x, y) => x.fract() != 0.0 || y.fract() != 0.0,
+    }
+}
+
 /// The mouse's side buttons are navigation, over the page and the shell
 /// alike. Only the press acts.
 pub fn button_action(button: WinitButton) -> Option<Action> {
@@ -360,6 +369,9 @@ pub struct InputState {
     view_focused: bool,
     /// The pointer in window logical pixels, while it is over the window.
     pub pointer: Option<slint::LogicalPosition>,
+    /// The last wheel event came from a touchpad (`wheel_is_precise`). True until a wheel
+    /// event says otherwise, so scrolls that do not come from a device stay exact.
+    pub wheel_precise: bool,
 }
 
 impl Default for InputState {
@@ -372,6 +384,7 @@ impl Default for InputState {
             window_focused: false,
             view_focused: false,
             pointer: None,
+            wheel_precise: true,
         }
     }
 }
@@ -800,6 +813,19 @@ mod tests {
             PointerEventButton::Other,
         ] {
             assert_eq!(mouse_button(other), None);
+        }
+    }
+
+    #[test]
+    fn a_notch_is_not_precise_a_touchpad_is() {
+        use slint::winit_030::winit::dpi::PhysicalPosition;
+        for (delta, precise) in [
+            (MouseScrollDelta::LineDelta(0.0, 1.0), false),
+            (MouseScrollDelta::LineDelta(-2.0, 0.0), false),
+            (MouseScrollDelta::LineDelta(0.0, 0.25), true),
+            (MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 12.0)), true),
+        ] {
+            assert_eq!(wheel_is_precise(&delta), precise, "{delta:?}");
         }
     }
 

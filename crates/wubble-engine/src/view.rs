@@ -671,10 +671,11 @@ impl View {
         self.scroll_x
     }
 
-    /// Deltas in logical pixels, positive = up / left.
-    pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, modifiers: &Modifiers) {
+    /// Deltas in logical pixels, positive = up / left; `precise` for a touchpad's, not a
+    /// notched wheel's (`input::wheel_deltas`).
+    pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, precise: bool, modifiers: &Modifiers) {
         self.content(ContentEvent::Input);
-        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, &mut self.wheel);
+        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, precise, &mut self.wheel);
         let event = cef::MouseEvent {
             modifiers: flags,
             ..input::mouse_event(point, modifiers)

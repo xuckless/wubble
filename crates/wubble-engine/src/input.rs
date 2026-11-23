@@ -253,9 +253,16 @@ impl WheelRemainder {
 
 /// Wheel deltas in DIP (positive = up / left, as both winit and CEF use) and
 /// the event flags. Shift turns a vertical-only scroll horizontal
-/// (cefclient win); deltas are pixel-precise (cefclient GTK smooth scroll),
-/// with sub-pixel motion carried in `rest`.
-pub fn wheel_deltas(dx: f32, dy: f32, m: &Modifiers, rest: &mut WheelRemainder) -> (i32, i32, u32) {
+/// (cefclient win); sub-pixel motion is carried in `rest`. `precise` marks
+/// pixel deltas (a touchpad, cefclient GTK smooth scroll), which Blink scrolls
+/// at once; a notched wheel is not precise, so Blink animates it as Chrome does.
+pub fn wheel_deltas(
+    dx: f32,
+    dy: f32,
+    m: &Modifiers,
+    precise: bool,
+    rest: &mut WheelRemainder,
+) -> (i32, i32, u32) {
     let (dx, dy) = if m.keys.shift_key() && dx == 0.0 {
         (dy, 0.0)
     } else {
@@ -264,7 +271,7 @@ pub fn wheel_deltas(dx: f32, dy: f32, m: &Modifiers, rest: &mut WheelRemainder) 
     (
         WheelRemainder::axis(&mut rest.x, dx),
         WheelRemainder::axis(&mut rest.y, dy),
-        cef_modifiers(m) | flag::PRECISION_SCROLLING_DELTA,
+        cef_modifiers(m) | flag::PRECISION_SCROLLING_DELTA * u32::from(precise),
     )
 }
 
@@ -907,15 +914,21 @@ mod tests {
         let shift = mods(ModifiersState::SHIFT);
         let p = flag::PRECISION_SCROLLING_DELTA;
         let mut rest = WheelRemainder::default();
-        assert_eq!(wheel_deltas(0.0, 60.0, &none, &mut rest), (0, 60, p));
+        assert_eq!(wheel_deltas(0.0, 60.0, &none, true, &mut rest), (0, 60, p));
         assert_eq!(
-            wheel_deltas(0.0, -60.0, &shift, &mut rest),
+            wheel_deltas(0.0, -60.0, &shift, true, &mut rest),
             (-60, 0, p | flag::SHIFT)
         );
         // A real horizontal delta is left alone.
         assert_eq!(
-            wheel_deltas(5.0, 7.0, &shift, &mut rest),
+            wheel_deltas(5.0, 7.0, &shift, true, &mut rest),
             (5, 7, p | flag::SHIFT)
+        );
+        // A notched wheel is not precise.
+        assert_eq!(wheel_deltas(0.0, 60.0, &none, false, &mut rest), (0, 60, 0));
+        assert_eq!(
+            wheel_deltas(0.0, 60.0, &shift, false, &mut rest),
+            (60, 0, flag::SHIFT)
         );
     }
 
@@ -925,7 +938,7 @@ mod tests {
         let mut rest = WheelRemainder::default();
         let (mut x, mut y) = (0, 0);
         for _ in 0..10 {
-            let (dx, dy, _) = wheel_deltas(-0.3, 0.3, &none, &mut rest);
+            let (dx, dy, _) = wheel_deltas(-0.3, 0.3, &none, true, &mut rest);
             (x, y) = (x + dx, y + dy);
         }
         assert_eq!((x, y), (-3, 3));
@@ -935,9 +948,9 @@ mod tests {
     fn a_wheel_reversal_drops_the_carried_fraction() {
         let none = mods(ModifiersState::empty());
         let mut rest = WheelRemainder::default();
-        assert_eq!(wheel_deltas(0.0, 0.9, &none, &mut rest).1, 0);
-        assert_eq!(wheel_deltas(0.0, -0.5, &none, &mut rest).1, 0);
-        assert_eq!(wheel_deltas(0.0, -0.6, &none, &mut rest).1, -1);
+        assert_eq!(wheel_deltas(0.0, 0.9, &none, true, &mut rest).1, 0);
+        assert_eq!(wheel_deltas(0.0, -0.5, &none, true, &mut rest).1, 0);
+        assert_eq!(wheel_deltas(0.0, -0.6, &none, true, &mut rest).1, -1);
     }
 
     fn key(code: KeyCode, unmodified: Key, text: Option<&str>) -> KeyInput {
