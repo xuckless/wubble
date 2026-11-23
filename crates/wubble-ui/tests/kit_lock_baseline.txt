@@ -52,7 +52,6 @@ kit/derived.slint	kit-literal	135px	1
 kit/derived.slint	kit-literal	13px	5
 kit/derived.slint	kit-literal	140px	1
 kit/derived.slint	kit-literal	14px	9
-kit/derived.slint	kit-literal	1500ms	1
 kit/derived.slint	kit-literal	150ms	1
 kit/derived.slint	kit-literal	150px	1
 kit/derived.slint	kit-literal	15px	1

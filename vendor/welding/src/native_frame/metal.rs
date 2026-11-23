@@ -124,11 +124,16 @@ fn wgpu_format_to_mtl(format: wgpu::TextureFormat) -> Option<objc2_metal::MTLPix
 /// records any use of it, so the two queues need no other synchronisation.
 /// The copy is created as a raw `MTLTexture` and wrapped like the import, so
 /// wgpu counts it as initialised and never clears it.
+///
+/// wubble change (64): with `pool` (the host asked for OS buffers) the copy goes into one of
+/// its IOSurfaces instead, carried out as [`CopiedFrame::os`]; `Ok(None)` when every one is in
+/// use (the frame is dropped). Without it this path is as before.
 pub(crate) fn copy_metal_to_owned(
     frame: MetalTextureRef,
     ctx: &HostWgpuContext,
     arrived: std::time::Instant,
-) -> Result<CopiedFrame, ImportError> {
+    pool: Option<&mut OsBufferPool>,
+) -> Result<Option<CopiedFrame>, ImportError> {
     use objc2_metal::{
         MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
         MTLCommandQueue, MTLDevice, MTLStorageMode, MTLTextureDescriptor, MTLTextureUsage,
@@ -152,17 +157,26 @@ pub(crate) fn copy_metal_to_owned(
             wgpu: ctx.backend,
         },
     )?;
-    let copy = unsafe {
-        let descriptor =
-            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-                pixel_format,
-                size.width as usize,
-                size.height as usize,
-                false,
-            );
-        descriptor.setStorageMode(MTLStorageMode::Private);
-        descriptor.setUsage(MTLTextureUsage::ShaderRead);
-        mtl_device.newTextureWithDescriptor(&descriptor)
+    // wubble change (64): the host's OS buffer, if it asked for them and one is free.
+    let os = match pool.map(|pool| pool.next(&mtl_device, size, format, pixel_format)) {
+        None | Some(Next::Unavailable) => None,
+        Some(Next::Buffer(buffer)) => Some(buffer),
+        Some(Next::Busy) => return Ok(None),
+    };
+    let copy = match &os {
+        Some(buffer) => Some(buffer.0.texture.clone()),
+        None => unsafe {
+            let descriptor =
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    pixel_format,
+                    size.width as usize,
+                    size.height as usize,
+                    false,
+                );
+            descriptor.setStorageMode(MTLStorageMode::Private);
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            mtl_device.newTextureWithDescriptor(&descriptor)
+        },
     }
     .ok_or_else(|| ImportError::MetalImport("newTextureWithDescriptor: returned nil".into()))?;
 
@@ -199,7 +213,7 @@ pub(crate) fn copy_metal_to_owned(
     let texture = grafting::import_metal_texture_ref(graft_frame, &graft_host)
         .map_err(|error| ImportError::MetalImport(error.to_string()))?;
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    Ok(CopiedFrame {
+    Ok(Some(CopiedFrame {
         texture: ImportedTexture {
             texture,
             view,
@@ -215,7 +229,8 @@ pub(crate) fn copy_metal_to_owned(
         copy: done - started,
         copy_wait: done - waiting,
         damage: None,
-    })
+        os,
+    }))
 }
 
 type Retained<T> = objc2::rc::Retained<objc2::runtime::ProtocolObject<T>>;
@@ -246,4 +261,162 @@ fn copy_queue(
         *cached = Some((device.clone(), queue.clone()));
         Ok(queue)
     })
+}
+
+/// wubble change (64): one OS buffer of a view's pool: an IOSurface and the Metal texture over
+/// it that the frame copy writes.
+pub(crate) struct Slot {
+    surface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+    texture: Retained<dyn objc2_metal::MTLTexture>,
+}
+
+// SAFETY: an IOSurface and a Metal texture may be used from any thread (IOSurface and Metal
+// objects are thread safe); the slot holds nothing else.
+unsafe impl Send for Slot {}
+unsafe impl Sync for Slot {}
+
+impl Slot {
+    /// A `size` IOSurface of `format`'s layout (BGRA or RGBA, 4 bytes a pixel) tagged sRGB, as
+    /// CEF's bytes are display-encoded sRGB and the shell's layer is sRGB too, and its texture
+    /// as `pixel_format` (the copy's sRGB format).
+    fn new(
+        device: &Retained<dyn objc2_metal::MTLDevice>,
+        size: dpi::PhysicalSize<u32>,
+        format: wgpu::TextureFormat,
+        pixel_format: objc2_metal::MTLPixelFormat,
+    ) -> Result<Self, ImportError> {
+        use objc2_core_foundation::{CFDictionary, CFNumber, CFString, CFType};
+        use objc2_io_surface::{
+            IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceColorSpace,
+            kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
+        };
+        use objc2_metal::{MTLDevice, MTLStorageMode, MTLTextureDescriptor, MTLTextureUsage};
+
+        let fourcc: &[u8; 4] = match format {
+            wgpu::TextureFormat::Bgra8UnormSrgb => b"BGRA",
+            wgpu::TextureFormat::Rgba8UnormSrgb => b"RGBA",
+            _ => {
+                return Err(ImportError::MetalImport(format!(
+                    "no IOSurface layout for {format:?}"
+                )));
+            }
+        };
+        let (width, height) = (size.width as usize, size.height as usize);
+        // SAFETY: IOSurface's own constant keys.
+        let (keys, color_space) = unsafe {
+            (
+                [
+                    kIOSurfaceWidth,
+                    kIOSurfaceHeight,
+                    kIOSurfaceBytesPerElement,
+                    kIOSurfaceBytesPerRow,
+                    kIOSurfacePixelFormat,
+                ],
+                kIOSurfaceColorSpace,
+            )
+        };
+        let row = IOSurfaceRef::align_property(keys[3], width * 4);
+        let (w, h) = (CFNumber::new_i64(width as i64), CFNumber::new_i64(height as i64));
+        let (bytes, stride) = (CFNumber::new_i64(4), CFNumber::new_i64(row as i64));
+        let layout = CFNumber::new_i32(u32::from_be_bytes(*fourcc) as i32);
+        let values: [&CFType; 5] = [&w, &h, &bytes, &stride, &layout];
+        let properties = CFDictionary::<CFString, CFType>::from_slices(&keys, &values);
+        // SAFETY: the dictionary holds IOSurface's keys with values of their types.
+        let surface = unsafe { IOSurfaceRef::new(properties.as_opaque()) }
+            .ok_or_else(|| ImportError::MetalImport("IOSurfaceCreate returned NULL".into()))?;
+        // The name CoreGraphics' `kCGColorSpaceSRGB` holds, as Chromium tags its IOSurfaces
+        // (`ui/gfx/mac/io_surface.cc`, `IOSurfaceSetColorSpace`).
+        let srgb = CFString::from_static_str("kCGColorSpaceSRGB");
+        // SAFETY: the colour space key takes a colour space name.
+        unsafe { surface.set_value(color_space, &srgb) };
+
+        let texture = unsafe {
+            let descriptor =
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    pixel_format,
+                    width,
+                    height,
+                    false,
+                );
+            descriptor.setStorageMode(MTLStorageMode::Shared);
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            device.newTextureWithDescriptor_iosurface_plane(&descriptor, &surface, 0)
+        }
+        .ok_or_else(|| {
+            ImportError::MetalImport(
+                "newTextureWithDescriptor:iosurface:plane: returned nil for an OS buffer".into(),
+            )
+        })?;
+        Ok(Self { surface, texture })
+    }
+
+    pub(crate) fn io_surface(&self) -> std::ptr::NonNull<std::ffi::c_void> {
+        std::ptr::NonNull::from(&*self.surface).cast()
+    }
+
+    /// A buffer of it is alive (the host holds a frame in it) or the compositor uses it.
+    fn in_use(buffer: &super::OsBuffer) -> bool {
+        std::sync::Arc::strong_count(&buffer.0) > 1 || buffer.0.surface.is_in_use()
+    }
+}
+
+/// wubble change (64): where the next frame of a view goes.
+pub(crate) enum Next {
+    Buffer(super::OsBuffer),
+    /// Every buffer is in use: the frame is dropped.
+    Busy,
+    /// The buffers could not be made: a texture of its own, as without a pool.
+    Unavailable,
+}
+
+/// wubble change (64): a view's OS buffers, made for the frame size and format they last
+/// copied; a new size makes new ones (frames still holding old ones keep them).
+pub(crate) struct OsBufferPool {
+    request: super::OsBufferRequest,
+    /// What `slots` were made for; `slots` is empty when making them failed.
+    made: Option<(dpi::PhysicalSize<u32>, wgpu::TextureFormat)>,
+    slots: Vec<super::OsBuffer>,
+    latest: Option<usize>,
+}
+
+impl OsBufferPool {
+    pub(crate) fn new(request: super::OsBufferRequest) -> Self {
+        Self {
+            request,
+            made: None,
+            slots: Vec::new(),
+            latest: None,
+        }
+    }
+
+    fn next(
+        &mut self,
+        device: &Retained<dyn objc2_metal::MTLDevice>,
+        size: dpi::PhysicalSize<u32>,
+        format: wgpu::TextureFormat,
+        pixel_format: objc2_metal::MTLPixelFormat,
+    ) -> Next {
+        if self.made != Some((size, format)) {
+            self.made = Some((size, format));
+            self.latest = None;
+            self.slots = (0..self.request.slots)
+                .map(|_| Slot::new(device, size, format, pixel_format))
+                .map(|slot| slot.map(|s| super::OsBuffer(std::sync::Arc::new(s))))
+                .collect::<Result<_, _>>()
+                .unwrap_or_else(|error| {
+                    log::error!("no OS buffers for {size:?} {format:?}: {error}");
+                    Vec::new()
+                });
+        }
+        if self.slots.is_empty() {
+            return Next::Unavailable;
+        }
+        let in_use: Vec<bool> = self.slots.iter().map(Slot::in_use).collect();
+        let chosen = (self.request.choose)(&in_use, self.latest);
+        let Some(i) = chosen.filter(|&i| i < self.slots.len()) else {
+            return Next::Busy;
+        };
+        self.latest = Some(i);
+        Next::Buffer(self.slots[i].clone())
+    }
 }

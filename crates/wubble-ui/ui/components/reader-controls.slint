@@ -22,8 +22,10 @@ export component ReaderControls inherits Rectangle {
     callback setting(string, int);
     callback closed();
 
-    // built while it shows and as it leaves (its controls take registry slots when built)
-    property <bool> built: root.open || dock.progress > 0;
+    // built while it shows and as it leaves (its controls take registry slots when built); so
+    // drawn (AppWindow's `mounted`)
+    out property <bool> mounted: root.open || dock.progress > 0;
+    property <bool> built: root.mounted;
 
     width: dock.row-width;
     height: dock.height;

@@ -27,7 +27,7 @@ the design rule each derives from. "was" marks a value L2 changed toward the des
 | `sheet-body` | `Role.body.size` | components/error-panel.slint, components/pip-card.slint, components/sheet-frame.slint | wubble-only sheet body text: the type scale body (core/tokens.ts type.body 14; was 14.5) |
 | `tip-glide` | `260ms` | components/tooltip.slint | pages/touch.css:101 .tp-tip-pos transition var(--tp-glide) = touch.tsx DOCK.glideMs (kit_gen.rs touch::DOCK) |
 | `toast-weight` | `Role.st-row-title.weight` | components/preview-card.slint, components/toast.slint | wubble-only toast text, 14 px like .st-row-title (settings.css:45): its weight 500 (was 540) |
-| `toast-shown` | `1500ms` | components/toast.slint | wubble-only: how long a toast stays; no design counterpart |
+| `toast-shown` | `1500ms` | `wubble_core::overlay::TOAST_SHOWN_MS` (the host times the toast) | wubble-only: how long a toast stays; no design counterpart |
 | `boost-code-height` | `150px` | components/boost-panel.slint | wubble-only: the Boost editor's code area (a missing primitive, wubble-only.md) |
 | `pip-width` | `400px` | app.slint | wubble-only: picture-in-picture window, 16:9 |
 | `pip-height` | `225px` | app.slint | wubble-only: as pip-width |

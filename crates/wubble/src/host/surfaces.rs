@@ -918,20 +918,40 @@ impl Host {
 
     /// Takes whatever notice shows away.
     pub(super) fn toast_hide(&mut self) {
-        self.toast_serial = self.toast_serial.wrapping_add(1);
+        self.w.toast.stop();
         if let Some(window) = self.w.window.upgrade() {
-            window.set_toast_hide_serial(self.toast_serial);
+            window.set_toast_shown(false);
         }
     }
 
+    /// Shows a notice for its time (`overlay::TOAST_SHOWN_MS`; with a button the one undo
+    /// window, `sponsor::TOAST_MS`, which no button outlives), restarting the time; a sticky
+    /// one until it is answered or taken away. The window's timer is the toast's one clock.
     fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, sticky: bool) {
         self.toast_serial = self.toast_serial.wrapping_add(1);
         window.set_toast_text(text.into());
         window.set_toast_action(action.into());
         window.set_toast_sticky(sticky);
-        // The one undo window: a button outlives no notice it acts on.
-        window.set_toast_action_shown(wubble_core::sponsor::TOAST_MS as i64);
-        window.set_toast_serial(self.toast_serial);
+        window.set_toast_shown(true);
+        if sticky {
+            self.w.toast.stop();
+            return;
+        }
+        let ms = if action.is_empty() {
+            wubble_core::overlay::TOAST_SHOWN_MS
+        } else {
+            wubble_core::sponsor::TOAST_MS
+        };
+        let shown = window.as_weak();
+        self.w.toast.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(ms),
+            move || {
+                if let Some(window) = shown.upgrade() {
+                    window.set_toast_shown(false);
+                }
+            },
+        );
     }
 
     /// Puts `text` on the system clipboard: through the window's Wayland connection, else

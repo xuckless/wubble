@@ -20,7 +20,7 @@ import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
 import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
-import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem } from "components/model.slint";
+import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, Mounted } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
@@ -63,7 +63,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView }
+export { AutofillAnswer, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
 export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
@@ -92,6 +92,9 @@ export component AppWindow inherits Window {
     in property <string> pip-title;
     // The Pip window's controls and the card's button (host `pip_command`).
     callback pip-command(string, float);
+    // The Pip window's strip shows (the host's, `pip_hovered`), and the pointer's reports.
+    in property <bool> pip-strip;
+    callback pip-hovered(bool);
     // The visible page for screen readers (empty unless pages' accessibility is on: `a11y.web`),
     // and what one asked of an item (host `ax.rs`).
     in property <[AxItemView]> ax-items;
@@ -626,7 +629,7 @@ export component AppWindow inherits Window {
     // is the list, `extension-popup.open` the popup (once its page has a size).
     in property <bool> has-extensions: false;
     in property <[ExtensionAction]> extension-actions;
-    in-out property <bool> extensions-open: false;
+    in property <bool> extensions-open: false;
     in property <ExtensionPopup> extension-popup;
     in property <ExtensionPrompt> extension-prompt;
     callback extensions-requested();
@@ -672,20 +675,55 @@ export component AppWindow inherits Window {
             root.downloads-open = false;
         }
     }
+    // What of each surface the kit still draws, open or leaving (`Mounted`): the host reads it
+    // as it derives what covers a page. `mounted-changed` says one began or ended its exit.
+    out property <Mounted> mounted: {
+        permission: permission-ui.visible,
+        find: find-ui.visible,
+        dialog: sheet.visible,
+        bookmark-sheet: bookmark-sheet.visible,
+        print-sheet: print-sheet.visible,
+        extension-sheet: extension-sheet.visible,
+        agent-sheet: agent-sheet.visible,
+        region: shot-ui.visible,
+        downloads: downloads-ui.visible,
+        extensions: extensions-ui.visible || extension-popup-ui.visible,
+        spaces: spaces-ui.mounted,
+        menu: menu-ui.mounted,
+        error: error-ui.visible,
+        toast: toast-ui.mounted,
+        tooltip: tip-ui.shown-opacity > 0,
+        preview: preview-ui.visible,
+        glance: glance-ui.visible,
+        autofill-menu: autofill-ui.menu-mounted,
+        autofill-prompt: autofill-ui.prompt-mounted,
+        video-strip: root.video-strip-mounted,
+        video-tab: root.video-tab-mounted,
+        video-speeds: root.video-speeds-mounted,
+        pip-strip: root.pip-strip-mounted,
+        reader: reader-ui.mounted,
+        boost: boost-ui.visible,
+    };
+    callback mounted-changed();
+    changed mounted => {
+        root.mounted-changed();
+    }
+    // the video strip's and the Pip strip's, which sit under an `if`: their kit reports them
+    property <bool> video-strip-mounted;
+    property <bool> video-tab-mounted;
+    property <bool> video-speeds-mounted;
+    property <bool> pip-strip-mounted;
     in property <FindView> find;
     callback find-edited(string);
     // true: next match, false: previous.
     callback find-step(bool);
     callback find-closed();
-    // A brief notice (zoom level, "Esc to exit"); bump the serial to show it.
+    // A brief notice (zoom level, "Esc to exit"), shown while `toast-shown`: the host times it.
     in property <string> toast-text;
-    in property <int> toast-serial;
-    // A notice with a button (`Toast`): its label, whether it waits for an answer, and a serial
-    // that takes any notice away.
+    in property <bool> toast-shown;
+    // A notice with a button (`Toast`): its label, and whether it waits for an answer.
     in property <string> toast-action;
     in property <bool> toast-sticky;
-    in property <int> toast-hide-serial;
-    in property <duration> toast-action-shown;
     callback toast-acted();
     callback toast-closed();
     // The visible page's video controls (wubble_core::video) and the speed menu's rows.
@@ -1290,6 +1328,15 @@ export component AppWindow inherits Window {
                 image-fit: fill;
             }
             if !root.pip: VideoControls {
+                changed strip-mounted => {
+                    root.video-strip-mounted = self.strip-mounted;
+                }
+                changed tab-mounted => {
+                    root.video-tab-mounted = self.tab-mounted;
+                }
+                changed speeds-mounted => {
+                    root.video-speeds-mounted = self.speeds-mounted;
+                }
                 video: root.video;
                 rates: root.video-rates;
                 pointer-in: root.pointer-in;
@@ -1306,7 +1353,14 @@ export component AppWindow inherits Window {
                 }
             }
             if root.pip: PipControls {
+                changed mounted => {
+                    root.pip-strip-mounted = self.mounted;
+                }
                 paused: root.video.paused;
+                shown: root.pip-strip;
+                hovered(on) => {
+                    root.pip-hovered(on);
+                }
                 command(name, value) => {
                     root.pip-command(name, value);
                 }
@@ -1336,7 +1390,7 @@ export component AppWindow inherits Window {
                 }
             }
             // Beside the sidebar at the hovered row, kept inside the content area.
-            PreviewCard {
+            preview-ui := PreviewCard {
                 x: Space.s3;
                 y: max(Space.s3, min(root.preview.y - parent.absolute-position.y, parent.height - self.height - Space.s3));
                 shown: root.preview.shown;
@@ -1344,7 +1398,7 @@ export component AppWindow inherits Window {
                 address: root.preview.address;
                 thumb: root.preview.thumb;
             }
-            ReaderControls {
+            reader-ui := ReaderControls {
                 x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
                 y: parent.height - self.height - Space.s4;
                 open: root.reader-on;
@@ -1359,7 +1413,7 @@ export component AppWindow inherits Window {
                     root.reader-toggled();
                 }
             }
-            ShotOverlay {
+            shot-ui := ShotOverlay {
                 active: root.shot-picking;
                 pane-x: root.shot-pane-x;
                 pane-width: root.shot-pane-width;
@@ -1373,7 +1427,7 @@ export component AppWindow inherits Window {
                     root.shot-cancelled();
                 }
             }
-            BoostPanel {
+            boost-ui := BoostPanel {
                 x: parent.width - self.width - Space.s3;
                 y: Space.s3;
                 height: parent.height - 2 * Space.s3;
@@ -1404,16 +1458,14 @@ export component AppWindow inherits Window {
             // A brief notice at the page's top; one that waits for an answer (SponsorBlock's
             // question, its Undo) at its bottom, as the reader's controls: a top one sat on the
             // page's own top bar (a site's search field) for as long as it waited.
-            Toast {
+            toast-ui := Toast {
                 x: (parent.width - self.width) / 2;
                 y: root.toast-action == "" ? Space.s4 : parent.height - self.height - Space.s4;
                 widest: min(Shell.toast-max-width, parent.width - 2 * Space.s4);
                 text: root.toast-text;
-                serial: root.toast-serial;
+                shown: root.toast-shown;
                 action: root.toast-action;
                 sticky: root.toast-sticky;
-                hide-serial: root.toast-hide-serial;
-                action-shown: root.toast-action-shown;
                 acted => {
                     root.toast-acted();
                 }
@@ -1422,7 +1474,7 @@ export component AppWindow inherits Window {
                 }
             }
             // The peek: over the page, under the sheets and the command bar.
-            GlanceCard {
+            glance-ui := GlanceCard {
                 glance: root.glance;
                 cursor: root.cursors[root.web-cursor];
                 closed => {
@@ -1701,7 +1753,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    AutofillMenu {
+    autofill-ui := AutofillMenu {
         x: content.x + Space.s3;
         y: root.permission.open ? max(content.y + Space.s3, permission-ui.y + permission-ui.height + Shell.prompt-gap) : content.y + Space.s3;
         view: root.autofill;
@@ -1854,7 +1906,7 @@ export component AppWindow inherits Window {
     }
 
     // Over everything, pointer events pass through: the one tooltip.
-    Tooltip {
+    tip-ui := Tooltip {
         shown: root.tip.shown;
         text: root.tip.text;
         shortcut: root.tip.shortcut;

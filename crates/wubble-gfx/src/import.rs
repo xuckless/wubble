@@ -35,6 +35,8 @@ pub enum GfxError {
     Import(String),
     /// Slint refused the blit target.
     Image(String),
+    /// The page's OS layer could not be made or refused a frame (`crate::layer`).
+    Layer(String),
 }
 
 impl fmt::Display for GfxError {
@@ -44,6 +46,7 @@ impl fmt::Display for GfxError {
             Self::Device(e) => write!(f, "cannot create the GPU device: {e}"),
             Self::Import(e) => write!(f, "frame import failed: {e}"),
             Self::Image(e) => write!(f, "Slint rejected the frame texture: {e}"),
+            Self::Layer(e) => write!(f, "page layer: {e}"),
         }
     }
 }
@@ -86,6 +89,27 @@ impl NativeFrame {
     pub fn damage(&self) -> Option<Damage> {
         match &self.0 {
             welding::NativeFrame::Copied(c) => c.damage,
+            _ => None,
+        }
+    }
+
+    /// Whether the frame was copied into an OS buffer (`crate::layer`), which only macOS has.
+    #[cfg(target_os = "macos")]
+    pub fn has_os_buffer(&self) -> bool {
+        self.os_buffer().is_some()
+    }
+
+    /// Whether the frame was copied into an OS buffer: never here.
+    #[cfg(not(target_os = "macos"))]
+    pub fn has_os_buffer(&self) -> bool {
+        false
+    }
+
+    /// The OS buffer the frame was copied into, when the view was asked for them.
+    #[cfg(target_os = "macos")]
+    pub fn os_buffer(&self) -> Option<&welding::OsBuffer> {
+        match &self.0 {
+            welding::NativeFrame::Copied(c) => c.os.as_ref(),
             _ => None,
         }
     }

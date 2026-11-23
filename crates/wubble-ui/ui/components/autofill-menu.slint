@@ -33,6 +33,10 @@ export component AutofillMenu inherits Rectangle {
     callback menu(int);
     callback answer(AutofillAnswer);
 
+    // Drawn, open or leaving: the menu and the prompt (AppWindow's `mounted`).
+    out property <bool> menu-mounted: list.visible;
+    out property <bool> prompt-mounted: prompt.mounted;
+
     property <bool> prompting: root.view.prompt;
     property <bool> leaving: !root.prompting && prompt.mounted;
 

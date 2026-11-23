@@ -557,6 +557,45 @@ pub struct CopiedFrame {
     /// previous frame (CEF's `capture_update_rect`), in the frame's pixels;
     /// `None` when CEF gave none (all of it may have changed).
     pub damage: Option<Damage>,
+    /// wubble change (64): the OS buffer the frame was copied into, when the host asked for
+    /// them ([`OsBufferRequest`]); `texture` is the same memory. `None`: a texture of its own.
+    #[cfg(target_vendor = "apple")]
+    pub os: Option<OsBuffer>,
+}
+
+/// wubble change (64): what a host asks of
+/// [`crate::CefSurfaceProducer::set_os_buffers`]: the view's frame copy goes into one of
+/// `slots` OS-presentable buffers (macOS: IOSurfaces), which the host may hand to the OS
+/// compositor as they are, instead of a texture of its own per frame.
+#[derive(Clone, Copy)]
+pub struct OsBufferRequest {
+    pub slots: usize,
+    /// The slot to copy the next frame into, given which slots are in use (a buffer of it is
+    /// alive, or the compositor still reads it) and the one copied into last; `None` drops the
+    /// frame. The host's policy, so welding keeps none.
+    pub choose: fn(&[bool], Option<usize>) -> Option<usize>,
+}
+
+/// wubble change (64): a pool slot a frame was copied into: a retained IOSurface, which the
+/// host may set as a `CALayer`'s contents. Clones share the slot; the slot is copied into again
+/// only once no clone is alive and the compositor no longer uses it.
+#[cfg(target_vendor = "apple")]
+#[derive(Clone)]
+pub struct OsBuffer(std::sync::Arc<metal::Slot>);
+
+#[cfg(target_vendor = "apple")]
+impl OsBuffer {
+    /// The retained `IOSurfaceRef`, valid while this buffer is alive.
+    pub fn io_surface(&self) -> std::ptr::NonNull<std::ffi::c_void> {
+        self.0.io_surface()
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+impl std::fmt::Debug for OsBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OsBuffer").field(&self.io_surface()).finish()
+    }
 }
 
 /// wubble change: a rectangle of a frame that changed, in its pixels.
@@ -650,6 +689,9 @@ pub use vulkan_dmabuf::build_dmabuf_capable_device;
 pub(crate) use vulkan_dmabuf::copy_dmabuf_to_owned;
 #[cfg(target_vendor = "apple")]
 pub(crate) use metal::copy_metal_to_owned;
+// wubble change (64): a view's OS buffers.
+#[cfg(target_vendor = "apple")]
+pub(crate) use metal::OsBufferPool;
 
 /// wubble change: copies an imported, callback-scoped CEF frame into a
 /// weld-owned texture and waits for the copy, so CEF may reuse its pooled

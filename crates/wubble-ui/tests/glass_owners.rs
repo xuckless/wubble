@@ -223,11 +223,10 @@ fn every_glass_has_its_panel_and_every_panel_its_glass() {
     rig.app.set_video(VideoView::default());
     rig.app.set_toast_text("Link copied".into());
     rig.app.set_toast_sticky(true);
-    rig.app.set_toast_serial(rig.app.get_toast_serial() + 1);
+    rig.app.set_toast_shown(true);
     rig.idle("toast");
     rig.app.set_toast_sticky(false);
-    rig.app
-        .set_toast_hide_serial(rig.app.get_toast_hide_serial() + 1);
+    rig.app.set_toast_shown(false);
     rig.app.set_page(InternalPageKind::Settings);
     rig.idle("settings again");
 
@@ -270,7 +269,7 @@ fn every_glass_has_its_panel_and_every_panel_its_glass() {
             r.app.set_menu(menu(40.0, 120.0, 8));
             r.frame(step());
             r.app.set_toast_text("Link copied".into());
-            r.app.set_toast_serial(r.app.get_toast_serial() + 1);
+            r.app.set_toast_shown(true);
             r.frame(step());
         }),
     ];

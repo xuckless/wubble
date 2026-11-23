@@ -147,8 +147,11 @@ pub use held::RequestId;
 pub use native_frame::build_dmabuf_capable_device;
 pub use native_frame::{
     CopiedFrame, Damage, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
-    NativeFrameKind, NativeFramePixelFormat, WgpuTextureImporter,
+    NativeFrameKind, NativeFramePixelFormat, OsBufferRequest, WgpuTextureImporter,
 };
+// wubble change (64): the frame copy's OS buffer.
+#[cfg(target_vendor = "apple")]
+pub use native_frame::OsBuffer;
 pub use opened::{OpenedWindow, PopupFactory};
 pub use permissions::{PermissionId, PermissionKind};
 #[cfg(all(feature = "cef-runtime", target_os = "windows"))]

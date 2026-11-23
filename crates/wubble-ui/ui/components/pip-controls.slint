@@ -6,8 +6,8 @@ import { MoveArea } from "window-frame.slint";
 import { BDock } from "../kit/overlay/b/b-dock.slint";
 
 // The picture-in-picture window's controls (wubble_core::pip): a strip at the window's foot while
-// the pointer is over the window, with play or pause, back and forward ten seconds, return to the
-// tab and close. The design has no picture-in-picture (wubble-only.md §28): the strip is the
+// the pointer is over the window (the host's `shown`, from `hovered`: wubble_core::overlay's
+// PipStrip), with play or pause, back and forward ten seconds, return to the tab and close. The design has no picture-in-picture (wubble-only.md §28): the strip is the
 // video strip's Dock (kit/overlay/b/b-dock.slint). The rest of the window moves it (the window
 // has no frame); a double-click returns to the tab. The buttons answer while the strip is faded
 // too: a screen reader has no hover, and a pointer shows the strip before it can click. Intents
@@ -15,10 +15,19 @@ import { BDock } from "../kit/overlay/b/b-dock.slint";
 export component PipControls inherits Rectangle {
     // (element ids the tests find: root, strip)
     in property <bool> paused;
+    // The strip shows: the host's answer to `hovered`.
+    in property <bool> shown;
     callback command(string, float);
     callback begin-move();
+    // The pointer came over the window (true) or left it.
+    callback hovered(bool);
+    // Drawn, shown or leaving (the strip stays in the tree, clear, for a screen reader).
+    out property <bool> mounted: strip.shown || strip.progress > 0;
 
     area := MoveArea {
+        changed has-hover => {
+            root.hovered(self.has-hover);
+        }
         begin-move => {
             root.begin-move();
         }
@@ -30,7 +39,7 @@ export component PipControls inherits Rectangle {
         strip := BDock {
             key: GlassKeys.pip-strip;
             layer: GlassOver.card;
-            shown: area.has-hover;
+            shown: root.shown;
             reachable-hidden: true;
             width: min(self.row-width, root.width - 2 * Space.s2);
             x: (root.width - self.width) / 2;

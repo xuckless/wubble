@@ -1082,6 +1082,7 @@ impl Host {
     // ----- the toast's button
 
     pub(crate) fn toast_acted(&mut self) {
+        self.toast_hide();
         match self.videos.toast.take() {
             Some(ToastAct::Undo(tab)) => self.sponsor_undo(tab),
             Some(ToastAct::AskSponsor(_)) => {
@@ -1095,6 +1096,7 @@ impl Host {
     }
 
     pub(crate) fn toast_closed(&mut self) {
+        self.toast_hide();
         if let Some(ToastAct::AskSponsor(_)) = self.videos.toast.take() {
             self.videos.asking = false;
             self.write_setting(defs::SPONSOR_ASKED.key, "1");
@@ -1274,11 +1276,25 @@ impl Host {
         }
     }
 
+    /// The pointer came over the picture-in-picture window (true) or left it: its strip shows
+    /// while it is there. The host's answer, so the strip's visibility is not Slint's own.
+    pub(crate) fn pip_hovered(&mut self, on: bool) {
+        if let Some(window) = self.w.window.upgrade() {
+            window.set_pip_strip(on);
+        }
+    }
+
+    /// The tab whose card this window shows: a Main window's visible tab playing in
+    /// picture-in-picture.
+    pub(super) fn pip_card(&self) -> Option<TabId> {
+        self.model.pip_tab().filter(|&t| {
+            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
+        })
+    }
+
     /// The Main window's card for its tab in picture-in-picture, and the Pip window's controls.
     pub(super) fn render_pip(&mut self, window: &AppWindow) {
-        let card = self.model.pip_tab().filter(|&t| {
-            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
-        });
+        let card = self.pip_card();
         window.set_pip_card(card.is_some());
         let title = card
             .and_then(|t| self.model.tabs.get(&t))
@@ -1351,7 +1367,7 @@ impl Host {
         let window = self.w.window.upgrade();
         let toast = window
             .as_ref()
-            .map(|w| (w.get_toast_serial(), w.get_toast_text().to_string()))
+            .map(|w| (self.toast_serial, w.get_toast_text().to_string()))
             .unwrap_or_default();
         // what the pointer (`video_smoke_pointer`, the same window) finds: `VideoControls`
         // shows only over a video with a size

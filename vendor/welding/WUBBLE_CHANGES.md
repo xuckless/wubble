@@ -599,6 +599,23 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     wubble's own CEF calls (the focused frame's identifier, which the host
     checks a page's clipboard request against).
 
+64. **OS buffers for the frame copy (macOS).** `surface.rs`: new
+    `CefSurfaceProducer::set_os_buffers(Option<OsBufferRequest>)` (default:
+    unsupported). `native_frame/mod.rs`: new `OsBufferRequest` (how many slots,
+    and the host's `choose(in_use, latest)` for the slot to copy into) and, on
+    Apple, `OsBuffer` (a shared, retained IOSurface; `io_surface()`) and
+    `CopiedFrame::os`. `native_frame/metal.rs`: `copy_metal_to_owned` takes the
+    view's `OsBufferPool`; with one the blit's target is a pool slot (an sRGB
+    tagged IOSurface with a Metal texture over it, made per frame size) instead
+    of a new private texture, and `Ok(None)` drops a frame when every slot is in
+    use (a live `OsBuffer` of it, or `IOSurfaceIsInUse`); without one the path is
+    as before. A pool that cannot be made copies as without one.
+    `macos_cef`: the pool per view (`os_buffers`), never used for the popup's
+    frames. `Cargo.toml`: `objc2-core-foundation` (macOS, the IOSurface
+    properties). Linux and Windows unchanged. For wubble's page layer
+    (`wubble_core::page_layer`). Tests: none here (a Metal device is needed); the
+    slot choice is wubble-core's `pick_slot`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

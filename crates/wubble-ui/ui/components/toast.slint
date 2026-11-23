@@ -5,42 +5,21 @@ import { AToast } from "../kit/overlay/a/a-toast.slint";
 // A brief notice: the zoom level after Ctrl +/-/0, "Press Esc to exit full screen". One
 // component for both. Derived from the kit (docs/fidelity/wubble-only.md; the design has no
 // toast): the Toast (kit/overlay/a/a-toast.slint), a thick glass capsule arriving and leaving by
-// Overlap. The host bumps `serial` with each notice; it shows for Shell.toast-shown, a later one
-// restarts the time. Pointer events pass through to the page.
+// Overlap. The host shows it (`shown`) and times it: `wubble_core::overlay::TOAST_SHOWN_MS`, a
+// later notice restarting the time. Pointer events pass through to the page.
 //
 // With an `action` (SponsorBlock's "Skipped sponsor: Undo", its one-time "Turn on" question) the
 // notice carries a button, stays a while longer, and takes the pointer over itself only. A
-// `sticky` one stays until answered or closed (its close button); `hide-serial` takes any away.
+// `sticky` one stays until answered or closed (its close button); the host takes any away.
 export component Toast inherits Rectangle {
     in property <string> text;
-    in property <int> serial;
+    in property <bool> shown;
     in property <string> action;
     in property <bool> sticky;
-    in property <int> hide-serial;
-    // How long a notice with a button stays: the host's, as long as it can act
-    // (`wubble_core::sponsor::TOAST_MS`).
-    in property <duration> action-shown;
     callback acted();
     callback closed();
-
-    property <bool> shown: false;
-    changed serial => {
-        root.shown = true;
-        hide.running = false;
-        hide.running = !root.sticky;
-    }
-    changed hide-serial => {
-        root.shown = false;
-        hide.running = false;
-    }
-    hide := Timer {
-        interval: root.action == "" ? Shell.toast-shown : root.action-shown;
-        running: false;
-        triggered => {
-            root.shown = false;
-            self.running = false;
-        }
-    }
+    // Drawn: shown, or leaving (the kit's exit).
+    out property <bool> mounted: body.visible;
 
     // Sized to the text, up to the widest a notice grows (and the room it is given).
     in property <length> widest: Shell.toast-max-width;
@@ -57,11 +36,9 @@ export component Toast inherits Rectangle {
         key: GlassKeys.toast;
         layer: GlassOver.card;
         acted => {
-            root.shown = false;
             root.acted();
         }
         closed => {
-            root.shown = false;
             root.closed();
         }
     }
