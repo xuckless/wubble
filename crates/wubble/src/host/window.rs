@@ -103,6 +103,8 @@ pub(crate) struct WindowHost {
     /// The window's monitor and place on the desktop, read by `Host::follow_desktop`: told to
     /// every page as its screen.
     pub(super) desktop: Option<Desktop>,
+    /// Runs `Host::follow_desktop` once a burst of `Moved` events (a window drag) settles.
+    pub(super) desktop_settle: slint::Timer,
     /// The previous pane frame's time while the strings or a pane's stretch move.
     pub(super) panes_last: Option<Instant>,
     /// What the strings settled, waiting to be dispatched outside rendering.
@@ -148,6 +150,7 @@ impl WindowHost {
             frames: BTreeMap::new(),
             panes: Panes::default(),
             desktop: None,
+            desktop_settle: slint::Timer::default(),
             panes_last: None,
             split_commands: vec![],
             drawn: Default::default(),

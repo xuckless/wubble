@@ -139,6 +139,9 @@ use crate::{
 /// Pop-ups a tab holds back at most; later ones are dropped.
 const MAX_HELD_POPUPS: usize = 8;
 
+/// How long the window rests after a move before the pages hear of its new place.
+const DESKTOP_SETTLE: Duration = Duration::from_millis(100);
+
 /// How far ahead `--smoke tabs` ticks the lifecycle: past the discard delay.
 const SMOKE_DISCARD_AFTER: Duration = Duration::from_secs(20 * 60);
 
@@ -3387,13 +3390,17 @@ impl Host {
         self.add_aux_window(&window);
         // The first event of a window finds its desktop (winit has no event for the window's
         // creation); a move or a scale change finds a new one.
-        if self.w.desktop.is_none()
-            || matches!(
-                event,
-                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
-            )
-        {
+        if self.w.desktop.is_none() || matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
             self.follow_desktop();
+        } else if matches!(event, WindowEvent::Moved(_)) {
+            // A drag sends dozens a second, each a screen change for every page: the place
+            // the window rests at is told once.
+            let id = self.w.id;
+            self.w.desktop_settle.start(
+                slint::TimerMode::SingleShot,
+                DESKTOP_SETTLE,
+                move || crate::with_host_in(id, Host::follow_desktop),
+            );
         }
         self.input.touching = matches!(event, WindowEvent::Touch(_));
         if let Some(e) = crate::run_state::event_of(event, || {
