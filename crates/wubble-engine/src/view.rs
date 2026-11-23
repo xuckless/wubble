@@ -1048,6 +1048,11 @@ impl View {
             }
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
+            // Before the cursor change: the host applies the image with it, and
+            // alone when the cursor was an image already.
+            if let welding::CursorShape::Image(image) = &shape {
+                self.events.push(WebEvent::CursorImage(image.clone()));
+            }
             self.apply_nav(NavInput::Cursor(shape.into()));
         }
         let placement = self.producer.popup_rect().map(Rect::from);

@@ -5,11 +5,12 @@
 //! executes the [`NavEffect`]s. The host only ever sees [`WebEvent`]s.
 
 use welding::CursorShape;
+pub use welding::CursorImage;
 
 use crate::input::KeyId;
 
-/// The pointer shape a page asks for. Exactly the shapes Slint can show
-/// (i-slint-common 1.19 `BuiltInMouseCursor`). `cursor as i32` indexes the
+/// The pointer shape a page asks for: every one Chromium has, which is more than Slint can
+/// show (i-slint-common 1.19 `BuiltInMouseCursor`). `cursor as i32` indexes the
 /// `cursors` table in `wubble-ui/ui/app.slint`, which lists them in this order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(i32)]
@@ -48,9 +49,31 @@ pub enum Cursor {
     PanSW,
     PanW,
     PanNW,
-    /// A drop here copies, or links (drag feedback; CEF does not set these).
+    /// A drop here copies, or links (also CSS `copy` and `alias`).
     Copy,
     Alias,
+    /// What Slint's `MouseCursor` has too: the column and row resizes, `no-drop`,
+    /// and the edge resizes (CSS `n-resize` and the rest).
+    ColResize,
+    RowResize,
+    NoDrop,
+    ResizeN,
+    ResizeE,
+    ResizeS,
+    ResizeW,
+    ResizeNe,
+    ResizeNw,
+    ResizeSe,
+    ResizeSw,
+    /// What it has no cursor for: the host sets the window's own (`host/cursor.rs`).
+    /// The shell shows the nearest shape where that is not in force.
+    ContextMenu,
+    Cell,
+    VerticalText,
+    ZoomIn,
+    ZoomOut,
+    /// The page's own image, which arrives as [`WebEvent::CursorImage`].
+    Image,
 }
 
 impl Cursor {
@@ -73,7 +96,6 @@ impl Cursor {
 }
 
 impl From<CursorShape> for Cursor {
-    /// Shapes Slint has no cursor for fall back to the nearest one it has.
     fn from(shape: CursorShape) -> Self {
         match shape {
             CursorShape::Default => Self::Default,
@@ -91,6 +113,25 @@ impl From<CursorShape> for Cursor {
             CursorShape::ResizeNwSe => Self::ResizeNwSe,
             CursorShape::Grab => Self::Grab,
             CursorShape::Grabbing => Self::Grabbing,
+            CursorShape::Copy => Self::Copy,
+            CursorShape::Alias => Self::Alias,
+            CursorShape::ColResize => Self::ColResize,
+            CursorShape::RowResize => Self::RowResize,
+            CursorShape::NoDrop => Self::NoDrop,
+            CursorShape::ResizeN => Self::ResizeN,
+            CursorShape::ResizeE => Self::ResizeE,
+            CursorShape::ResizeS => Self::ResizeS,
+            CursorShape::ResizeW => Self::ResizeW,
+            CursorShape::ResizeNe => Self::ResizeNe,
+            CursorShape::ResizeNw => Self::ResizeNw,
+            CursorShape::ResizeSe => Self::ResizeSe,
+            CursorShape::ResizeSw => Self::ResizeSw,
+            CursorShape::ContextMenu => Self::ContextMenu,
+            CursorShape::Cell => Self::Cell,
+            CursorShape::VerticalText => Self::VerticalText,
+            CursorShape::ZoomIn => Self::ZoomIn,
+            CursorShape::ZoomOut => Self::ZoomOut,
+            CursorShape::Image(_) => Self::Image,
             CursorShape::Panning(p) => {
                 use welding::Panning as P;
                 match p {
@@ -109,7 +150,7 @@ impl From<CursorShape> for Cursor {
             }
             // welding's name for CEF's `CT_NONE`.
             CursorShape::Custom(name) if name == "none" => Self::None,
-            // Zoom, other custom names, and shapes a newer welding adds.
+            // Other custom names, and shapes a newer welding adds.
             _ => Self::Default,
         }
     }
@@ -143,6 +184,9 @@ pub enum WebEvent {
     /// The page's first icon URL, empty when it has none.
     FaviconChanged(String),
     CursorChanged(Cursor),
+    /// The image behind `Cursor::Image`, sent before the `CursorChanged` that
+    /// says so, and alone when one image replaces another.
+    CursorImage(CursorImage),
     /// `window.open` or a `target=_blank` link. CEF opened nothing itself; the host's
     /// policy (`wubble_core::popup::decide`) says what opens.
     PopupRequested(PopupRequest),
@@ -719,8 +763,10 @@ mod tests {
         assert_eq!(Cursor::PanStillVertical.pan(), Pan::Still);
         assert_eq!(Cursor::PanS.pan(), Pan::Moving(Direction::S));
         assert_eq!(Cursor::PanNE.pan(), Pan::Moving(Direction::NE));
-        // The shell's cursor table ends with the panning cursors.
+        // The shell's cursor table (app.slint) lists them in this order.
         assert_eq!(Cursor::PanNW as i32, 26);
+        assert_eq!(Cursor::Alias as i32, 28);
+        assert_eq!(Cursor::Image as i32, 45);
     }
 
     #[test]
@@ -742,10 +788,30 @@ mod tests {
             (CursorShape::ResizeAll, Cursor::Move),
             (CursorShape::Grab, Cursor::Grab),
             (CursorShape::Grabbing, Cursor::Grabbing),
-            (CursorShape::ZoomIn, Cursor::Default),
-            (CursorShape::ZoomOut, Cursor::Default),
+            (CursorShape::ZoomIn, Cursor::ZoomIn),
+            (CursorShape::ZoomOut, Cursor::ZoomOut),
+            (CursorShape::Copy, Cursor::Copy),
+            (CursorShape::Alias, Cursor::Alias),
+            (CursorShape::ColResize, Cursor::ColResize),
+            (CursorShape::RowResize, Cursor::RowResize),
+            (CursorShape::NoDrop, Cursor::NoDrop),
+            (CursorShape::ResizeNe, Cursor::ResizeNe),
+            (CursorShape::ResizeW, Cursor::ResizeW),
+            (CursorShape::ContextMenu, Cursor::ContextMenu),
+            (CursorShape::Cell, Cursor::Cell),
+            (CursorShape::VerticalText, Cursor::VerticalText),
+            (
+                CursorShape::Image(CursorImage {
+                    width: 1,
+                    height: 1,
+                    hotspot_x: 0,
+                    hotspot_y: 0,
+                    rgba: vec![0; 4].into(),
+                }),
+                Cursor::Image,
+            ),
             (CursorShape::Custom("none".into()), Cursor::None),
-            (CursorShape::Custom("alias".into()), Cursor::Default),
+            (CursorShape::Custom("cef-other".into()), Cursor::Default),
             (
                 CursorShape::Panning(welding::Panning::Middle),
                 Cursor::PanStill,
