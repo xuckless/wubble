@@ -13,6 +13,7 @@ CPU per second) differ on a real 300 Hz display.
 | File | What it measures |
 |---|---|
 | `profile.sh` | `perf record` on wubble's whole process tree while it shows a page served from loopback; writes the flame graphs (`NAME.svg`, `NAME-main.svg` for the main thread), `NAME.breakdown.txt` (below) and `NAME.cpu.txt` (tree and main-process CPU from `/proc`, user + system, with the load average) |
+| `pgo.sh` | not a measurement: a profile-guided `dist` build of wubble into `target/pgo` (instrumented build, the `--measure` workloads, rebuild with the profile); untested, compare it with the plain build before use |
 | `video-page.sh` | the profiling fixture: an 8 s 1080p60 VP9 clip looping muted at 854x480 in a still page (`video.html`) |
 | `fold.py` | perf's samples to folded stacks: each Chromium helper process is one frame, runs of `libcef.so` frames in the main process collapse to one, LBR stacks (32 frames at most) are completed from the most common caller chain |
 | `breakdown.py` | the folded stacks as two tables: samples by process, and wubble's main thread by what it does (frame arrival, the Slint render and its parts, the CEF pump); its rules name functions of the pinned Slint, Skia and wgpu |
