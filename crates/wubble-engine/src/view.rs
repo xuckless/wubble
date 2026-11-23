@@ -27,6 +27,7 @@ use welding::{
     PlatformCefProducer, WeldError,
 };
 use winit::keyboard::PhysicalKey;
+use wubble_gfx::pacing::{self, ContentEvent, ContentRate};
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::{EngineError, RequestMode};
@@ -261,6 +262,10 @@ pub struct View {
     popups: Popups,
     /// Pop-up browsers adopted as views, until the engine takes them ([`View::take_opened`]).
     opened: Vec<(View, crate::nav::PopupRequest)>,
+    /// How lively the page is, and the frame-rate ceiling the host asked for: CEF is told
+    /// `content.frame_rate(ceiling)` ([`Self::content`], [`Self::set_frame_rate`]).
+    content: ContentRate,
+    ceiling: u32,
 }
 
 /// A view's pop-up switch and, by CEF's pop-up id, the hooks its factory made for each pop-up
@@ -356,6 +361,7 @@ impl View {
             filter,
             (rule, popups),
             devtools_client,
+            config.frame_rate,
         ))
     }
 
@@ -366,6 +372,7 @@ impl View {
         filter: Option<Arc<dyn ContentFilter>>,
         (rule, popups): (NavigationRule, Popups),
         devtools_client: cef::Client,
+        ceiling: u32,
     ) -> Self {
         let browser_id = producer.browser_id();
         Self {
@@ -400,6 +407,8 @@ impl View {
             rule,
             popups,
             opened: Vec::new(),
+            content: ContentRate::default(),
+            ceiling,
         }
     }
 
@@ -450,6 +459,7 @@ impl View {
             self.filter.clone(),
             (pending.rule, pending.popups),
             self.devtools_client.clone(),
+            self.ceiling,
         );
         let request = crate::nav::PopupRequest {
             url: opened.url,
@@ -616,6 +626,7 @@ impl View {
     /// `now` is any monotonic time (it only times double clicks).
     pub fn mouse_move(&mut self, point: Point, modifiers: &Modifiers, now: Duration) {
         self.clicks.moved(now, point);
+        self.content(ContentEvent::Input);
         let event = input::mouse_event(point, modifiers);
         self.send(|host| host.send_mouse_move_event(Some(&event), 0));
     }
@@ -646,6 +657,7 @@ impl View {
         } else {
             self.clicks.count()
         };
+        self.content(ContentEvent::Input);
         let event = input::mouse_event(point, modifiers);
         let button = input::cef_button(button);
         self.send(|host| {
@@ -661,6 +673,7 @@ impl View {
 
     /// Deltas in logical pixels, positive = up / left.
     pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, modifiers: &Modifiers) {
+        self.content(ContentEvent::Input);
         let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, &mut self.wheel);
         let event = cef::MouseEvent {
             modifiers: flags,
@@ -757,6 +770,7 @@ impl View {
     }
 
     pub fn key(&mut self, key: &KeyInput) {
+        self.content(ContentEvent::Input);
         self.held_keys
             .retain(|(physical, _)| *physical != key.physical);
         if key.pressed {
@@ -871,10 +885,22 @@ impl View {
         result
     }
 
-    /// CEF's frame-rate ceiling (`SetWindowlessFrameRate`), for a window
-    /// that moved to a display with another refresh rate.
+    /// The frame-rate ceiling, for a window that moved to a display with another refresh
+    /// rate. CEF is told the rate the page's content has under it (`SetWindowlessFrameRate`).
     pub fn set_frame_rate(&mut self, frame_rate: u32) {
-        self.send(|host| host.set_windowless_frame_rate(frame_rate as i32));
+        self.ceiling = frame_rate;
+        let rate = self.content.frame_rate(frame_rate);
+        self.send(|host| host.set_windowless_frame_rate(rate as i32));
+    }
+
+    /// Input or a frame: the page's frame rate follows what changes in it
+    /// (`pacing::ContentRate`). CEF is told only when the rate changes.
+    fn content(&mut self, event: ContentEvent) {
+        let before = self.content.frame_rate(self.ceiling);
+        self.content = self.content.after(event, std::time::Instant::now());
+        if self.content.frame_rate(self.ceiling) != before {
+            self.set_frame_rate(self.ceiling);
+        }
     }
 
     /// Follows the host's content rectangle; unchanged layouts cost nothing.
@@ -899,7 +925,14 @@ impl View {
         let frame = NativeFrame::from(CefSurfaceProducer::acquire_native_frame(
             &mut self.producer,
         )?);
-        let effects = self.apply(ViewEvent::Frame(frame.size()));
+        let size = frame.size();
+        self.content(ContentEvent::Frame {
+            large: pacing::large_damage(
+                frame.damage().map(|d| (d.width, d.height)),
+                (size.width, size.height),
+            ),
+        });
+        let effects = self.apply(ViewEvent::Frame(size));
         effects.contains(&ViewEffect::Present).then_some(frame)
     }
 

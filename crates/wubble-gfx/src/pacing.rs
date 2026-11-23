@@ -6,7 +6,7 @@
 //! [`PLATFORM_PACING`] (decisions.md "Frame pacing"); `--begin-frames` and `--no-begin-frames`
 //! override it for a run.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// CEF frame rate when the display does not report a refresh rate.
 pub const DEFAULT_FRAME_RATE: u32 = 60;
@@ -36,6 +36,74 @@ pub fn view_frame_rate(display: u32, shown: bool) -> u32 {
         display
     } else {
         display.min(UNSHOWN_FRAME_RATE)
+    }
+}
+
+/// The frame-rate ceiling of a page whose frames change little (a spinner, a caret, a small
+/// CSS animation): nobody sees 240 Hz in 16 px, and every page frame is a frame of the shell.
+pub const CALM_FRAME_RATE: u32 = 60;
+
+/// How long input or a large change keeps a page at its full ceiling.
+pub const LIVELY_HOLD: Duration = Duration::from_millis(300);
+
+/// A frame is large when its damage covers at least one part in this many of it. A video
+/// in a page and a scroll are large; a spinner and a caret are not.
+pub const LARGE_DAMAGE_PART: u64 = 20;
+
+/// Whether a frame of `frame` (width, height) with `damage` (width, height) of it changed is
+/// large. `None`: CEF did not say what changed, so maybe all of it.
+pub fn large_damage(damage: Option<(u32, u32)>, frame: (u32, u32)) -> bool {
+    let area = |(w, h): (u32, u32)| u64::from(w) * u64::from(h);
+    damage.is_none_or(|d| area(d) * LARGE_DAMAGE_PART >= area(frame))
+}
+
+/// How lively a page's content is: what its frame-rate ceiling follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentRate {
+    /// The full ceiling, until `until` (`None`: a new view, calm from its first small frame).
+    Lively { until: Option<Instant> },
+    /// Small changes only and no input for [`LIVELY_HOLD`]: [`CALM_FRAME_RATE`].
+    Calm,
+}
+
+impl Default for ContentRate {
+    fn default() -> Self {
+        Self::Lively { until: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentEvent {
+    /// The page got input (pointer, wheel, key).
+    Input,
+    /// The host took a frame; `large`: [`large_damage`].
+    Frame { large: bool },
+}
+
+impl ContentRate {
+    /// The state after `event` at `now`. Input and a large frame start the hold again; a
+    /// small frame ends a hold that has run out. Nothing else does: a page that stops
+    /// painting keeps its state until its next frame.
+    pub fn after(self, event: ContentEvent, now: Instant) -> Self {
+        match (self, event) {
+            (_, ContentEvent::Input | ContentEvent::Frame { large: true }) => Self::Lively {
+                until: Some(now + LIVELY_HOLD),
+            },
+            (Self::Lively { until }, ContentEvent::Frame { large: false })
+                if until.is_some_and(|until| now < until) =>
+            {
+                self
+            }
+            (_, ContentEvent::Frame { large: false }) => Self::Calm,
+        }
+    }
+
+    /// CEF's frame rate under `ceiling` (the display's rate, or [`view_frame_rate`]'s).
+    pub fn frame_rate(self, ceiling: u32) -> u32 {
+        match self {
+            Self::Lively { .. } => ceiling,
+            Self::Calm => ceiling.min(CALM_FRAME_RATE),
+        }
     }
 }
 
@@ -220,6 +288,82 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_frame_is_large_from_a_twentieth_of_its_area() {
+        let frame = (1000, 800);
+        for (name, damage, large) in [
+            ("no rect: maybe all of it", None, true),
+            ("the whole frame", Some(frame), true),
+            ("a video in the page", Some((854, 480)), true),
+            ("exactly a twentieth", Some((200, 200)), true),
+            ("just under a twentieth", Some((200, 199)), false),
+            ("a spinner", Some((16, 16)), false),
+            ("a caret", Some((2, 20)), false),
+            ("nothing changed", Some((0, 0)), false),
+        ] {
+            assert_eq!(large_damage(damage, frame), large, "{name}");
+        }
+        assert!(large_damage(Some((0, 0)), (0, 0)), "an empty frame");
+        assert!(!large_damage(Some((16, 16)), (u32::MAX, u32::MAX)), "no overflow");
+    }
+
+    #[test]
+    fn content_rate_follows_input_and_damage() {
+        use {ContentEvent::*, ContentRate::*};
+        let t = Instant::now();
+        let held = Lively {
+            until: Some(t + LIVELY_HOLD),
+        };
+        let ms = Duration::from_millis;
+        const SMALL: ContentEvent = Frame { large: false };
+        const LARGE: ContentEvent = Frame { large: true };
+        // (name, state, event, time since t, next): one row per state and event
+        for (name, state, event, at, next) in [
+            ("a new view's large frame holds", ContentRate::default(), LARGE, ms(0), held),
+            ("a new view's small frame calms it", ContentRate::default(), SMALL, ms(0), Calm),
+            ("a new view's input holds", ContentRate::default(), Input, ms(0), held),
+            ("a small frame inside the hold keeps it", held, SMALL, ms(299), held),
+            ("a small frame at the hold's end calms", held, SMALL, ms(300), Calm),
+            ("a small frame long after calms", held, SMALL, ms(60_000), Calm),
+            (
+                "a large frame starts the hold again",
+                held,
+                LARGE,
+                ms(200),
+                Lively {
+                    until: Some(t + ms(500)),
+                },
+            ),
+            (
+                "input starts the hold again",
+                held,
+                Input,
+                ms(200),
+                Lively {
+                    until: Some(t + ms(500)),
+                },
+            ),
+            ("a calm page stays calm on small frames", Calm, SMALL, ms(0), Calm),
+            ("a large frame wakes a calm page", Calm, LARGE, ms(0), held),
+            ("input wakes a calm page", Calm, Input, ms(0), held),
+        ] {
+            assert_eq!(state.after(event, t + at), next, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_calm_page_paints_at_sixty_at_most() {
+        for (ceiling, lively, calm) in [
+            (240, 240, CALM_FRAME_RATE),
+            (120, 120, CALM_FRAME_RATE),
+            (60, 60, 60),
+            (UNSHOWN_FRAME_RATE, UNSHOWN_FRAME_RATE, UNSHOWN_FRAME_RATE),
+        ] {
+            assert_eq!(ContentRate::default().frame_rate(ceiling), lively);
+            assert_eq!(ContentRate::Calm.frame_rate(ceiling), calm);
+        }
+    }
 
     #[test]
     fn the_mac_ships_shell_pacing_and_the_rest_cefs_timer() {
