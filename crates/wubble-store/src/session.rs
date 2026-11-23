@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_round_trip_and_only_main_ones_are_kept() {
+    fn windows_round_trip_and_little_ones_are_not_kept() {
         run(async {
             let mut store = Store::open_in_memory().await.unwrap();
             let ap = |m, c| apply(m, c).0;
@@ -795,6 +795,189 @@ mod tests {
                 loaded.windows,
                 vec![Window::main(WindowId(5), SpaceId(2))],
                 "one Space twice"
+            );
+        });
+    }
+
+    /// `rich()` with a second Main window (maximized, its normal bounds kept), the first
+    /// minimized, and a Popup window on a tab of Space 1, focused.
+    fn with_popup() -> Model {
+        let ap = |m, c| apply(m, c).0;
+        let mut m = ap(
+            rich(),
+            Command::NewWindow {
+                space: Some(SpaceId(0)),
+            },
+        );
+        m = ap(
+            m,
+            Command::OpenPopupWindow {
+                url: "https://p.test".into(),
+                opener: TabId(6),
+                size: Some((400, 300)),
+            },
+        );
+        let popup = m.focused();
+        let g = |width: u32,
+                 height: u32,
+                 pos: Option<(i32, i32)>,
+                 state: WindowState,
+                 monitor: Option<&str>| Geometry {
+            width,
+            height,
+            pos,
+            state,
+            monitor: monitor.map(String::from),
+        };
+        for (window, geometry) in [
+            (1, g(800, 600, Some((10, -20)), WindowState::Normal, None)),
+            // reported at the screen's size: the model keeps the normal bounds
+            (1, g(1920, 1080, Some((0, 0)), WindowState::Maximized, Some("DP-1"))),
+            (0, g(900, 700, None, WindowState::Minimized, None)),
+            (popup.0, g(400, 300, Some((50, 60)), WindowState::Normal, Some("HDMI-1"))),
+        ] {
+            m = ap(
+                m,
+                Command::ResizeWindow {
+                    window: WindowId(window),
+                    geometry,
+                },
+            );
+        }
+        m.check().unwrap();
+        m
+    }
+
+    #[test]
+    fn show_state_monitor_and_popup_windows_round_trip() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let m = with_popup();
+            // The fixture covers what the test claims.
+            let popup = m.window(m.focused()).unwrap();
+            assert!(popup.tab().is_some());
+            let main = m.window(WindowId(1)).unwrap().geometry.clone().unwrap();
+            assert_eq!(
+                (main.width, main.pos, main.state, main.monitor.as_deref()),
+                (800, Some((10, -20)), WindowState::Maximized, Some("DP-1"))
+            );
+            store.save_session(&m).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            // windows, their geometry and order; the Popup window's tab comes back Active
+            assert_same(&loaded, &restored(&m));
+            assert_eq!(loaded.focused(), popup.id);
+        });
+    }
+
+    #[test]
+    fn stored_popup_windows_that_cannot_show_their_tab_are_dropped() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let m = with_popup();
+            let popup = m.window(m.focused()).cloned().unwrap();
+            let tab = popup.tab().unwrap();
+            let (space, _) = m.location(tab).unwrap();
+            let shown = m.spaces.iter().find(|s| s.id == space).unwrap().active.unwrap();
+            let mains: Vec<Window> = m
+                .windows
+                .iter()
+                .filter(|w| w.space().is_some())
+                .cloned()
+                .collect();
+            // (case, SQL run on the saved session, the windows loaded)
+            let cases = [
+                (
+                    "its tab is gone",
+                    "UPDATE windows SET tab_id = 999 WHERE tab_id IS NOT NULL".to_string(),
+                    mains.clone(),
+                ),
+                (
+                    "its tab is its Space's shown tab",
+                    format!("UPDATE windows SET tab_id = {} WHERE tab_id IS NOT NULL", shown.0),
+                    mains.clone(),
+                ),
+                (
+                    "a second window on the same tab",
+                    format!(
+                        "INSERT INTO windows(id, position, space_id, tab_id) VALUES (9, 9, {}, {})",
+                        space.0, tab.0
+                    ),
+                    m.windows.clone(),
+                ),
+                (
+                    "no Main window left: one on the active Space, below the Popup",
+                    "DELETE FROM windows WHERE tab_id IS NULL".to_string(),
+                    vec![Window::main(WindowId(0), m.active_space()), popup.clone()],
+                ),
+            ];
+            for (case, sql, windows) in cases {
+                store.save_session(&m).await.unwrap();
+                store.conn.execute(sql, ()).await.unwrap();
+                let loaded = store.load_session(now()).await.unwrap();
+                assert_eq!(loaded.windows, windows, "{case}");
+                // the tab stays a tab of its Space either way
+                assert_eq!(loaded.tabs.len(), m.tabs.len(), "{case}");
+                loaded.check().unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn a_v16_session_loads_its_windows_normal_on_no_known_monitor() {
+        run(async {
+            let mut store = Store::connect(":memory:").await.unwrap();
+            migrate::migrate(&mut store.conn, &MIGRATIONS[..16])
+                .await
+                .unwrap();
+            let ap = |m, c| apply(m, c).0;
+            let mut m = ap(
+                rich(),
+                Command::NewWindow {
+                    space: Some(SpaceId(0)),
+                },
+            );
+            m = ap(
+                m,
+                Command::ResizeWindow {
+                    window: WindowId(0),
+                    geometry: Geometry {
+                        width: 800,
+                        height: 600,
+                        pos: Some((10, 20)),
+                        ..Geometry::default()
+                    },
+                },
+            );
+            let tx = store.conn.transaction().await.unwrap();
+            // the v16 writer: today's, with the columns v17 adds dropped after
+            tx.execute_batch(
+                "ALTER TABLE windows ADD COLUMN state TEXT; \
+                 ALTER TABLE windows ADD COLUMN monitor TEXT; \
+                 ALTER TABLE windows ADD COLUMN tab_id INTEGER;",
+            )
+            .await
+            .unwrap();
+            write_model(&tx, &m).await.unwrap();
+            tx.execute_batch(
+                "ALTER TABLE windows DROP COLUMN state; \
+                 ALTER TABLE windows DROP COLUMN monitor; \
+                 ALTER TABLE windows DROP COLUMN tab_id;",
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            assert_same(&loaded, &restored(&m));
+            assert_eq!(
+                loaded.window(WindowId(0)).unwrap().geometry,
+                Some(Geometry {
+                    width: 800,
+                    height: 600,
+                    pos: Some((10, 20)),
+                    state: WindowState::Normal,
+                    monitor: None,
+                })
             );
         });
     }
