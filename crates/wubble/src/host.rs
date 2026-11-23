@@ -57,6 +57,7 @@ mod swipe;
 mod tab_drag;
 mod tasks;
 mod tooltip;
+mod touch;
 mod updates;
 mod videos;
 mod window;
@@ -97,7 +98,7 @@ use wubble_core::region::{Region, next_region};
 use wubble_core::site::SitePermissions;
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
-use wubble_core::touch::InputEvent;
+use wubble_core::touch::{FingerInput, InputEvent};
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -3382,6 +3383,7 @@ impl Host {
         {
             self.follow_desktop();
         }
+        self.input.touching = matches!(event, WindowEvent::Touch(_));
         if let Some(e) = crate::run_state::event_of(event, || {
             window
                 .window()
@@ -3410,6 +3412,7 @@ impl Host {
                     .location
                     .to_logical::<f64>(window.window().scale_factor().into());
                 self.input_kind(InputEvent::Touch { x: at.x, y: at.y });
+                self.touch(&window, t);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical(window.window().scale_factor().into());
@@ -3427,6 +3430,27 @@ impl Host {
                     .pointer_move(position.x, position.y);
                 self.tab_drag_pointer(position.x, position.y, false);
                 self.drag_window_pointer(false);
+                // X11 moves the pointer with a page's finger: no mouse moves for the page beside
+                // its touch.
+                if self.w.fingers.on_page() {
+                    return EventResult::PreventDefault;
+                }
+            }
+            // A touchpad scroll's stop (Wayland's `axis_stop`; X11 and Windows send none, macOS
+            // glides itself): the page glides on. Queued, so the stop frame's own scroll, which
+            // Slint sends after this, comes first.
+            #[cfg(target_os = "linux")]
+            WindowEvent::MouseWheel {
+                phase: slint::winit_030::winit::event::TouchPhase::Ended,
+                ..
+            } => {
+                let id = self.w.id;
+                let _ = slint::invoke_from_event_loop(move || {
+                    crate::with_host_in(id, |host| {
+                        let now = host.fling_now();
+                        host.fling(wubble_core::fling::FlingInput::Lift { now });
+                    })
+                });
             }
             // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
             WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
@@ -3477,9 +3501,11 @@ impl Host {
             WindowEvent::Focused(focused) => {
                 // before Slint sees it: the start page's capsule keeps the bar through it
                 window.set_window_active(*focused);
-                // a page drag inside the window ends with nothing dropped (an OS drag goes on)
+                // a page drag inside the window ends with nothing dropped (an OS drag goes on), and
+                // the pages' fingers are cancelled
                 if !*focused {
                     self.drag_cancelled();
+                    self.fingers(FingerInput::OnScreen(vec![]));
                 }
                 let current = self.model.focused() == self.w.id;
                 if let Some(focused) = input::window_focus(current, *focused) {
@@ -3762,6 +3788,10 @@ impl Host {
     }
 
     pub fn pointer_moved(&mut self, pane: i32, point: Point) {
+        // Slint's mouse made from a finger: the page has the finger as touch (`host/touch.rs`).
+        if self.input.touching {
+            return;
+        }
         if self.drag_pointer(point, false) {
             return;
         }
@@ -3801,6 +3831,9 @@ impl Host {
     }
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {
+        if self.input.touching {
+            return;
+        }
         self.pointer_over_page(false);
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
         self.pace(PaceEvent::Wake);
@@ -3819,35 +3852,28 @@ impl Host {
         pressed: bool,
         point: Point,
     ) {
+        // Slint's press made from a finger lands it on the page, as touch (`host/touch.rs`); the
+        // rest of its mouse input is dropped. A pane that takes no touch only takes the focus.
+        if self.input.touching {
+            if pressed {
+                match crate::shell::tab_id(pane).filter(|&t| self.touchable(t)) {
+                    Some(tab) => self.fingers(FingerInput::Landed {
+                        pane: tab,
+                        point: (point.x, point.y),
+                    }),
+                    None => self.page_pressed(crate::shell::tab_id(pane)),
+                }
+            }
+            return;
+        }
         let Some(button) = input::mouse_button(button) else {
             return;
         };
         if !pressed && self.drag_pointer(point, true) {
             return;
         }
-        if pressed && let Some(window) = self.w.window.upgrade() {
-            self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
-        }
         if pressed {
-            self.tip_dismiss();
-        }
-        if pressed && let Some(tab) = crate::shell::tab_id(pane) {
-            // keys follow the pane that was pressed: the DevTools panel, the peek or a page
-            let to =
-                (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
-            if self.key_pane != to && self.shown_tabs().contains(&tab) {
-                self.key_pane = to;
-                if let Some(window) = self.w.window.upgrade() {
-                    self.sync_focus(&window);
-                }
-            }
-            // a press in the peek stays a peek: its buttons promote it
-            if self.shown() != Some(tab)
-                && !self.model.is_glance(tab)
-                && self.model.window_tabs(self.w.id).contains(&tab)
-            {
-                self.dispatch(Command::ActivateTab(tab));
-            }
+            self.page_pressed(crate::shell::tab_id(pane));
         }
         let sent = if pressed {
             vec![button]
@@ -3864,7 +3890,39 @@ impl Host {
         }
     }
 
+    /// A press on a pane (a button, a finger): autoscroll and tips hear it, a glide stops, and
+    /// the pane takes the keys and becomes the shown tab.
+    fn page_pressed(&mut self, tab: Option<TabId>) {
+        if let Some(window) = self.w.window.upgrade() {
+            self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
+        }
+        self.tip_dismiss();
+        self.fling(wubble_core::fling::FlingInput::Interrupt);
+        let Some(tab) = tab else {
+            return;
+        };
+        // keys follow the pane that was pressed: the DevTools panel, the peek or a page
+        let to =
+            (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
+        if self.key_pane != to && self.shown_tabs().contains(&tab) {
+            self.key_pane = to;
+            if let Some(window) = self.w.window.upgrade() {
+                self.sync_focus(&window);
+            }
+        }
+        // a press in the peek stays a peek: its buttons promote it
+        if self.shown() != Some(tab)
+            && !self.model.is_glance(tab)
+            && self.model.window_tabs(self.w.id).contains(&tab)
+        {
+            self.dispatch(Command::ActivateTab(tab));
+        }
+    }
+
     pub fn pointer_cancelled(&mut self, pane: i32) {
+        if self.input.touching {
+            return;
+        }
         self.input.buttons = Default::default();
         if let Some(view) = self.pane_view(pane) {
             view.capture_lost();
@@ -3873,6 +3931,13 @@ impl Host {
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
         self.hints_scrolled();
+        let now = self.fling_now();
+        self.fling(wubble_core::fling::FlingInput::Scroll {
+            target: (pane, point),
+            dx: dx.into(),
+            dy: dy.into(),
+            now,
+        });
         let (modifiers, precise) = (self.input.modifiers(), self.input.wheel_precise);
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {

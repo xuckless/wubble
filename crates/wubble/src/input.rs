@@ -372,6 +372,9 @@ pub struct InputState {
     /// The last wheel event came from a touchpad (`wheel_is_precise`). True until a wheel
     /// event says otherwise, so scrolls that do not come from a device stay exact.
     pub wheel_precise: bool,
+    /// The raw event Slint is dispatching is a touch: the mouse input it makes of it is the
+    /// finger's, which a page has as touch (`host/touch.rs`), so it never reaches a page.
+    pub touching: bool,
 }
 
 impl Default for InputState {
@@ -385,6 +388,7 @@ impl Default for InputState {
             view_focused: false,
             pointer: None,
             wheel_precise: true,
+            touching: false,
         }
     }
 }

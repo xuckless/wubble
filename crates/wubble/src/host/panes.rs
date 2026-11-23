@@ -14,6 +14,7 @@ use wubble_core::split::{Bow, SPLIT, string_line};
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowId;
+use wubble_engine::input::Point;
 use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
@@ -307,6 +308,15 @@ impl Host {
             ),
         };
         (window.get_content_x() + x, window.get_content_y() + y)
+    }
+
+    /// The window point `at` (logical px) in `tab`'s view: where a drag or a pinch over it is.
+    pub(super) fn page_point(&self, window: &AppWindow, tab: TabId, at: (f32, f32)) -> Point {
+        let (x, y) = self.view_origin(window, tab);
+        Point {
+            x: at.0 - x,
+            y: at.1 - y,
+        }
     }
 
     /// One frame of `dt` seconds of the split's strings. What they settled is dispatched later,

@@ -4,17 +4,25 @@
 //! (`swipe-chip.slint`) following the fingers, unless the page scrolls sideways with it.
 //! Wayland reports both through `crate::wl`; macOS pinch is winit's `PinchGesture`. Nothing
 //! reports a history swipe elsewhere yet (macOS's would be winit's `PanGesture`), so its half is
-//! unused there.
+//! unused there. A two-finger scroll glides on after the fingers lift (`wubble_core::fling`)
+//! where the platform says when they lift and does not glide itself: Wayland.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use std::time::Duration;
+
+use wubble_core::fling::{self, Fling, FlingEffect, FlingInput};
 use wubble_core::gesture::{self, PinchInput, Swipe, SwipeEffect, SwipeInput};
 use wubble_core::motion;
 use wubble_core::tab::TabId;
-use wubble_engine::input::Point;
+use wubble_engine::input::{Modifiers, Point};
 use wubble_engine::pinch::Gesture;
+use wubble_gfx::pacing::PaceEvent;
 use wubble_ui::AppWindow;
 
 use super::Host;
+
+/// How often a glide scrolls the page: a 120 Hz frame.
+const FLING_TICK: Duration = Duration::from_micros(8333);
 
 /// How far the chip travels in from the edge at full progress (logical px) before the
 /// rubber band, and the band's asymptote (the design's seams and scroll ends, motion.rs).
@@ -28,6 +36,10 @@ pub(super) struct Gestures {
     swipe: Swipe,
     /// The page a swipe is over, and its root's horizontal scroll at the begin.
     page: Option<(TabId, f64)>,
+    /// The two-finger scroll and its glide, on a pane (a shell pane id) at a point in it.
+    fling: Fling<(i32, Point)>,
+    /// Ticks the glide while it runs.
+    fling_timer: slint::Timer,
 }
 
 /// The chip's travel in from the edge at `progress`: straight to the mark, rubber-banded past
@@ -72,14 +84,7 @@ impl Host {
         let (tab, at) = match self.input.pointer {
             Some(p) => {
                 let tab = self.pane_under(window, (p.x, p.y))?;
-                let (x, y) = self.view_origin(window, tab);
-                (
-                    tab,
-                    Point {
-                        x: p.x - x,
-                        y: p.y - y,
-                    },
-                )
+                (tab, self.page_point(window, tab, (p.x, p.y)))
             }
             None => {
                 let tab = self.shown()?;
@@ -91,8 +96,52 @@ impl Host {
                 (tab, at)
             }
         };
-        let page = !self.snapshots.standing_in(tab) && !self.agent_drives(tab);
-        (page && self.tab_view(tab).is_some()).then_some((tab, at))
+        self.touchable(tab).then_some((tab, at))
+    }
+
+    /// Whether `tab`'s page takes a pinch or a finger: it has a view, is not showing its
+    /// snapshot and no agent session drives it (its coordinates are the agent's).
+    pub(super) fn touchable(&mut self, tab: TabId) -> bool {
+        !self.snapshots.standing_in(tab) && !self.agent_drives(tab) && self.tab_view(tab).is_some()
+    }
+
+    /// The glide's clock, ms.
+    pub(super) fn fling_now(&self) -> f64 {
+        self.input.now().as_secs_f64() * 1000.0
+    }
+
+    /// One input of the two-finger scroll's glide, and what it says to do.
+    pub(super) fn fling(&mut self, input: FlingInput<(i32, Point)>) {
+        let (next, effects) = fling::transition(std::mem::take(&mut self.gestures.fling), input);
+        self.gestures.fling = next;
+        for effect in effects {
+            match effect {
+                // Plain scrolls: a key held now does not make the glide a zoom.
+                FlingEffect::Scroll {
+                    target: (pane, point),
+                    dx,
+                    dy,
+                } => {
+                    self.pace(PaceEvent::Wake);
+                    if let Some(view) = self.pane_view(pane) {
+                        view.wheel(point, dx as f32, dy as f32, true, &Modifiers::default());
+                    }
+                }
+                // On whichever window is focused: a tick always reaches the glide, which ends itself
+                // (its page just stops getting it once no window shows it).
+                FlingEffect::Start => {
+                    self.gestures
+                        .fling_timer
+                        .start(slint::TimerMode::Repeated, FLING_TICK, || {
+                            crate::with_host(|host| {
+                                let now = host.fling_now();
+                                host.fling(FlingInput::Tick { now });
+                            })
+                        });
+                }
+                FlingEffect::Stop => self.gestures.fling_timer.stop(),
+            }
+        }
     }
 
     /// A swipe's input; a begin `at` a window point (a two-finger scroll) counts only over a
@@ -143,7 +192,11 @@ impl Host {
                     window.set_swipe_shift(chip_shift(p, overshoot) as f32);
                 }
                 SwipeEffect::Hide => window.set_swipe_progress(0.0),
-                SwipeEffect::Go(action) => self.perform(action),
+                // the page that comes does not glide on with the swipe
+                SwipeEffect::Go(action) => {
+                    self.fling(FlingInput::Interrupt);
+                    self.perform(action);
+                }
             }
         }
     }

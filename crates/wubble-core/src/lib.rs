@@ -23,6 +23,7 @@ pub mod drag;
 pub mod extensions;
 pub mod external;
 pub mod favicon;
+pub mod fling;
 pub mod gesture;
 pub mod glass;
 pub mod gpu;

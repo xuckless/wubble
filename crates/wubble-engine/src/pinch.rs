@@ -79,12 +79,8 @@ impl Answer {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TouchKind {
-    Press,
-    Move,
-    Cancel,
-}
+// The fingers go down, move and are cancelled (never released: no tap).
+pub use wubble_core::touch::TouchKind;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {

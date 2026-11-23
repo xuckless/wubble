@@ -113,6 +113,8 @@ pub(crate) struct WindowHost {
     pub(super) pace: Pace,
     /// The page's pointer shape on the window.
     pub(super) cursor: super::cursor::PageCursor,
+    /// The touchscreen's fingers down on this window's pages (`host/touch.rs`).
+    pub(super) fingers: wubble_core::touch::Fingers,
 }
 
 impl WindowHost {
@@ -151,6 +153,7 @@ impl WindowHost {
             drawn: Default::default(),
             pace: Pace::default(),
             cursor: Default::default(),
+            fingers: Default::default(),
         }
     }
 }
