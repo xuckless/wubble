@@ -965,6 +965,7 @@ impl Host {
         let asker = Asker {
             key_page: self.key_page() == Some(tab),
             window_focused: self.input.window_focused && self.model.focused() == self.w.id,
+            page_keyboard: self.input.view_focused,
             frame_focused: self
                 .tab_view(tab)
                 .and_then(|v| v.focused_frame())

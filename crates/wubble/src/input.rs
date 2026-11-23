@@ -366,7 +366,7 @@ pub struct InputState {
     epoch: Instant,
     pub window_focused: bool,
     /// What the view was last told about keyboard focus.
-    view_focused: bool,
+    pub view_focused: bool,
     /// The pointer in window logical pixels, while it is over the window.
     pub pointer: Option<slint::LogicalPosition>,
     /// The last wheel event came from a touchpad (`wheel_is_precise`). True until a wheel

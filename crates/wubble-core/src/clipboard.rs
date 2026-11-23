@@ -152,6 +152,8 @@ pub struct Asker {
     pub key_page: bool,
     /// That window has the keyboard.
     pub window_focused: bool,
+    /// The page has the window's keyboard, not the shell (its own field, the command bar).
+    pub page_keyboard: bool,
     /// It is CEF's focused frame of that page.
     pub frame_focused: bool,
     /// A read for its tab is still being answered ([`in_flight`]).
@@ -164,7 +166,8 @@ pub struct Asker {
 /// page's script did to the bridge. One read at a time per tab, so no page holds the window
 /// waiting on reads.
 pub fn admit(ask: Ask, asker: Asker) -> bool {
-    let present = asker.key_page && asker.window_focused && asker.frame_focused;
+    let present =
+        asker.key_page && asker.window_focused && asker.page_keyboard && asker.frame_focused;
     match ask {
         Ask::Write | Ask::Primary => present,
         Ask::Read => present && !asker.reading,
@@ -445,17 +448,18 @@ mod tests {
     fn only_the_frame_the_user_is_in_reaches_the_clipboard() {
         // Every fact: a write or the primary selection needs the three, a read also no read
         // of its tab in flight.
-        for bits in 0u8..16 {
+        for bits in 0u8..32 {
             let asker = Asker {
-                key_page: bits & 8 != 0,
-                window_focused: bits & 4 != 0,
+                key_page: bits & 16 != 0,
+                window_focused: bits & 8 != 0,
+                page_keyboard: bits & 4 != 0,
                 frame_focused: bits & 2 != 0,
                 reading: bits & 1 != 0,
             };
             for (ask, allowed) in [
-                (Ask::Write, bits >> 1 == 0b111),
-                (Ask::Primary, bits >> 1 == 0b111),
-                (Ask::Read, bits == 0b1110),
+                (Ask::Write, bits >> 1 == 0b1111),
+                (Ask::Primary, bits >> 1 == 0b1111),
+                (Ask::Read, bits == 0b11110),
             ] {
                 assert_eq!(admit(ask, asker), allowed, "{ask:?} {asker:?}");
             }
