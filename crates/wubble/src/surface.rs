@@ -290,10 +290,6 @@ pub struct Surfaces {
     pub permission: PermissionPrompt,
     pub auth: Auth,
     pub error: PageError,
-    /// The main frame's id and the focused field's `<datalist>` offer, while it makes one.
-    /// Nothing shows it yet (a list that takes no focus, under `Offer::rect`; the pick goes
-    /// back as `datalist::pick_message` on `FrameChannel::Datalist`).
-    pub datalist: Option<(String, wubble_core::datalist::Offer)>,
 }
 
 impl Surfaces {
@@ -321,7 +317,6 @@ impl Surfaces {
             permission,
             auth,
             error,
-            datalist: None,
         }
     }
 }
@@ -384,11 +379,6 @@ pub enum Routed {
     },
     /// A busy probe's report from one of the page's frames (`host/busy.rs`).
     Probe {
-        frame: wubble_engine::page::FrameInfo,
-        report: String,
-    },
-    /// The focused field's `<datalist>` offer from one of the page's frames.
-    Datalist {
         frame: wubble_engine::page::FrameInfo,
         report: String,
     },
@@ -513,7 +503,6 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
         PageEvent::FrameMessage { frame, text } => Routed::Frame { frame, text },
         PageEvent::Probe { frame, report } => Routed::Probe { frame, report },
-        PageEvent::Datalist { frame, report } => Routed::Datalist { frame, report },
         // The built-ins' answers: `host/builtins.rs` takes them before routing.
         PageEvent::CdpReply { .. }
         | PageEvent::EvalResult { .. }
@@ -1065,7 +1054,6 @@ mod tests {
                 proxy: false,
             }),
             error: PageError::Crashed,
-            datalist: None,
         };
         assert!(matches!(s.menu, Menu::Open { .. }));
         let gone = s.view_gone();

@@ -1,7 +1,9 @@
 //! `<datalist>` suggestions for the focused field. Chromium shows a list under the field as the
-//! user types; windowless CEF draws none, so wubble-helper's `datalist.js` reports the
-//! focused field's options and box ([`parse`]), and the host shows the ones that match what is
-//! typed ([`rows`]) and sends the pick back ([`pick_message`]). Pure.
+//! user types; windowless CEF draws none, so a page script reports the focused field's options
+//! and box ([`parse`]), and the host shows the ones that match what is typed ([`rows`]) and
+//! sends the pick back ([`pick_message`]). Pure. Nothing runs it yet: the list under the field
+//! is not in the kit, so the page script (wubble-helper `datalist.js`, commit 2b5733a) and its
+//! frame channel wait for it.
 //!
 //! Which options show is Chromium's `HTMLInputElement::FilteredDataListOptions`
 //! (BSD-3-Clause): everything while the field is empty, else the options whose value or label
