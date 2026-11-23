@@ -390,3 +390,11 @@ Chrome draws a page's drag with the image Blink made for it (a grey label for a 
 |---|---|---|---|
 | Drag ghost (`kit/chrome/drag-ghost.slint`) | Chromium's drag image at the pointer, its hotspot under it, untouched; without one, the tab drag's ghost row (shell fill, radius sm, `.wb-tab-drag`'s shadow) holding the title in `wb-tab` and under it the URL in `wb-cmd-hint` mist, as Chromium's label orders them; a dragged tab's ghost is the same piece with the title alone (moved out of app.slint) | `.wb-tab-drag`, the tab row's text | gallery drag-ghost-label, drag-ghost-image; `--smoke dnd --shot-dir` (Chromium's own images) |
 | Drop mark (`kit/chrome/drop-mark.slint`) | the split drop zone's box (ink .12 fill, ink .35 rim of 2, radius md; moved out of app.slint) over the address pill, the New tab row, the open command bar's field, the bookmarks page and a bookmarks folder row (`ListRow` `drop-target`); its rim alone as a 2 px line in the tab list's gap; a Space row is lit as the tab drag lights it | the split drop zone | gallery drag-ghost-tab-list, drag-ghost-bar |
+
+## Page layer hole (page-layer stage 2)
+
+The new primitive the owner approved on 2026-11-23. The web design has no counterpart: a page there is the browser's own. It has no look: what shows is the page itself, from its OS layer under the shell (`--page-layer=window`, macOS).
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Page hole (`kit/material/page-hole.slint`, `PageHole` and its `PageHoleSource` global; composed by `kit/chrome/split-view.slint` as `pane-hole`) | the pane's frame image replaced by an image the vendored renderer clears with (`BlendMode::Clear`, Skia change 3): the pane's fill and the window's ground, glass and scene under it removed, in the pane's own clip (`Radius.md`, none in page fullscreen), the status bubble and the close button still drawn over it; the page's layer behind it has the same corner radius from the same generated token. Drawn only while the pane's page is on its layer (`SplitPane.hole`) | `SplitView`'s pane (`webview.tsx` `.wb-view`), `Radius.md` | none: the hole is transparent in a shot (`--shot` and the gallery hold the page on the shell, `Need::Pixels`); judged on the Mac with `--page-layer=window` |

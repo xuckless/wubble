@@ -1086,6 +1086,12 @@ impl WindowFactory {
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
+        // the page hole's image (kit `PageHole`), when the mode's layers sit under the shell
+        if page_layer().row().order == wubble_core::page_layer::Order::Below {
+            window
+                .global::<wubble_ui::PageHoleSource>()
+                .set_image(i_slint_renderer_skia::hole::image());
+        }
         if let Some(g) = &geometry {
             host::place_window(&window, g);
         }

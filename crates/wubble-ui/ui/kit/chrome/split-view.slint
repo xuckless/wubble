@@ -10,6 +10,7 @@ import { StatusBubble } from "../../components/status-bubble.slint";
 import { IconButton } from "../controls/icon-button.slint";
 import { Glyph } from "../controls/icon.slint";
 import { SeamStrip, SeamKind } from "../controls/seam.slint";
+import { PageHole } from "../material/page-hole.slint";
 
 // @source slint-split-view
 // Split view (wubble_core::split): 2–3 pages side by side, divided by rubber strings. Rust owns every
@@ -60,6 +61,10 @@ export struct SplitPane {
     status-shown: bool,
     status-host: string,
     status-rest: string,
+    // wubble change: the page shows on its own OS layer under the shell (wubble_core::page_layer,
+    // `--page-layer=window`): the pane is a hole (kit PageHole) in place of its frame, its corners
+    // the pane's; what the pane draws over its frame (the status bubble, the close button) stays.
+    hole: bool,
 }
 
 export struct SplitSeam {
@@ -116,7 +121,13 @@ export component SplitView inherits Rectangle {
             source-clip-width: p.clip-width;
             source-clip-height: p.clip-height;
             image-fit: fill;
-            visible: !parent.masked;
+            visible: !parent.masked && !p.hole;
+        }
+        // wubble change: the pane's fill and everything under it cleared, in the pane's clip
+        pane-hole := PageHole {
+            width: parent.width;
+            height: parent.height;
+            visible: !parent.masked && p.hole;
         }
         pane-prev := Image {
             x: 0;
