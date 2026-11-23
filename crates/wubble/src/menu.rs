@@ -206,8 +206,7 @@ impl Ctx<'_> {
     fn image_search(&self) -> bool {
         self.image()
             && self.nav.image.is_some()
-            && (self.menu.media_url.starts_with("https://")
-                || self.menu.media_url.starts_with("http://"))
+            && wubble_core::url::is_recordable(&self.menu.media_url)
     }
     /// The `view-source:` URL of the frame clicked in, when that is a frame other than the
     /// page's own and one Chromium can show the source of (a web or file frame, not

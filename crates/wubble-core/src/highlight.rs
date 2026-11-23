@@ -24,7 +24,7 @@ fn encode(text: &str) -> String {
 /// `page_url` with a text fragment for `selection`; `None` for a page that is not `http(s)` or
 /// a selection with no text. Any fragment the URL had is replaced, as Chromium does.
 pub fn link_to_highlight(page_url: &str, selection: &str) -> Option<String> {
-    if !(page_url.starts_with("http://") || page_url.starts_with("https://")) {
+    if !crate::url::is_recordable(page_url) {
         return None;
     }
     let base = page_url.split('#').next().unwrap_or(page_url);
