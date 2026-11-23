@@ -760,7 +760,7 @@ pub enum CursorShape {
     Grabbing,
     ZoomIn,
     ZoomOut,
-    /// wubble change (58): the rest of the CSS cursors Chromium tells apart
+    /// wubble change (60): the rest of the CSS cursors Chromium tells apart
     /// (CEF `CT_COLUMNRESIZE`, `CT_ROWRESIZE`, `CT_NODROP`, `CT_COPY`,
     /// `CT_ALIAS`, `CT_CELL`, `CT_CONTEXTMENU`, `CT_VERTICALTEXT`) and the
     /// edge resizes (`CT_EASTRESIZE` and the other seven).
@@ -780,7 +780,7 @@ pub enum CursorShape {
     ResizeNw,
     ResizeSe,
     ResizeSw,
-    /// wubble change (58): a page's own `cursor: url(...)` image.
+    /// wubble change (60): a page's own `cursor: url(...)` image.
     Image(CursorImage),
     /// wubble change (32): middle-click autoscroll's cursors (CEF `CT_*PANNING`).
     Panning(Panning),
@@ -789,7 +789,7 @@ pub enum CursorShape {
     Custom(String),
 }
 
-/// wubble change (58): a page's cursor image (CEF's `CefCursorInfo`), as the
+/// wubble change (60): a page's cursor image (CEF's `CefCursorInfo`), as the
 /// straight-alpha RGBA pixels windowing toolkits take (CEF's are premultiplied
 /// BGRA). `width`/`height` and the hotspot are in device pixels, so the image
 /// is already scaled for the display CEF was told about.

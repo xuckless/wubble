@@ -35,7 +35,7 @@ impl LatestCursor {
 /// `POINTER` is the ordinary arrow, while `CursorShape::Pointer` is the CSS
 /// `pointer`, i.e. the link hand, which CEF calls `HAND`.
 ///
-/// wubble change (58): every type Chromium sends has its own shape (the
+/// wubble change (60): every type Chromium sends has its own shape (the
 /// table's rows follow `ui/base/cursor/mojom/cursor_type.mojom`), and
 /// `CUSTOM` carries the page's image from `info`.
 #[cfg(feature = "cef-runtime")]
@@ -113,7 +113,7 @@ pub(crate) fn from_cef(type_: cef::CursorType, info: Option<&cef::CursorInfo>) -
     }
 }
 
-/// wubble change (58): the page's `cursor: url()` image. CEF's buffer is
+/// wubble change (60): the page's `cursor: url()` image. CEF's buffer is
 /// `size.width * size.height * 4` bytes of premultiplied BGRA, upper-left
 /// origin (`cef_cursor_info_t`); `None` when it is empty or too big for
 /// winit's `u16` sizes.

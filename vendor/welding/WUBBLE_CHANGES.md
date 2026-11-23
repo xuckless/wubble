@@ -561,7 +561,7 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (screen DIP), as `OpenedWindow::position` already had. Test:
     `new_window_tests::position_needs_both_features`.
 
-58. **Every CEF cursor type, and the page's cursor image.** `cursor.rs`:
+60. **Every CEF cursor type, and the page's cursor image.** `cursor.rs`:
     `from_cef(type, info)` is one table of CEF types to shapes instead of an
     if-chain, and `CursorShape` (`surface.rs`) gains `ColResize`, `RowResize`,
     `NoDrop`, `Copy`, `Alias`, `Cell`, `ContextMenu`, `VerticalText` and the
