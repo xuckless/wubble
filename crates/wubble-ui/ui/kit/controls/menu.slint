@@ -485,6 +485,8 @@ export component PointMenu inherits Rectangle {
     callback dismissed();
     // the panel's left edge, after flipping and clamping
     out property <length> panel-x: menu.panel-x;
+    // the menu is drawn: open, or its exit not yet over (Menu `mounted`)
+    out property <bool> mounted: menu.mounted;
 
     property <[MenuEntry]> rows;
     property <bool> rows-icons;

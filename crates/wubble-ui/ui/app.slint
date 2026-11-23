@@ -697,10 +697,10 @@ export component AppWindow inherits Window {
         glance: glance-ui.visible,
         autofill-menu: autofill-ui.menu-mounted,
         autofill-prompt: autofill-ui.prompt-mounted,
-        video-strip: root.video-strip-mounted,
-        video-tab: root.video-tab-mounted,
-        video-speeds: root.video-speeds-mounted,
-        pip-strip: root.pip-strip-mounted,
+        video-strip: !root.pip && video-ui.strip-mounted,
+        video-tab: !root.pip && video-ui.tab-mounted,
+        video-speeds: !root.pip && video-ui.speeds-mounted,
+        pip-strip: root.pip && pip-ui.mounted,
         reader: reader-ui.mounted,
         boost: boost-ui.visible,
     };
@@ -708,11 +708,6 @@ export component AppWindow inherits Window {
     changed mounted => {
         root.mounted-changed();
     }
-    // the video strip's and the Pip strip's, which sit under an `if`: their kit reports them
-    property <bool> video-strip-mounted;
-    property <bool> video-tab-mounted;
-    property <bool> video-speeds-mounted;
-    property <bool> pip-strip-mounted;
     in property <FindView> find;
     callback find-edited(string);
     // true: next match, false: previous.
@@ -1327,35 +1322,30 @@ export component AppWindow inherits Window {
                 source: root.over-card;
                 image-fit: fill;
             }
-            if !root.pip: VideoControls {
-                changed strip-mounted => {
-                    root.video-strip-mounted = self.strip-mounted;
-                }
-                changed tab-mounted => {
-                    root.video-tab-mounted = self.tab-mounted;
-                }
-                changed speeds-mounted => {
-                    root.video-speeds-mounted = self.speeds-mounted;
-                }
-                video: root.video;
-                rates: root.video-rates;
-                pointer-in: root.pointer-in;
-                pointer-x: root.pointer-x;
-                pointer-y: root.pointer-y;
-                command(name, value) => {
-                    root.video-command(name, value);
-                }
-                save(x, y) => {
-                    root.video-save(x, y);
-                }
-                hovered(over) => {
-                    root.video-hovered(over);
+            // built in every window (so `mounted` can name it), drawn outside the Pip window only
+            Rectangle {
+                visible: !root.pip;
+                video-ui := VideoControls {
+                    video: root.video;
+                    rates: root.video-rates;
+                    // never under the pointer where it is not drawn (its hover is by place too)
+                    pointer-in: root.pointer-in && !root.pip;
+                    pointer-x: root.pointer-x;
+                    pointer-y: root.pointer-y;
+                    command(name, value) => {
+                        root.video-command(name, value);
+                    }
+                    save(x, y) => {
+                        root.video-save(x, y);
+                    }
+                    hovered(over) => {
+                        root.video-hovered(over);
+                    }
                 }
             }
-            if root.pip: PipControls {
-                changed mounted => {
-                    root.pip-strip-mounted = self.mounted;
-                }
+            // built in every window (so `mounted` can name it), drawn in the Pip window only
+            pip-ui := PipControls {
+                visible: root.pip;
                 paused: root.video.paused;
                 shown: root.pip-strip;
                 hovered(on) => {

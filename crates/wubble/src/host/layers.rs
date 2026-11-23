@@ -130,7 +130,7 @@ impl Host {
             add(Kind::Status, Some(tab));
         }
         // ----- what the kit still draws: open, or leaving (the command bar's exit is the
-        // driver's, the menu's the controls registry's, both seen in what they report)
+        // driver's, seen in its state)
         let m = window.get_mounted();
         #[rustfmt::skip]
         let drawn = [
