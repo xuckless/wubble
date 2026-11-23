@@ -1082,6 +1082,7 @@ impl Host {
     // ----- the toast's button
 
     pub(crate) fn toast_acted(&mut self) {
+        self.toast_hide();
         match self.videos.toast.take() {
             Some(ToastAct::Undo(tab)) => self.sponsor_undo(tab),
             Some(ToastAct::AskSponsor(_)) => {
@@ -1095,6 +1096,7 @@ impl Host {
     }
 
     pub(crate) fn toast_closed(&mut self) {
+        self.toast_hide();
         if let Some(ToastAct::AskSponsor(_)) = self.videos.toast.take() {
             self.videos.asking = false;
             self.write_setting(defs::SPONSOR_ASKED.key, "1");
@@ -1351,7 +1353,7 @@ impl Host {
         let window = self.w.window.upgrade();
         let toast = window
             .as_ref()
-            .map(|w| (w.get_toast_serial(), w.get_toast_text().to_string()))
+            .map(|w| (self.toast_serial, w.get_toast_text().to_string()))
             .unwrap_or_default();
         // what the pointer (`video_smoke_pointer`, the same window) finds: `VideoControls`
         // shows only over a video with a size

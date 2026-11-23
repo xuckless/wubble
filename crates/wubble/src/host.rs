@@ -488,7 +488,7 @@ pub struct Host {
     settings: settings::SettingsPage,
     /// The history, bookmarks and passwords pages.
     pages: pages::PagesState,
-    /// Bumped per notice and per find-bar focus request.
+    /// Bumped per notice shown (`--smoke video` sees a new one) and per find-bar focus request.
     toast_serial: i32,
     find_focus: i32,
     /// The zoom `--smoke page` passed with.

@@ -17,9 +17,9 @@ fn element(app: &AppWindow, id: &str) -> ElementHandle {
 }
 
 /// (pill x, pill right, text x, text right, pill height, text height)
-fn shown(app: &AppWindow, text: &str, serial: i32) -> [f32; 6] {
+fn shown(app: &AppWindow, text: &str) -> [f32; 6] {
     app.set_toast_text(text.into());
-    app.set_toast_serial(serial);
+    app.set_toast_shown(true);
     mock_elapsed_time(Duration::from_millis(600));
     let pill = element(app, "AToast::pill");
     let label = element(app, "AToast::label");
@@ -41,15 +41,13 @@ fn the_toast_holds_its_text() {
     let app = AppWindow::new().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let window_width = 1280.0;
-    let mut serial = 0;
     for text in [
         "125%",
         "Screenshot saved to Downloads and copied",
         "Video controls hidden on www.example.com. Show them again in Settings, under \
          \"Sites without video controls\".",
     ] {
-        serial += 1;
-        let [px, pr, lx, lr, ph, lh] = shown(&app, text, serial);
+        let [px, pr, lx, lr, ph, lh] = shown(&app, text);
         assert!(lr - lx > 0.0, "{text:?}: the text has no width");
         assert!(
             px <= lx && lr <= pr,

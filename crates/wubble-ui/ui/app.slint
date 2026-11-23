@@ -677,15 +677,12 @@ export component AppWindow inherits Window {
     // true: next match, false: previous.
     callback find-step(bool);
     callback find-closed();
-    // A brief notice (zoom level, "Esc to exit"); bump the serial to show it.
+    // A brief notice (zoom level, "Esc to exit"), shown while `toast-shown`: the host times it.
     in property <string> toast-text;
-    in property <int> toast-serial;
-    // A notice with a button (`Toast`): its label, whether it waits for an answer, and a serial
-    // that takes any notice away.
+    in property <bool> toast-shown;
+    // A notice with a button (`Toast`): its label, and whether it waits for an answer.
     in property <string> toast-action;
     in property <bool> toast-sticky;
-    in property <int> toast-hide-serial;
-    in property <duration> toast-action-shown;
     callback toast-acted();
     callback toast-closed();
     // The visible page's video controls (wubble_core::video) and the speed menu's rows.
@@ -1404,16 +1401,14 @@ export component AppWindow inherits Window {
             // A brief notice at the page's top; one that waits for an answer (SponsorBlock's
             // question, its Undo) at its bottom, as the reader's controls: a top one sat on the
             // page's own top bar (a site's search field) for as long as it waited.
-            Toast {
+            toast-ui := Toast {
                 x: (parent.width - self.width) / 2;
                 y: root.toast-action == "" ? Space.s4 : parent.height - self.height - Space.s4;
                 widest: min(Shell.toast-max-width, parent.width - 2 * Space.s4);
                 text: root.toast-text;
-                serial: root.toast-serial;
+                shown: root.toast-shown;
                 action: root.toast-action;
                 sticky: root.toast-sticky;
-                hide-serial: root.toast-hide-serial;
-                action-shown: root.toast-action-shown;
                 acted => {
                     root.toast-acted();
                 }
