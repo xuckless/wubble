@@ -247,8 +247,7 @@ impl Host {
                 };
                 let nav = menu::NavFlags {
                     back: true,
-                    forward: false,
-                    search: None,
+                    ..menu::NavFlags::default()
                 };
                 surfaces.menu = Menu::Open {
                     id: FAKE,

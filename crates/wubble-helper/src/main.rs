@@ -19,6 +19,9 @@ const PROBES: (&str, &str) = ("probes", include_str!("probes.js"));
 /// `cosmetic.js`: element hiding for the content blocker (browser side wubble-engine
 /// `cosmetic.rs`; MPL-2.0 parts ported from Brave, see the file).
 const COSMETIC: (&str, &str) = ("cosmetic", include_str!("cosmetic.js"));
+/// `datalist.js`: the focused field's `<datalist>` options, for the list wubble shows under it
+/// (browser side `wubble_core::datalist`).
+const DATALIST: (&str, &str) = ("datalist", include_str!("datalist.js"));
 /// `clipboard.js`: the page clipboard through the window, only when the browser
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
@@ -60,7 +63,7 @@ fn main() {
     // `--no-sandbox` on to every subprocess.
     let sandbox = CefSandboxMode::for_direct_entry(switch(CefSandboxMode::NO_SANDBOX_SWITCH));
     let clipboard = switch(CLIPBOARD_SWITCH);
-    let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES, COSMETIC]
+    let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES, COSMETIC, DATALIST]
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
         .collect();
@@ -79,7 +82,7 @@ mod tests {
 
     #[test]
     fn every_script_is_one_function_expression_on_its_channel() {
-        let script = compose(&[AUTOFILL, ZOOM, PROBES, COSMETIC, CLIPBOARD]);
+        let script = compose(&[AUTOFILL, ZOOM, PROBES, COSMETIC, CLIPBOARD, DATALIST]);
         assert!(script.starts_with("(function (send, register) {"));
         assert!(script.trim_end().ends_with("})"));
         assert!(script.contains("[\"autofill\", "));
@@ -87,6 +90,7 @@ mod tests {
         assert!(script.contains("[\"zoom\", "));
         assert!(script.contains("[\"probes\", "));
         assert!(script.contains("[\"cosmetic\", "));
+        assert!(script.contains("[\"datalist\", "));
         // No script ends in a statement terminator inside the array.
         assert!(!script.contains("});,"));
     }

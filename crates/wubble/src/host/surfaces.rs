@@ -16,6 +16,7 @@ use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowTarget;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
 use wubble_engine::page::{ClipboardRequest, PageEvent, Rect, RequestId};
@@ -120,10 +121,11 @@ impl Host {
                     .map_or(NavFlags::default(), |v| NavFlags {
                         back: v.nav().page.can_go_back,
                         forward: v.nav().page.can_go_forward,
-                        search: None,
+                        ..NavFlags::default()
                     });
                 let nav = NavFlags {
                     search: self.search_engine.map(|e| e.info().name),
+                    image: self.search_engine.and_then(|e| e.info().image),
                     ..nav
                 };
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
@@ -178,6 +180,8 @@ impl Host {
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => {
+                // a new document starts its reports from nothing
+                self.surfaces.entry(tab).or_default().datalist = None;
                 let shown = self.shown();
                 self.overlay_event(window, shown, OverlayEvent::Navigated(tab));
                 self.apply_permission(tab, PermissionEvent::PageChanged);
@@ -185,6 +189,15 @@ impl Host {
             }
             Routed::ImeBounds(rect) if self.key_page() == Some(tab) => {
                 place_candidates(window, self.view_origin(window, tab), rect)
+            }
+            Routed::TextInput(on) => {
+                let surfaces = self.surfaces.entry(tab).or_default();
+                if surfaces.text_input.replace(on) != Some(on)
+                    && self.key_page() == Some(tab)
+                    && window.get_web_focused()
+                {
+                    self.sync_ime(window);
+                }
             }
             Routed::Dismissed(ids) => {
                 self.apply_dialog(tab, DialogEvent::Dismissed(ids.clone()));
@@ -208,6 +221,12 @@ impl Host {
                 self.tasks.frame_seen(tab, &frame);
                 self.autofill_message(tab, frame, &text);
             }
+            // Only the main frame reports one (`datalist.js`): its box is the view's.
+            Routed::Datalist { frame, report } if frame.is_main => {
+                self.surfaces.entry(tab).or_default().datalist =
+                    wubble_core::datalist::parse(&report).map(|offer| (frame.id, offer));
+            }
+            Routed::Datalist { .. } => {}
             Routed::Probe { frame, report } => {
                 self.tasks.frame_seen(tab, &frame);
                 if let Some(keys) = report.strip_prefix(super::busy::PROBE_PREFIX) {
@@ -441,6 +460,22 @@ impl Host {
                 }
                 MenuEffect::Run(MenuCommand::OpenInNewTab(url)) => {
                     self.open_routed(url, Some(tab));
+                }
+                MenuEffect::Run(MenuCommand::OpenInNewWindow(url)) => {
+                    let before = self.model.visible_tab();
+                    self.open_routed(url, Some(tab));
+                    // A link another app takes opens no tab: only a new one is torn out.
+                    if let Some(new) = self.model.visible_tab().filter(|t| Some(*t) != before) {
+                        self.dispatch(Command::MoveTabToWindow {
+                            tab: new,
+                            to: WindowTarget::New,
+                        });
+                    }
+                }
+                MenuEffect::Run(MenuCommand::FrameScript { frame, script }) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.run_script_in(&frame, script);
+                    }
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),
@@ -843,6 +878,20 @@ impl Host {
     }
 
     // ----- IME
+
+    /// Switches the window's input method for the key page: on while its focused node takes
+    /// text (or CEF has not said yet), off elsewhere, so a password or a button gets no
+    /// preedit. Call only while the page has the keyboard: Slint runs it for its own fields.
+    pub(super) fn sync_ime(&self, window: &AppWindow) {
+        let on = self
+            .key_page()
+            .and_then(|t| self.surfaces.get(&t))
+            .and_then(|s| s.text_input)
+            .unwrap_or(true);
+        window
+            .window()
+            .with_winit_window(|w| w.set_ime_allowed(on));
+    }
 
     /// winit's IME events while the page has the keyboard; false when they
     /// are Slint's (a shell text field has it).

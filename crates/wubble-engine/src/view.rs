@@ -1949,6 +1949,10 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
             frame,
             report: body.to_owned(),
         },
+        FrameChannel::Datalist => PageEvent::Datalist {
+            frame,
+            report: body.to_owned(),
+        },
         FrameChannel::Clipboard => PageEvent::Clipboard {
             frame: frame.id,
             request: clipboard_request(body)?,
@@ -2246,6 +2250,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             one(Route::Page(PageEvent::DragCursor(DragOps(operation.0))))
         }
         E::ScrollOffset { x, .. } => one(Route::ScrollX(x)),
+        E::TextInput { wanted } => one(Route::Page(PageEvent::TextInput(wanted))),
         E::AccessibilityTree { json } => one(Route::Page(PageEvent::AxTree(json))),
         E::AccessibilityLocation { json } => one(Route::Page(PageEvent::AxLocation(json))),
         _ => vec![],
@@ -2762,6 +2767,7 @@ mod tests {
             FrameChannel::Zoom,
             FrameChannel::Probes,
             FrameChannel::Cosmetic,
+            FrameChannel::Datalist,
         ] {
             assert_eq!(
                 FrameChannel::split(&channel.join("x\ny")),

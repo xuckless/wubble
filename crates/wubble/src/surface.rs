@@ -290,6 +290,13 @@ pub struct Surfaces {
     pub permission: PermissionPrompt,
     pub auth: Auth,
     pub error: PageError,
+    /// Whether the focused node takes text, as CEF last said; `None` before it did (the input
+    /// method stays on then: CEF reports changes, and a field may have focus from the start).
+    pub text_input: Option<bool>,
+    /// The main frame's id and the focused field's `<datalist>` offer, while it makes one.
+    /// Nothing shows it yet (a list that takes no focus, under `Offer::rect`; the pick goes
+    /// back as `datalist::pick_message` on `FrameChannel::Datalist`).
+    pub datalist: Option<(String, wubble_core::datalist::Offer)>,
 }
 
 impl Surfaces {
@@ -317,6 +324,8 @@ impl Surfaces {
             permission,
             auth,
             error,
+            text_input: None,
+            datalist: None,
         }
     }
 }
@@ -350,6 +359,8 @@ pub enum Routed {
     TargetId(Result<String, ()>),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
+    /// Whether the focused node takes text (`PageEvent::TextInput`).
+    TextInput(bool),
     /// CEF gave up on these requests: every surface showing one closes.
     Dismissed(Vec<RequestId>),
     Permission(PermissionEvent),
@@ -379,6 +390,11 @@ pub enum Routed {
     },
     /// A busy probe's report from one of the page's frames (`host/busy.rs`).
     Probe {
+        frame: wubble_engine::page::FrameInfo,
+        report: String,
+    },
+    /// The focused field's `<datalist>` offer from one of the page's frames.
+    Datalist {
         frame: wubble_engine::page::FrameInfo,
         report: String,
     },
@@ -462,6 +478,7 @@ pub fn route(event: PageEvent) -> Routed {
         // taken before routing (`host/ax.rs`)
         PageEvent::AxTree(_) | PageEvent::AxLocation(_) => Routed::Ignore,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
+        PageEvent::TextInput(on) => Routed::TextInput(on),
         PageEvent::PermissionRequested {
             id,
             origin,
@@ -500,6 +517,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
         PageEvent::FrameMessage { frame, text } => Routed::Frame { frame, text },
         PageEvent::Probe { frame, report } => Routed::Probe { frame, report },
+        PageEvent::Datalist { frame, report } => Routed::Datalist { frame, report },
         // The built-ins' answers: `host/builtins.rs` takes them before routing.
         PageEvent::CdpReply { .. }
         | PageEvent::EvalResult { .. }
@@ -884,6 +902,10 @@ mod tests {
             Routed::Ignore
         );
         assert_eq!(
+            route(PageEvent::TextInput(false)),
+            Routed::TextInput(false)
+        );
+        assert_eq!(
             route(PageEvent::FullscreenChanged(true)),
             Routed::Fullscreen(true)
         );
@@ -1051,6 +1073,8 @@ mod tests {
                 proxy: false,
             }),
             error: PageError::Crashed,
+            text_input: Some(true),
+            datalist: None,
         };
         assert!(matches!(s.menu, Menu::Open { .. }));
         let gone = s.view_gone();

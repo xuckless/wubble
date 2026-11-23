@@ -331,15 +331,18 @@ pub enum FrameChannel {
     /// `cosmetic.js`: answered by the engine itself with the content filter's
     /// rules ([`crate::cosmetic`]); no [`PageEvent`].
     Cosmetic,
+    /// `datalist.js`: [`PageEvent::Datalist`].
+    Datalist,
 }
 
 impl FrameChannel {
-    const ALL: [(FrameChannel, &'static str); 5] = [
+    const ALL: [(FrameChannel, &'static str); 6] = [
         (FrameChannel::Autofill, "autofill"),
         (FrameChannel::Clipboard, "clipboard"),
         (FrameChannel::Zoom, "zoom"),
         (FrameChannel::Probes, "probes"),
         (FrameChannel::Cosmetic, "cosmetic"),
+        (FrameChannel::Datalist, "datalist"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -561,11 +564,15 @@ pub enum PageEvent {
         text: String,
     },
     /// Where the text being composed sits (physical pixels), to place the
-    /// IME candidate window. Only while a composition is active.
+    /// IME candidate window: the caret too, when CEF reports it before the first
+    /// composed character.
     ImeBounds {
         rect: Rect,
         selection: (u32, u32),
     },
+    /// Whether the focused node takes text input, so the host's input method is on for a field
+    /// and off elsewhere (CEF's `OnVirtualKeyboardRequested`: the mode is not NONE).
+    TextInput(bool),
     /// The page started dragging (only after `View::set_drag_source(true)`);
     /// run the drag and end it with `View::drag_source_ended`. Physical
     /// pixels.
@@ -589,6 +596,13 @@ pub enum PageEvent {
     /// [`FrameChannel::Probes`]): what in the frame must keep its tab awake.
     /// The first one, empty, tells which renderer the frame runs in.
     Probe {
+        frame: FrameInfo,
+        report: String,
+    },
+    /// The focused field's `<datalist>` offer from `frame` (wubble-helper `datalist.js` on
+    /// [`FrameChannel::Datalist`]); `wubble_core::datalist::parse` reads the report, and the
+    /// pick goes back through `View::send_frame_message`.
+    Datalist {
         frame: FrameInfo,
         report: String,
     },
@@ -674,6 +688,7 @@ impl PageEvent {
             ) => a == b,
             (Self::FindResult { .. }, Self::FindResult { .. })
             | (Self::ImeBounds { .. }, Self::ImeBounds { .. })
+            | (Self::TextInput(_), Self::TextInput(_))
             | (Self::PopupMoved(_), Self::PopupMoved(_))
             | (Self::LinkStatus(_), Self::LinkStatus(_))
             | (Self::Tooltip(_), Self::Tooltip(_)) => true,
