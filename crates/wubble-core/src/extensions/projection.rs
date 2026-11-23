@@ -93,7 +93,7 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
                     for s in model
                         .spaces
                         .iter()
-                        .filter(|s| !s.private && !shown.contains(&s.id))
+                        .filter(|s| model.side_of_space(s.id) == Side::Normal && !shown.contains(&s.id))
                     {
                         listed.extend(space_tabs(s, false));
                     }
