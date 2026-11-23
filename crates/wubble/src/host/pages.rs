@@ -16,6 +16,7 @@ use wubble_core::overlay::Kind;
 use wubble_core::pages::{
     self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
 };
+use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_store::Favicon;
 use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
@@ -466,10 +467,10 @@ impl Host {
 
     // ----- the address pill: the bookmark star and the blocker badge
 
-    /// The hosts the blocker skips: the stored setting, with the private windows' switches
-    /// (`Host::run_site_lists`).
-    fn blocker_exceptions(&self) -> Vec<String> {
-        wubble_core::site::toggled(&self.blocker_hosts, &self.private_choices.blocker)
+    /// The hosts the blocker skips for `tab` (`SiteView::blocker`; no tab: the stored ones).
+    fn blocker_exceptions(&self, tab: Option<TabId>) -> Vec<String> {
+        tab.map_or_else(|| self.site_view_of(Side::Normal), |t| self.site_view(t))
+            .blocker()
     }
 
     pub(super) fn render_pill(&mut self, window: &AppWindow) {
@@ -481,7 +482,7 @@ impl Host {
         let web = wubble_core::url::is_recordable(&url);
         let star = web && pages::bookmark_for_url(&self.pages.bookmarks.rows, &url).is_some();
         let count = tab.and_then(|t| self.blocked_of(t)).unwrap_or(0);
-        let badge = pages::blocker_state(count, &url, &self.blocker_exceptions());
+        let badge = pages::blocker_state(count, &url, &self.blocker_exceptions(tab));
         window.set_address_bookmarkable(web);
         window.set_address_bookmarked(star);
         window.set_address_blocker_visible(web && badge.visible);
@@ -512,7 +513,7 @@ impl Host {
         };
         // the entry the switch is about: the one turning blocking off here (a parent's, or the
         // site's own), else this site's host (a port is no part of it)
-        let exceptions = self.blocker_exceptions();
+        let exceptions = self.blocker_exceptions(Some(tab));
         let covering = pages::blocker_exception(&url, &exceptions);
         let allowed = covering.is_some();
         let host = covering.map_or(page_host, str::to_owned);

@@ -214,10 +214,9 @@ pub enum SiteChange {
 
 /// The per-site choices made in private windows (permissions, Allow pop-ups, save-password
 /// "Never", zoom, page theme, blocker exceptions, never-sleep sites): never stored, read over
-/// the stored ones, and dropped with the private windows' in-memory container (Chrome's
-/// off-the-record `HostContentSettingsMap` and zoom map go with the off-the-record profile).
-/// Permissions, zoom and theme are read by private tabs only ([`SiteView`]); the blocker and
-/// the sleep policy run for every tab, so their switches hold everywhere for the run.
+/// the stored ones by private tabs only ([`SiteView`]), and dropped with the private windows'
+/// in-memory container (Chrome's off-the-record `HostContentSettingsMap` and zoom map go with
+/// the off-the-record profile).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrivateChoices {
     pub permissions: SitePermissions,
@@ -294,6 +293,22 @@ impl SiteView<'_> {
         let level = crate::zoom::wanted(self.stored.zoom, page, self.stored.zoom_default);
         self.private
             .map_or(level, |p| crate::zoom::wanted(&p.zoom, page, level))
+    }
+
+    /// The hosts the blocker skips: the stored list, with a private tab's switches.
+    pub fn blocker(&self) -> Vec<String> {
+        self.private.map_or_else(
+            || self.stored.blocker.to_vec(),
+            |p| toggled(self.stored.blocker, &p.blocker),
+        )
+    }
+
+    /// The sites whose tabs never sleep: the stored list, with a private tab's switches.
+    pub fn never_sleep(&self) -> Vec<String> {
+        self.private.map_or_else(
+            || self.stored.never_sleep.to_vec(),
+            |p| toggled(self.stored.never_sleep, &p.never_sleep),
+        )
     }
 
     pub fn theme(&self, page: &str) -> PageTheme {
@@ -438,10 +453,12 @@ mod tests {
         let view = SiteView { stored, private: Some(&p) };
         assert_eq!(view.zoom(page), 80);
         assert_eq!(view.theme(page), dark);
-        assert_eq!(toggled(&blocker, &p.blocker), Vec::<String>::new());
-        assert_eq!(toggled(&never, &p.never_sleep), vec!["a.test".to_string()]);
+        assert_eq!(view.blocker(), Vec::<String>::new());
+        assert_eq!(view.never_sleep(), vec!["a.test".to_string()]);
         let normal = SiteView { stored, private: None };
         assert_eq!((normal.zoom(page), normal.theme(page)), (150, PageTheme::Auto));
+        // a normal tab reads the stored lists only
+        assert_eq!((normal.blocker(), normal.never_sleep()), (blocker.clone(), never.clone()));
         // back to the stored values: nothing is left
         p.write(&stored, SiteChange::Zoom { page: page.into(), percent: 150 });
         p.write(&stored, SiteChange::Theme { page: page.into(), theme: PageTheme::Auto });

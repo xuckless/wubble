@@ -2942,7 +2942,13 @@ fn never_sleep_sites_cover_subdomains_and_follow_the_url() {
     let m = Model::new(t0());
     let (m, a) = tab_at(m, "https://docs.example.com/x");
     let (m, b) = tab_at(m, "https://other.test/");
-    let (m, _) = run(m, Command::SetNeverSleepSites(vec!["example.com".into()]));
+    let (m, _) = run(
+        m,
+        Command::SetNeverSleepSites {
+            side: Side::Normal,
+            sites: vec!["example.com".into()],
+        },
+    );
     assert_eq!(m.tabs[&a].lifecycle.keep, Keep::Awake);
     assert_eq!(m.tabs[&b].lifecycle.keep, Keep::Normal);
     let (m, _) = tick(m, Duration::from_secs(3600));
@@ -2963,7 +2969,13 @@ fn a_frozen_tab_turned_awake_is_unfrozen() {
     let (m, a, _) = hidden_pair();
     let (m, _) = tick(m, Duration::from_secs(120));
     assert_eq!(liveness(&m, a), Liveness::Frozen);
-    let (m, fx) = run_all(m, Command::SetNeverSleepSites(vec!["a.test".into()]));
+    let (m, fx) = run_all(
+        m,
+        Command::SetNeverSleepSites {
+            side: Side::Normal,
+            sites: vec!["a.test".into()],
+        },
+    );
     assert_eq!(liveness(&m, a), Liveness::Background);
     assert_eq!(lifecycle_effects(&fx), vec![life(a, Life::Unfreeze)]);
 }
@@ -4276,5 +4288,30 @@ fn a_record_is_private_only_in_a_known_memory_container() {
     ] {
         assert_eq!(m.side_of_record(c), record, "{row}");
         assert_eq!(m.side_of_container(c), own, "{row}");
+    }
+}
+
+/// Each side's tabs run its own never-sleep list: a site kept awake from a private window
+/// leaves the same site's normal tab to sleep, and the reverse.
+#[test]
+fn never_sleep_sites_hold_per_side() {
+    let m = Model::new(t0());
+    let (m, n) = tab_at(m, "https://a.test/");
+    let (m, _, ps) = private_window(m, "https://a.test/");
+    let p = m.order(ps)[0];
+    // (row, side the list is set for, normal tab's keep, private tab's keep)
+    for (row, side, normal, private) in [
+        ("normal list", Side::Normal, Keep::Awake, Keep::Normal),
+        ("private list", Side::Private, Keep::Normal, Keep::Awake),
+    ] {
+        let (m, _) = run(
+            m.clone(),
+            Command::SetNeverSleepSites {
+                side,
+                sites: vec!["a.test".into()],
+            },
+        );
+        assert_eq!(m.tabs[&n].lifecycle.keep, normal, "{row}");
+        assert_eq!(m.tabs[&p].lifecycle.keep, private, "{row}");
     }
 }

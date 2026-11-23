@@ -94,7 +94,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{
-    PrivateChoices, SiteChange, SitePermissions, SiteView, Stored, toggled,
+    PrivateChoices, SiteChange, SitePermissions, SiteView, Stored,
 };
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
@@ -1102,6 +1102,8 @@ impl Host {
                         }
                         self.builtins_view_opened(tab, &url);
                         self.ax_view_opened(tab);
+                        // the blocker knows a private tab's view from its first request
+                        self.forget_gone_blocks();
                         self.agent_rules();
                         self.pace(PaceEvent::Wake);
                         self.pace_unshown();
@@ -1308,12 +1310,17 @@ impl Host {
 
     /// Drops the blocker's counts of views that are gone.
     pub(super) fn forget_gone_blocks(&mut self) {
-        let ids: Vec<_> = self.views.values().copied().collect();
-        let live: Vec<i32> = ids
-            .into_iter()
-            .filter_map(|id| Some(self.engine.view(id)?.browser_id()))
-            .collect();
-        self.blocking.keep_views(&live);
+        let ids: Vec<_> = self.views.iter().map(|(&t, &id)| (t, id)).collect();
+        let (mut live, mut private) = (vec![], vec![]);
+        for (tab, id) in ids {
+            if let Some(browser) = self.engine.view(id).map(|v| v.browser_id()) {
+                live.push(browser);
+                if self.model.side_of_tab(tab) == Side::Private {
+                    private.push(browser);
+                }
+            }
+        }
+        self.blocking.keep_views(&live, &private);
     }
 
     /// The blocker's count for each tab with a view.
@@ -1819,10 +1826,14 @@ impl Host {
     /// The one read of the per-site tables for `tab`: the stored ones, under its own choices
     /// for a private tab (an unknown tab reads as private: `Model::side_of_tab`).
     pub(super) fn site_view(&self, tab: TabId) -> SiteView<'_> {
+        self.site_view_of(self.model.side_of_tab(tab))
+    }
+
+    /// What every tab on `side` reads.
+    fn site_view_of(&self, side: Side) -> SiteView<'_> {
         SiteView {
             stored: self.stored_sites(),
-            private: (self.model.side_of_tab(tab) == Side::Private)
-                .then_some(&self.private_choices),
+            private: (side == Side::Private).then_some(&self.private_choices),
         }
     }
 
@@ -1905,14 +1916,19 @@ impl Host {
         }
     }
 
-    /// The blocker and the model run the stored lists with the private windows' switches.
+    /// The blocker and the model run, per side, what that side's tabs read (`SiteView`): the
+    /// stored lists for normal tabs, with the private windows' switches for private ones. A
+    /// private switch never reaches a normal tab, its menus or the stored settings.
     pub(super) fn run_site_lists(&mut self) {
-        let choices = &self.private_choices;
-        self.blocking
-            .set_exceptions(&toggled(&self.blocker_hosts, &choices.blocker));
-        let sites = toggled(&self.never_sleep_sites, &choices.never_sleep);
-        if sites != self.model.never_sites() {
-            self.dispatch(Command::SetNeverSleepSites(sites));
+        let (normal, private) = (self.site_view_of(Side::Normal), self.site_view_of(Side::Private));
+        let blocker = [normal.blocker(), private.blocker()];
+        let never = [(Side::Normal, normal.never_sleep()), (Side::Private, private.never_sleep())];
+        self.blocking.set_exceptions(&blocker[0]);
+        self.blocking.set_private_exceptions(&blocker[1]);
+        for (side, sites) in never {
+            if sites != self.model.never_sites(side) {
+                self.dispatch(Command::SetNeverSleepSites { side, sites });
+            }
         }
     }
 

@@ -748,7 +748,7 @@ pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         })
     {
         let listed = model
-            .never_sites()
+            .never_sites(model.side_of_tab(tab))
             .iter()
             .find(|s| wubble_core::routing::host_in(&[s.as_str()], &host));
         out.push(match listed {
@@ -2214,7 +2214,13 @@ mod tests {
             ]
         );
         let (m, _) = apply(m, Cmd::SetSpaceNeverSleep { space, on: true });
-        let (m, _) = apply(m, Cmd::SetNeverSleepSites(vec![host.clone()]));
+        let (m, _) = apply(
+            m,
+            Cmd::SetNeverSleepSites {
+                side: Side::Normal,
+                sites: vec![host.clone()],
+            },
+        );
         assert_eq!(
             rows(&m),
             [

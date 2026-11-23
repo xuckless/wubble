@@ -128,6 +128,11 @@ struct ListState {
 pub struct Blocking {
     blocker: RwLock<Arc<Blocker>>,
     overrides: RwLock<SiteOverrides>,
+    /// The exceptions private tabs run (the stored ones with the private windows' switches:
+    /// `Host::run_site_lists`), and the views ([`wubble_engine::view::View::browser_id`]) of
+    /// private tabs, whose requests read them. A request of no known private view reads
+    /// `overrides`; page cosmetics, which name no view, always do.
+    private: RwLock<(SiteOverrides, HashSet<i32>)>,
     enabled: AtomicBool,
     /// Per view ([`wubble_engine::view::View::browser_id`]), since its last
     /// main-frame request; dropped when the view goes ([`Self::keep_views`]).
@@ -154,6 +159,7 @@ impl Blocking {
         Arc::new(Self {
             blocker: RwLock::new(Arc::new(Blocker::from_lists(&[]))),
             overrides: RwLock::new(SiteOverrides::default()),
+            private: RwLock::new((SiteOverrides::default(), HashSet::new())),
             enabled: AtomicBool::new(BlockerEnabled::default()),
             blocked: Mutex::new(HashMap::new()),
             lists: Mutex::new(ListState::default()),
@@ -459,6 +465,18 @@ impl Blocking {
         self.set_overrides(overrides);
     }
 
+    /// The hosts the blocker skips for private tabs' requests.
+    pub fn set_private_exceptions(&self, hosts: &[String]) {
+        let mut overrides = SiteOverrides::default();
+        for host in hosts {
+            overrides.insert(host);
+        }
+        self.private
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0 = overrides;
+    }
+
     pub fn set_overrides(&self, overrides: SiteOverrides) {
         *self
             .overrides
@@ -535,8 +553,14 @@ impl Blocking {
 
     /// Forgets what views other than `live` had blocked: called when a
     /// view goes, so a closed or slept tab's page does not stay counted.
-    pub fn keep_views(&self, live: &[i32]) {
+    /// Also names the live views of private tabs (`private`), whose requests read the private
+    /// exceptions.
+    pub fn keep_views(&self, live: &[i32], private: &[i32]) {
         self.counts().retain(|id, _| live.contains(id));
+        self.private
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .1 = private.iter().copied().collect();
     }
 
     fn counts(&self) -> std::sync::MutexGuard<'_, HashMap<i32, PageBlocks>> {
@@ -558,6 +582,20 @@ impl Blocking {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .shields_for(page_url)
+    }
+
+    /// [`Self::shields_for`] as the view `browser_id` runs it: a private tab's view reads the
+    /// private exceptions.
+    fn shields_in(&self, page_url: &str, browser_id: i32) -> Shields {
+        let private = self.private.read().unwrap_or_else(PoisonError::into_inner);
+        if !private.1.contains(&browser_id) {
+            drop(private);
+            return self.shields_for(page_url);
+        }
+        if !self.enabled.load(Ordering::Relaxed) || !is_web(page_url) {
+            return Shields::Off;
+        }
+        private.0.shields_for(page_url)
     }
 }
 
@@ -776,7 +814,9 @@ impl ContentFilter for Blocking {
         let timed = DECIDE_TIMING
             .load(Ordering::Relaxed)
             .then(std::time::Instant::now);
-        let decision = self.current().decide(net, self.shields_for(top));
+        let decision = self
+            .current()
+            .decide(net, self.shields_in(top, request.browser_id));
         if let Some(at) = timed {
             DECIDE_NS.fetch_add(at.elapsed().as_nanos() as u64, Ordering::Relaxed);
             DECIDE_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -946,6 +986,30 @@ example.com##.sponsor
         );
     }
 
+    /// A private tab's view reads the private exceptions, every other view the stored ones:
+    /// a site switched off in a private window still blocks in a normal one, and the reverse.
+    #[test]
+    fn each_side_reads_its_own_exceptions() {
+        let b = blocking(TEST_LIST);
+        b.set_exceptions(&["normal.test".into()]);
+        b.set_private_exceptions(&["site.org".into()]);
+        b.keep_views(&[1, 2], &[2]);
+        let ad = "https://ads.example/x.js";
+        // (page, view, action): view 1 normal, view 2 private
+        for (top, view, want) in [
+            (SITE, 1, Block),
+            (SITE, 2, Allow),
+            ("https://normal.test/", 1, Allow),
+            ("https://normal.test/", 2, Block),
+        ] {
+            let got = b.check(&RequestInfo {
+                browser_id: view,
+                ..req(ad, top, Script)
+            });
+            assert_eq!(got, want, "{top} in view {view}");
+        }
+    }
+
     /// uBO's `$redirect` stubs are served in place of the resource (and
     /// counted as blocked); a page is never replaced by one.
     #[test]
@@ -988,7 +1052,7 @@ example.com##.sponsor
             browser_id: 2,
             ..req("https://ads.example/x.js", SITE, Script)
         });
-        b.keep_views(&[2]);
+        b.keep_views(&[2], &[]);
         assert_eq!((b.blocked(1), b.blocked(2)), (0, 1));
         assert_eq!(b.counts().len(), 1);
     }

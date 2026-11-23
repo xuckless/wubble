@@ -322,8 +322,9 @@ pub enum Command {
     /// An agent session made the Space: an agent Space for the rest of its life
     /// ([`Space::agent`]); nothing clears it.
     MarkAgentSpace(SpaceId),
-    /// Tabs on these sites (a host covers its subdomains) are never put to sleep.
-    SetNeverSleepSites(Vec<String>),
+    /// `side`'s tabs on these sites (a host covers its subdomains) are never put to sleep: the
+    /// stored list for normal tabs, with the private windows' switches for private ones.
+    SetNeverSleepSites { side: Side, sites: Vec<String> },
     /// Groups the Space's unpinned top-level tabs into one folder per site (`tidy::plan_groups`).
     /// [`Effect::Tidied`] carries the layout before, for [`Command::SetLayout`] to undo it.
     TidyTabs {
@@ -412,8 +413,10 @@ pub struct Model {
     wall_ms: i64,
     /// When hidden tabs go to sleep (the settings' sleep rows).
     policy: SleepPolicy,
-    /// Sites whose tabs never sleep (the `sleep.never_sites` row).
+    /// Sites whose tabs never sleep (the `sleep.never_sites` row), and the list private tabs
+    /// run (`Command::SetNeverSleepSites`).
     never_sites: Vec<String>,
+    private_never_sites: Vec<String>,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -474,6 +477,7 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
+            private_never_sites: vec![],
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -487,9 +491,12 @@ impl Model {
         self.policy
     }
 
-    /// The sites whose tabs never sleep.
-    pub fn never_sites(&self) -> &[String] {
-        &self.never_sites
+    /// The sites whose tabs on `side` never sleep.
+    pub fn never_sites(&self, side: Side) -> &[String] {
+        match side {
+            Side::Normal => &self.never_sites,
+            Side::Private => &self.private_never_sites,
+        }
     }
 
     /// The model's clock: the time it was started with or last ticked to.
@@ -534,6 +541,7 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
+            private_never_sites: vec![],
         };
         m.check()?;
         Ok(m)
@@ -1853,9 +1861,8 @@ impl Model {
         for si in 0..self.spaces.len() {
             let space_on = self.spaces[si].never_sleep;
             for t in self.order_idx(si) {
-                let on = space_on
-                    || (!self.never_sites.is_empty()
-                        && host_in(&self.never_sites, &self.tabs[&t].url));
+                let sites = self.never_sites(self.side_of_tab(t));
+                let on = space_on || (!sites.is_empty() && host_in(sites, &self.tabs[&t].url));
                 want.push((t, if on { Keep::Awake } else { Keep::Normal }));
             }
         }
@@ -2244,8 +2251,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
-        Command::SetNeverSleepSites(sites) => {
-            m.never_sites = sites;
+        Command::SetNeverSleepSites { side, sites } => {
+            match side {
+                Side::Normal => m.never_sites = sites,
+                Side::Private => m.private_never_sites = sites,
+            }
             vec![]
         }
         Command::TidyTabs { space } => m.tidy_tabs(space),
