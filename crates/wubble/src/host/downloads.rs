@@ -460,7 +460,7 @@ impl Host {
         let shows = |w: WindowId| !self.model.window_tabs(w).is_empty();
         let closing_window = match closing {
             Closing::Window(w) => Some(w).filter(|&w| shows(w)),
-            Closing::App => None,
+            Closing::App | Closing::Restart => None,
         };
         let holding = self
             .model
@@ -469,7 +469,7 @@ impl Host {
             .filter_map(|&t| self.model.location(t))
             .find_map(|(space, _)| self.model.space_window(space))
             .filter(|&w| shows(w));
-        let here = matches!(closing, Closing::App).then_some(self.w.id);
+        let here = matches!(closing, Closing::App | Closing::Restart).then_some(self.w.id);
         let Some(window) = closing_window.or(holding).or(here) else {
             return false;
         };
@@ -492,6 +492,7 @@ impl Host {
         match closing {
             Closing::Window(w) => self.dispatch(Command::CloseWindow(w)),
             Closing::App => crate::quit(),
+            Closing::Restart => self.restart_now(),
         }
     }
 

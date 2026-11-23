@@ -969,6 +969,7 @@ pub fn close_entries(closing: Closing, count: usize) -> Vec<Entry> {
     let (close, keep) = match closing {
         Closing::Window(_) => ("Close", "Keep Window Open"),
         Closing::App => ("Quit", "Keep wubble Open"),
+        Closing::Restart => ("Restart", "Keep wubble Open"),
     };
     let entry = |label: String, command, enabled, danger| Entry {
         label,
@@ -1716,6 +1717,15 @@ mod tests {
                 [
                     "3 downloads from private windows will be cancelled",
                     "Cancel Downloads and Quit",
+                    "Keep wubble Open",
+                ],
+            ),
+            (
+                Closing::Restart,
+                2,
+                [
+                    "2 downloads from private windows will be cancelled",
+                    "Cancel Downloads and Restart",
                     "Keep wubble Open",
                 ],
             ),

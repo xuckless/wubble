@@ -234,7 +234,7 @@ impl Model {
                 // a Pip window's tab stays in its Space
                 Some(Shown::Pip(_)) | None => vec![],
             },
-            Closing::App => all(),
+            Closing::App | Closing::Restart => all(),
         };
         ended
             .into_iter()

@@ -400,6 +400,9 @@ pub enum Closing {
     Window(WindowId),
     /// Quitting.
     App,
+    /// Quitting to run the new version ("Restart to update"): it restarts only once it quits,
+    /// so a dismissed question leaves nothing for a later quit.
+    Restart,
 }
 
 #[cfg(test)]

@@ -4076,6 +4076,7 @@ fn a_close_ends_the_private_tabs_it_takes_with_it() {
         (Closing::Window(WindowId(0)), vec![]),
         (Closing::Window(WindowId(99)), vec![]),
         (Closing::App, p12.clone()),
+        (Closing::Restart, p12.clone()),
     ] {
         assert_eq!(
             sorted(m.private_tabs_ended(closing)),
