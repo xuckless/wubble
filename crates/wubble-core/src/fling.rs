@@ -96,12 +96,14 @@ pub fn transition<T: Copy + PartialEq>(
     match (state, input) {
         // A scroll that moves nothing (the stop's own empty frame) changes nothing.
         (state, I::Scroll { dx, dy, .. }) if dx == 0.0 && dy == 0.0 => (state, vec![]),
+        // The same fingers going on; after a rest longer than a lift would allow (a mouse
+        // wheel sends no lift at all) it is a new scroll, below, with its own point.
         (
             Fling::Tracking {
                 target,
                 travel,
                 mut path,
-                ..
+                last,
             },
             I::Scroll {
                 target: on,
@@ -109,7 +111,7 @@ pub fn transition<T: Copy + PartialEq>(
                 dy,
                 now,
             },
-        ) if on == target => {
+        ) if on == target && now - last <= REST_MS => {
             let travel = (travel.0 + dx, travel.1 + dy);
             path.push(travel.0, travel.1, now);
             (
@@ -381,5 +383,22 @@ mod tests {
         // one scroll's path has no speed yet: no glide, and never on the old target
         let (s, _) = run(&inputs);
         assert!(matches!(s, Fling::Idle));
+    }
+
+    #[test]
+    fn a_scroll_after_a_rest_is_a_new_one() {
+        // a wheel's scrolls, no lift, then a scroll a second later on the same target
+        let mut inputs = scroll(6, 20.0);
+        inputs.push(FlingInput::Scroll {
+            target: 1,
+            dx: 0.0,
+            dy: 5.0,
+            now: 1_050.0,
+        });
+        let (s, _) = run(&inputs);
+        assert!(
+            matches!(s, Fling::Tracking { travel, last, .. } if travel == (0.0, 5.0) && last == 1_050.0),
+            "{s:?}"
+        );
     }
 }

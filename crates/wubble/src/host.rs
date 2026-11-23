@@ -3579,8 +3579,9 @@ impl Host {
     /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
     /// is `input::key_route`'s decision.
     pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
-        // A key stops a glide, as in Chrome (a PageDown is not added to it).
-        if key.pressed {
+        // A key stops a glide, as in Chrome (a PageDown is not added to it); a modifier alone
+        // or a held key's repeats do not.
+        if key.pressed && !key.repeat && !input::is_modifier(&key.unmodified) {
             self.fling(wubble_core::fling::FlingInput::Interrupt);
         }
         // Link hints take every key while their labels show.
