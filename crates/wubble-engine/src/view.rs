@@ -1923,6 +1923,10 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
             frame,
             report: body.to_owned(),
         },
+        FrameChannel::Datalist => PageEvent::Datalist {
+            frame,
+            report: body.to_owned(),
+        },
         FrameChannel::Clipboard => PageEvent::Clipboard {
             frame: frame.id,
             request: clipboard_request(body)?,
@@ -2716,6 +2720,7 @@ mod tests {
             FrameChannel::Zoom,
             FrameChannel::Probes,
             FrameChannel::Cosmetic,
+            FrameChannel::Datalist,
         ] {
             assert_eq!(
                 FrameChannel::split(&channel.join("x\ny")),

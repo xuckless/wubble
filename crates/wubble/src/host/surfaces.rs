@@ -180,6 +180,8 @@ impl Host {
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => {
+                // a new document starts its reports from nothing
+                self.surfaces.entry(tab).or_default().datalist = None;
                 let shown = self.shown();
                 self.overlay_event(window, shown, OverlayEvent::Navigated(tab));
                 self.apply_permission(tab, PermissionEvent::PageChanged);
@@ -219,6 +221,12 @@ impl Host {
                 self.tasks.frame_seen(tab, &frame);
                 self.autofill_message(tab, frame, &text);
             }
+            // Only the main frame reports one (`datalist.js`): its box is the view's.
+            Routed::Datalist { frame, report } if frame.is_main => {
+                self.surfaces.entry(tab).or_default().datalist =
+                    wubble_core::datalist::parse(&report).map(|offer| (frame.id, offer));
+            }
+            Routed::Datalist { .. } => {}
             Routed::Probe { frame, report } => {
                 self.tasks.frame_seen(tab, &frame);
                 if let Some(keys) = report.strip_prefix(super::busy::PROBE_PREFIX) {

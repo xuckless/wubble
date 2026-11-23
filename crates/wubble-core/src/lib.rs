@@ -15,6 +15,7 @@ pub mod busy;
 pub mod chrome;
 pub mod closed;
 pub mod controls;
+pub mod datalist;
 pub mod devtools;
 pub mod dnd;
 pub mod download;

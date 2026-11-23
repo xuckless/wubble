@@ -331,15 +331,18 @@ pub enum FrameChannel {
     /// `cosmetic.js`: answered by the engine itself with the content filter's
     /// rules ([`crate::cosmetic`]); no [`PageEvent`].
     Cosmetic,
+    /// `datalist.js`: [`PageEvent::Datalist`].
+    Datalist,
 }
 
 impl FrameChannel {
-    const ALL: [(FrameChannel, &'static str); 5] = [
+    const ALL: [(FrameChannel, &'static str); 6] = [
         (FrameChannel::Autofill, "autofill"),
         (FrameChannel::Clipboard, "clipboard"),
         (FrameChannel::Zoom, "zoom"),
         (FrameChannel::Probes, "probes"),
         (FrameChannel::Cosmetic, "cosmetic"),
+        (FrameChannel::Datalist, "datalist"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -593,6 +596,13 @@ pub enum PageEvent {
     /// [`FrameChannel::Probes`]): what in the frame must keep its tab awake.
     /// The first one, empty, tells which renderer the frame runs in.
     Probe {
+        frame: FrameInfo,
+        report: String,
+    },
+    /// The focused field's `<datalist>` offer from `frame` (wubble-helper `datalist.js` on
+    /// [`FrameChannel::Datalist`]); `wubble_core::datalist::parse` reads the report, and the
+    /// pick goes back through `View::send_frame_message`.
+    Datalist {
         frame: FrameInfo,
         report: String,
     },
