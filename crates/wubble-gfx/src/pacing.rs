@@ -112,7 +112,7 @@ impl ContentRate {
 /// ([`ContentRate::frame_rate`]): every `ceiling / rate`th, as CEF's timer would pace it (CEF's
 /// `windowless_frame_rate` does not apply to external begin frames).
 pub fn begin_frame_due(ceiling: u32, rate: u32, tick: u32) -> bool {
-    tick % (ceiling / rate.max(1)).max(1) == 0
+    tick.is_multiple_of((ceiling / rate.max(1)).max(1))
 }
 
 /// Who decides when CEF paints.

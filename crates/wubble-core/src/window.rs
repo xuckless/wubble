@@ -176,7 +176,7 @@ pub const MAX_SIDE: u32 = 4096;
 /// least 1: a stored or page-chosen size the window can have.
 pub fn bounded((w, h): (u32, u32), display: Option<(u32, u32)>) -> (u32, u32) {
     let (dw, dh) = display.unwrap_or((MAX_SIDE, MAX_SIDE));
-    let side = |v: u32, d: u32| v.min(d).min(MAX_SIDE).max(1);
+    let side = |v: u32, d: u32| v.min(d).clamp(1, MAX_SIDE);
     (side(w, dw), side(h, dh))
 }
 

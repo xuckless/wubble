@@ -185,10 +185,10 @@ pub fn plan<S: AsRef<str>>(mimes: &[S], reader: Reader) -> Vec<(Kind, String)> {
     };
     let rows = READS
         .iter()
-        .filter(|(_, readers, _)| reads(*readers))
-        .filter_map(|(kind, _, types)| Some((*kind, types.iter().find_map(|t| offered(*t))?)));
+        .filter(|(_, readers, _)| reads(readers))
+        .filter_map(|(kind, _, types)| Some((*kind, types.iter().find_map(|t| offered(t))?)));
     let picture = dnd::picture_types()
-        .find_map(|t| offered(t))
+        .find_map(&offered)
         .filter(|_| reads(RICH))
         .map(|m| (Kind::Picture, m));
     let web = mimes
@@ -340,8 +340,10 @@ fn html_text(bytes: &[u8]) -> String {
     let text = match bytes {
         [0xff, 0xfe, rest @ ..] => {
             let units: Vec<u16> = rest
-                .chunks_exact(2)
-                .map(|u| u16::from_le_bytes([u[0], u[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|u| u16::from_le_bytes(*u))
                 .collect();
             String::from_utf16_lossy(&units)
         }
@@ -481,7 +483,9 @@ mod tests {
             WEB_MAP,
             web0,
         ];
-        let cases: &[(&[&str], Reader, &[(Kind, &str)])] = &[
+        // (offered types, reader, what is read: kind and type)
+        type Case<'a> = (&'a [&'a str], Reader, &'a [(Kind, &'a str)]);
+        let cases: &[Case] = &[
             (
                 &all,
                 Reader::Paste,
@@ -520,7 +524,7 @@ mod tests {
         ];
         for (mimes, reader, want) in cases {
             let want: Vec<_> = want.iter().map(|(k, m)| (*k, m.to_string())).collect();
-            assert_eq!(plan(*mimes, *reader), want, "{mimes:?} {reader:?}");
+            assert_eq!(plan(mimes, *reader), want, "{mimes:?} {reader:?}");
         }
     }
 
