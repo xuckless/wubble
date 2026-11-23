@@ -2581,10 +2581,11 @@ fn popup_and_little_windows_own_their_tab() {
     assert_eq!(
         m.window(p).unwrap().geometry,
         Some(Geometry {
-            width: 400,
-            height: 300,
+            width: 416,
+            height: 316,
             ..Geometry::default()
-        })
+        }),
+        "the page at the size asked for, in the shell's inset"
     );
     assert_eq!(m.visible_tab(), Some(pt), "the popup has focus");
     assert_eq!(m.spaces[0].active, Some(t[0]), "the Space keeps its page");
