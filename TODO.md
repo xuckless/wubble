@@ -151,7 +151,7 @@ Open, to build or check:
 - [ ] Per platform: view lifecycle on the Mac and Windows; GPU process watch on macOS and Windows; macOS and Windows popup frame
 - [ ] Input gaps: kinetic wheel phase on Linux (host-side fling), touch input, the AltGr flag, CSS `url()` and zoom cursors
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
-- [ ] Clipboard and drag: non-text page clipboard formats; custom MIME to other apps
+- [ ] Drag: custom MIME types to other apps
 - [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
 - [ ] Drag out on Windows (the stub: `wl::Null`)
 - [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
@@ -253,17 +253,25 @@ Target: the main process under 5 % of a core while a page moves (it is 8 to 9 % 
 - [ ] The page on a compositor surface: each pane's page on its own `wl_subsurface` (macOS: a `CALayer` on the IOSurface) with CEF's buffer attached directly, the shell above it; glass over a page is faked (a low-rate sample of the page, as the ambience's 8 Hz). A page frame then costs one attach and commit: no import, blit, Slint walk, flush or present. Overturns four frame-path decisions; prototype one pane without glass on Linux and measure first
 
 ## Web view parity with Chrome (owner, 2026-11-22)
-The owner wants the page view to feel like Chrome's, 1:1. Audit of 2026-11-22, read from the code, nothing run; drags inside a window, between panes, onto the shell and to and from other apps on Wayland already work. In the order a user feels them:
-- [ ] Wayland clipboard is text only: a page's copy and paste loses HTML, images, files and custom formats (`clipboard.rs` `bridge_needed`, `wl/wayland.rs` `TEXT_TYPES`; build-out `wayland-clipboard-rich`)
-- [ ] The page is told the window is the screen: `screen.width`, `availLeft`, `window.screenX` (welding `linux_cef/cef_backed.rs` `screen_info`, engine `ScreenArea`); report the monitor and the window's place, keep pop-ups clamped in the host
-- [ ] Touch and pen never reach a page (Slint turns a touch into mouse events): no touchstart, no pen PointerEvents, no touch scroll or long press (build-out `touch-input`, `pen-input`)
-- [ ] Cursors: CSS image cursors and their hotspot are dropped (`on_cursor_change` ignores the custom cursor info); zoom-in, zoom-out, copy, alias, context-menu, all-scroll and cell show the arrow (build-out `cursor-custom-altgr`)
+The owner wants the page view to feel like Chrome's, 1:1. `untested/perf3` holds five lanes of it, written from an audit of the code without a compile or a run: nothing below is known to work until it is built and tried. Drags inside a window, between panes, onto the shell and to and from other apps on Wayland worked before.
+- [ ] Build it first: `cargo fmt --all`, `cargo check --workspace`, `cargo test --workspace` (the lanes' reports list where each expects compile errors; `kit_lock` may count the new `MouseCursor` tokens in `app.slint`; the menu tests' row indices were written by two lanes), then `--smoke parity`, `page`, `dnd`, `popup` and the gallery
+- [ ] Written, to check by hand, the riskiest first:
+  - [ ] IME per field (`OnVirtualKeyboardRequested` switches the input method): if CEF says nothing when focus arrives by Tab the IME stays off; password fields are not told apart; the one underline's colour (0) may draw nothing; the caret rect before the first composed character depends on CEF sending it. With fcitx or ibus on Wayland
+  - [ ] Touch as touch (`wubble_core::touch`, `host/touch.rs`): on a touchscreen, `touchstart` and `pointerType` "touch" fire (else `--touch-events=enabled`), the shell still takes touches, no mouse event made of a touch reaches a page, a tap on a context menu goes to the menu, two-finger pinch
+  - [ ] Wayland clipboard, every type (`wubble_core::clipboard`, `clipboard.js`): the parity smoke's B items, rich text into LibreOffice, a screenshot pasted into a page (`clipboardData.files`), files copied in Nautilus, `navigator.clipboard.read()`; Chromium's `web ` format names and the 16 MiB frame message were written from memory
+  - [ ] Screen and window geometry (`welding::Desktop`): `screen.*`, `window.screenX/Y`, `outerWidth` against Chrome on two monitors and at 1.25x; a `<select>` near the window's bottom edge; macOS's flipped y; many `Moved` events on X11 during a window drag
+  - [ ] Cursors (`host/cursor.rs`): every CSS cursor against Chrome, an image cursor with a hotspot (CEF's buffer is taken as premultiplied BGRA), no hidden pointer over the extension popup card
+  - [ ] Wheel: a notched mouse wheel now scrolls with Blink's animation (not marked precise), a touchpad stays precise; the fling after a two-finger scroll on Wayland (`wubble_core::fling`, our own decay: tune it against Chrome)
+  - [ ] The new menu rows: Open Link in New Window, Add to Dictionary (CEF's command 206), Search Google for Image (the URL is unchecked), Copy Link to Highlight, the frame rows; Paste as Plain Text now runs as an edit command on every platform
+- [ ] `<datalist>`: the page script, the filter and the host's state are written; no list is drawn (a list under the field that takes no focus is not in the kit: the owner's design)
+- [ ] The back and forward mouse buttons never reach the page: CEF sends only left, middle and right, and a CDP event does not say whether the page cancelled it
+- [ ] `cursor: all-scroll` arrives as CEF's autoscroll cursor and starts the autoscroll overlay: an armed state in `wubble_core::autoscroll`, entered on a middle press
+- [ ] Pen: winit 0.30 has no pen type (Windows: a touch; Wayland and X11: the pointer; macOS: nothing): tablet readers per platform (build-out `pen-input`); touch selection handles need kit parts; a drag started by a long press gets no positions
+- [ ] Screen: no work area (`screen.availWidth` is the monitor's); a `<select>` that overflows the window slides over its control (no flip: the popup carries no anchor); `window.open`'s `left`/`top` without a size are dropped
+- [ ] Wayland clipboard: copied HTML lacks Blink's inlined styles, pasted HTML loses `<style>` formatting, screenshots still copy through arboard, a rich paste can block the loop for 2 s
+- [ ] Fling: stop it on the touchpad's hold gesture (`zwp_pointer_gesture_hold_v1` in the wl worker); momentum phases and elastic overscroll on macOS need a CEF patch
 - [ ] Drags to and from other apps: none on X11 and Windows beyond dropped files (`wl::Null`), macOS written and never run; custom dataTransfer types leave the window nowhere; a page drag to a second wubble window (build-out `x11-xdnd`, `windows-drag-drop`, `drag-custom-types-out`, `cross-window-page-drag`)
-- [ ] Wheel: check by hand that a mouse wheel gets Blink's smooth scroll (the deltas are sent as precise); no fling on Linux touchpads; no momentum phases or elastic overscroll on macOS (needs a CEF patch)
-- [ ] IME: no caret rect before the first composed character (the candidate window starts misplaced), no underline styles, on in password fields on Linux and macOS (build-out `ime-caret-underlines`)
 - [ ] Pointer lock: the permission prompt exists, nothing confines the pointer or sends relative motion (a CEF patch, likely)
-- [ ] The back and forward mouse buttons navigate in the shell and never reach the page (no `auxclick`)
-- [ ] `<datalist>` shows nothing; the context menu lacks Open Link in New Window, Add to dictionary, Search image; `window.open` ignores the position
 
 ## Features no plan has yet (scout, 2026-11-22)
 Checked against the build-out list and this file; the owner picks.
