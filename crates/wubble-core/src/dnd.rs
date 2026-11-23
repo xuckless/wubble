@@ -7,7 +7,9 @@
 //! per line, CRLF, `#` comment lines). Written new, no code copied. The
 //! picture's file name follows Chromium's `DropData::GetSafeFilenameForImageFileContents`
 //! (`content/public/common/drop_data.cc`, BSD-3-Clause: the page's name with the
-//! extension forced to the picture's type).
+//! extension forced to the picture's type). Chromium's custom data (`custom_data`) is the
+//! layout of `ui/base/clipboard/custom_data_helper.cc` in a `base::Pickle`
+//! (`base/pickle.cc`, BSD-3-Clause); layout only, no code copied.
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +25,7 @@ pub enum Kind {
 /// The MIME types each kind is offered as, in preference order.
 const URI_LIST: &[&str] = &["text/uri-list"];
 const HTML: &[&str] = &["text/html"];
-const TEXT: &[&str] = &[
+pub(crate) const TEXT: &[&str] = &[
     "text/plain;charset=utf-8",
     "UTF8_STRING",
     "text/plain",
@@ -31,8 +33,8 @@ const TEXT: &[&str] = &[
     "TEXT",
 ];
 
-/// The text types a drag out offers: the UTF-8 ones of [`TEXT`].
-const OFFERED_TEXT: &[&str] = TEXT.split_at(3).0;
+/// The text types a drag out (and a copy, `crate::clipboard`) offers: the UTF-8 ones of [`TEXT`].
+pub(crate) const OFFERED_TEXT: &[&str] = TEXT.split_at(3).0;
 
 /// The kinds to read for a drop offering `mimes`, each with the type to ask
 /// for, best first (the first is what the drop is accepted as). Empty: the
@@ -219,6 +221,22 @@ fn is_svg(bytes: &[u8]) -> bool {
     head.starts_with("<svg") || (head.starts_with("<?xml") && head.contains("<svg"))
 }
 
+/// The picture types known here, PNG first (what a paste takes first, as Chromium reads PNG).
+pub fn picture_types() -> impl Iterator<Item = &'static str> {
+    PICTURES.iter().map(|(mime, ..)| *mime)
+}
+
+/// The picture type a file name's extension names; `None` for another extension.
+pub fn image_mime_of(name: &str) -> Option<&'static str> {
+    let (_, ext) = name.rsplit_once('.')?;
+    PICTURES
+        .iter()
+        .find(|(_, own, others)| {
+            ext.eq_ignore_ascii_case(own) || others.iter().any(|o| ext.eq_ignore_ascii_case(o))
+        })
+        .map(|(mime, ..)| *mime)
+}
+
 /// The `PICTURES` row of a picture type.
 fn picture(mime: &str) -> Option<&'static (&'static str, &'static str, &'static [&'static str])> {
     PICTURES.iter().find(|(m, ..)| m.eq_ignore_ascii_case(mime))
@@ -279,6 +297,51 @@ pub fn stale_drag_dirs<S: AsRef<str>>(names: &[S], keep: usize) -> Vec<String> {
     ours.into_iter()
         .skip(keep)
         .map(|(_, n)| n.to_owned())
+        .collect()
+}
+
+/// Chromium's custom data (`chromium/x-web-custom-data`): the types a page's `setData` named
+/// other than text and HTML, with their values. A `base::Pickle`: a u32 payload size, then a u32
+/// count and each type and value as a string16 (an i32 length in UTF-16 units, then the units,
+/// zero-padded to 4 bytes); little endian.
+pub fn custom_data(entries: &[(String, String)]) -> Vec<u8> {
+    let mut payload = (entries.len() as u32).to_le_bytes().to_vec();
+    for text in entries.iter().flat_map(|(t, v)| [t, v]) {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        payload.extend((units.len() as i32).to_le_bytes());
+        payload.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        payload.resize(payload.len().next_multiple_of(4), 0);
+    }
+    let mut out = (payload.len() as u32).to_le_bytes().to_vec();
+    out.extend(payload);
+    out
+}
+
+/// The entries of Chromium's custom data ([`custom_data`]); `None` when the bytes are not one.
+pub fn read_custom_data(bytes: &[u8]) -> Option<Vec<(String, String)>> {
+    let mut at = 0;
+    let u32_at = |at: &mut usize| -> Option<u32> {
+        let word = bytes.get(*at..*at + 4)?;
+        *at += 4;
+        Some(u32::from_le_bytes(word.try_into().ok()?))
+    };
+    let size = u32_at(&mut at)? as usize;
+    if size > bytes.len() - 4 {
+        return None;
+    }
+    let count = u32_at(&mut at)?;
+    let string16 = |at: &mut usize| -> Option<String> {
+        let len = u32_at(at)? as usize;
+        let raw = bytes.get(*at..*at + len.checked_mul(2)?)?;
+        *at += (len * 2).next_multiple_of(4);
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|u| u16::from_le_bytes([u[0], u[1]]))
+            .collect();
+        String::from_utf16(&units).ok()
+    };
+    (0..count)
+        .map(|_| Some((string16(&mut at)?, string16(&mut at)?)))
         .collect()
 }
 
@@ -538,6 +601,57 @@ mod tests {
         };
         assert_eq!(offers(&link).len(), 5);
         assert!(offers(&Outgoing::default()).is_empty());
+    }
+
+    #[test]
+    fn custom_data_is_chromiums_pickle() {
+        let one = vec![("a".to_owned(), "b".to_owned())];
+        #[rustfmt::skip]
+        let bytes: &[u8] = &[
+            20, 0, 0, 0, // payload size
+            1, 0, 0, 0, // one entry
+            1, 0, 0, 0, b'a', 0, 0, 0, // "a", padded to 4
+            1, 0, 0, 0, b'b', 0, 0, 0,
+        ];
+        assert_eq!(custom_data(&one), bytes);
+        let cases: &[&[(&str, &str)]] = &[
+            &[],
+            &[("text/x-a", "")],
+            &[("application/x-b", "猫 cat"), ("text/uri-list", "https://a.test/")],
+            &[("ab", "abc"), ("é", "😀")],
+        ];
+        for entries in cases {
+            let owned: Vec<_> = entries
+                .iter()
+                .map(|(t, v)| (t.to_string(), v.to_string()))
+                .collect();
+            assert_eq!(read_custom_data(&custom_data(&owned)), Some(owned));
+        }
+        // Too short, a size past the end, a string past the end: none.
+        let broken: &[&[u8]] = &[
+            &[],
+            &[1, 0],
+            &[200, 0, 0, 0, 0, 0, 0, 0],
+            &[8, 0, 0, 0, 1, 0, 0, 0, 9, 0, 0, 0],
+        ];
+        for bytes in broken {
+            assert_eq!(read_custom_data(bytes), None, "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_names_its_picture_type_by_extension() {
+        let cases = [
+            ("shot.png", Some("image/png")),
+            ("a.b.JPEG", Some("image/jpeg")),
+            ("x.jfif", Some("image/jpeg")),
+            ("notes.txt", None),
+            ("png", None),
+        ];
+        for (name, mime) in cases {
+            assert_eq!(image_mime_of(name), mime, "{name}");
+        }
+        assert_eq!(picture_types().next(), Some("image/png"));
     }
 
     #[test]

@@ -2078,7 +2078,7 @@ fn run(
         response_observer: observer
             .then(|| media_observer.clone() as Arc<dyn wubble_engine::filter::ResponseObserver>),
         features: loaded.settings.page_features(),
-        clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
+        clipboard_bridge: clipboard::bridged(),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
         extensions: wubble_core::extensions::load_paths(
             wubble_engine::ext_api::available(),

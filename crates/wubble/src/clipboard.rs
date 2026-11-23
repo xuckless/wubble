@@ -6,14 +6,18 @@
 //! one), so their copies and pastes come here (wubble-helper `clipboard.js`,
 //! `PageEvent::Clipboard`). The window has both. On Wayland they go through
 //! wubble's one Wayland worker (`crate::wl::wayland`, ported from
-//! smithay-clipboard, the crate Slint's winit backend uses for the same job); it
-//! carries text only.
-//! Images (Copy Image, screenshots) go through the one worker that owns an
-//! `arboard` clipboard for them (`shot_io`), which offers `image/png`.
+//! smithay-clipboard, the crate Slint's winit backend uses for the same job): a
+//! page's copy carries every type it has, a paste every type a page takes
+//! (`wubble_core::clipboard`), the primary selection text only. Copy Image goes
+//! there too (`host::builtins`), so one data source owns the selection;
+//! screenshots go through the one worker that owns an `arboard` clipboard for
+//! them (`shot_io`), which offers `image/png`, as Copy Image does elsewhere.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
 //! bridge is off for the pages; on X11 the shell's own copies go through Slint,
 //! on macOS and Windows through arboard (the same system clipboard, which the
 //! parity smoke also reads back).
+
+use wubble_core::clipboard::{Payload, Reader};
 
 /// Which clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +31,12 @@ pub enum Buffer {
 /// Chromium picks its Wayland platform.
 pub fn bridge_needed(wayland_display: Option<&std::ffi::OsStr>) -> bool {
     cfg!(target_os = "linux") && wayland_display.is_some_and(|d| !d.is_empty())
+}
+
+/// Whether this run's pages' clipboard goes through the host ([`bridge_needed`] for its
+/// session).
+pub fn bridged() -> bool {
+    bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref())
 }
 
 /// The host side of the pages' clipboard. One impl per OS, chosen by cfg into [`Clipboard`].
@@ -46,6 +56,18 @@ pub trait Bridge {
 
     /// The text on `buffer`, if any.
     fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String>;
+
+    /// Puts a page's copy on the clipboard under every type it has; false where the host does
+    /// not carry the pages' clipboard (Chromium's own does), and the caller copies its text.
+    fn store_rich(&mut self, _window: &slint::Window, _payload: Payload) -> bool {
+        false
+    }
+
+    /// What `reader` takes from the clipboard; `None` where the host does not carry the pages'
+    /// clipboard, or it holds nothing `reader` takes.
+    fn load_rich(&mut self, _window: &slint::Window, _reader: Reader) -> Option<Payload> {
+        None
+    }
 
     /// The platform's extras on the same connection (`crate::wl`), once open.
     fn extras(&self) -> Option<&dyn crate::wl::Aux> {
@@ -154,7 +176,7 @@ mod wayland {
     use std::cell::RefCell;
     use std::rc::{Rc, Weak};
 
-    use super::{Bridge, Buffer};
+    use super::{Bridge, Buffer, Payload, Reader};
     use crate::wl::wayland::Worker;
 
     thread_local! {
@@ -222,6 +244,18 @@ mod wayland {
 
         fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
             self.get(window)?.load(buffer)
+        }
+
+        fn store_rich(&mut self, window: &slint::Window, payload: Payload) -> bool {
+            let Some(worker) = self.get(window) else {
+                return false;
+            };
+            worker.store_payload(Buffer::Clipboard, payload);
+            true
+        }
+
+        fn load_rich(&mut self, window: &slint::Window, reader: Reader) -> Option<Payload> {
+            self.get(window)?.load_payload(Buffer::Clipboard, reader)
         }
 
         fn extras(&self) -> Option<&dyn crate::wl::Aux> {

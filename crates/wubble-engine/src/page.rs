@@ -304,16 +304,31 @@ pub enum EditCommand {
 /// What a frame asks of the host's clipboard ([`PageEvent::Clipboard`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClipboardRequest {
-    /// The page put this text on the clipboard (a copy or cut).
-    Copy(String),
+    /// The page put this on the clipboard: a copy or cut (the selection, or what its `copy`
+    /// listener set), or `navigator.clipboard.write`.
+    Copy(wubble_core::clipboard::Payload),
+    /// A copy in an image document: the picture at this URL, as Chromium copies it there
+    /// ([`crate::view::View::download_image`], as Copy Image).
+    CopyImage(String),
     /// The selection changed: the primary selection's text.
     Primary(String),
     /// The page is pasting: answer with [`crate::view::View::answer_clipboard`].
-    /// `primary`: a middle click's paste, from the primary selection.
-    Paste { primary: bool },
-    /// `navigator.clipboard.readText` passed its permission check: answer with
-    /// the read's id.
-    Read(u32),
+    Paste(PasteFrom),
+    /// `navigator.clipboard.readText` ([`Reader::Text`](wubble_core::clipboard::Reader)) or
+    /// `read` ([`Reader::AsyncApi`](wubble_core::clipboard::Reader)) passed its permission
+    /// check: answer with the read's id.
+    Read(u32, wubble_core::clipboard::Reader),
+}
+
+/// Where a page's paste comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteFrom {
+    /// The clipboard, every type a page takes (Paste, Ctrl+V).
+    Clipboard,
+    /// The clipboard's text (Paste as Plain Text, Ctrl+Shift+V).
+    PlainText,
+    /// The primary selection's text (a middle click in a field).
+    Primary,
 }
 
 /// The content scripts' channels on welding's one frame message (wubble-helper

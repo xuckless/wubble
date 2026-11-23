@@ -43,7 +43,7 @@ use crate::media::{self, AudioProbe, Fullscreen, FullscreenInput, MediaEffect, P
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 use crate::page::{
     ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags,
-    FrameChannel, LogLevel, MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
+    FrameChannel, LogLevel, MediaFlags, PageEvent, PasteFrom, PermissionKind, Rect, RequestId,
 };
 use crate::pinch::{self, Pinch, TouchKind};
 use crate::popup::{self, PopupWidget};
@@ -1668,11 +1668,17 @@ impl View {
         }
     }
 
-    /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): the text to
-    /// paste, or a read's result.
-    pub fn answer_clipboard(&mut self, frame: &str, text: &str, read: Option<u32>) {
+    /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): what to paste, or a
+    /// read's result. Also a paste the host starts itself (no request: Paste as Plain Text).
+    pub fn answer_clipboard(
+        &mut self,
+        frame: &str,
+        payload: &wubble_core::clipboard::Payload,
+        read: Option<u32>,
+    ) {
         let id = read.map(|r| r.to_string()).unwrap_or_default();
-        self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{text}"));
+        let message = format!("{id}\n{}", payload.to_json());
+        self.send_frame_message(frame, FrameChannel::Clipboard, &message);
     }
 
     // ── Editing, IME, drags, popup frames.
@@ -1961,16 +1967,29 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
     })
 }
 
-/// `clipboard.js`'s `kind\ntext`.
+/// Where `clipboard.js`'s `paste` comes from, by its text; another text is the clipboard.
+const PASTES: [(&str, PasteFrom); 2] = [
+    ("plain", PasteFrom::PlainText),
+    ("primary", PasteFrom::Primary),
+];
+
+/// `clipboard.js`'s `kind\ntext`: a copy's text is the page JSON
+/// (`wubble_core::clipboard::Payload::to_json`).
 fn clipboard_request(body: &str) -> Option<ClipboardRequest> {
+    use wubble_core::clipboard::{Payload, Reader};
     let (kind, text) = body.split_once('\n')?;
     Some(match kind {
-        "copy" => ClipboardRequest::Copy(text.into()),
+        "copy" => ClipboardRequest::Copy(Payload::from_json(text)?),
+        "image" => ClipboardRequest::CopyImage(text.into()),
         "primary" => ClipboardRequest::Primary(text.into()),
-        "paste" => ClipboardRequest::Paste {
-            primary: text == "primary",
-        },
-        "read" => ClipboardRequest::Read(text.parse().ok()?),
+        "paste" => ClipboardRequest::Paste(
+            PASTES
+                .iter()
+                .find_map(|(t, from)| (*t == text).then_some(*from))
+                .unwrap_or(PasteFrom::Clipboard),
+        ),
+        "read" => ClipboardRequest::Read(text.parse().ok()?, Reader::Text),
+        "items" => ClipboardRequest::Read(text.parse().ok()?, Reader::AsyncApi),
         _ => return None,
     })
 }
@@ -2733,24 +2752,51 @@ mod tests {
                 None
             }
         };
-        assert_eq!(
-            request("clipboard\ncopy\na\nb"),
-            Some(ClipboardRequest::Copy("a\nb".into()))
-        );
-        assert_eq!(
-            request("clipboard\npaste\nprimary"),
-            Some(ClipboardRequest::Paste { primary: true })
-        );
-        assert_eq!(
-            request("clipboard\npaste\n"),
-            Some(ClipboardRequest::Paste { primary: false })
-        );
-        assert_eq!(
-            request("clipboard\nread\n4"),
-            Some(ClipboardRequest::Read(4))
-        );
-        assert_eq!(request("clipboard\nread\nx"), None);
-        assert_eq!(request("clipboard\nformat\nc:"), None);
+        use wubble_core::clipboard::{Payload, Reader};
+        let copied = Payload {
+            text: Some("a\nb".into()),
+            ..Payload::default()
+        };
+        let cases = [
+            (
+                "clipboard\ncopy\n{\"text\":\"a\\nb\"}",
+                Some(ClipboardRequest::Copy(copied)),
+            ),
+            ("clipboard\ncopy\na\nb", None),
+            (
+                "clipboard\nimage\nhttps://a.test/c.png",
+                Some(ClipboardRequest::CopyImage("https://a.test/c.png".into())),
+            ),
+            (
+                "clipboard\nprimary\na",
+                Some(ClipboardRequest::Primary("a".into())),
+            ),
+            (
+                "clipboard\npaste\nprimary",
+                Some(ClipboardRequest::Paste(PasteFrom::Primary)),
+            ),
+            (
+                "clipboard\npaste\nplain",
+                Some(ClipboardRequest::Paste(PasteFrom::PlainText)),
+            ),
+            (
+                "clipboard\npaste\n",
+                Some(ClipboardRequest::Paste(PasteFrom::Clipboard)),
+            ),
+            (
+                "clipboard\nread\n4",
+                Some(ClipboardRequest::Read(4, Reader::Text)),
+            ),
+            (
+                "clipboard\nitems\n5",
+                Some(ClipboardRequest::Read(5, Reader::AsyncApi)),
+            ),
+            ("clipboard\nread\nx", None),
+            ("clipboard\nformat\nc:", None),
+        ];
+        for (text, want) in cases {
+            assert_eq!(request(text), want, "{text}");
+        }
         // `zoom.js`'s answers are the view's own (`View::zoom_answer`, `pinch::Answer`).
         assert_eq!(at("zoom\nin"), None);
         // No channel, or an unknown one: nothing.

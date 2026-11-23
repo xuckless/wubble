@@ -25,8 +25,12 @@ use wubble_ui::{AppWindow, Palette};
 
 use super::{Host, new_tab};
 use crate::builtin_smoke as smoke;
+use crate::clipboard::Bridge as _;
 use crate::pagescripts::{self, HintColors, hex};
 use crate::shot_io::{self, Saved, Saver};
+
+/// The toast when Copy Image could not put the picture on the clipboard.
+const COPY_IMAGE_FAILED: &str = "Could not copy the image";
 
 /// What the built-ins hold.
 pub(super) struct Builtins {
@@ -722,20 +726,59 @@ impl Host {
         self.builtins.saver.get_or_insert_with(Saver::spawn)
     }
 
-    /// Copy Image's pixels arrived (`View::download_image`): onto the clipboard, on the worker
-    /// that owns the clipboard's images; the toast says how it went.
+    /// Copy Image's pixels arrived (`View::download_image`) for the image at `url`: onto the
+    /// clipboard, on the worker that owns the clipboard's images; the toast says how it went.
+    /// Where the host carries the pages' clipboard it goes there instead, as a PNG with
+    /// Chromium's `<img>` markup, so one source owns the selection: the PNG is encoded off the
+    /// event loop.
     pub(super) fn copy_image_done(
         &mut self,
         window: &AppWindow,
+        url: &str,
         image: Result<wubble_engine::favicon::Rgba, String>,
     ) {
         let image = match image {
             Ok(image) => image,
             Err(e) => {
                 eprintln!("wubble: copy image: {e}");
-                return self.toast(window, "Could not copy the image");
+                return self.toast(window, COPY_IMAGE_FAILED);
             }
         };
+        if crate::clipboard::bridged() {
+            let html = wubble_core::clipboard::image_markup(url);
+            let spawned = std::thread::Builder::new()
+                .name("wubble-copy-image".into())
+                .spawn(move || {
+                    let png = shot_io::encode_png(image.width, image.height, &image.rgba);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        crate::with_host(|host| {
+                            let Some(window) = host.w.window.upgrade() else {
+                                return;
+                            };
+                            let payload = png.map(|bytes| wubble_core::clipboard::Payload {
+                                html: Some(html),
+                                files: vec![wubble_core::clipboard::File {
+                                    name: "image.png".into(),
+                                    mime: "image/png".into(),
+                                    bytes,
+                                }],
+                                ..Default::default()
+                            });
+                            let stored = payload
+                                .map_err(|e| eprintln!("wubble: copy image: {e}"))
+                                .is_ok_and(|p| host.clipboard.store_rich(window.window(), p));
+                            if !stored {
+                                host.toast(&window, COPY_IMAGE_FAILED);
+                            }
+                        });
+                    });
+                });
+            if let Err(e) = spawned {
+                eprintln!("wubble: copy image: {e}");
+                self.toast(window, COPY_IMAGE_FAILED);
+            }
+            return;
+        }
         let job = shot_io::Job {
             picture: shot_io::Picture::Rgba {
                 width: image.width,
@@ -750,7 +793,7 @@ impl Host {
                     if saved.clipboard != Some(true)
                         && let Some(window) = host.w.window.upgrade()
                     {
-                        host.toast(&window, "Could not copy the image");
+                        host.toast(&window, COPY_IMAGE_FAILED);
                     }
                 });
             });
