@@ -225,7 +225,9 @@ mod tests {
             tab: OTHER,
             restore_window: false,
         };
-        let rows: &[(&str, &[(WindowId, Screen)], TabId, Option<WindowId>)] = &[
+        // (name, each window's screen, the page's tab, the window that holds it)
+        type OwnerRow<'a> = (&'a str, &'a [(WindowId, Screen)], TabId, Option<WindowId>);
+        let rows: &[OwnerRow] = &[
             (
                 "one window holds it",
                 &[(WA, page(true)), (WB, Windowed)],

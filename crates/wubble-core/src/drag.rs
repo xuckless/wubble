@@ -460,7 +460,9 @@ mod tests {
     /// A release seen by another window ends the drag as cancelled; the drag's own window routes it.
     #[test]
     fn a_release_in_another_window_cancels() {
-        let table: [(&str, Drag<Data>, bool, Option<Input<Data>>); 7] = [
+        /// (name, state, released in the drag's own window, what runs)
+        type ReleaseRow = (&'static str, Drag<Data>, bool, Option<Input<Data>>);
+        let table: [ReleaseRow; 7] = [
             (
                 "tab, own window",
                 tab_dragging(DropTarget::None),
@@ -502,7 +504,14 @@ mod tests {
         let cancel = Some(Input::Tab(TI::Cancel));
         let page = Some(Input::Page(PI::Cancelled));
         // (name, state, lost window, closed, what runs)
-        let table: [(&str, Drag<Data>, WindowId, bool, Option<Input<Data>>); 14] = [
+        type WindowLostRow = (
+            &'static str,
+            Drag<Data>,
+            WindowId,
+            bool,
+            Option<Input<Data>>,
+        );
+        let table: [WindowLostRow; 14] = [
             ("idle", Drag::Idle, own, true, None),
             (
                 "tab pressed",

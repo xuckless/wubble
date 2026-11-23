@@ -192,7 +192,7 @@ fn the_scanner_finds_each_rule() {
         ("in a comment or a string", "    text: \"shown: a.has-hover Timer {\"; // root.x-open = 1", &[]),
     ];
     for (name, line, want) in rows {
-        assert_eq!(rules(*line), *want, "{name}");
+        assert_eq!(rules(line), *want, "{name}");
     }
     let text = "in-out property <bool> spaces-open: false;\n\
                 in property <bool> menu;\n\
@@ -268,8 +268,10 @@ fn the_glass_check_finds_each_fault() {
                 out property <int> find: 2;\n    out property <int> menu: 3;\n}";
     let keys = glass_keys(text);
     let dup = [keys.clone(), vec![("print".to_string(), 2)]].concat();
+    // (name, the keys, the rows' glass, the faults)
+    type GlassRow<'a> = (&'a str, &'a [(String, i64)], &'a [&'a str], &'a [&'a str]);
     #[rustfmt::skip]
-    let rows: &[(&str, &[(String, i64)], &[&str], &[&str])] = &[
+    let rows: &[GlassRow] = &[
         ("clean", &keys, &["find", "menu", "find"], &[]),
         ("two keys alike", &dup, &["find", "menu", "print"], &["GlassKeys.print and GlassKeys.find are both 2"]),
         ("a row names a missing key", &keys, &["find", "menu", "toast"], &["a row's glass toast is no GlassKeys key"]),

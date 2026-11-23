@@ -343,8 +343,9 @@ mod tests {
             size: B,
             fading: true,
         };
+        type AfterFrameRow = (&'static str, PaneView, Px, Px, PaneView, Option<PaneEffect>);
         #[rustfmt::skip]
-        let rows: &[(&str, PaneView, Px, Px, PaneView, Option<PaneEffect>)] = &[
+        let rows: &[AfterFrameRow] = &[
             ("live, the same size", Live { size: A }, A, A, Live { size: A }, None),
             ("live, a stale size", Live { size: A }, B, A, Stretching { from: A }, None),
             ("live, resized and painted at once", Live { size: A }, B, B, fading, Some(PaneEffect::Arrived { from: A })),

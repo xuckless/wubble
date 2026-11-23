@@ -207,7 +207,8 @@ fn open_refused_outside_window_kinds() {
 fn store_table() {
     let (dl, ds, menu, ext) = (win(Downloads), win(Spaces), win(Menu), win(Extensions));
     let agent = win(AgentSheet);
-    let rows: Vec<(&str, TabId, bool, Vec<Action>, Action, Vec<Effect>, Vec<Layer>)> = vec![
+    type StoreRow = (&'static str, TabId, bool, Vec<Action>, Action, Vec<Effect>, Vec<Layer>);
+    let rows: Vec<StoreRow> = vec![
         // refusals: nothing changes
         ("find refused under a sheet", A, false, vec![open(on(BookmarkSheet, A))], open(on(Find, A)), vec![], vec![on(BookmarkSheet, A)]),
         ("a menu refused under a dialog", A, false, vec![open(on(Dialog, A))], open(menu), vec![], vec![on(Dialog, A)]),
@@ -336,7 +337,8 @@ fn store_table() {
 fn a_machine_s_overlay_meets_the_rules() {
     let with = |others: Vec<Layer>, machine: Vec<Kind>| T { others, machine, ..env(A) };
     // name, env, action, effects, what the store holds after
-    let rows: Vec<(&str, T, Action, Vec<Effect>, Vec<Layer>)> = vec![
+    type MachineRow = (&'static str, T, Action, Vec<Effect>, Vec<Layer>);
+    let rows: Vec<MachineRow> = vec![
         ("its dialog refuses Spaces", with(vec![on(Dialog, A)], vec![Dialog]), open(win(Spaces)), vec![], vec![]),
         ("downloads replaces its menu", with(vec![win(Menu)], vec![Menu]), open(win(Downloads)),
             vec![Cancel(win(Menu)), Mount(win(Downloads)), focus(Some(win(Downloads)))], vec![win(Downloads)]),
@@ -426,7 +428,8 @@ fn error_panel_and_boost_stay_hidden_with_tab() {
 #[rustfmt::skip]
 fn selectors() {
     let (menu, sheet, find, err) = (win(Menu), on(BookmarkSheet, A), on(Find, A), on(ErrorPanel, A));
-    let rows: Vec<(&str, Vec<Action>, KeyOwner, PointerOwner, AxRoots, bool)> = vec![
+    type SelectorRow = (&'static str, Vec<Action>, KeyOwner, PointerOwner, AxRoots, bool);
+    let rows: Vec<SelectorRow> = vec![
         ("nothing", vec![], KeyOwner::Page, PointerOwner::Page, AxRoots::default(), true),
         ("a menu over the error panel has the keys", vec![open(err), open(menu)], KeyOwner::Layer(menu), PointerOwner::Layer(menu),
             AxRoots { modal: None, roots: vec![err, menu] }, true),
@@ -469,7 +472,8 @@ fn rows_match_the_rules_table() {
     const P: &[Group] = &[Exclusive];
     const N: &[Group] = &[];
     // kind, group, tail, refused under, closes, Escape, keys, one per window
-    let table: &[(Kind, Group, bool, &[Group], &[Group], Esc, Keys, bool)] = &[
+    type KindRow = (Kind, Group, bool, &'static [Group], &'static [Group], Esc, Keys, bool);
+    let table: &[KindRow] = &[
         (Notice, Coexist, false, N, N, Esc::ShellOnly, Keys::Never, true),
         (Permission, Coexist, true, N, N, Esc::ShellOnly, Keys::Never, false),
         (Find, Coexist, true, M, P, Esc::Any, Keys::OnAsk, false),
@@ -674,8 +678,9 @@ fn every_hover_kind_has_its_delays_and_no_other_kind_has_any() {
 #[test]
 fn a_cue_from_rest_in_every_slot() {
     let k = Key::Tab(A);
+    type CueRow = (&'static str, Kind, Key, Cue, Hover<Key>, Vec<Effect>);
     #[rustfmt::skip]
-    let rows: &[(&str, Kind, Key, Cue, Hover<Key>, Vec<Effect>)] = &[
+    let rows: &[CueRow] = &[
         ("tooltip waits 280", Tooltip, Key::Page(A), Cue::Enter, Hover::Pending { key: Key::Page(A), due: 1_280 }, vec![Arm(Some(1_280))]),
         ("card waits 500", Preview, k, Cue::Enter, Hover::Pending { key: k, due: 1_500 }, vec![Arm(Some(1_500))]),
         ("status waits 80", Status, k, Cue::Enter, Hover::Pending { key: k, due: 1_080 }, vec![Arm(Some(1_080))]),
@@ -894,8 +899,9 @@ fn navigation_a_tab_gone_and_a_window_gone() {
 fn the_peek_through_its_slot() {
     let p = |cue, now| hv(Peek, Key::None, cue, now);
     let up = Some(Key::None);
+    type PeekRow = (&'static str, Vec<Action>, Option<Key>, Vec<Effect>);
     #[rustfmt::skip]
-    let rows: &[(&str, Vec<Action>, Option<Key>, Vec<Effect>)] = &[
+    let rows: &[PeekRow] = &[
         ("the edge shows at once", vec![p(Cue::Show, 0)], up, vec![Show(at(Peek), Key::None)]),
         ("arming, the edge shows at once", vec![p(Cue::Enter, 0), p(Cue::Show, 10)], up, vec![Arm(Some(60)), Show(at(Peek), Key::None), Arm(None)]),
         ("a strip move shows after 60", vec![p(Cue::Enter, 0), tick(59), tick(60)], up, vec![Arm(Some(60)), Arm(Some(60)), Show(at(Peek), Key::None)]),
