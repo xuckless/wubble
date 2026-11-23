@@ -11,7 +11,9 @@ use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::split::{Bow, SPLIT, string_line};
-use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
+use wubble_core::stretch::{
+    PaneEffect, PaneEvent, PaneSprings, PaneView, Px, after_frame, transition,
+};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowId;
 use wubble_engine::input::Point;
@@ -19,7 +21,7 @@ use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
 use wubble_gfx::scene::{PagePane, PageRect as ScenePage, Rect};
-use wubble_gfx::{Edge, FrameSize};
+use wubble_gfx::{Edge, FrameSize, NativeFrame};
 use wubble_ui::{AppWindow, GlanceView, Palette, Radius, SplitPane, SplitSeam};
 
 /// The peek's card covers this much of the content area each way.
@@ -47,8 +49,28 @@ use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
 
+/// The part of a frame of `size` a pane laid out as `layout` shows: a frame painted for this
+/// layout shows its layout's part (CEF can paint a pixel more); a stale one, painted for
+/// another, is shown whole, scaled to the pane.
+pub(super) fn frame_clip(size: FrameSize, layout: &Layout) -> FrameSize {
+    if size == layout.frame_size() {
+        size.cropped_to(layout.size)
+    } else {
+        size
+    }
+}
+
+/// A pane's corner radius: none while its page is fullscreen.
+pub(super) fn pane_radius(window: &AppWindow) -> f32 {
+    if window.get_page_fullscreen() {
+        0.0
+    } else {
+        window.global::<Radius>().get_md()
+    }
+}
+
 /// The content area's size, logical pixels.
-fn content_size(window: &AppWindow) -> (f64, f64) {
+pub(super) fn content_size(window: &AppWindow) -> (f64, f64) {
     (
         f64::from(window.get_content_width()),
         f64::from(window.get_content_height()),
@@ -365,7 +387,10 @@ impl Host {
         self.lay_out_views_with(window, &rects);
         let stretching = self.step_stretch(window, &rects, dt);
         let bowed = self.mask_panes(window, &rects);
+        // what this render draws over a page on its layer, and whether it still may stay there
+        self.layers_changed(window, false);
         self.render_panes_with(window, &rects);
+        self.layers_drawn();
         self.measure_shell(window, &rects, bowed);
         let autoscrolling = self.autoscroll_frame(window, now);
         let moving = strings || stretching || autoscrolling || source;
@@ -664,11 +689,7 @@ impl Host {
     fn sync_scene_pages_with(&self, window: &AppWindow, rects: &[PageRect]) {
         let (_, height) = content_size(window);
         let (cx, cy) = (window.get_content_x(), window.get_content_y());
-        let radius = if window.get_page_fullscreen() {
-            0.0
-        } else {
-            window.global::<Radius>().get_md()
-        };
+        let radius = pane_radius(window);
         let pages: Vec<PagePane> = rects
             .iter()
             .filter_map(|r| {
@@ -733,11 +754,12 @@ impl Host {
     }
 
     /// Takes each pane's new frame, if it has one, and the focused page's popup frame. Returns
-    /// whether any pane got a frame.
+    /// whether any pane got a frame: drawn by the shell, or shown on its page layer
+    /// (`Host::route_frame`), which costs no render of the shell.
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
-        let focused = self.shown();
         let keys = self.key_page();
         let mut presented = false;
+        let mut shell_drew = false;
         for (tab, layout) in self.view_layouts(window) {
             let Some(view) = self.tab_view(tab) else {
                 continue;
@@ -766,74 +788,11 @@ impl Host {
                 let timer = self.engine.page_painted(refresh).timer;
                 self.arm_pump(timer);
             }
-            let size = frame.size();
-            // A frame painted for this layout shows its layout's part (CEF can paint a pixel
-            // more); a stale one, painted for another, is shown whole, scaled to the pane.
-            let clip = if size == layout.frame_size() {
-                size.cropped_to(layout.size)
-            } else {
-                size
-            };
-            // `--measure` follows the focused page.
-            let measured =
-                (Some(tab) == focused).then(|| measure::Frame::of(&frame, layout.frame_size()));
-            let slot = self.slot_for(tab);
-            let blit = Instant::now();
-            // A pane at rest, showing this slot's last frame whole and 1:1, takes only what
-            // changed, written in place: the image stays, so the changed part is marked here.
-            let shown = self
-                .w
-                .frames
-                .get(&tab)
-                .filter(|f| f.view.is_live() && f.prev.is_none() && f.masked.is_none())
-                .filter(|f| f.clip == clip)
-                .map(|f| f.image.clone());
-            let (image, damage) = match shown {
-                Some(shown) => self.w.presenters[slot].present_damaged(frame, &shown),
-                None => self.w.presenters[slot].present(frame).map(|i| (i, None)),
-            }
-            .map_err(|e| e.to_string())?;
-            measure::stage(measure::Metric::Blit, blit);
-            if let Some(damage) = damage {
-                measure::count(measure::Count::CefFrameDamaged);
-                self.mark_damage(window, tab, clip, damage);
-            }
-            if let Some(measured) = measured {
-                let presenter = &self.w.presenters[slot];
-                measure::taken(measured, || {
-                    presenter.probe(measure::PROBE.0, measure::PROBE.1)
-                });
-            }
-            let wanted = px(wanted);
             self.frame_arrived(tab);
-            let entry = self.w.frames.entry(tab).or_insert_with(|| PaneFrame {
-                image: image.clone(),
-                clip,
-                view: PaneView::Live { size: px(size) },
-                springs: PaneSprings::default(),
-                prev: None,
-                masked: None,
-            });
-            entry.view = transition(entry.view, wanted, PaneEvent::Layout).0;
-            let (view, effect) = transition(entry.view, wanted, PaneEvent::Frame(px(size)));
-            entry.view = view;
-            // the frame at the new size arrived: one damped wobble, and the stale frame (still
-            // intact in the other ring slot or the old ring) fades out over it
-            entry.prev = match effect {
-                Some(PaneEffect::Arrived { from }) => {
-                    entry.springs.arrive(from, wanted);
-                    Some((
-                        std::mem::replace(&mut entry.image, image.clone()),
-                        entry.clip,
-                    ))
-                }
-                None => None,
-            };
-            entry.image = image;
-            entry.clip = clip;
+            shell_drew |= self.route_frame(window, tab, layout, wanted, frame)?;
             presented = true;
         }
-        if presented {
+        if shell_drew {
             self.render_panes(window);
             // an arrival's wobble and fade, or a stale frame's stretch, need the frame driver
             if self.w.frames.values().any(|f| !f.view.is_live()) {
@@ -843,9 +802,84 @@ impl Host {
         Ok(presented)
     }
 
+    /// `frame` of `tab`, laid out as `layout` for a view wanting `wanted`, through the shell's
+    /// presenter into the pane's entry: the page layer's `Effect::Present` (and its
+    /// `PresentLatest`). The caller renders the panes.
+    pub(super) fn present_frame(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        layout: Layout,
+        wanted: FrameSize,
+        frame: NativeFrame,
+    ) -> Result<(), String> {
+        let focused = self.shown();
+        let generation = frame.generation();
+        let size = frame.size();
+        let clip = frame_clip(size, &layout);
+        // `--measure` follows the focused page.
+        let measured =
+            (Some(tab) == focused).then(|| measure::Frame::of(&frame, layout.frame_size()));
+        let slot = self.slot_for(tab);
+        let blit = Instant::now();
+        // A pane at rest, showing this slot's last frame whole and 1:1, takes only what
+        // changed, written in place: the image stays, so the changed part is marked here.
+        let shown = self
+            .w
+            .frames
+            .get(&tab)
+            .filter(|f| f.view.is_live() && f.prev.is_none() && f.masked.is_none())
+            .filter(|f| f.clip == clip)
+            .map(|f| f.image.clone());
+        let (image, damage) = match shown {
+            Some(shown) => self.w.presenters[slot].present_damaged(frame, &shown),
+            None => self.w.presenters[slot].present(frame).map(|i| (i, None)),
+        }
+        .map_err(|e| e.to_string())?;
+        measure::stage(measure::Metric::Blit, blit);
+        if let Some(damage) = damage {
+            measure::count(measure::Count::CefFrameDamaged);
+            self.mark_damage(window, tab, clip, damage);
+        }
+        if let Some(measured) = measured {
+            let presenter = &self.w.presenters[slot];
+            measure::taken(measured, || {
+                presenter.probe(measure::PROBE.0, measure::PROBE.1)
+            });
+        }
+        let wanted = px(wanted);
+        let entry = self.w.frames.entry(tab).or_insert_with(|| PaneFrame {
+            image: image.clone(),
+            clip,
+            view: PaneView::Live { size: px(size) },
+            springs: PaneSprings::default(),
+            prev: None,
+            masked: None,
+            generation,
+        });
+        let (view, effect) = after_frame(entry.view, wanted, px(size));
+        entry.view = view;
+        // the frame at the new size arrived: one damped wobble, and the stale frame (still
+        // intact in the other ring slot or the old ring) fades out over it
+        entry.prev = match effect {
+            Some(PaneEffect::Arrived { from }) => {
+                entry.springs.arrive(from, wanted);
+                Some((
+                    std::mem::replace(&mut entry.image, image.clone()),
+                    entry.clip,
+                ))
+            }
+            None => None,
+        };
+        entry.image = image;
+        entry.clip = clip;
+        entry.generation = generation;
+        Ok(())
+    }
+
     /// The part of `tab`'s pane that `damage` (in its frame's pixels, of which the pane shows
     /// `clip`) covers is redrawn in the next frame; nothing when it is empty.
-    fn mark_damage(
+    pub(super) fn mark_damage(
         &self,
         window: &AppWindow,
         tab: TabId,

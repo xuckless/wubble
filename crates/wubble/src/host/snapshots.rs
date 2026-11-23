@@ -60,6 +60,8 @@ impl Host {
         if self.snapshots.standing_in(tab) {
             return;
         }
+        // a page on its layer: its latest frame into the presenter first, as the snapshot reads it
+        self.layer_pixels(tab);
         let slot = |w: &super::WindowHost| {
             w.frames
                 .contains_key(&tab)
@@ -138,6 +140,8 @@ impl Host {
                     springs: PaneSprings::default(),
                     prev: None,
                     masked: None,
+                    // no CEF frame yet: older than any the page paints
+                    generation: 0,
                 },
             );
             self.snapshots.standing_in.insert(tab);

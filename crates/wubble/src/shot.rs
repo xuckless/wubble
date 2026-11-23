@@ -63,6 +63,12 @@ pub fn requested() -> bool {
     PATH.with(|p| p.borrow().is_some())
 }
 
+/// Whether a shot will still read the window's pixels: `--shot` not yet taken, or the
+/// gallery's `--shot-dir` (any scene may shoot).
+pub fn pending() -> bool {
+    SHOT.with(|s| s.borrow().is_some()) || has_dir()
+}
+
 /// The window the shot is taken of; sized like the design's screenshot.
 pub fn attach(window: &AppWindow) {
     let path = PATH.with(|p| p.borrow().clone());

@@ -176,17 +176,26 @@ pub fn pacing() -> Pacing {
         .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
 }
 
+/// The command line's `--page-layer`. Set once, before any window.
+static PAGE_LAYER: std::sync::OnceLock<wubble_core::page_layer::Mode> = std::sync::OnceLock::new();
+
+/// This run's page layer mode (off unless the command line said otherwise).
+pub fn page_layer() -> wubble_core::page_layer::Mode {
+    PAGE_LAYER.get().copied().unwrap_or_default()
+}
+
 fn main() -> ExitCode {
     // `--measure startup` counts from here.
     measure::process_started();
     // Before anything touches the OS's application object (winit, CEF).
     app::prepare_process();
     let command = match cli::parse_with_shot(std::env::args_os()) {
-        Ok((command, shot, pacing)) => {
+        Ok((command, shot, flags)) => {
             shot::request(shot);
-            if let Some(pacing) = pacing {
+            if let Some(pacing) = flags.pacing {
                 let _ = PACING.set(pacing);
             }
+            let _ = PAGE_LAYER.set(flags.page_layer);
             command
         }
         Err(e) => e.exit(),
@@ -1591,6 +1600,14 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.pip_command(&name, value))
     });
     window.on_pip_hovered(move |on| with_host_in(win, |host| host.pip_hovered(on)));
+    // A surface began or ended its exit: a page on its layer may have to leave it. Fired
+    // inside a render, so queued; only when the mode can make a layer.
+    if page_layer() != wubble_core::page_layer::Mode::Off {
+        window.on_mounted_changed(move || {
+            let _ =
+                slint::invoke_from_event_loop(move || with_host_in(win, Host::surfaces_mounted));
+        });
+    }
     window.on_ax_action(move |index, name, value| {
         with_host_in(win, |host| host.ax_action(index, &name, &value))
     });
@@ -2170,6 +2187,21 @@ fn run(
     );
     host.set_extensions_root(extensions_root);
     HOST.set(Some(host));
+    // The page layer hears each window's render just before it is presented (what it drew of
+    // a page on its layer); only when the mode can make one.
+    if page_layer() != wubble_core::page_layer::Mode::Off {
+        i_slint_renderer_skia::presenting::set_hook(|window| {
+            HOST.with(|cell| match cell.try_borrow_mut() {
+                Ok(mut host) => {
+                    if let Some(host) = host.as_mut() {
+                        host.presenting(window);
+                    }
+                }
+                // busy (a render inside a pump): what this one drew is lost, another follows
+                Err(_) => window.request_redraw(),
+            });
+        });
+    }
     // The browser checks for an update as it opens (the setting and the policy permitting) and
     // counts the start as healthy after a while (`update::install`); smokes do neither.
     let healthy = slint::Timer::default();

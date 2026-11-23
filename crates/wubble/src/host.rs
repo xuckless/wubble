@@ -41,6 +41,7 @@ mod look;
 mod media;
 mod memory;
 mod overlay;
+mod page_layer;
 mod pages;
 mod panes;
 mod parity;
@@ -345,6 +346,9 @@ struct PaneFrame {
     prev: Option<(slint::Image, wubble_gfx::FrameSize)>,
     /// The frame cut along a bowed string, while one bends this pane's edge.
     masked: Option<wubble_gfx::mask::Masked>,
+    /// CEF's paint count of the frame `image` holds (`NativeFrame::generation`): what a render
+    /// of the pane draws, for the page layer's `Event::Presenting`.
+    generation: u64,
 }
 
 impl PaneFrame {
@@ -874,6 +878,18 @@ impl Host {
     /// Closes window `id`'s platform window. Its frames and rings go with it; the tabs it
     /// showed are hidden (or closed) by the model.
     fn close_window(&mut self, id: WindowId) {
+        // its pages' layers go while it is still a window (none with `--page-layer=off`)
+        let layered = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .any(|w| w.id == id && !w.layers.is_empty());
+        if layered {
+            let here = self.w.id;
+            self.enter(id);
+            if let Some(window) = self.w.window.upgrade() {
+                self.layers_gone(&window, |_| true);
+            }
+            self.enter(here);
+        }
         if self.w.id == id {
             let Some(&other) = self.parked.keys().next() else {
                 return;
@@ -1221,6 +1237,8 @@ impl Host {
         // Another tab's frame (and cursor) must not stay on screen while
         // input already goes to the tabs shown now: blank until they paint.
         let kept = self.framed_tabs();
+        // a page that left its pane leaves its layer first (its frame goes to the shell)
+        self.layers_gone(&window, |t| !kept.contains(&t));
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
         window::free_slots(&mut self.w.slots, &kept);

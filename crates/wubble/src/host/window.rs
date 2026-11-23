@@ -123,6 +123,8 @@ pub(crate) struct WindowHost {
     /// This window's full screen, its own or one of its pages' (`crate::screen`): each window
     /// has its own, so one window's page fullscreen is never another's.
     pub(super) screen: Screen,
+    /// The route of each of its panes to an OS layer of its own (`host/page_layer.rs`).
+    pub(super) layers: super::page_layer::PageLayers,
 }
 
 impl WindowHost {
@@ -165,6 +167,7 @@ impl WindowHost {
             fingers: Default::default(),
             toast: slint::Timer::default(),
             screen: Screen::default(),
+            layers: Default::default(),
         }
     }
 }

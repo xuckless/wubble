@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use crate::passwords_smoke::VaultPhase;
 use clap::{CommandFactory, Parser, error::ErrorKind};
+use wubble_core::page_layer;
+pub use wubble_core::page_layer::Mode as PageLayerMode;
 pub use wubble_gfx::pacing::Pacing;
 
 pub use crate::load_run::Variant;
@@ -80,6 +82,11 @@ struct Cli {
     /// CEF painting on its own timer, instead of this platform's default.
     #[arg(long)]
     no_begin_frames: bool,
+    /// Which pages show on their own OS layer instead of through the shell
+    /// (`wubble_core::page_layer`): `off` (none, the default) or `fullscreen` (a page in
+    /// fullscreen and the picture-in-picture window; macOS only, elsewhere the same as off).
+    #[arg(long, value_name = "MODE", value_parser = parse_page_layer, default_value = "off")]
+    page_layer: PageLayerMode,
     /// `--measure load`: what the engine hooks requests with (default: as shipped).
     #[arg(long, value_name = "VARIANT", value_enum, requires = "measure")]
     load_variant: Option<Variant>,
@@ -198,6 +205,14 @@ enum SmokeArg {
     Extensions {
         installed: bool,
     },
+}
+
+/// `--page-layer`: one of `page_layer::MODES`.
+fn parse_page_layer(value: &str) -> Result<PageLayerMode, String> {
+    page_layer::mode(value).ok_or_else(|| {
+        let names: Vec<&str> = page_layer::MODES.iter().map(|&(n, _)| n).collect();
+        format!("one of {}", names.join(", "))
+    })
 }
 
 fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
@@ -602,9 +617,17 @@ pub struct ShotArgs {
     pub parity: Option<PathBuf>,
 }
 
-/// [`parse`], and the shot options.
-/// Also the pacing `--begin-frames` or `--no-begin-frames` asks for, if either.
-pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, ShotArgs, Option<Pacing>), clap::Error>
+/// What any run takes from the command line, beside its command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunFlags {
+    /// The pacing `--begin-frames` or `--no-begin-frames` asks for, if either.
+    pub pacing: Option<Pacing>,
+    /// `--page-layer`.
+    pub page_layer: PageLayerMode,
+}
+
+/// [`parse`], the shot options and the run's flags.
+pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, ShotArgs, RunFlags), clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
@@ -620,7 +643,11 @@ where
         (_, true) => Some(Pacing::CefTimer),
         _ => None,
     };
-    Command::try_from(cli).map(|command| (command, shot, pacing))
+    let flags = RunFlags {
+        pacing,
+        page_layer: cli.page_layer,
+    };
+    Command::try_from(cli).map(|command| (command, shot, flags))
 }
 
 #[cfg(test)]
@@ -1125,7 +1152,7 @@ mod tests {
         let pacing = |args: &[&str]| {
             parse_with_shot(std::iter::once("wubble").chain(args.iter().copied()))
                 .ok()
-                .map(|(.., pacing)| pacing)
+                .map(|(.., flags)| flags.pacing)
         };
         assert_eq!(pacing(&[]), Some(None));
         assert_eq!(pacing(&["--begin-frames"]), Some(Some(Pacing::Shell)));
@@ -1138,6 +1165,32 @@ mod tests {
             Some(Some(Pacing::Shell))
         );
         assert_eq!(pacing(&["--begin-frames", "--no-begin-frames"]), None);
+    }
+
+    #[test]
+    fn page_layer_flag_rows() {
+        let flags = |args: &[&str]| {
+            parse_with_shot(std::iter::once("wubble").chain(args.iter().copied()))
+                .ok()
+                .map(|(.., flags)| flags)
+        };
+        let layer = |mode| RunFlags {
+            page_layer: mode,
+            ..RunFlags::default()
+        };
+        #[rustfmt::skip]
+        let rows: &[(&str, &[&str], Option<RunFlags>)] = &[
+            ("page_layer_defaults_off", &[], Some(layer(PageLayerMode::Off))),
+            ("off", &["--page-layer", "off"], Some(layer(PageLayerMode::Off))),
+            ("fullscreen", &["--page-layer=fullscreen"], Some(layer(PageLayerMode::Fullscreen))),
+            ("on is not yet a mode", &["--page-layer", "on"], None),
+            ("an unknown mode", &["--page-layer", "x"], None),
+            ("with the pacing", &["--begin-frames", "--page-layer", "fullscreen", "--smoke", "page"],
+                Some(RunFlags { pacing: Some(Pacing::Shell), page_layer: PageLayerMode::Fullscreen })),
+        ];
+        for &(name, args, want) in rows {
+            assert_eq!(flags(args), want, "{name}");
+        }
     }
 
     #[test]
