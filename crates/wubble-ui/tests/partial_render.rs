@@ -1,8 +1,8 @@
 //! Partial rendering in the shell's renderer (Slint's Skia on wgpu, vendored: see
 //! `vendor/i-slint-renderer-skia/WUBBLE_CHANGES.md`), checked by state, never by time: a new
 //! page frame alone redraws its pane and none of the sidebar's items; a change in one row
-//! redraws that row; a frame with nothing changed draws nothing; and every partial frame
-//! holds the same pixels as the same state drawn whole. Rendered offscreen into a kept texture
+//! redraws that row; a frame with nothing changed draws nothing; a page hole clears its pane;
+//! and every partial frame holds the same pixels as the same state drawn whole. Rendered offscreen into a kept texture
 //! (`SkiaWGPU30Renderer::render_to_kept_texture`, the path the window's surface takes).
 //! Needs a GPU adapter; without one the test returns early.
 //! Pattern: `crisp_text.rs` (offscreen platform).
@@ -358,4 +358,32 @@ fn a_page_frame_redraws_its_pane_and_nothing_of_the_sidebar() {
     );
     assert!(row.items_drawn < 6, "{row:?}");
     assert_eq!(differing(&read(&gpu, &kept), &whole(&gpu)), 0);
+
+    // the page hole (vendored change 3): the pane cleared to transparent inside its rounded
+    // clip, where the page's OS layer shows, the window around it as it was
+    shell.set_frame(i_slint_renderer_skia::hole::image());
+    window.renderer.render_to_kept_texture(&kept).unwrap();
+    let holed = read(&gpu, &kept);
+    let at = |x: usize, y: usize| -> [u8; 4] {
+        let i = (y * SIZE.0 as usize + x) * 4;
+        [holed[i], holed[i + 1], holed[i + 2], holed[i + 3]]
+    };
+    let near = |p: [u8; 4], q: [u8; 4]| p.iter().zip(q).all(|(a, b)| a.abs_diff(b) <= 2);
+    let ground = [0x20, 0x21, 0x24, 0xff];
+    #[rustfmt::skip]
+    let points: &[(&str, (usize, usize), [u8; 4])] = &[
+        ("the pane's middle is a hole", (260, 150), [0; 4]),
+        ("to its left edge", (129, 150), [0; 4]),
+        ("to its bottom edge", (260, 290), [0; 4]),
+        ("outside its rounded corner the window stays", (128, 8), ground),
+        ("the window's ground", (4, 4), ground),
+    ];
+    for &(name, (x, y), want) in points {
+        assert!(near(at(x, y), want), "{name}: {:?}", at(x, y));
+    }
+    assert_eq!(
+        differing(&holed, &whole(&gpu)),
+        0,
+        "a partial frame with a hole holds what a whole redraw does"
+    );
 }

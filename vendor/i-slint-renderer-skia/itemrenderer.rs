@@ -724,6 +724,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         if geometry.is_empty() {
             return;
         }
+        // wubble change (3): the page hole clears what is under it, in the current clip (`hole.rs`)
+        if crate::hole::is(&image.source()) {
+            self.canvas.draw_rect(to_skia_rect(&geometry), &crate::hole::paint());
+            return;
+        }
         self.draw_image_impl(self_rc, image, geometry);
     }
 
