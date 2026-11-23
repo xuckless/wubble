@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use wubble_core::model::{Dest, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{FolderId, Item, Rgb, SpaceIcon, SpaceId, SpaceKind};
+use wubble_core::space::{FolderId, Item, Rgb, Side, SpaceIcon, SpaceId, SpaceKind};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
 use wubble_core::window::WindowId;
@@ -98,7 +98,7 @@ pub fn window_space(model: &Model, window: WindowId) -> wubble_core::space::Spac
             own.and_then(|w| w.tab())
                 .and_then(|t| model.location(t))
                 .map(|(s, _)| s)
-                .filter(|&s| model.is_private_space(s))
+                .filter(|&s| model.side_of_space(s) == Side::Private)
         })
         .unwrap_or_else(|| model.active_space())
 }

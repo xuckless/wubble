@@ -20,7 +20,7 @@
 
 use crate::model::Model;
 use crate::pages::InternalPage;
-use crate::space::{Item, Space, SpaceId};
+use crate::space::{Item, Side, Space, SpaceId};
 use crate::tab::TabId;
 use crate::window::{Shown, WindowId};
 
@@ -64,11 +64,11 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
         .windows
         .iter()
         .rev()
-        .filter(|w| !model.is_private_window(w.id))
+        .filter(|w| model.side_of_window(w.id) != Side::Private)
         .find_map(|w| w.space().map(|_| w.id));
     let mut out = Projection::default();
     for w in &model.windows {
-        if model.is_private_window(w.id) {
+        if model.side_of_window(w.id) == Side::Private {
             continue;
         }
         let kind = match w.shown {

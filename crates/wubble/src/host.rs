@@ -94,7 +94,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{Decision, Permission, PrivateChoices, SitePermissions};
-use wubble_core::space::{ContainerId, Item, SpaceId, Storage};
+use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
 use wubble_core::window::{WindowId, WindowKind};
@@ -1326,8 +1326,7 @@ impl Host {
         {
             return;
         }
-        if !self.agent_drives(tab)
-            && !self.model.is_private_tab(tab)
+        if self.records(tab)
             && let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone())
         {
             self.store.put_favicon(&url, &icon, now_ms());
@@ -1728,8 +1727,7 @@ impl Host {
             }
             WebEvent::TitleChanged(title) => {
                 self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
-                if !self.agent_drives(tab)
-                    && !self.model.is_private_tab(tab)
+                if self.records(tab)
                     && let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {
@@ -1784,6 +1782,13 @@ impl Host {
         self.after_change();
     }
 
+    /// Whether what `tab` does goes into the user's records (history visits, titles, favicons):
+    /// not an agent session's loads, not a private window's, and not an unknown tab's (fails
+    /// closed: `Model::side_of_tab`).
+    pub(super) fn records(&self, tab: TabId) -> bool {
+        !self.agent_drives(tab) && self.model.side_of_tab(tab) == Side::Normal
+    }
+
     /// The origin of `tab`'s page, for remembered site choices.
     fn site_of(&self, tab: TabId) -> Option<String> {
         let url = self.model.tabs.get(&tab)?.url.as_str();
@@ -1793,7 +1798,7 @@ impl Host {
     /// The site choices `tab` reads: the stored ones, and for a private window's tab its own
     /// in-memory ones over them.
     fn site_choices(&self, tab: TabId) -> std::borrow::Cow<'_, SitePermissions> {
-        if self.model.is_private_tab(tab) {
+        if self.model.side_of_tab(tab) == Side::Private {
             std::borrow::Cow::Owned(
                 self.site_permissions
                     .overlaid(&self.private_choices.permissions),
@@ -1807,7 +1812,7 @@ impl Host {
     /// only (it goes with the private windows' container), any other in the table and the
     /// store.
     fn remember_site(&mut self, tab: TabId, site: &str, kind: Permission, decision: Decision) {
-        if self.model.is_private_tab(tab) {
+        if self.model.side_of_tab(tab) == Side::Private {
             self.private_choices.permissions.set(site, kind, decision);
         } else {
             self.site_permissions.set(site, kind, decision);
@@ -2265,8 +2270,8 @@ impl Host {
     /// In a private window no rule applies: its links stay in it (Chrome's incognito window).
     pub(super) fn open_routed(&mut self, url: String, opener: Option<TabId>) {
         let private = opener.map_or_else(
-            || self.model.is_private_space(self.model.active_space()),
-            |t| self.model.is_private_tab(t),
+            || self.model.side_of_space(self.model.active_space()) == Side::Private,
+            |t| self.model.side_of_tab(t) == Side::Private,
         );
         let routed = if private {
             wubble_core::routing::Routed::default()
@@ -2417,11 +2422,7 @@ impl Host {
             self.drag_gone(tab);
         }
         let typed = self.typed_nav.committed(tab);
-        // an agent session's loads, and a private window's, are none of the user's history
-        if persist::visit_to_record(previous.as_deref(), url)
-            && !self.agent_drives(tab)
-            && !self.model.is_private_tab(tab)
-        {
+        if persist::visit_to_record(previous.as_deref(), url) && self.records(tab) {
             let transition = if typed {
                 Transition::Typed
             } else {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::space::{SplitGroup, even};
+use crate::space::{Side, SplitGroup, Storage, even};
 use crate::tab::Tab;
 use crate::window::{Window, WindowId};
 
@@ -3822,7 +3822,7 @@ fn an_emptied_private_window_closes_and_a_normal_one_stays() {
         },
     );
     let w3 = opened(&fx);
-    assert!(m.is_private_window(w3) && m.window(w1).is_some());
+    assert!(m.side_of_window(w3) == Side::Private && m.window(w1).is_some());
     // the last one torn out: a new private window takes it and the old one closes, the
     // container staying with the new one
     let last = m.order(s1)[0];
@@ -3836,7 +3836,7 @@ fn an_emptied_private_window_closes_and_a_normal_one_stays() {
     let w4 = opened(&fx);
     assert!(fx.contains(&Effect::WindowClosed(w1)), "{fx:?}");
     assert!(!fx.iter().any(|e| matches!(e, Effect::ContainerDeleted { .. })));
-    assert!(m.is_private_window(w4) && m.is_private_tab(last));
+    assert!(m.side_of_window(w4) == Side::Private && m.side_of_tab(last) == Side::Private);
     // a normal window emptied so stays, on its empty Space
     let (m, fx) = run(
         m,
@@ -3861,13 +3861,13 @@ fn a_new_window_from_a_private_window_is_a_normal_one() {
     let w = opened(&fx);
     let s = m.active_space();
     assert_eq!(m.focused(), w);
-    assert!(!m.is_private_window(w) && !m.is_private_space(s) && s != s0());
+    assert!(m.side_of_window(w) != Side::Private && m.side_of_space(s) != Side::Private && s != s0());
     assert_eq!(m.spaces[m.space_idx(s).unwrap()].container, D);
     let (m, t) = open(m, None);
-    assert!(!m.is_private_tab(t) && m.location(t).map(|(s, _)| s) == Some(s));
+    assert!(m.side_of_tab(t) != Side::Private && m.location(t).map(|(s, _)| s) == Some(s));
     let (m, fx) = run(m, Command::NewPrivateWindow { url: None });
     let w2 = opened(&fx);
-    assert!(m.is_private_window(w2) && fx.contains(&Effect::ShowCommandBar));
+    assert!(m.side_of_window(w2) == Side::Private && fx.contains(&Effect::ShowCommandBar));
     assert_eq!(m.private_spaces().len(), 2);
     assert_eq!(m.containers.iter().filter(|c| c.storage == Storage::Memory).count(), 1);
 }

@@ -127,11 +127,6 @@ impl Model {
             .map(|w| w.id)
     }
 
-    /// Whether `space` is a private window's ([`Space::private`]).
-    pub fn is_private_space(&self, space: SpaceId) -> bool {
-        self.space_idx(space).is_some_and(|si| self.spaces[si].kind == SpaceKind::Private)
-    }
-
     /// Where `container` keeps its data ([`Container::storage`]). An unknown container is
     /// [`Storage::Memory`]: what nobody knows is never written to disk (fails closed).
     pub fn storage_of(&self, container: ContainerId) -> Storage {
@@ -141,29 +136,33 @@ impl Model {
             .map_or(Storage::Memory, |c| c.storage)
     }
 
-    /// Whether `container` is the in-memory one private windows share ([`Storage::Memory`]).
-    pub fn is_ephemeral(&self, container: ContainerId) -> bool {
-        self.storage_of(container) == Storage::Memory
+    /// The side of the private line `container` is on: its storage's.
+    pub fn side_of_container(&self, container: ContainerId) -> Side {
+        self.storage_of(container).side()
     }
 
-    /// Whether `tab` is a private window's: placed in a private Space, or (the same, by
-    /// [`Model::check`]) living in the ephemeral container. Nothing of it is saved or recorded.
-    pub fn is_private_tab(&self, tab: TabId) -> bool {
-        self.location(tab)
-            .is_some_and(|(s, _)| self.is_private_space(s))
-            || self
-                .tabs
-                .get(&tab)
-                .is_some_and(|t| self.is_ephemeral(t.container))
+    /// The side `space` is on: its container's (a private window's Space, [`SpaceKind::Private`],
+    /// is in the Memory container, by [`Model::check`]). An unknown Space is private.
+    pub fn side_of_space(&self, space: SpaceId) -> Side {
+        self.space_idx(space)
+            .map_or(Side::Private, |si| self.side_of_container(self.spaces[si].container))
     }
 
-    /// Whether window `id` is private: a Main window showing a private Space, or a Popup or
-    /// Pip window of a private tab.
-    pub fn is_private_window(&self, id: WindowId) -> bool {
+    /// The side `tab` is on: its container's. An unknown tab is private: nothing of it is
+    /// recorded, nothing of it crosses (fails closed).
+    pub fn side_of_tab(&self, tab: TabId) -> Side {
+        self.tabs
+            .get(&tab)
+            .map_or(Side::Private, |t| self.side_of_container(t.container))
+    }
+
+    /// The side window `id` is on: its Space's (a Main window), its own tab's (a Little, Popup
+    /// or Pip window). An unknown window is private.
+    pub fn side_of_window(&self, id: WindowId) -> Side {
         match self.window(id).map(|w| w.shown) {
-            Some(Shown::Space(s)) => self.is_private_space(s),
-            Some(Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t)) => self.is_private_tab(t),
-            None => false,
+            Some(Shown::Space(s)) => self.side_of_space(s),
+            Some(Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t)) => self.side_of_tab(t),
+            None => Side::Private,
         }
     }
 
@@ -185,7 +184,7 @@ impl Model {
     /// tabs): a private window only its own, any other window every Space that is not private
     /// (Chrome's incognito window and its tab search stay within one profile).
     pub fn listed_spaces(&self, space: SpaceId) -> impl Iterator<Item = &Space> + '_ {
-        let private = self.is_private_space(space);
+        let private = self.side_of_space(space) == Side::Private;
         self.spaces
             .iter()
             .filter(move |s| if private { s.id == space } else { s.kind != SpaceKind::Private })
@@ -199,7 +198,7 @@ impl Model {
             .iter()
             .rev()
             .filter_map(Window::space)
-            .find(|&s| !self.is_private_space(s))
+            .find(|&s| self.side_of_space(s) != Side::Private)
             .or_else(|| self.spaces.iter().find(|s| s.kind != SpaceKind::Private).map(|s| s.id))
             .expect("a Space that is not private")
     }
@@ -227,7 +226,7 @@ impl Model {
         };
         ended
             .into_iter()
-            .filter(|&t| self.is_private_tab(t))
+            .filter(|&t| self.side_of_tab(t) == Side::Private)
             .collect()
     }
 
@@ -278,7 +277,7 @@ impl Model {
             None => {
                 let main = self.main_idx();
                 let normal = self.windows.iter().rposition(|w| {
-                    w.space().is_some_and(|s| !self.is_private_space(s))
+                    w.space().is_some_and(|s| self.side_of_space(s) != Side::Private)
                 });
                 match normal {
                     Some(i) => {
@@ -394,7 +393,7 @@ impl Model {
                 {
                     return vec![Effect::LastWindowClosed];
                 }
-                if self.is_private_space(s) {
+                if self.side_of_space(s) == Side::Private {
                     return self.close_private_window(id, s);
                 }
                 let was_focused = self.focused() == id;
@@ -509,25 +508,25 @@ impl Model {
         }
         // a tab never crosses between private and normal windows (Chrome keeps incognito tabs in
         // incognito windows: `TabStripModel` drags only within one profile)
-        let private = self.is_private_tab(tab);
+        let side = self.side_of_tab(tab);
         // the private window it leaves, which closes once nothing is left in it
         let left = self
             .location(tab)
             .map(|(s, _)| s)
-            .filter(|&s| self.is_private_space(s))
+            .filter(|&s| self.side_of_space(s) == Side::Private)
             .and_then(|s| self.space_window(s));
         let mut fx = vec![];
         let target = match to {
             WindowTarget::Existing(w) => match self.window(w) {
                 Some(win)
-                    if win.kind() == WindowKind::Main && self.is_private_window(w) == private =>
+                    if win.kind() == WindowKind::Main && self.side_of_window(w) == side =>
                 {
                     w
                 }
                 _ => return vec![],
             },
             // a private tab dragged out makes a private window of its own
-            WindowTarget::New if private => {
+            WindowTarget::New if side == Side::Private => {
                 let (_, id) = self.add_private_window();
                 fx.push(Effect::WindowOpened(id));
                 id
@@ -602,7 +601,7 @@ impl Model {
     ) -> Vec<Effect> {
         // a link from another app never opens in a private window (Chrome opens it in the last
         // normal one)
-        if space.is_some_and(|s| self.is_private_space(s)) {
+        if space.is_some_and(|s| self.side_of_space(s) == Side::Private) {
             return vec![];
         }
         let space = Some(space.unwrap_or_else(|| self.normal_space()));
@@ -617,7 +616,7 @@ impl Model {
     pub(super) fn promote_little(&mut self, window: WindowId, space: SpaceId) -> Vec<Effect> {
         let tab = match self.window(window).map(|w| w.shown) {
             Some(Shown::Little(t))
-                if self.space_idx(space).is_some() && !self.is_private_space(space) =>
+                if self.space_idx(space).is_some() && self.side_of_space(space) != Side::Private =>
             {
                 t
             }

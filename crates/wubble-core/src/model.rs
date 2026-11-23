@@ -755,10 +755,10 @@ impl Model {
                 return Err(format!("space {:?} has unknown container", s.id));
             }
             // a private Space's tabs, and only theirs, live in the in-memory container
-            if (s.kind == SpaceKind::Private) != self.is_ephemeral(s.container) {
-                return Err(format!("space {:?} private={} container", s.id, s.kind == SpaceKind::Private));
+            let side = self.side_of_container(s.container);
+            if (s.kind == SpaceKind::Private) != (side == Side::Private) {
+                return Err(format!("space {:?} is {:?} in a {side:?} container", s.id, s.kind));
             }
-            let private = s.kind == SpaceKind::Private;
             let mut place = |t: TabId| -> Result<(), String> {
                 if placed.insert(t, si).is_some() {
                     return Err(format!("tab {t:?} placed twice"));
@@ -770,7 +770,7 @@ impl Model {
                 if !self.has_container(tab.container) {
                     return Err(format!("tab {t:?} has unknown container"));
                 }
-                if self.is_ephemeral(tab.container) != private {
+                if self.side_of_container(tab.container) != side {
                     return Err(format!("tab {t:?} crosses a private window's line"));
                 }
                 if tab.opener.is_some_and(|o| !self.tabs.contains_key(&o)) {
@@ -999,7 +999,7 @@ impl Model {
         show: bool,
     ) -> Vec<Effect> {
         // extensions do not run in private windows (Chrome's default: "Allow in Incognito" off)
-        if space.is_some_and(|s| self.is_private_space(s)) {
+        if space.is_some_and(|s| self.side_of_space(s) == Side::Private) {
             return vec![];
         }
         let space = Some(space.unwrap_or_else(|| self.normal_space()));
@@ -1041,7 +1041,7 @@ impl Model {
         // a private Space's tabs are all in its in-memory container, and no other tab is
         let eff = if self.spaces[si].kind == SpaceKind::Private {
             default
-        } else if self.is_ephemeral(eff) {
+        } else if self.side_of_container(eff) == Side::Private {
             return None;
         } else {
             eff
@@ -1192,7 +1192,7 @@ impl Model {
         };
         !self.is_glance(tab)
             && !deleted_agent_space
-            && !self.is_private_tab(tab)
+            && self.side_of_tab(tab) != Side::Private
             && self.tabs.get(&tab).is_some_and(|t| !t.url.is_empty())
     }
 
@@ -1419,7 +1419,7 @@ impl Model {
         };
         if !self.has_container(container)
             || self.spaces[si].kind == SpaceKind::Private
-            || self.is_ephemeral(container)
+            || self.side_of_container(container) == Side::Private
         {
             return vec![];
         }
@@ -1469,7 +1469,7 @@ impl Model {
             return vec![];
         }
         // a private window is locked to its Space, and no switcher reaches a private Space
-        if self.spaces[si].kind == SpaceKind::Private || self.is_private_space(self.active_space()) {
+        if self.spaces[si].kind == SpaceKind::Private || self.side_of_space(self.active_space()) == Side::Private {
             return vec![];
         }
         let mut fx = self.set_active_space(space);
@@ -1481,7 +1481,7 @@ impl Model {
         // the in-memory container goes with the last private window, never by itself
         if container == ContainerId::DEFAULT
             || !self.has_container(container)
-            || self.is_ephemeral(container)
+            || self.side_of_container(container) == Side::Private
         {
             return vec![];
         }
@@ -1516,7 +1516,7 @@ impl Model {
         if !self.has_container(container)
             || self.tabs[&tab].container == container
             || self.spaces[si].kind == SpaceKind::Private
-            || self.is_ephemeral(container)
+            || self.side_of_container(container) == Side::Private
         {
             return vec![];
         }
@@ -2015,7 +2015,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             show,
         } => m.extension_tab(url, container, space, show),
         // an agent session never works in a private Space
-        Command::OpenInSpace { space, .. } if m.is_private_space(space) => vec![],
+        Command::OpenInSpace { space, .. } if m.side_of_space(space) == Side::Private => vec![],
         Command::OpenInSpace { space, url } => m
             .place_new_tab(url, None, None, Some(space))
             .map(|(id, si, create)| {

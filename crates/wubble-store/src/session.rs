@@ -18,7 +18,7 @@ use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
-    SpaceKind, SplitGroup, Storage,
+    Side, SpaceKind, SplitGroup, Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 use wubble_core::window::{Geometry, Window, WindowId};
@@ -353,7 +353,7 @@ pub(crate) async fn write_model(
     write_tabs(tx, model).await?;
     write_splits(tx, model).await?;
     write_windows(tx, model).await?;
-    let active = if model.is_private_space(model.active_space()) {
+    let active = if model.side_of_space(model.active_space()) == Side::Private {
         model.normal_space()
     } else {
         model.active_space()
@@ -378,7 +378,7 @@ async fn write_windows(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
         .windows
         .iter()
         .filter_map(|w| Some((w, w.space()?)))
-        .filter(|(_, space)| !m.is_private_space(*space));
+        .filter(|(_, space)| m.side_of_space(*space) != Side::Private);
     for (i, (w, space)) in mains.enumerate() {
         let g = w.geometry;
         st.execute((

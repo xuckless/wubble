@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use crate::lifecycle::{Activity, Pin};
 use crate::model::Model;
+use crate::space::Side;
 use crate::tab::TabId;
 
 /// The stored words of [`ArchiveAfter`], in its order: the setting's choices.
@@ -87,7 +88,7 @@ pub fn due(
                 && !model.is_internal(t.id)
                 && model.windowed(t.id).is_none()
                 && model.split_of(t.id).is_none()
-                && !model.is_private_tab(t.id)
+                && model.side_of_tab(t.id) != Side::Private
         })
         .map(|t| t.id)
         .collect()

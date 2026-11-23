@@ -21,7 +21,7 @@ use wubble_core::extensions::shell::{
 use wubble_core::extensions::{Event, ExtensionId, Installed, reaches, restart_needed};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::window::WindowId;
 use wubble_engine::app::ViewId;
 use wubble_engine::cdp::EvalId;
@@ -330,7 +330,7 @@ impl Host {
     /// A press on an extension's row: its action runs on the visible tab, in a private window
     /// only for an extension allowed there (`reaches`; the popover lists no other).
     pub fn extension_pressed(&mut self, id: &str) {
-        let private = self.model.is_private_window(self.w.id);
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
         let allowed = ExtensionId::parse(id)
             .and_then(|id| self.ext_ui.list.get(&id))
             .is_some_and(|e| reaches(e, private));
@@ -626,7 +626,7 @@ impl Host {
         // the engine's fact (`ext_api::available`): without its patches no extension is offered
         let available = self.engine.ext_apis();
         // a private window shows the button only for extensions allowed there
-        let private = self.model.is_private_window(self.w.id);
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
         window.set_has_extensions(wubble_core::extensions::footer_button(
             available, &ui.list, private,
         ));
@@ -674,7 +674,7 @@ impl Host {
             return rows.clone();
         }
         let view = self.shown().and_then(|t| self.views.get(&t)).copied();
-        let private = self.model.is_private_window(self.w.id);
+        let private = self.model.side_of_window(self.w.id) == Side::Private;
         self.ext_ui
             .list
             .extensions()

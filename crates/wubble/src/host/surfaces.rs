@@ -15,6 +15,7 @@ use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
 use wubble_core::site::{Decision, Permission};
+use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
@@ -121,7 +122,7 @@ impl Host {
                     });
                 let nav = NavFlags {
                     search: self.search_engine.map(|e| e.info().name),
-                    private: self.model.is_private_tab(tab),
+                    private: self.model.side_of_tab(tab) == Side::Private,
                     ..nav
                 };
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
@@ -758,7 +759,7 @@ impl Host {
         let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
         let host = url.as_deref().and_then(zoom::host_of);
         if let (Some(url), Some(host)) = (url.as_deref(), host.as_deref())
-            && self.model.is_private_tab(tab)
+            && self.model.side_of_tab(tab) == Side::Private
         {
             // kept in memory over the stored level, which zooming back to drops it for
             let stored = zoom::wanted(&self.site_zoom, url, self.zoom_default);
@@ -781,7 +782,7 @@ impl Host {
     pub(super) fn restore_zoom(&mut self, tab: TabId, url: &str) {
         let want = zoom::wanted(&self.site_zoom, url, self.zoom_default);
         // a private window's own level, else the stored one
-        let want = if self.model.is_private_tab(tab) {
+        let want = if self.model.side_of_tab(tab) == Side::Private {
             zoom::wanted(&self.private_choices.zoom, url, want)
         } else {
             want

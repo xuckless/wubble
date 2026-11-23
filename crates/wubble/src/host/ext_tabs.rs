@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use wubble_core::extensions::{opened_url, project};
 use wubble_core::model::{Command, Model};
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
 use wubble_core::window::WindowId;
 use wubble_engine::app::{Engine, ViewId};
@@ -73,7 +73,7 @@ fn open_command(
     let space = window
         .and_then(|w| model.windows.iter().find(|x| x.id == w))
         .and_then(|w| w.space())
-        .filter(|&s| !model.is_private_space(s));
+        .filter(|&s| model.side_of_space(s) != Side::Private);
     Command::ExtensionTab {
         url: opened_url(url).to_owned(),
         container,
@@ -127,11 +127,11 @@ pub(crate) fn serve(host: &mut impl ExtHost) {
             // allowed extension's reach is the engine's: docs/research/extensions.md)
             ExtRequest::CloseTab(view) => host
                 .tab_of(view)
-                .filter(|&t| !host.model().is_private_tab(t))
+                .filter(|&t| host.model().side_of_tab(t) != Side::Private)
                 .map(Command::CloseTab),
             ExtRequest::ActivateTab(view) => host
                 .tab_of(view)
-                .filter(|&t| !host.model().is_private_tab(t))
+                .filter(|&t| host.model().side_of_tab(t) != Side::Private)
                 .map(Command::ActivateTab),
             ExtRequest::ActionChanged { extension } => {
                 let _ = extension;

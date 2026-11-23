@@ -10,7 +10,7 @@ use slint::ComponentHandle;
 use wubble_core::agent::log::Outcome;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::model::Command;
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
 use wubble_core::window::Closing;
 use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
@@ -214,12 +214,8 @@ impl Host {
                         entry: None,
                     })
                     .entry = Some(entry.id);
-                // a private window's download is listed for this run only (the file stays)
-                if !self.model.is_ephemeral(container) {
-                    self.store.add_download(&entry);
-                }
                 let text = format!("Downloading {}", entry.name);
-                self.downloads.list.insert(0, entry);
+                self.push_entry(entry, self.model.side_of_tab(tab));
                 self.toast(window, &text);
                 self.render_downloads(window);
                 self.report_busy(tab);
@@ -493,12 +489,8 @@ impl Host {
             container,
         };
         d.next_id += 1;
-        // a private window's download is listed for this run only (the file stays)
-        if !self.model.is_ephemeral(container) {
-            self.store.add_download(&entry);
-        }
         let (id, text) = (entry.id, format!("Downloading {}", entry.name));
-        self.downloads.list.insert(0, entry);
+        self.push_entry(entry, self.model.side_of_container(container));
         if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, &text);
             self.render_downloads(&window);
@@ -506,9 +498,14 @@ impl Host {
         id
     }
 
-    /// A file wubble wrote itself (a print saved as PDF), listed as a finished download of `url`.
-    pub(super) fn add_finished_download(&mut self, url: &str, path: &Path) {
+    /// A file wubble wrote itself (a print saved as PDF), listed as a finished download of `url`
+    /// in `tab`'s container (stored only for a normal tab: `push_entry`).
+    pub(super) fn add_finished_download(&mut self, url: &str, path: &Path, tab: Option<TabId>) {
         let size = std::fs::metadata(path).map_or(0, |m| m.len());
+        let container = tab
+            .and_then(|t| self.model.tabs.get(&t))
+            .map_or(ContainerId::DEFAULT, |t| t.container);
+        let side = tab.map_or(Side::Private, |t| self.model.side_of_tab(t));
         let d = &mut self.downloads;
         let entry = DownloadEntry {
             id: d.next_id,
@@ -519,14 +516,23 @@ impl Host {
             total: Some(size),
             state: DownloadState::Complete,
             started_ms: now_ms(),
-            container: ContainerId::DEFAULT,
+            container,
         };
         d.next_id += 1;
-        self.store.add_download(&entry);
-        self.downloads.list.insert(0, entry);
+        self.push_entry(entry, side);
         if let Some(window) = self.w.window.upgrade() {
             self.render_downloads(&window);
         }
+    }
+
+    /// `entry` goes to the top of the list, and to the store only from the normal `side`: a
+    /// private window's downloads are listed for this run only (their files stay). An unknown
+    /// tab's side is private, so its entry is never stored (fails closed).
+    fn push_entry(&mut self, entry: DownloadEntry, side: Side) {
+        if side == Side::Normal {
+            self.store.add_download(&entry);
+        }
+        self.downloads.list.insert(0, entry);
     }
 
     /// The entry's file moved to `path` (a media download's final name).
@@ -690,11 +696,11 @@ impl Host {
     /// every other one in normal windows only (Chrome's off-the-record profile has a download
     /// manager of its own).
     fn listed_downloads(&self) -> Vec<DownloadEntry> {
-        let private = self.model.is_private_window(self.w.id);
+        let side = self.model.side_of_window(self.w.id);
         self.downloads
             .list
             .iter()
-            .filter(|e| self.model.is_ephemeral(e.container) == private)
+            .filter(|e| self.model.side_of_container(e.container) == side)
             .cloned()
             .collect()
     }

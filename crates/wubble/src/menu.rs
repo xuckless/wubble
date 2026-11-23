@@ -23,7 +23,7 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
 use wubble_core::pagetheme::PageTheme;
-use wubble_core::space::{ContainerId, SpaceId, SpaceKind, Storage};
+use wubble_core::space::{ContainerId, Side, SpaceId, SpaceKind};
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
 use wubble_core::window::{Closing, Shown, WindowId, WindowKind, WindowTarget};
@@ -779,12 +779,12 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     let own = model.window_of(tab);
     // a private window's tab moves only among private windows (a new one is private too), a
     // normal tab only among normal ones
-    let private = model.is_private_tab(tab);
+    let side = model.side_of_tab(tab);
     let others = model.windows.iter().filter(|w| {
         w.kind() == WindowKind::Main
             && Some(w.id) != own
             && w.space() != model.location(tab).map(|l| l.0)
-            && model.is_private_window(w.id) == private
+            && model.side_of_window(w.id) == side
     });
     std::iter::once(entry("Move to New Window".into(), WindowTarget::New))
         .chain(others.filter_map(|w| {
@@ -830,12 +830,12 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
         // one a tab of the focused Main window, or of the last normal one when that is private
         Shown::Popup(tab) => {
             let main = model.main_window();
-            let to = if model.is_private_tab(tab) {
+            let to = if model.side_of_tab(tab) == Side::Private {
                 model
                     .location(tab)
                     .and_then(|(space, _)| model.space_window(space))
                     .unwrap_or(main)
-            } else if model.is_private_window(main) {
+            } else if model.side_of_window(main) == Side::Private {
                 model.space_window(model.normal_space()).unwrap_or(main)
             } else {
                 main
@@ -1017,11 +1017,11 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
     let container = model.tabs.get(&tab).map(|t| t.container);
     // the containers on the tab's side of the private line: a private window clears its
     // in-memory container only, a normal one never names it
-    let private = container.is_some_and(|c| model.is_ephemeral(c));
+    let mine = model.side_of_tab(tab);
     let side: Vec<ContainerId> = model
         .containers
         .iter()
-        .filter(|c| (c.storage == Storage::Memory) == private)
+        .filter(|c| c.storage.side() == mine)
         .map(|c| c.id)
         .collect();
     let name = container
