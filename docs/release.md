@@ -2,7 +2,9 @@
 
 How wubble ships: a tarball and `install.sh` on Linux, a signed and notarised DMG and the same
 script on macOS (docs/decisions.md "Release form"), updated in place by the app itself
-("Auto-update", "Update signing"). The first releases are previews (`0.1.0-preview.N`).
+("Auto-update", "Update signing"). Versions are semantic from `0.6.1` on (`MAJOR.MINOR.PATCH`, no
+`-preview` suffix; before it, previews `0.1.0-preview.N`). A build follows the channel of its own
+version (a plain version: stable); every release is published to both channels.
 
 ## Where things are
 
@@ -10,9 +12,10 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
   `wubble-<V>-<platform>.tar.xz` (platforms `linux-x86_64`, `macos-aarch64`), each platform's
   `.debug.tar.xz` (Linux: split symbols; macOS: `wubble.dSYM` and `wubble-helper.dSYM`), the `.dmg`, a `.sha256` and a `.minisig` for each, and
   `latest.json` (+ `.minisig`), the signed update manifest.
-- The rolling release `updates` (a prerelease, never "latest") holds `preview.json` and, from the
-  first stable version on, `stable.json`, each with its `.minisig`: byte copies of the newest
-  `latest.json`. The app and `install.sh` read only these.
+- The rolling release `updates` (a prerelease, never "latest") holds `preview.json` and
+  `stable.json`, each with its `.minisig`: both byte copies of the newest `latest.json` (a preview
+  install reads `preview.json` and so moves to each release; a release install reads
+  `stable.json`). The app and `install.sh` read only these.
 - Manifest schema and checks: `crates/wubble-core/src/update/manifest.rs`; install layout and
   rollback: `crates/wubble-core/src/update/install.rs`; the tool: `crates/wubble-release`.
 
@@ -32,7 +35,7 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
 
 ## Each release
 
-1. Set `[workspace.package] version` in `Cargo.toml` (e.g. `0.1.0-preview.1`), commit, tag
+1. Set `[workspace.package] version` in `Cargo.toml` (e.g. `0.6.1`), commit, tag
    `v<version>`, push the commit and the tag.
 2. Linux (this box): `CEF_PATH=<codec CEF> scripts/release/package-linux.sh`
    (the own CEF build with codecs; the script refuses to pack without `CEF_PATH`). It first builds
@@ -62,15 +65,16 @@ script on macOS (docs/decisions.md "Release form"), updated in place by the app 
    installed binary's `--smoke boot` and `--smoke page`. Smokes that find elements by id
    (`mcp`, `settings`, `tabs`, `video`) need a `dist` build with `SLINT_EMIT_DEBUG_INFO=1`.
 6. Publish (the owner's go, every release): push the commit and the tag;
-   `gh release create v<V> --prerelease --verify-tag --title "wubble <V>" --notes-file ... dist/wubble-<V>-* dist/latest.json*`;
-   then copy `latest.json` and its `.minisig` to the rolling `updates` release as `preview.json`
-   (`gh release upload updates ... --clobber`): from then on installs offer the update.
+   `gh release create v<V> --verify-tag --title "wubble <V>" --notes-file ... dist/wubble-<V>-* dist/latest.json*`;
+   then copy `latest.json` and its `.minisig` to the rolling `updates` release as both
+   `preview.json` and `stable.json` (with their `.minisig`; `gh release upload updates ... --clobber`):
+   from then on installs on either channel offer the update.
 7. Check: a fresh `install.sh` from GitHub gives `<V>`; an install of the previous version, run
    once, stages `<V>` (`updates/launch.json`) and starts as it the next time.
 8. macOS, after the tag is pushed: the owner runs `package-macos.sh` on the Mac (step 3); its
    archive is signed here, added to `latest.json` (`make-manifest` again with both archives in
-   `dist/`), and the manifest, its signature and the Mac files are uploaded; `preview.json` is
-   replaced again. `.github/workflows/release-sign.yml` (signing in CI) is not used.
+   `dist/`), and the manifest, its signature and the Mac files are uploaded; `preview.json` and
+   `stable.json` are replaced again. `.github/workflows/release-sign.yml` (signing in CI) is not used.
 9. The site: set `VERSION` in `site/assets/js/site.js` to `<V>`, commit, and `npx wrangler deploy` in
    `site/` (the owner's Cloudflare login; `site/README.md`), once every platform's files are up.
 
