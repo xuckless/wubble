@@ -1,4 +1,4 @@
-import { GlassKeys, GlassOver } from "model.slint";
+import { Geo, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { Segmented } from "../kit/controls/segmented.slint";
@@ -21,6 +21,14 @@ export component ReaderControls inherits Rectangle {
     in property <int> theme;
     callback setting(string, int);
     callback closed();
+    // Its place in the window, when it changed (host `Action::Placed`).
+    callback placed(length, length, length, length);
+
+    // Its place while it is drawn, an empty rect otherwise (showing it is a change too).
+    property <Geo> geo: root.mounted ? { x: root.absolute-position.x, y: root.absolute-position.y, width: root.width, height: root.height } : { };
+    changed geo => {
+        root.placed(self.geo.x, self.geo.y, self.geo.width, self.geo.height);
+    }
 
     // built while it shows and as it leaves (its controls take registry slots when built); so
     // drawn (AppWindow's `mounted`)

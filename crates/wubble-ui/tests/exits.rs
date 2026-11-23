@@ -11,8 +11,11 @@ use i_slint_backend_testing::{
     ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
 use slint::platform::PointerEventButton;
-use slint::{ComponentHandle, Image, LogicalSize, ModelRc, Rgba8Pixel, SharedPixelBuffer};
-use wubble_ui::{AppWindow, DialogView, ErrorView, GlanceView, SplitPane, driver};
+use slint::{
+    ComponentHandle, Image, LogicalSize, Model as _, ModelRc, Rgba8Pixel, SharedPixelBuffer,
+    VecModel,
+};
+use wubble_ui::{AppWindow, AutofillView, DialogView, ErrorView, GlanceView, SplitPane, driver};
 
 fn opacity_of(app: &AppWindow, label: &str) -> Option<f32> {
     ElementHandle::find_by_accessible_label(app, label)
@@ -170,6 +173,70 @@ fn glance_card_promotes_closes_and_leaves(app: &AppWindow) {
     assert_eq!(opacity_of(app, "Peeked page").unwrap_or(0.0), 0.0);
 }
 
+/// A pane's status bubble reports drawing once as it shows and once as its fade ends, nothing at
+/// rest; the autofill chip and the reader controls report their place once as they show, and
+/// again only when it changes.
+fn the_kit_reports_what_it_drew(app: &AppWindow) {
+    let drawn = Rc::new(RefCell::new(vec![]));
+    let d = drawn.clone();
+    app.on_status_drawn(move |pane, on| d.borrow_mut().push((pane, on)));
+    let placed = Rc::new(RefCell::new(vec![]));
+    let p = placed.clone();
+    app.on_autofill_placed(move |part, _, _, _, _| p.borrow_mut().push(("autofill", part as i32)));
+    let p = placed.clone();
+    app.on_reader_placed(move |_, _, _, _| p.borrow_mut().push(("reader", 0)));
+    // the host rewrites a pane's row in place
+    let model = Rc::new(VecModel::from(vec![SplitPane {
+        id: 3,
+        fill: true,
+        status_host: "example.com".into(),
+        ..Default::default()
+    }]));
+    app.set_panes(ModelRc::from(model.clone()));
+    let panes = |shown| {
+        let mut row = model.row_data(0).unwrap();
+        row.status_shown = shown;
+        model.set_row_data(0, row);
+    };
+    panes(false);
+    mock_elapsed_time(Duration::from_millis(600));
+    assert!(drawn.borrow().is_empty(), "nothing at rest");
+    panes(true);
+    mock_elapsed_time(Duration::from_millis(600));
+    mock_elapsed_time(Duration::from_millis(600));
+    assert_eq!(*drawn.borrow(), [(3, true)]);
+    panes(false);
+    mock_elapsed_time(Duration::from_millis(20));
+    assert_eq!(drawn.borrow().len(), 1, "still fading");
+    mock_elapsed_time(Duration::from_millis(600));
+    assert_eq!(*drawn.borrow(), [(3, true), (3, false)]);
+    // the chip shows: its place, once; the reader's controls too
+    app.set_autofill(AutofillView {
+        chip: true,
+        ..Default::default()
+    });
+    app.set_reader_open(true);
+    mock_elapsed_time(Duration::from_millis(600));
+    let count = |what: &str| placed.borrow().iter().filter(|p| p.0 == what).count();
+    let (chips, readers) = (count("autofill"), count("reader"));
+    assert!(chips >= 1 && readers >= 1, "{:?}", placed.borrow());
+    mock_elapsed_time(Duration::from_millis(600));
+    assert_eq!(
+        (count("autofill"), count("reader")),
+        (chips, readers),
+        "nothing at rest"
+    );
+    // closed, the empty place is reported
+    app.set_autofill(AutofillView::default());
+    app.set_reader_open(false);
+    mock_elapsed_time(Duration::from_millis(600));
+    assert_eq!(
+        (count("autofill"), count("reader")),
+        (chips + 1, readers + 1),
+        "gone"
+    );
+}
+
 #[test]
 fn exits_keep_their_view() {
     init_integration_test_with_mock_time();
@@ -179,6 +246,7 @@ fn exits_keep_their_view() {
     sheet_leaves_with_its_view(&app);
     error_panel_leaves_with_its_view(&app);
     glance_card_promotes_closes_and_leaves(&app);
+    the_kit_reports_what_it_drew(&app);
     outgoing_page_plays_and_is_dropped(&app);
     outgoing_page_without_a_switch_is_dropped(&app);
 }

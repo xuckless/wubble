@@ -1524,6 +1524,26 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     });
     // The built-ins' own UI: the reader's glyph and controls, the screenshot overlay.
     window.on_reader_toggled(move || with_host_in(win, Host::reader_toggled));
+    // The kit's reports of what it drew (a pane's bubble, a surface's place) fire inside a render:
+    // queued, as `mounted-changed` is.
+    window.on_status_drawn(move |pane, drawn| {
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host_in(win, |host| host.status_drawn(pane, drawn))
+        });
+    });
+    window.on_reader_placed(move |x, y, w, h| {
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host_in(win, |host| {
+                host.shown_placed(wubble_core::overlay::Kind::Reader, x, y, w, h)
+            })
+        });
+    });
+    window.on_autofill_placed(move |part, x, y, w, h| {
+        let kind = wubble_core::autofill::PARTS[part as usize];
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host_in(win, |host| host.shown_placed(kind, x, y, w, h))
+        });
+    });
     window.on_reader_setting(move |key, value| {
         with_host_in(win, |host| host.reader_setting(&key, value))
     });

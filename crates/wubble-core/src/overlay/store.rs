@@ -19,9 +19,10 @@
 
 use std::collections::BTreeMap;
 
-use super::{Esc, Group, Keys, Kind, Layer, Pointer, Stack};
+use super::{Esc, Facts, Group, Keys, Kind, Layer, Pointer, Scope, Stack};
 use crate::hovercard::{self, Event, Hover};
 use crate::tab::TabId;
+use crate::tabdrag::{Point, Rect};
 use crate::window::{WindowId, WindowKind};
 
 /// An overlay in the store; absent is closed.
@@ -93,9 +94,12 @@ pub enum Cue {
 }
 
 /// The overlays the store owns, for every window and tab of the app, and its hover slots.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ui {
     entries: BTreeMap<(Home, Kind), Phase>,
+    /// Where an entry's kit drew it (window logical px), reported by [`Action::Placed`]; only an
+    /// entry has one.
+    rects: BTreeMap<(Home, Kind), Rect>,
     /// The hover and timed surfaces; absent is `Hover::Idle`.
     hover: BTreeMap<Surface, Hover<Key>>,
     /// What the host's one timer is armed for (the store's own timer bookkeeping).
@@ -116,9 +120,13 @@ pub trait Env {
     fn others(&self, w: WindowId) -> Vec<Layer>;
     /// TRANSITIONAL: `kind`'s openness is still its machine's.
     fn machine(&self, kind: Kind) -> bool;
+    /// The window's peek tab, drawn over its shown one.
+    fn peeked(&self, _: WindowId) -> Option<TabId> {
+        None
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     /// The user, a key or the page asks for an overlay.
     Open { w: WindowId, layer: Layer },
@@ -126,6 +134,16 @@ pub enum Action {
     Close { w: WindowId, layer: Layer },
     /// The kit drew its exit to the end.
     Exited { w: WindowId, layer: Layer },
+    /// Where the kit drew an open or leaving layer (window logical px): a layer not in the store
+    /// ignores it, the same rect again changes nothing.
+    Placed {
+        w: WindowId,
+        layer: Layer,
+        rect: Rect,
+    },
+    /// `tab` is no longer a pane of window `w`: its pane layers go, whatever they were doing (a
+    /// pane that left cannot report its exit).
+    PaneGone { w: WindowId, tab: TabId },
     /// Escape in window `w` (who has the keys is the [`Env`]'s).
     Escape { w: WindowId },
     /// Window `w` shows `to` in place of `from`.
@@ -219,9 +237,11 @@ impl Ui {
 
     /// The open overlays drawn in `w` now (a hidden tab's are not).
     fn visible(&self, env: &impl Env, w: WindowId) -> Vec<Layer> {
-        let shown = env.shown(w);
+        let (shown, peeked) = (env.shown(w), env.peeked(w));
         let mut v = self.live(env, w);
-        v.retain(|l| l.tab.is_none() || l.tab == shown);
+        v.retain(|l| {
+            l.kind.scope() == Scope::Pane || l.tab.is_none() || l.tab == shown || l.tab == peeked
+        });
         v
     }
 
@@ -230,6 +250,7 @@ impl Ui {
     pub fn stack(&self, env: &impl Env, w: WindowId) -> Stack {
         Stack {
             shown: env.shown(w),
+            peeked: env.peeked(w),
             layers: self.live(env, w),
             leaving: self
                 .in_window(w)
@@ -273,8 +294,50 @@ impl Ui {
             .map_or(PointerOwner::Page, PointerOwner::Layer)
     }
 
+    /// Who takes the pointer at `p` (window logical px): the topmost visible layer whose row
+    /// owns its rect and whose placed rect holds `p` (the open peek's from `facts`), else
+    /// whoever takes a press outside every overlay ([`Ui::pointer_owner`]). A layer leaving, not
+    /// yet placed, hidden or passing the pointer through owns nothing.
+    pub fn pointer_at(&self, env: &impl Env, facts: &Facts, w: WindowId, p: Point) -> PointerOwner {
+        let glance = facts
+            .glance_rect
+            .filter(|r| r.contains(p))
+            .map(|_| Layer::new(Kind::Glance, None));
+        self.visible(env, w)
+            .into_iter()
+            .filter(|l| {
+                l.kind.row().pointer == Pointer::OwnRect
+                    && self
+                        .rects
+                        .get(&(home(w, *l), l.kind))
+                        .is_some_and(|r| r.contains(p))
+            })
+            .chain(glance)
+            .max_by_key(|l| l.kind.row().z)
+            .map_or_else(|| self.pointer_owner(env, w), PointerOwner::Layer)
+    }
+
+    /// The tabs with a pane layer (a bubble, open or leaving): the host sends
+    /// [`Action::PaneGone`] for those no longer a pane of the window.
+    pub fn pane_tabs(&self) -> Vec<TabId> {
+        self.entries
+            .keys()
+            .filter_map(|&(h, k)| match h {
+                Home::Tab(t) if k.scope() == Scope::Pane => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where `layer`'s kit drew it, if it said.
+    pub fn rect(&self, w: WindowId, layer: Layer) -> Option<Rect> {
+        self.rects.get(&(home(w, layer), layer.kind)).copied()
+    }
+
     pub fn ax_roots(&self, env: &impl Env, w: WindowId) -> AxRoots {
         let mut roots = self.visible(env, w);
+        // the free surfaces (a popup, a bubble) are no tree of their own
+        roots.retain(|l| l.kind.row().group != Group::Free);
         roots.sort_by_key(|l| l.kind.row().z);
         let modal = roots
             .iter()
@@ -317,11 +380,32 @@ impl Ui {
         let Some(timing) = at.kind.timing() else {
             return;
         };
+        let was = hovercard::shown(self.hover(at)).and_then(Key::tab);
         let (next, effect) = hovercard::transition(self.hover(at), event, &timing);
         if next == Hover::Idle {
             self.hover.remove(&at);
         } else {
             self.hover.insert(at, next);
+        }
+        if at.kind.slot_layer() {
+            match effect {
+                Some(hovercard::Effect::Show(key)) => {
+                    let now = key.tab();
+                    // the slot moved: the pane it left hides, the pane it came to shows
+                    if let Some(t) = was.filter(|&t| Some(t) != now) {
+                        self.leave(at.kind, t);
+                    }
+                    if let Some(t) = now {
+                        self.enter(at.kind, t, fx);
+                    }
+                }
+                Some(hovercard::Effect::Hide) => {
+                    if let Some(t) = was {
+                        self.leave(at.kind, t);
+                    }
+                }
+                None => {}
+            }
         }
         fx.extend(effect.map(|e| match e {
             hovercard::Effect::Show(key) => Effect::Show(at, key),
@@ -362,6 +446,30 @@ impl Ui {
             {
                 self.slot(at, Event::Tick { now }, fx);
             }
+        }
+    }
+
+    /// `key` is gone: no phase, no rect.
+    fn forget(&mut self, key: (Home, Kind)) {
+        self.entries.remove(&key);
+        self.rects.remove(&key);
+    }
+
+    /// A slot's layer shows for `tab`: open (a leaving one just stays mounted).
+    fn enter(&mut self, kind: Kind, tab: TabId, fx: &mut Vec<Effect>) {
+        if self
+            .entries
+            .insert((Home::Tab(tab), kind), Phase::Open)
+            .is_none()
+        {
+            fx.push(Effect::Mount(Layer::new(kind, Some(tab))));
+        }
+    }
+
+    /// A slot's layer hides: its kit draws the exit (until [`Action::Exited`]).
+    fn leave(&mut self, kind: Kind, tab: TabId) {
+        if let Some(p) = self.entries.get_mut(&(Home::Tab(tab), kind)) {
+            *p = Phase::Leaving;
         }
     }
 
@@ -408,7 +516,8 @@ impl Ui {
                 p == Phase::Leaving
                     && match l.tab {
                         None => !drawn(l),
-                        Some(t) if shown == Some(t) => !drawn(l),
+                        // a pane is drawn wherever its tab is (a split shows several)
+                        Some(t) if shown == Some(t) || l.kind.scope() == Scope::Pane => !drawn(l),
                         Some(t) => env.showing(t).is_none(),
                     }
             })
@@ -450,10 +559,13 @@ impl<E: Env> Step<'_, E> {
             return;
         }
         let row = l.kind.row();
-        if row.tail && l.tab.is_none_or(|t| self.env.showing(t).is_some()) {
+        if row.tail
+            && l.tab
+                .is_none_or(|t| row.scope == Scope::Pane || self.env.showing(t).is_some())
+        {
             self.ui.entries.insert(key, Phase::Leaving);
         } else {
-            self.ui.entries.remove(&key);
+            self.ui.forget(key);
             self.fx.push(Effect::Unmount(l));
         }
         self.focus |= row.keys != Keys::Never;
@@ -506,10 +618,15 @@ impl<E: Env> Step<'_, E> {
             self.fx.push(Effect::Mount(l));
             return;
         }
-        if was == Some(Phase::Leaving) {
+        // a surface whose content its owner rewrites in place keeps what it drew
+        let again = was == Some(Phase::Leaving) && !row.remount;
+        if was == Some(Phase::Leaving) && row.remount {
             self.fx.push(Effect::Unmount(l));
         }
         self.ui.entries.insert(key, Phase::Open);
+        if again {
+            return;
+        }
         self.fx.push(Effect::Mount(l));
         self.focus |= row.keys == Keys::Take;
     }
@@ -534,7 +651,7 @@ impl Ui {
             if cancel && p == Phase::Open {
                 fx.push(Effect::Cancel(l));
             }
-            self.entries.remove(&(h, kind));
+            self.forget((h, kind));
             fx.push(Effect::Unmount(l));
         }
         fx
@@ -575,13 +692,28 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
     // a tab's overlay meets the overlays of the window that shows its tab, wherever it was asked
     let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
     let w = match action {
-        Action::Open { w, layer } | Action::Close { w, layer } | Action::Exited { w, layer } => {
-            at(w, layer.tab)
-        }
+        Action::Open { w, layer }
+        | Action::Close { w, layer }
+        | Action::Exited { w, layer }
+        | Action::Placed { w, layer, .. } => at(w, layer.tab),
         Action::Navigated { w, tab } => at(w, Some(tab)),
         Action::Escape { w } | Action::Switched { w, .. } => w,
         Action::ViewGone(tab) => {
             let fx = ui.drop_home(Home::Tab(tab), false);
+            return (ui, fx);
+        }
+        Action::PaneGone { tab, .. } => {
+            let gone: Vec<Kind> = ui
+                .entries
+                .keys()
+                .filter(|&&(h, k)| h == Home::Tab(tab) && k.scope() == Scope::Pane)
+                .map(|&(_, k)| k)
+                .collect();
+            let mut fx = vec![];
+            for kind in gone {
+                ui.forget((Home::Tab(tab), kind));
+                fx.push(Effect::Unmount(Layer::new(kind, Some(tab))));
+            }
             return (ui, fx);
         }
         Action::WindowGone(w) => {
@@ -603,8 +735,15 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         Action::Exited { layer, .. } => {
             let key = (home(w, layer), layer.kind);
             if s.ui.entries.get(&key) == Some(&Phase::Leaving) {
-                s.ui.entries.remove(&key);
+                s.ui.forget(key);
                 s.fx.push(Effect::Unmount(layer));
+            }
+        }
+        Action::Placed { layer, rect, .. } => {
+            let layer = Layer::new(layer.kind, layer.tab);
+            let key = (home(w, layer), layer.kind);
+            if s.ui.entries.contains_key(&key) && s.ui.rects.get(&key) != Some(&rect) {
+                s.ui.rects.insert(key, rect);
             }
         }
         Action::Escape { .. } => {
@@ -634,6 +773,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             }
         }
         Action::ViewGone(_)
+        | Action::PaneGone { .. }
         | Action::WindowGone(_)
         | Action::Hover { .. }
         | Action::Tick { .. } => {

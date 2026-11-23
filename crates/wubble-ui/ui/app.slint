@@ -24,7 +24,7 @@ import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, Mounted } 
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
-import { AutofillAnswer, AutofillMenu, AutofillView } from "components/autofill-menu.slint";
+import { AutofillAnswer, AutofillMenu, AutofillPart, AutofillView } from "components/autofill-menu.slint";
 import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
 import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage, TasksPage, AgentLogPage } from "components/pages.slint";
@@ -63,7 +63,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted }
+export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
 export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
@@ -214,6 +214,12 @@ export component AppWindow inherits Window {
     // values; indexes of their words), and its controls' intents.
     in property <bool> reader-available <=> sidebar.address-reader-available;
     in property <bool> reader-on <=> sidebar.address-reader-on;
+    // The controls show while the store has them open (the pill's book is `reader-on`).
+    in property <bool> reader-open;
+    callback reader-placed(length, length, length, length);
+    callback autofill-placed(AutofillPart, length, length, length, length);
+    // A pane's status bubble began or finished drawing (its fade is over when false).
+    callback status-drawn(int, bool);
     callback reader-toggled <=> sidebar.address-reader-requested;
     in property <int> reader-size;
     in property <int> reader-width;
@@ -1075,6 +1081,9 @@ export component AppWindow inherits Window {
                         scrolled(pane, x, y, dx, dy) => {
                             root.web-scrolled(pane, x, y, dx, dy);
                         }
+                        status-drawn(pane, drawn) => {
+                            root.status-drawn(pane, drawn);
+                        }
                         seam-grab(j, x, y) => {
                             root.split-grab(j, x, y);
                         }
@@ -1396,7 +1405,7 @@ export component AppWindow inherits Window {
             reader-ui := ReaderControls {
                 x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
                 y: parent.height - self.height - Space.s4;
-                open: root.reader-on;
+                open: root.reader-open;
                 size: root.reader-size;
                 column: root.reader-width;
                 font: root.reader-font;
@@ -1406,6 +1415,9 @@ export component AppWindow inherits Window {
                 }
                 closed => {
                     root.reader-toggled();
+                }
+                placed(x, y, w, h) => {
+                    root.reader-placed(x, y, w, h);
                 }
             }
             shot-ui := ShotOverlay {
@@ -1757,6 +1769,9 @@ export component AppWindow inherits Window {
         }
         answer(a) => {
             root.autofill-answer(a);
+        }
+        placed(part, x, y, w, h) => {
+            root.autofill-placed(part, x, y, w, h);
         }
     }
 

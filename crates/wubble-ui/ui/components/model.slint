@@ -416,6 +416,14 @@ export struct Mounted {
 }
 
 // The page's popup widget (`<select>` list, date picker, autofill) in window coordinates.
+// Where a surface's kit drew it: window coordinates (a `placed` report, host `Action::Placed`).
+export struct Geo {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
 export struct PopupView {
     shown: bool,
     // Where the layer is drawn: window coordinates, kept inside the window.

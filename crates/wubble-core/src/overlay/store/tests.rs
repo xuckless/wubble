@@ -18,6 +18,7 @@ struct T {
     page_keys: bool,
     others: Vec<Layer>,
     machine: Vec<Kind>,
+    peeked: Option<TabId>,
 }
 
 impl Env for T {
@@ -42,6 +43,9 @@ impl Env for T {
     fn machine(&self, kind: Kind) -> bool {
         self.machine.contains(&kind)
     }
+    fn peeked(&self, _: WindowId) -> Option<TabId> {
+        self.peeked
+    }
 }
 
 /// Window 1 (a Main window) shows `tab`.
@@ -52,6 +56,7 @@ fn env(tab: TabId) -> T {
         page_keys: false,
         others: vec![],
         machine: vec![],
+        peeked: None,
     }
 }
 
@@ -595,10 +600,12 @@ fn walk(ui: Ui, actions: &[Action]) -> (Ui, Vec<Effect>) {
     let e = env(A);
     actions.iter().fold((ui, vec![]), |(ui, mut fx), &a| {
         let (ui, more) = reduce(ui, &e, a);
+        // a bubble's layer leaving waits for its kit's report, as an overlay's does
+        let exits = ui.entries.values().all(|&p| p == Phase::Open);
         assert_eq!(
             ui.idle(),
-            ui.armed.is_none(),
-            "idle iff no timer, after {a:?}"
+            ui.armed.is_none() && exits,
+            "idle iff no timer and no exit, after {a:?}"
         );
         fx.extend(more);
         (ui, fx)
@@ -748,7 +755,10 @@ fn one_timer_for_every_slot() {
     let (ui, fx) = walk(ui, &[tick(79)]);
     assert_eq!(fx, vec![Arm(Some(80))], "early: the same again");
     let (ui, fx) = walk(ui, &[tick(80)]);
-    assert_eq!(fx, vec![Show(at(Status), k), Arm(Some(500))]);
+    assert_eq!(
+        fx,
+        vec![Mount(on(Status, A)), Show(at(Status), k), Arm(Some(500))]
+    );
     let (ui, fx) = walk(ui, &[tick(5_000)]);
     assert_eq!(
         (fx, ui.idle()),
@@ -816,7 +826,7 @@ fn navigation_a_tab_gone_and_a_window_gone() {
     );
     let (_, fx) = reduce(ui.clone(), &e, Action::ViewGone(A));
     #[rustfmt::skip]
-    assert_eq!(fx, vec![Unshow(at(Toast)), Unshow(at(Tooltip)), Unshow(at(Preview)), Unshow(at(Status)), Unshow(at(VideoStrip))], "tab gone");
+    assert_eq!(fx, vec![Unshow(at(Toast)), Unshow(at(Tooltip)), Unshow(at(Preview)), Unshow(at(Status)), Unshow(at(VideoStrip)), Unmount(on(Status, A))], "tab gone");
     let (gone, fx) = reduce(ui, &e, Action::WindowGone(W1));
     assert_eq!(fx, vec![], "window gone");
     assert_eq!(
@@ -887,4 +897,279 @@ fn a_lost_timer_fire_rearms_on_the_next_action() {
         ],
     );
     assert_eq!(fx, vec![Arm(Some(80)), Arm(Some(80))]);
+}
+
+// ----- the page-attached surfaces: a `<select>` list, autofill, reader, the status bubble
+
+const PAGE: [Kind; 6] = [
+    Popup,
+    AutofillChip,
+    AutofillMenu,
+    AutofillPrompt,
+    Reader,
+    Status,
+];
+
+fn rect(x: f64, y: f64, w: f64, h: f64) -> crate::tabdrag::Rect {
+    crate::tabdrag::Rect { x, y, w, h }
+}
+fn placed(layer: Layer, rect: crate::tabdrag::Rect) -> Action {
+    Action::Placed { w: W1, layer, rect }
+}
+fn covered(ui: &Ui, e: &T, pane: TabId) -> crate::overlay::Coverage {
+    crate::overlay::covers(&ui.stack(e, W1), &crate::overlay::Facts::default(), pane)
+}
+
+/// Each page-attached kind through open, place, close, exit, a navigation, a tab switch and
+/// its view gone.
+#[test]
+fn page_attached_lifecycle() {
+    use crate::overlay::Coverage::None as Bare;
+    let (e, r) = (env(A), rect(10.0, 20.0, 30.0, 40.0));
+    for kind in PAGE {
+        let (l, row, name) = (on(kind, A), kind.row(), format!("{kind:?}"));
+        // open: in the stack, mounted once; hidden on another tab it covers nothing
+        let (ui, fx) = run(&e, &[open(l)]);
+        assert_eq!(
+            (fx, ui.stack(&e, W1).layers),
+            (vec![Mount(l)], vec![l]),
+            "{name} opens"
+        );
+        assert_ne!(covered(&ui, &e, A), Bare, "{name} covers");
+        assert_eq!(
+            reduce(ui.clone(), &e, open(l)),
+            (ui.clone(), vec![]),
+            "{name} twice"
+        );
+        assert_eq!(
+            covered(&ui, &env(B), A),
+            if kind == Status {
+                covered(&ui, &e, A)
+            } else {
+                Bare
+            },
+            "{name} hidden"
+        );
+        // place: stored, the same rect no change, before open and after close ignored
+        let (ui, fx) = reduce(ui, &e, placed(l, r));
+        assert_eq!((fx, ui.rect(W1, l)), (vec![], Some(r)), "{name} places");
+        assert_eq!(
+            reduce(ui.clone(), &e, placed(l, r)),
+            (ui.clone(), vec![]),
+            "{name} same rect"
+        );
+        let (moved, _) = reduce(ui.clone(), &e, placed(l, rect(1.0, 1.0, 2.0, 2.0)));
+        assert_eq!(
+            moved.rect(W1, l),
+            Some(rect(1.0, 1.0, 2.0, 2.0)),
+            "{name} moves"
+        );
+        assert_eq!(
+            reduce(Ui::default(), &e, placed(l, r)),
+            (Ui::default(), vec![]),
+            "{name} before open"
+        );
+        // a tab switch hides it and keeps its rect and phase; back reveals it
+        let (away, fx) = reduce(ui.clone(), &env(B), switched(A, B));
+        assert_eq!(
+            (fx, away.rect(W1, l), away.phase(W1, l)),
+            (vec![Hide(l)], Some(r), Some(Phase::Open)),
+            "{name} switched away"
+        );
+        assert_eq!(
+            reduce(away, &e, switched(B, A)).1,
+            vec![Reveal(l)],
+            "{name} switched back"
+        );
+        // a navigation closes the popup and the bubble only
+        let (_, fx) = reduce(ui.clone(), &e, nav(A));
+        let closes = row.on_nav;
+        assert_eq!(fx.contains(&Cancel(l)), closes, "{name} navigated");
+        assert_eq!(closes, matches!(kind, Popup | Status), "{name} on_nav");
+        // close: gone at once, or leaving (still covering, owning nothing) until Exited
+        let (closed, fx) = reduce(ui.clone(), &e, close(l));
+        if row.tail {
+            assert_eq!(
+                (fx, closed.phase(W1, l), closed.rect(W1, l)),
+                (vec![], Some(Phase::Leaving), Some(r)),
+                "{name} leaves"
+            );
+            assert_ne!(covered(&closed, &e, A), Bare, "{name} leaving covers");
+            assert_eq!(
+                reduce(closed.clone(), &e, close(l)),
+                (closed.clone(), vec![]),
+                "{name} close again"
+            );
+            assert_eq!(
+                reduce(closed.clone(), &e, placed(l, rect(5.0, 5.0, 1.0, 1.0)))
+                    .0
+                    .rect(W1, l),
+                Some(rect(5.0, 5.0, 1.0, 1.0)),
+                "{name} places leaving"
+            );
+            assert_eq!(
+                reduce(closed.clone(), &e, open(l)).1,
+                vec![],
+                "{name} reopened cancels the tail"
+            );
+            assert_eq!(
+                reduce(ui.clone(), &e, exited(l)),
+                (ui.clone(), vec![]),
+                "{name} stale exit"
+            );
+            let (gone, fx) = reduce(closed.clone(), &e, exited(l));
+            assert_eq!(
+                (gone, fx),
+                (Ui::default(), vec![Unmount(l)]),
+                "{name} exits"
+            );
+            // its view gone, leaving or not, takes it with its rect
+            assert_eq!(
+                reduce(closed, &e, Action::ViewGone(A)),
+                (Ui::default(), vec![Unmount(l)]),
+                "{name} view gone leaving"
+            );
+        } else {
+            assert_eq!(
+                (closed, fx),
+                (Ui::default(), vec![Unmount(l)]),
+                "{name} closes"
+            );
+        }
+        let (gone, fx) = reduce(ui, &e, Action::ViewGone(A));
+        assert_eq!(
+            (gone, fx),
+            (Ui::default(), vec![Unmount(l)]),
+            "{name} view gone"
+        );
+    }
+}
+
+/// A pane that left the window drops its pane layers, leaving or not, and nobody else's.
+#[test]
+fn pane_gone() {
+    let e = env(A);
+    let (ui, _) = run(
+        &e,
+        &[
+            open(on(Status, B)),
+            close(on(Status, B)),
+            open(on(Status, A)),
+            open(on(Reader, B)),
+            open(win(Downloads)),
+        ],
+    );
+    let (ui, fx) = reduce(ui, &e, Action::PaneGone { w: W1, tab: B });
+    assert_eq!(fx, vec![Unmount(on(Status, B))]);
+    assert_eq!(
+        sorted(ui.stack(&e, W1).layers),
+        sorted(vec![on(Status, A), on(Reader, B), win(Downloads)])
+    );
+    assert_eq!(
+        reduce(ui.clone(), &e, Action::PaneGone { w: W1, tab: B }),
+        (ui, vec![])
+    );
+    // later events of the gone layer are ignored
+    assert_eq!(
+        run(
+            &e,
+            &[Action::PaneGone { w: W1, tab: B }, exited(on(Status, B))]
+        ),
+        (Ui::default(), vec![])
+    );
+}
+
+/// The status bubble's slot opens and leaves its pane's layer; the fade over, the kit says so.
+#[test]
+fn the_status_slot_is_a_layer() {
+    use crate::overlay::Coverage::{None as Bare, Part};
+    let slot = |key, cue, now| hv(Status, key, cue, now);
+    let e = env(A);
+    let split = T {
+        shown: [(W1, Some(A))].into(),
+        ..env(A)
+    };
+    let (ui, _) = walk(Ui::default(), &[slot(Key::Tab(B), Cue::Show, 0)]);
+    assert_eq!(
+        (
+            ui.phase(W1, on(Status, B)),
+            covered(&ui, &split, B),
+            covered(&ui, &split, A)
+        ),
+        (Some(Phase::Open), Part, Bare)
+    );
+    // the slot moves to A: B's bubble fades, A's shows
+    let (ui, _) = walk(ui, &[slot(Key::Tab(A), Cue::Show, 10)]);
+    assert_eq!(
+        (ui.phase(W1, on(Status, B)), ui.phase(W1, on(Status, A))),
+        (Some(Phase::Leaving), Some(Phase::Open))
+    );
+    // hidden: leaving, still covering, until the kit reports its fade
+    let (ui, _) = walk(ui, &[slot(Key::None, Cue::Dismiss, 20)]);
+    assert_eq!(
+        (ui.phase(W1, on(Status, A)), covered(&ui, &e, A)),
+        (Some(Phase::Leaving), Part)
+    );
+    let (ui, fx) = walk(ui, &[exited(on(Status, A)), exited(on(Status, B))]);
+    assert_eq!(
+        (ui, fx),
+        (
+            Ui::default(),
+            vec![Unmount(on(Status, A)), Unmount(on(Status, B))]
+        )
+    );
+}
+
+/// Who takes the pointer at a point: the topmost placed rect, the open peek's, else the page.
+#[test]
+fn pointer_at_rects() {
+    use crate::overlay::Facts;
+    use crate::tabdrag::Point;
+    let (popup, chip, prompt, status) = (
+        on(Popup, A),
+        on(AutofillChip, A),
+        on(AutofillPrompt, A),
+        on(Status, A),
+    );
+    let (r1, r2) = (rect(0.0, 0.0, 10.0, 10.0), rect(5.0, 5.0, 10.0, 10.0));
+    let glance = Facts {
+        glance: true,
+        glance_rect: Some(rect(0.0, 0.0, 100.0, 100.0)),
+        ..Facts::default()
+    };
+    let tab = |e: &T| T {
+        peeked: e.peeked,
+        ..env(A)
+    };
+    let peek = T {
+        peeked: Some(B),
+        ..env(A)
+    };
+    let setup = |actions: &[Action]| run(&env(A), actions).0;
+    let at = |ui: &Ui, e: &T, f: &Facts, x: f64, y: f64| ui.pointer_at(e, f, W1, Point { x, y });
+    let none = Facts::default();
+    let e = tab(&env(A));
+    let two = setup(&[open(popup), placed(popup, r1), open(chip), placed(chip, r2)]);
+    let page = PointerOwner::Page;
+    #[rustfmt::skip]
+    let rows: Vec<(&str, PointerOwner, PointerOwner)> = vec![
+        ("inside, the left and top edges in", at(&two, &e, &none, 0.0, 0.0), PointerOwner::Layer(popup)),
+        ("the right and bottom edges out", at(&two, &e, &none, 15.0, 15.0), page),
+        ("the chip alone", at(&two, &e, &none, 14.0, 14.0), PointerOwner::Layer(chip)),
+        ("overlapping: the higher z, the chip drawn over the popup", at(&two, &e, &none, 7.0, 7.0), PointerOwner::Layer(chip)),
+        ("outside every rect", at(&two, &e, &none, 50.0, 50.0), page),
+        ("a bubble owns nothing", at(&setup(&[open(status), placed(status, r1)]), &e, &none, 1.0, 1.0), page),
+        ("a leaving chip owns nothing", at(&setup(&[open(chip), placed(chip, r1), close(chip)]), &e, &none, 1.0, 1.0), page),
+        ("an unplaced prompt owns nothing", at(&setup(&[open(prompt)]), &e, &none, 1.0, 1.0), page),
+        ("a zero-size rect owns nothing", at(&setup(&[open(chip), placed(chip, rect(1.0, 1.0, 0.0, 0.0))]), &e, &none, 1.0, 1.0), page),
+        ("a hidden tab's popup owns nothing", at(&two, &env(B), &none, 1.0, 1.0), page),
+        ("the peek's card", at(&setup(&[]), &e, &glance, 50.0, 50.0), PointerOwner::Layer(win(Glance))),
+        ("outside the peek's card falls through", at(&two, &e, &glance, 150.0, 150.0), page),
+        ("the popup over the peek", at(&two, &e, &glance, 1.0, 1.0), PointerOwner::Layer(popup)),
+        ("a popup of the peek's tab is owned while it shows", at(&run(&peek, &[open(on(Popup, B)), placed(on(Popup, B), r1)]).0, &peek, &none, 1.0, 1.0), PointerOwner::Layer(on(Popup, B))),
+        ("a closed peek owns nothing", at(&setup(&[]), &e, &none, 50.0, 50.0), page),
+    ];
+    for (name, got, want) in rows {
+        assert_eq!(got, want, "{name}");
+    }
 }

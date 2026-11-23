@@ -687,11 +687,13 @@ mod tests {
                 shown: Some(tab),
                 layers: layer.clone(),
                 leaving: vec![],
+                ..Stack::default()
             };
             let leaving = Stack {
                 shown: Some(tab),
                 layers: vec![],
                 leaving: layer,
+                ..Stack::default()
             };
             for (state, stack) in [("open", open), ("leaving", leaving)] {
                 let needs = Needs::NONE.covered(covers(&stack, &facts, tab));

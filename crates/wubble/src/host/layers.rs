@@ -26,7 +26,16 @@ use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 2] = [Kind::Downloads, Kind::Spaces];
+const STORED: [Kind; 8] = [
+    Kind::Downloads,
+    Kind::Spaces,
+    Kind::Popup,
+    Kind::AutofillChip,
+    Kind::AutofillMenu,
+    Kind::AutofillPrompt,
+    Kind::Reader,
+    Kind::Status,
+];
 
 /// What the store reads of the host's other owners as an action runs (never copied into it).
 struct HostEnv<'a> {
@@ -73,6 +82,10 @@ impl Env for HostEnv<'_> {
 
     fn machine(&self, kind: Kind) -> bool {
         !STORED.contains(&kind)
+    }
+
+    fn peeked(&self, w: WindowId) -> Option<TabId> {
+        self.host.model.glance_of(w).map(|g| g.tab)
     }
 }
 
@@ -178,21 +191,15 @@ impl Host {
         // ----- the free surfaces, from what their owners wrote into this window
         let key = self.model.window_key_tab(self.w.id);
         let video = window.get_video();
-        let autofill = window.get_autofill();
         #[rustfmt::skip]
         let free = [
-            (Kind::Popup, None, window.get_popup().shown),
             (Kind::Toast, None, window.get_toast_shown()),
             (Kind::Tooltip, None, window.get_tip().shown),
             (Kind::Preview, None, window.get_preview().shown),
-            (Kind::AutofillChip, shown, autofill.chip),
-            (Kind::AutofillMenu, shown, autofill.menu_open),
-            (Kind::AutofillPrompt, shown, autofill.prompt),
             (Kind::VideoStrip, key, video.w > 0.0 && video.open),
             (Kind::VideoTab, key, video.w > 0.0 && video.collapsed),
             (Kind::VideoSpeeds, key, video.w > 0.0 && video.open && video.speeds),
             (Kind::PipStrip, None, window.get_pip_strip()),
-            (Kind::Reader, shown, window.get_reader_on()),
             (Kind::Swipe, None, window.get_swipe_progress() != 0.0),
             (Kind::ExitPage, None, window.get_exit_t() < 1.0 && window.get_exit_page().size().width > 0),
             (Kind::Entrance, None, window.get_page_enter() < 1.0),
@@ -212,12 +219,6 @@ impl Host {
             if on {
                 add(kind, tab);
             }
-        }
-        // the status bubble is the host's for a pane on screen here
-        if let Some((tab, _)) = self.status_shown()
-            && self.w.frames.contains_key(&tab)
-        {
-            add(Kind::Status, Some(tab));
         }
         // ----- what the kit still draws of the machines' overlays and the free surfaces: open,
         // or leaving (the store's own leave by their phase; the command bar's exit is the
@@ -249,6 +250,7 @@ impl Host {
         let facts = Facts {
             glass: window.global::<GlassLayer>().get_over_on(),
             glance: self.model.glance_of(self.w.id).is_some() || window.get_mounted().glance,
+            glance_rect: self.glance_hit(window),
             pip_card: self.pip_card(),
         };
         overlay::covers(&self.surface_stack(window), &facts, pane)
@@ -407,7 +409,8 @@ impl Host {
             window.set_downloads_open(open(Kind::Downloads));
             window.set_spaces_open(open(Kind::Spaces));
             let bits = mounted(&window.get_mounted());
-            let drawn = |l: Layer| bits.contains(&(l.kind, true));
+            // a pane's bubble is drawn until its pane reports the fade over (`status_drawn`)
+            let drawn = |l: Layer| l.kind.scope() == Scope::Pane || bits.contains(&(l.kind, true));
             let gone = self.ui.gone(&self.env(&window, self.shown()), w, drawn);
             for layer in gone {
                 self.step(&window, Action::Exited { w, layer });
@@ -441,6 +444,75 @@ impl Host {
         if let Some(window) = self.w.window.upgrade() {
             let (w, layer) = (self.w.id, Layer::new(kind, None));
             self.act(&window, Action::Close { w, layer });
+        }
+    }
+
+    /// `kind` of `tab` is open or not, by what its owner (the engine's popup, a machine's view)
+    /// says now: the store opens or closes its layer (a repeat of what it holds changes nothing).
+    pub(super) fn layer_is(&mut self, kind: Kind, tab: TabId, open: bool) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let (w, layer) = (self.w.id, Layer::new(kind, Some(tab)));
+        let action = if open {
+            Action::Open { w, layer }
+        } else {
+            Action::Close { w, layer }
+        };
+        self.act(&window, action);
+    }
+
+    /// The kit drew `kind` of `tab` at `rect` (window logical px); the same place again is
+    /// nothing.
+    pub(super) fn layer_placed(
+        &mut self,
+        kind: Kind,
+        tab: TabId,
+        rect: wubble_core::tabdrag::Rect,
+    ) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let (w, layer) = (self.w.id, Layer::new(kind, Some(tab)));
+        if self.ui.rect(w, layer) != Some(rect) {
+            self.act(&window, Action::Placed { w, layer, rect });
+        }
+    }
+
+    /// A pane's status bubble began or finished drawing: its fade over ends its exit.
+    pub(crate) fn status_drawn(&mut self, pane: i32, drawn: bool) {
+        let (Some(tab), Some(window)) = (crate::shell::tab_id(pane), self.w.window.upgrade())
+        else {
+            return;
+        };
+        if !drawn {
+            let (w, layer) = (self.w.id, Layer::new(Kind::Status, Some(tab)));
+            self.act(&window, Action::Exited { w, layer });
+        }
+    }
+
+    /// The window's visible tab's autofill part (`part` of [`autofill::PARTS`]) or reader
+    /// controls were drawn at this place.
+    pub(crate) fn shown_placed(&mut self, kind: Kind, x: f32, y: f32, width: f32, height: f32) {
+        if let Some(tab) = self.shown() {
+            let rect = wubble_core::tabdrag::Rect {
+                x: f64::from(x),
+                y: f64::from(y),
+                w: f64::from(width),
+                h: f64::from(height),
+            };
+            self.layer_placed(kind, tab, rect);
+        }
+    }
+
+    /// `live` are the tabs drawn as panes now: a pane layer of any other tab (a bubble that was
+    /// fading in a pane that went) goes, its element being gone cannot report.
+    pub(super) fn panes_gone(&mut self, window: &AppWindow, live: &[TabId]) {
+        let mut stale = self.ui.pane_tabs();
+        stale.dedup();
+        for tab in stale.into_iter().filter(|t| !live.contains(t)) {
+            let w = self.w.id;
+            self.act(window, Action::PaneGone { w, tab });
         }
     }
 

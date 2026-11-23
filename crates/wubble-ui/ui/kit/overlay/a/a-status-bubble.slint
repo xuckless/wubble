@@ -27,6 +27,8 @@ export component AStatusBubble inherits Rectangle {
     in property <length> pane-width;
     in property <length> pane-height;
     out property <float> progress: tip.fade;
+    // Drawn, shown or fading: the host learns the fade is over (`changed drawn`).
+    out property <bool> drawn: tip.fade > 0;
 
     tip := ATipMotion {
         shown: root.shown;

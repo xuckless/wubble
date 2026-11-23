@@ -1202,6 +1202,19 @@ pub fn view(state: &AutofillState) -> View {
     }
 }
 
+/// The store's layers of a tab's autofill, in the order of [`open_parts`].
+pub const PARTS: [crate::overlay::Kind; 3] = [
+    crate::overlay::Kind::AutofillChip,
+    crate::overlay::Kind::AutofillMenu,
+    crate::overlay::Kind::AutofillPrompt,
+];
+
+/// Which of [`PARTS`] the shell shows for `view`: the one source of the chip's, the menu's and
+/// the prompt's openness.
+pub fn open_parts(view: &View) -> [bool; 3] {
+    [view.chip, view.menu.is_some(), view.prompt.is_some()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1936,6 +1949,21 @@ mod tests {
             // A new main document (its script's `start`, perhaps under a new frame id).
             let (s, _) = transition(s, Event::Navigated, ON);
             assert_eq!(s.phase, Phase::Idle, "{offered}");
+        }
+    }
+
+    /// The store closes none of the autofill layers on a navigation (their rows' `on_nav` is
+    /// off): the machine ends the offer, and the host closes the parts by the view's change.
+    #[test]
+    fn autofill_on_nav_matches_the_machine() {
+        assert!(PARTS.iter().all(|k| !k.row().on_nav));
+        for extra in [vec![], vec![Event::Open]] {
+            let mut events = vec![forms("main", login_page()), logins()];
+            events.extend(extra);
+            let (shown, _) = run(events, ON);
+            assert!(open_parts(&view(&shown)).contains(&true));
+            let (gone, _) = transition(shown, Event::Navigated, ON);
+            assert_eq!(open_parts(&view(&gone)), [false; 3]);
         }
     }
 

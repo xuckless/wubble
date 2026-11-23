@@ -10,7 +10,7 @@ use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use wubble_core::hints::{self, HintEffect, HintEvent, HintKey, Hints};
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_core::pagetheme::{self, MediaPrefs, PageTheme, Shown, ThemeTable};
 use wubble_core::reader::{
     self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs, ScrollAt,
@@ -422,6 +422,10 @@ impl Host {
         let state = self.builtins.reader.get(&tab).copied().unwrap_or_default();
         let (next, effects) = reader::transition(state, event);
         self.builtins.reader.insert(tab, next);
+        // the controls open and close on the machine's one edge
+        if state.is_on() != next.is_on() {
+            self.layer_is(Kind::Reader, tab, next.is_on());
+        }
         for effect in effects {
             match effect {
                 ReaderEffect::Probe => {
@@ -987,6 +991,9 @@ impl Host {
             .unwrap_or_default();
         window.set_reader_available(reader.available());
         window.set_reader_on(reader.is_on());
+        window.set_reader_open(tab.is_some_and(|t| {
+            self.ui.phase(self.w.id, Layer::new(Kind::Reader, Some(t))) == Some(Phase::Open)
+        }));
         let p = self.builtins.reader_prefs;
         window.set_reader_size(i32::try_from(p.size).unwrap_or(i32::MAX));
         window.set_reader_width(p.width as i32);

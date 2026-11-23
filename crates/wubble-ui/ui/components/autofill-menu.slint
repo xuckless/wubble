@@ -1,5 +1,5 @@
 import { Shell } from "../kit/derived.slint";
-import { GlassKeys } from "model.slint";
+import { Geo, GlassKeys } from "model.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { AMenuPopover } from "../kit/overlay/a/a-menu-list.slint";
@@ -15,6 +15,8 @@ import { APrompt } from "../kit/overlay/a/a-prompt.slint";
 // or answer the prompt (keyjacking). Intents only; the host fills and saves.
 // The save prompt's buttons (host/autofill.rs `autofill_answer`).
 export enum AutofillAnswer { save, never, not-now }
+// The three parts the host reports openness and place of (`wubble_core::autofill::PARTS`).
+export enum AutofillPart { chip, menu, prompt }
 
 export struct AutofillView {
     chip: bool,
@@ -32,6 +34,23 @@ export component AutofillMenu inherits Rectangle {
     // -1: open the menu, -2: close it, i >= 0: row i was clicked.
     callback menu(int);
     callback answer(AutofillAnswer);
+    // A part's place in the window, when it changed (host `Action::Placed`).
+    callback placed(AutofillPart, length, length, length, length);
+
+    // Each part's place while it is drawn, nothing (an empty rect) otherwise: showing it is a change
+    // too, so the first place is reported.
+    property <Geo> chip-geo: chip.visible ? { x: chip.absolute-position.x, y: chip.absolute-position.y, width: chip.width, height: chip.height } : { };
+    property <Geo> list-geo: list.visible ? { x: list.absolute-position.x, y: list.absolute-position.y, width: list.width, height: list.height } : { };
+    property <Geo> prompt-geo: prompt.mounted ? { x: prompt.absolute-position.x, y: prompt.absolute-position.y, width: prompt.width, height: prompt.height } : { };
+    changed chip-geo => {
+        root.placed(AutofillPart.chip, self.chip-geo.x, self.chip-geo.y, self.chip-geo.width, self.chip-geo.height);
+    }
+    changed list-geo => {
+        root.placed(AutofillPart.menu, self.list-geo.x, self.list-geo.y, self.list-geo.width, self.list-geo.height);
+    }
+    changed prompt-geo => {
+        root.placed(AutofillPart.prompt, self.prompt-geo.x, self.prompt-geo.y, self.prompt-geo.width, self.prompt-geo.height);
+    }
 
     // Drawn, open or leaving: the menu and the prompt (AppWindow's `mounted`).
     out property <bool> menu-mounted: list.visible;

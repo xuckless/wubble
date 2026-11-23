@@ -215,6 +215,19 @@ impl Host {
         })
     }
 
+    /// The open peek's card and the scrim that closes it: the content area (window logical px).
+    pub(super) fn glance_hit(&self, window: &AppWindow) -> Option<wubble_core::tabdrag::Rect> {
+        self.model.glance_of(self.w.id)?;
+        let (x, y) = self.content_origin(window);
+        let (w, h) = content_size(window);
+        Some(wubble_core::tabdrag::Rect {
+            x: f64::from(x),
+            y: f64::from(y),
+            w,
+            h,
+        })
+    }
+
     /// The peek's view layout: its page rect, with where it sits in the window.
     fn glance_layout(&self, window: &AppWindow, r: &GlanceRect) -> Layout {
         let scale = window.window().scale_factor();
@@ -629,6 +642,13 @@ impl Host {
                 }
             })
             .collect();
+        // a bubble of a pane that left cannot report its fade: its layer goes with the pane
+        let live: Vec<TabId> = rects
+            .iter()
+            .filter(|r| !start(r.tab))
+            .map(|r| r.tab)
+            .collect();
+        self.panes_gone(window, &live);
         let fullscreen = matches!(self.w.screen, Screen::Page { .. });
         let seams: Vec<SplitSeam> = if fullscreen {
             vec![]

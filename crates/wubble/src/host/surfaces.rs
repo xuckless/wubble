@@ -154,7 +154,11 @@ impl Host {
             Routed::Find(e) => self.apply_find(tab, e),
             Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
             Routed::DragCursor(op) => self.drag_cursor(tab, op),
-            Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
+            // the engine's rect stays as the input's origin; whether the list is up is the store's
+            Routed::Popup(rect) => {
+                self.surfaces.entry(tab).or_default().popup = rect;
+                self.layer_is(Kind::Popup, tab, rect.is_some());
+            }
             // Picture-in-picture's fullscreen is the video's, in its own window.
             Routed::Fullscreen(true) if self.pip_tab() == Some(tab) => {}
             Routed::Fullscreen(true) if visible => {
@@ -729,13 +733,27 @@ impl Host {
             .map(|s| &s.find)
             .unwrap_or(&current.find);
         window.set_find(find_view(find, self.find_focus));
-        let popup = keys
-            .and_then(|t| self.surfaces.get(&t))
-            .and_then(|s| s.popup);
+        let up = keys.filter(|&t| {
+            self.ui
+                .phase(self.w.id, overlay::Layer::new(Kind::Popup, Some(t)))
+                == Some(overlay::Phase::Open)
+        });
+        let popup = up.and_then(|t| self.surfaces.get(&t)).and_then(|s| s.popup);
         let origin = keys.map_or(self.focus_origin(window), |t| self.view_origin(window, t));
-        window.set_popup(popup_view(window, origin, popup));
-        if popup.is_none() {
-            window.set_popup_frame(slint::Image::default());
+        let view = popup_view(window, origin, popup);
+        window.set_popup(view.clone());
+        match up {
+            Some(tab) if view.shown => {
+                let (x, y) = (f64::from(view.x), f64::from(view.y));
+                let rect = wubble_core::tabdrag::Rect {
+                    x,
+                    y,
+                    w: f64::from(view.width),
+                    h: f64::from(view.height),
+                };
+                self.layer_placed(Kind::Popup, tab, rect);
+            }
+            _ => window.set_popup_frame(slint::Image::default()),
         }
         window.set_page_fullscreen(matches!(self.w.screen, Screen::Page { .. }));
         self.render_autofill(window, tab);

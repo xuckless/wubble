@@ -25,6 +25,7 @@ use wubble_core::autofill::{
     self, AutofillState, Candidate, Effect, Event, FieldId, FormSnapshot, MenuRow, Mode, Phase,
     Policy, SaveKind, SaveVerdict, ScriptMessage, View,
 };
+use wubble_core::overlay::{Layer, Phase as Stored};
 use wubble_core::secret::Secret;
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
@@ -137,7 +138,15 @@ impl Host {
     fn autofill_event(&mut self, tab: TabId, event: Event) {
         let policy = self.autofill_policy(tab, event.origin().map(str::to_owned));
         let state = self.autofill.tabs.remove(&tab).unwrap_or_default();
+        let before = autofill::open_parts(&autofill::view(&state));
         let (next, effects) = autofill::transition(state, event, policy);
+        let after = autofill::open_parts(&autofill::view(&next));
+        // the chip, the menu and the prompt open and close as the machine's view says
+        for ((kind, was), now) in autofill::PARTS.into_iter().zip(before).zip(after) {
+            if was != now {
+                self.layer_is(kind, tab, now);
+            }
+        }
         if autofill::view(&next).chip && self.checks.mcp_smoke.is_some() && self.agent_drives(tab) {
             let origin = self.page_url(tab).and_then(|u| autofill::web_origin(&u));
             if let (Some(run), Some(origin)) = (self.checks.mcp_smoke.as_mut(), origin) {
@@ -324,10 +333,19 @@ impl Host {
     /// Writes the visible tab's autofill into the shell when it changed (a
     /// rewritten row model would restart the rows' entrance).
     pub(super) fn render_autofill(&mut self, window: &AppWindow, tab: Option<TabId>) {
-        let view = tab
+        let mut view = tab
             .and_then(|t| self.autofill.tabs.get(&t))
             .map(autofill::view)
             .unwrap_or_default();
+        // what shows is what the store holds open (the machine's content under it)
+        let open = autofill::PARTS.map(|kind| {
+            tab.is_some_and(|t| {
+                self.ui.phase(self.w.id, Layer::new(kind, Some(t))) == Some(Stored::Open)
+            })
+        });
+        view.chip &= open[0];
+        view.menu = view.menu.filter(|_| open[1]);
+        view.prompt = view.prompt.filter(|_| open[2]);
         if self.autofill.drawn.as_ref() == Some(&(tab, view.clone())) {
             return;
         }

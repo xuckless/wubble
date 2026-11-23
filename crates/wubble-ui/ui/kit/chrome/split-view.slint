@@ -95,6 +95,9 @@ export component SplitView inherits Rectangle {
     callback pointer-released(int, PointerEventButton, length, length);
     callback pointer-cancelled(int);
     callback scrolled(int, length, length, length, length);
+    // wubble change: a pane's status bubble began (true) or finished (false) drawing: pane id,
+    // drawn. The host ends the bubble's exit by it (the store's `Exited`).
+    callback status-drawn(int, bool);
 
     for p in root.panes: Rectangle {
         property <bool> masked: p.margin > 0;
@@ -167,6 +170,9 @@ export component SplitView inherits Rectangle {
             rest: p.status-rest;
             pane-width: parent.width;
             pane-height: parent.height;
+            changed drawn => {
+                root.status-drawn(p.id, self.drawn);
+            }
             mirrored: touch.has-hover
                 && touch.mouse-x < Shell.status-margin + self.width + Shell.status-dodge
                 && touch.mouse-y > parent.height - Shell.status-margin - self.height - Shell.status-dodge;

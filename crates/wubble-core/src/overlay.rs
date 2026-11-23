@@ -272,6 +272,9 @@ pub struct Row {
     /// Its kit draws an exit: closed, it is [`Phase::Leaving`] until the kit says it is gone
     /// ([`Action::Exited`]).
     pub tail: bool,
+    /// Opened while it still leaves, its content is fresh (Unmount, Mount); else the open only
+    /// cancels the exit (a surface whose content its owner rewrites in place).
+    pub remount: bool,
     /// It may not open while a visible overlay of one of these groups shows.
     pub refused_under: &'static [Group],
     /// Opening it closes the visible overlays of these groups.
@@ -345,6 +348,7 @@ const DISMISSED: Row = Row {
     on_leave: true,
     on_nav: false,
     tail: true,
+    remount: true,
     refused_under: HOLDS,
     closes: USERS,
     one_per_window: false,
@@ -367,6 +371,7 @@ const FREE: Row = Row {
     escape: Esc::Never,
     on_leave: false,
     tail: false,
+    remount: false,
     refused_under: &[],
     closes: &[],
     ..DISMISSED
@@ -407,22 +412,24 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::Boost, scope: Scope::Tab, z: 58, group: Group::Coexist, keys: Keys::OnAsk, pointer: Pointer::OwnRect, glass: Some("boost"),
         escape: Esc::Never, on_leave: false, closes: &[], ..DISMISSED },
     // ----- free
-    Row { kind: Kind::Popup, z: 90, pointer: Pointer::OwnRect, ..FREE },
+    // the page's popup belongs to its tab (the peek's too) and ends with its document
+    Row { kind: Kind::Popup, scope: Scope::Tab, z: 90, pointer: Pointer::OwnRect, on_nav: true, ..FREE },
     // the toast and the notice on it are one slot (`Key::Notice`): its navigation close is the notice's row's
     Row { kind: Kind::Toast, z: 62, glass: Some("toast"), life: Life::Timed(TOAST_SHOWN_MS), ..FREE },
     Row { kind: Kind::Tooltip, z: 114, life: Life::Hover(hovercard::TOOLTIP), on_nav: true, ..FREE },
     Row { kind: Kind::Preview, z: 52, glass: Some("preview"), life: Life::Hover(hovercard::TAB_CARD), ..FREE },
-    Row { kind: Kind::Status, scope: Scope::Pane, z: 30, life: Life::Hover(hovercard::STATUS_BUBBLE), on_nav: true, ..FREE },
+    // its fade is the kit's (`status-drawn` per pane): leaving until it reports
+    Row { kind: Kind::Status, scope: Scope::Pane, z: 30, life: Life::Hover(hovercard::STATUS_BUBBLE), on_nav: true, tail: true, ..FREE },
     Row { kind: Kind::AutofillChip, scope: Scope::Tab, z: 96, pointer: Pointer::OwnRect, ..FREE },
-    Row { kind: Kind::AutofillMenu, scope: Scope::Tab, z: 97, pointer: Pointer::OwnRect, glass: Some("autofill-menu"), life: Life::Dismiss, ..FREE },
-    Row { kind: Kind::AutofillPrompt, scope: Scope::Tab, z: 98, pointer: Pointer::OwnRect, glass: Some("autofill-prompt"), life: Life::Answer, ..FREE },
+    Row { kind: Kind::AutofillMenu, scope: Scope::Tab, z: 97, pointer: Pointer::OwnRect, glass: Some("autofill-menu"), life: Life::Dismiss, tail: true, ..FREE },
+    Row { kind: Kind::AutofillPrompt, scope: Scope::Tab, z: 98, pointer: Pointer::OwnRect, glass: Some("autofill-prompt"), life: Life::Answer, tail: true, ..FREE },
     // the strip, its tab and its menu are one slot (the video machine says which)
     Row { kind: Kind::VideoStrip, scope: Scope::Pane, z: 40, pointer: Pointer::OwnRect, glass: Some("video-strip"), life: Life::Hover(VIDEO), windows: PAGES, on_nav: true, ..FREE },
     Row { kind: Kind::VideoTab, scope: Scope::Pane, z: 41, pointer: Pointer::OwnRect, glass: Some("video-tab"), windows: PAGES, ..FREE },
     Row { kind: Kind::VideoSpeeds, scope: Scope::Pane, z: 42, pointer: Pointer::OwnRect, glass: Some("video-speeds"), life: Life::Dismiss, windows: PAGES, ..FREE },
     Row { kind: Kind::PipStrip, z: 44, pointer: Pointer::OwnRect, glass: Some("pip-strip"), life: Life::Hover(hovercard::AT_ONCE), windows: PIP, ..FREE },
     Row { kind: Kind::PipCard, scope: Scope::Tab, z: 46, pointer: Pointer::OwnRect, windows: MAIN, ..FREE },
-    Row { kind: Kind::Reader, scope: Scope::Tab, z: 54, pointer: Pointer::OwnRect, glass: Some("reader"), ..FREE },
+    Row { kind: Kind::Reader, scope: Scope::Tab, z: 54, pointer: Pointer::OwnRect, glass: Some("reader"), tail: true, ..FREE },
     Row { kind: Kind::Glance, z: 64, keys: Keys::OnAsk, pointer: Pointer::Scrim, glass: Some("glance"), life: Life::Dismiss, escape: Esc::Any, ..FREE },
     Row { kind: Kind::Swipe, z: 70, life: Life::Drag, ..FREE },
     Row { kind: Kind::ExitPage, z: 10, ..FREE },
@@ -467,6 +474,13 @@ impl Kind {
         }
     }
 
+    /// A hover slot whose thing is also a layer of its pane (the status bubble): shown, it is
+    /// open; hidden, it leaves until its kit reports the fade over.
+    pub fn slot_layer(self) -> bool {
+        let row = self.row();
+        row.tail && row.scope == Scope::Pane && matches!(row.life, Life::Hover(_))
+    }
+
     /// Under the overlays' rules.
     fn ruled(self) -> bool {
         self.row().group != Group::Free
@@ -496,6 +510,8 @@ impl Layer {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stack {
     pub shown: Option<TabId>,
+    /// The window's peek tab, drawn over the shown one: its tab's layers show too.
+    pub peeked: Option<TabId>,
     pub layers: Vec<Layer>,
     /// Closed by their owners, still drawn by their kit until the exit ends: no rule sees them,
     /// and they cover the page.
@@ -506,7 +522,10 @@ impl Stack {
     /// Drawn now: a window's and a pane's surface (the host derives only the panes on screen)
     /// always, a tab's while its tab is visible.
     fn visible(&self, layer: &Layer) -> bool {
-        layer.kind.scope() == Scope::Pane || layer.tab.is_none() || layer.tab == self.shown
+        layer.kind.scope() == Scope::Pane
+            || layer.tab.is_none()
+            || layer.tab == self.shown
+            || layer.tab == self.peeked
     }
 
     /// The topmost visible overlay.
@@ -539,13 +558,16 @@ impl Stack {
 }
 
 /// What a page's pane is covered by that its owner, not the stack, knows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Facts {
     /// The scene draws the overlays' glass in this window (`GlassLayer.over-on`): a glass
     /// surface reads the page's pixels.
     pub glass: bool,
     /// The window's peek is open or leaving (`Model::glance_of`, its card's exit).
     pub glance: bool,
+    /// Where the open peek's card and scrim are (the host's `glance_rect`, computed per call:
+    /// not the store's); none while it is closed or only its exit is drawn.
+    pub glance_rect: Option<crate::tabdrag::Rect>,
     /// The visible tab plays in picture-in-picture: its card stands in for it.
     pub pip_card: Option<TabId>,
 }
