@@ -2491,7 +2491,8 @@ impl Host {
         tab: TabId,
         command: &Command,
     ) -> Option<(ClosedTab, closed::Closed)> {
-        if self.archiving.contains_key(&tab) || self.agent_drives(tab) {
+        // an agent's and a private window's closed tabs are none of the user's records
+        if self.archiving.contains_key(&tab) || !self.records(tab) {
             return None;
         }
         let undo = closed::Closed::of(&self.model, tab, command, now_ms())?;
