@@ -84,8 +84,13 @@ impl Host {
                 (tab, at)
             }
         };
-        let page = !self.snapshots.standing_in(tab) && !self.agent_drives(tab);
-        (page && self.tab_view(tab).is_some()).then_some((tab, at))
+        self.touchable(tab).then_some((tab, at))
+    }
+
+    /// Whether `tab`'s page takes a pinch or a finger: it has a view, is not showing its
+    /// snapshot and no agent session drives it (its coordinates are the agent's).
+    pub(super) fn touchable(&mut self, tab: TabId) -> bool {
+        !self.snapshots.standing_in(tab) && !self.agent_drives(tab) && self.tab_view(tab).is_some()
     }
 
     /// A swipe's input; a begin `at` a window point (a two-finger scroll) counts only over a

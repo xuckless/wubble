@@ -107,6 +107,8 @@ pub(crate) struct WindowHost {
     pub(super) drawn: surfaces::Drawn,
     /// The begin frames of the pages this window shows (`Pacing::Shell`), one per render.
     pub(super) pace: Pace,
+    /// The touchscreen's fingers down on this window's pages (`host/touch.rs`).
+    pub(super) fingers: wubble_core::touch::Fingers,
 }
 
 impl WindowHost {
@@ -143,6 +145,7 @@ impl WindowHost {
             split_commands: vec![],
             drawn: Default::default(),
             pace: Pace::default(),
+            fingers: Default::default(),
         }
     }
 }

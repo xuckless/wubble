@@ -360,6 +360,9 @@ pub struct InputState {
     view_focused: bool,
     /// The pointer in window logical pixels, while it is over the window.
     pub pointer: Option<slint::LogicalPosition>,
+    /// The raw event Slint is dispatching is a touch: the mouse input it makes of it is the
+    /// finger's, which a page has as touch (`host/touch.rs`), so it never reaches a page.
+    pub touching: bool,
 }
 
 impl Default for InputState {
@@ -372,6 +375,7 @@ impl Default for InputState {
             window_focused: false,
             view_focused: false,
             pointer: None,
+            touching: false,
         }
     }
 }

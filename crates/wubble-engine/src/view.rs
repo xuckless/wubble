@@ -45,7 +45,7 @@ use crate::page::{
     ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags,
     FrameChannel, LogLevel, MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
 };
-use crate::pinch::{self, Pinch};
+use crate::pinch::{self, Pinch, TouchKind};
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
 
@@ -682,6 +682,21 @@ impl View {
         self.send(|host| host.send_mouse_wheel_event(Some(&event), dx, dy));
     }
 
+    /// A finger of a touchscreen on the page: finger `id` (small and stable while it is down)
+    /// at `point`, view-relative. Blink makes its scrolls, taps, long presses and pinches.
+    pub fn touch(
+        &mut self,
+        id: i32,
+        kind: TouchKind,
+        point: Point,
+        pressure: f32,
+        modifiers: &Modifiers,
+    ) {
+        self.content(ContentEvent::Input);
+        let event = input::touch_event(id, kind, point, pressure, modifiers);
+        self.send(|host| host.send_touch_event(Some(&event)));
+    }
+
     /// A trackpad pinch over the page (`pinch.rs`): Blink's pinch zoom, never the page zoom.
     /// `Begin` carries the pointer, view-relative.
     pub fn pinch(&mut self, gesture: pinch::Gesture) {
@@ -721,7 +736,7 @@ impl View {
     }
 
     fn execute_pinch(&mut self, effects: Vec<pinch::Effect>) {
-        use pinch::{Effect, TouchKind};
+        use pinch::Effect;
         for effect in effects {
             match effect {
                 Effect::Wheel { at, dy } => {
@@ -729,24 +744,8 @@ impl View {
                     self.send(|host| host.send_mouse_wheel_event(Some(&event), 0, dy));
                 }
                 Effect::Touch { kind, points } => {
-                    let type_ = match kind {
-                        TouchKind::Press => cef::TouchEventType::PRESSED,
-                        TouchKind::Move => cef::TouchEventType::MOVED,
-                        TouchKind::Cancel => cef::TouchEventType::CANCELLED,
-                    };
                     for (id, p) in (0..).zip(points) {
-                        let event = cef::TouchEvent {
-                            id,
-                            x: p.x,
-                            y: p.y,
-                            radius_x: 0.0,
-                            radius_y: 0.0,
-                            rotation_angle: 0.0,
-                            pressure: 1.0,
-                            type_,
-                            modifiers: 0,
-                            pointer_type: cef::PointerType::TOUCH,
-                        };
+                        let event = input::touch_event(id, kind, p, 1.0, &Modifiers::default());
                         self.send(|host| host.send_touch_event(Some(&event)));
                     }
                 }

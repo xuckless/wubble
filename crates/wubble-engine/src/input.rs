@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use crate::app::{Current, Platform};
 use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, PhysicalKey};
+use wubble_core::touch::TouchKind;
 
 /// `cef_event_flags_t` (cef-dll-sys 156).
 mod flag {
@@ -155,6 +156,34 @@ pub fn ctrl_wheel_event(point: Point) -> cef::MouseEvent {
     cef::MouseEvent {
         modifiers: flag::CONTROL | flag::PRECISION_SCROLLING_DELTA,
         ..mouse_event(point, &Modifiers::default())
+    }
+}
+
+/// One finger's touch event: finger `id` of the view at `point` (DIP, unrounded: touch keeps
+/// fractions), as a touchscreen's (`pointer_type` touch, no contact size or angle).
+pub fn touch_event(
+    id: i32,
+    kind: TouchKind,
+    point: Point,
+    pressure: f32,
+    m: &Modifiers,
+) -> cef::TouchEvent {
+    cef::TouchEvent {
+        id,
+        x: point.x,
+        y: point.y,
+        radius_x: 0.0,
+        radius_y: 0.0,
+        rotation_angle: 0.0,
+        pressure,
+        type_: match kind {
+            TouchKind::Press => cef::TouchEventType::PRESSED,
+            TouchKind::Move => cef::TouchEventType::MOVED,
+            TouchKind::Release => cef::TouchEventType::RELEASED,
+            TouchKind::Cancel => cef::TouchEventType::CANCELLED,
+        },
+        modifiers: cef_modifiers(m),
+        pointer_type: cef::PointerType::TOUCH,
     }
 }
 
