@@ -182,6 +182,10 @@ impl Host {
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => {
+                // the new document does not glide on with the last one's scroll
+                if self.gliding_on() == Some(tab) {
+                    self.fling(wubble_core::fling::FlingInput::Interrupt);
+                }
                 let shown = self.shown();
                 self.overlay_event(window, shown, OverlayEvent::Navigated(tab));
                 self.apply_permission(tab, PermissionEvent::PageChanged);

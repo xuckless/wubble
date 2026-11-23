@@ -29,6 +29,21 @@ const FLING_TICK: Duration = Duration::from_micros(8333);
 const CHIP_TRAVEL: f64 = 96.0;
 const CHIP_BAND: f64 = 34.0;
 
+/// What a two-finger scroll glides on: a pane (a shell pane id) and the point in it the scrolls
+/// go to. One glide per pane: the point a touchpad scroll reports drifts with the pointer, so
+/// it is not compared (the first one is kept).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FlingAt {
+    pub(super) pane: i32,
+    pub(super) point: Point,
+}
+
+impl PartialEq for FlingAt {
+    fn eq(&self, other: &Self) -> bool {
+        self.pane == other.pane
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Gestures {
     /// The page a pinch is over, from its begin to its end.
@@ -36,8 +51,8 @@ pub(super) struct Gestures {
     swipe: Swipe,
     /// The page a swipe is over, and its root's horizontal scroll at the begin.
     page: Option<(TabId, f64)>,
-    /// The two-finger scroll and its glide, on a pane (a shell pane id) at a point in it.
-    fling: Fling<(i32, Point)>,
+    /// The two-finger scroll and its glide.
+    fling: Fling<FlingAt>,
     /// Ticks the glide while it runs.
     fling_timer: slint::Timer,
 }
@@ -110,15 +125,21 @@ impl Host {
         self.input.now().as_secs_f64() * 1000.0
     }
 
+    /// The page the two-finger scroll or its glide is on.
+    pub(super) fn gliding_on(&self) -> Option<TabId> {
+        let at = self.gestures.fling.target()?;
+        crate::shell::tab_id(at.pane)
+    }
+
     /// One input of the two-finger scroll's glide, and what it says to do.
-    pub(super) fn fling(&mut self, input: FlingInput<(i32, Point)>) {
+    pub(super) fn fling(&mut self, input: FlingInput<FlingAt>) {
         let (next, effects) = fling::transition(std::mem::take(&mut self.gestures.fling), input);
         self.gestures.fling = next;
         for effect in effects {
             match effect {
                 // Plain scrolls: a key held now does not make the glide a zoom.
                 FlingEffect::Scroll {
-                    target: (pane, point),
+                    target: FlingAt { pane, point },
                     dx,
                     dy,
                 } => {

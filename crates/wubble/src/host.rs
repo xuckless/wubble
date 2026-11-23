@@ -3564,6 +3564,10 @@ impl Host {
     /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
     /// is `input::key_route`'s decision.
     pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
+        // A key stops a glide, as in Chrome (a PageDown is not added to it).
+        if key.pressed {
+            self.fling(wubble_core::fling::FlingInput::Interrupt);
+        }
         // Link hints take every key while their labels show.
         if self.hint_key(key) {
             return EventResult::PreventDefault;
@@ -3953,14 +3957,21 @@ impl Host {
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
         self.hints_scrolled();
-        let now = self.fling_now();
-        self.fling(wubble_core::fling::FlingInput::Scroll {
-            target: (pane, point),
-            dx: dx.into(),
-            dy: dy.into(),
-            now,
-        });
         let (modifiers, precise) = (self.input.modifiers(), self.input.wheel_precise);
+        // A Ctrl (or Cmd) scroll zooms the page: it does not glide on as a scroll.
+        let now = self.fling_now();
+        self.fling(
+            if modifiers.keys.control_key() || modifiers.keys.super_key() {
+                wubble_core::fling::FlingInput::Interrupt
+            } else {
+                wubble_core::fling::FlingInput::Scroll {
+                    target: gesture::FlingAt { pane, point },
+                    dx: dx.into(),
+                    dy: dy.into(),
+                    now,
+                }
+            },
+        );
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
             view.wheel(point, dx, dy, precise, &modifiers);

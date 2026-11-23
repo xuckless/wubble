@@ -41,6 +41,16 @@ pub enum Fling<T> {
     },
 }
 
+impl<T: Copy> Fling<T> {
+    /// What the fingers scroll or the glide moves, if anything.
+    pub fn target(&self) -> Option<T> {
+        match self {
+            Fling::Idle => None,
+            Fling::Tracking { target, .. } | Fling::Gliding { target, .. } => Some(*target),
+        }
+    }
+}
+
 // By hand: a derive would ask `T: Default`, which a pane id is not.
 impl<T> Default for Fling<T> {
     fn default() -> Self {
