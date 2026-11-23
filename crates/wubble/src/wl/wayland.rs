@@ -1568,15 +1568,6 @@ mod tests {
         assert!(sent(&DragData::default(), none).is_empty());
     }
 
-    fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-        let mut out = vec![];
-        let mut e = png::Encoder::new(&mut out, width, height);
-        e.set_color(png::ColorType::Rgba);
-        e.set_depth(png::BitDepth::Eight);
-        e.write_header().unwrap().write_image_data(rgba).unwrap();
-        out
-    }
-
     fn picture_drag(contents: Option<(&str, &[u8])>) -> DragData {
         DragData {
             link_url: Some("https://a.test/cat.jpg".into()),
@@ -1588,7 +1579,7 @@ mod tests {
                 })
             }),
             image: Some(Box::new(DragImage {
-                png: Arc::from(png(1, 1, &[1, 2, 3, 255])),
+                png: Arc::from(crate::shot_io::encode_png(1, 1, &[1, 2, 3, 255]).unwrap()),
                 size: (1, 1),
                 hotspot: (0, 0),
             })),
@@ -1644,7 +1635,8 @@ mod tests {
 
     #[test]
     fn the_drag_icon_is_premultiplied_argb_at_the_pngs_scale() {
-        let (w, h, argb) = argb(&png(2, 1, &[255, 0, 0, 255, 255, 255, 255, 128])).unwrap();
+        let png = crate::shot_io::encode_png(2, 1, &[255, 0, 0, 255, 255, 255, 255, 128]).unwrap();
+        let (w, h, argb) = argb(&png).unwrap();
         assert_eq!((w, h), (2, 1));
         assert_eq!(argb, [0, 0, 255, 255, 128, 128, 128, 128]);
         assert!(super::argb(b"not a png").is_none());

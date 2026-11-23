@@ -139,6 +139,20 @@ pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     Some((info.width, info.height))
 }
 
+/// Straight RGBA rows as a PNG, compressed fast (Copy Image's picture for the Wayland
+/// clipboard, `host::builtins`).
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = vec![];
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgba).map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// The PNG as 8-bit RGBA rows, what the clipboard takes.
 pub fn rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     // A full page is large: allow up to 1 GiB of pixels.
@@ -186,6 +200,14 @@ mod tests {
         w.write_image_data(&[255, 0, 0, 0, 0, 255]).unwrap();
         w.finish().unwrap();
         out
+    }
+
+    #[test]
+    fn rgba_encodes_to_a_png_that_decodes_back() {
+        let px = [1, 2, 3, 255, 4, 5, 6, 128];
+        let png = encode_png(2, 1, &px).unwrap();
+        assert_eq!(rgba(&png).unwrap(), (2, 1, px.to_vec()));
+        assert!(encode_png(2, 1, &px[..4]).is_err());
     }
 
     #[test]

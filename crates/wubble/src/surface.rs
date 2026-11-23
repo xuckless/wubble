@@ -408,8 +408,11 @@ pub enum Routed {
     },
     /// The view's rule refused a top-level navigation (an agent session's sites).
     Refused(String),
-    /// Copy Image's pixels, or why there are none.
-    Image(Result<wubble_engine::favicon::Rgba, String>),
+    /// Copy Image's pixels, or why there are none, and the image's URL.
+    Image {
+        url: String,
+        image: Result<wubble_engine::favicon::Rgba, String>,
+    },
     Ignore,
 }
 
@@ -533,7 +536,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::Tooltip(text) => Routed::Tooltip(text),
         PageEvent::ExternalProtocol { url, gesture } => Routed::External { url, gesture },
         PageEvent::NavigationRefused { url, .. } => Routed::Refused(url),
-        PageEvent::ImageDownloaded { image, .. } => Routed::Image(image),
+        PageEvent::ImageDownloaded { url, image } => Routed::Image { url, image },
     }
 }
 

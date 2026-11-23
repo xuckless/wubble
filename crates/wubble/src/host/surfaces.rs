@@ -236,7 +236,7 @@ impl Host {
             Routed::Tooltip(text) => self.page_tooltip(tab, text),
             Routed::External { url, gesture } => self.external_link(tab, url, gesture),
             Routed::Refused(url) => self.agent_refused(tab, &url),
-            Routed::Image(image) => self.copy_image_done(window, image),
+            Routed::Image { url, image } => self.copy_image_done(window, &url, image),
             Routed::WheelZoom { .. } | Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
