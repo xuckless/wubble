@@ -2136,7 +2136,7 @@ fn run(
     };
     // The focused Main window first, with the saved sidebar; the host opens the session's
     // others (Popup windows too) and raises the last focused once they exist
-    // (`Host::settle_session_windows`). It comes back in its state, never minimized when it is
+    // (`Host::open_session_windows`). It comes back in its state, never minimized when it is
     // the focused one (`Geometry::restoring`).
     let first_id = loaded.model.main_window();
     let focused = loaded.model.focused() == first_id;
