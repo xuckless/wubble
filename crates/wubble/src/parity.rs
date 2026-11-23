@@ -56,7 +56,14 @@ const run = (text) => {
   Promise.resolve(p).then(() => report('ok'), (e) => report(`${e.name}: ${e.message}`));
 };
 document.getElementById('b').addEventListener('click', () => run(id));
-addEventListener('message', (e) => { if (e.data === 'write') run(id + '-script'); });
+addEventListener('message', (e) => {
+  if (e.data === 'write') run(id + '-script');
+  // A frame navigating the page it is in without a gesture: Chromium refuses (framebusting).
+  if (e.data === 'bust') {
+    try { top.location = 'https://example.invalid/busted'; report('navigated'); }
+    catch (err) { report(`${err.name}: ${err.message}`); }
+  }
+});
 </script>"#;
 
 /// Where `parity.html` puts things (view-relative logical px).
@@ -1003,6 +1010,16 @@ pub const ITEMS: &[Item] = &[
                 "/^NotAllowedError: .*permissions policy/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"
             ),
             H(C::Clipboard("stale"))
+        ]
+    ),
+    // The pop-up blocker off (`disable-popup-blocking`) must not let a cross-origin frame
+    // navigate the tab without a gesture, as the POPUPS content setting would.
+    item!(
+        "F.frame-bust-refused",
+        [Js("$('frameno').contentWindow.postMessage('bust', '*')")],
+        [
+            J("/SecurityError/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"),
+            J("!!$('frameno') || location.href")
         ]
     ),
     item!(
