@@ -336,8 +336,9 @@ impl Ui {
 
     pub fn ax_roots(&self, env: &impl Env, w: WindowId) -> AxRoots {
         let mut roots = self.visible(env, w);
-        // the free surfaces (a popup, a bubble) are no tree of their own
-        roots.retain(|l| l.kind.row().group != Group::Free);
+        // a free surface of a page (a popup, a bubble) is no tree of its own; the window's
+        // (glance, toast, PiP card) are roots as before
+        roots.retain(|l| l.tab.is_none() || l.kind.row().group != Group::Free);
         roots.sort_by_key(|l| l.kind.row().z);
         let modal = roots
             .iter()
@@ -710,6 +711,8 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
                 .map(|&(_, k)| k)
                 .collect();
             let mut fx = vec![];
+            // the pane's hover slot goes with it, or it would draw a bubble no layer covers
+            ui.drop_tab(tab, false, &mut fx);
             for kind in gone {
                 ui.forget((Home::Tab(tab), kind));
                 fx.push(Effect::Unmount(Layer::new(kind, Some(tab))));

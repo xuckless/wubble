@@ -409,8 +409,13 @@ impl Host {
             window.set_downloads_open(open(Kind::Downloads));
             window.set_spaces_open(open(Kind::Spaces));
             let bits = mounted(&window.get_mounted());
-            // a pane's bubble is drawn until its pane reports the fade over (`status_drawn`)
-            let drawn = |l: Layer| l.kind.scope() == Scope::Pane || bits.contains(&(l.kind, true));
+            // a pane's bubble is drawn from its pane's report until the fade over (`status_drawn`);
+            // the other pane layers have no exit
+            let drawn = |l: Layer| match (l.kind.scope(), l.tab) {
+                (Scope::Pane, Some(t)) if l.kind == Kind::Status => self.status_drawn.contains(&t),
+                (Scope::Pane, _) => true,
+                _ => bits.contains(&(l.kind, true)),
+            };
             let gone = self.ui.gone(&self.env(&window, self.shown()), w, drawn);
             for layer in gone {
                 self.step(&window, Action::Exited { w, layer });
@@ -485,7 +490,10 @@ impl Host {
         else {
             return;
         };
-        if !drawn {
+        if drawn {
+            self.status_drawn.insert(tab);
+        } else {
+            self.status_drawn.remove(&tab);
             let (w, layer) = (self.w.id, Layer::new(Kind::Status, Some(tab)));
             self.act(&window, Action::Exited { w, layer });
         }
@@ -510,7 +518,11 @@ impl Host {
     pub(super) fn panes_gone(&mut self, window: &AppWindow, live: &[TabId]) {
         let mut stale = self.ui.pane_tabs();
         stale.dedup();
-        for tab in stale.into_iter().filter(|t| !live.contains(t)) {
+        // a tab another window shows is that window's pane, not a stale one
+        let me = self.w.id;
+        stale.retain(|t| !live.contains(t) && self.model.window_of(*t).is_none_or(|w| w == me));
+        for tab in stale {
+            self.status_drawn.remove(&tab);
             let w = self.w.id;
             self.act(window, Action::PaneGone { w, tab });
         }

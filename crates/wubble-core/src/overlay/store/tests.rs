@@ -1120,6 +1120,19 @@ fn the_status_slot_is_a_layer() {
     );
 }
 
+/// A pane that goes takes its hover slot along: the bubble is not drawn when it comes back.
+#[test]
+fn pane_gone_dismisses_the_slot() {
+    let e = env(A);
+    let (ui, _) = walk(Ui::default(), &[hv(Status, Key::Tab(B), Cue::Show, 0)]);
+    let (ui, _) = reduce(ui, &e, Action::PaneGone { w: W1, tab: B });
+    assert_eq!(ui.phase(W1, on(Status, B)), None);
+    assert!(!matches!(
+        ui.hover(at(Status)),
+        crate::hovercard::Hover::Shown { .. }
+    ));
+}
+
 /// Who takes the pointer at a point: the topmost placed rect, the open peek's, else the page.
 #[test]
 fn pointer_at_rects() {

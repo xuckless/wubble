@@ -371,6 +371,9 @@ pub struct Host {
     /// The window the host works on now (`window.rs`); the others are parked.
     w: WindowHost,
     parked: BTreeMap<WindowId, WindowHost>,
+    /// Tabs whose pane draws its status bubble, as the kit reported (`status-drawn`): a bubble
+    /// that leaves without ever having drawn has no fade to wait for.
+    status_drawn: HashSet<TabId>,
     /// Makes the platform window of each model window that opens.
     factory: crate::WindowFactory,
     /// The engine's single-shot pump timer.
@@ -661,6 +664,7 @@ impl Host {
             engine,
             w,
             parked: BTreeMap::new(),
+            status_drawn: HashSet::new(),
             factory,
             timer: slint::Timer::default(),
             model,
