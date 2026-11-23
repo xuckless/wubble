@@ -884,6 +884,13 @@ impl Host {
             self.aux().remove_window(id);
             crate::orbs::remove(id);
             let _ = gone.handle.hide();
+            // its page fullscreen goes with it: the page leaves (a tab moved out lives on), and
+            // its late `Fullscreen(false)` finds no owner
+            if let Screen::Page { tab, .. } = gone.screen
+                && let Some(v) = self.tab_view(tab)
+            {
+                v.exit_fullscreen();
+            }
             // picture-in-picture's window went, whoever closed it
             if gone.kind == WindowKind::Pip {
                 self.pip_window_closed();

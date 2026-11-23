@@ -641,7 +641,8 @@ impl Host {
         let screens = std::iter::once(&self.w)
             .chain(self.parked.values())
             .map(|w| (w.id, w.screen));
-        // a tab no window holds: the current window's (`(_, PageLeft(_))`) ignores it
+        // a tab no window holds: the current window's `(_, PageLeft(_))` cell drops it, and the
+        // current window is drawn again, as `Fullscreen(false)` (a PiP video's too) always did
         let owner = screen::page_owner(screens, tab).unwrap_or(here);
         if self.enter(owner)
             && let Some(window) = self.w.window.upgrade()

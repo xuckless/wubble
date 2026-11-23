@@ -19,6 +19,7 @@ use wubble_core::tab::TabId;
 use wubble_core::video::{
     self, Fold, Over, Overlay, PageCmd, RateTable, VideoCmd, VideoEffect, VideoInput, VideoState,
 };
+use wubble_core::window::WindowKind;
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
 use wubble_ui::{AppWindow, VideoMark, VideoSave, VideoView};
@@ -881,7 +882,7 @@ impl Host {
             }
             _ => None,
         };
-        let next = view.unwrap_or_default();
+        let next = for_window(self.w.kind, view.unwrap_or_default());
         if next != prev {
             if (next.open || next.collapsed) && !(prev.open || prev.collapsed) {
                 self.sync_pointer(window);
@@ -1287,9 +1288,9 @@ impl Host {
     /// The tab whose card this window shows: a Main window's visible tab playing in
     /// picture-in-picture.
     pub(super) fn pip_card(&self) -> Option<TabId> {
-        self.model.pip_tab().filter(|&t| {
-            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
-        })
+        self.model
+            .pip_tab()
+            .filter(|&t| self.w.kind == WindowKind::Main && self.shown() == Some(t))
     }
 
     /// The Main window's card for its tab in picture-in-picture, and the Pip window's controls.
@@ -1572,9 +1573,48 @@ impl Host {
     }
 }
 
+/// What a window's controls are given of its video. The Pip window draws only `PipControls`,
+/// which reads `paused`: it gets nothing else, so the `VideoControls` built there (for
+/// `AppWindow.mounted`) stay shut: no glass, no frames, no `VideoStrip` in its stack.
+fn for_window(kind: WindowKind, view: VideoView) -> VideoView {
+    match kind {
+        WindowKind::Pip => VideoView {
+            paused: view.paused,
+            ..VideoView::default()
+        },
+        WindowKind::Main | WindowKind::Little | WindowKind::Popup => view,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pip_window_is_given_only_the_play_state() {
+        let open = VideoView {
+            open: true,
+            speeds: true,
+            w: 400.0,
+            h: 225.0,
+            paused: true,
+            ..VideoView::default()
+        };
+        for (kind, want) in [
+            (WindowKind::Main, open.clone()),
+            (WindowKind::Little, open.clone()),
+            (WindowKind::Popup, open.clone()),
+            (
+                WindowKind::Pip,
+                VideoView {
+                    paused: true,
+                    ..VideoView::default()
+                },
+            ),
+        ] {
+            assert_eq!(for_window(kind, open.clone()), want, "{kind:?}");
+        }
+    }
 
     #[test]
     fn commands_reach_the_kit_as_scripts() {

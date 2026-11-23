@@ -1328,8 +1328,8 @@ export component AppWindow inherits Window {
                 video-ui := VideoControls {
                     video: root.video;
                     rates: root.video-rates;
-                    // never under the pointer where it is not drawn (its hover is by place too)
-                    pointer-in: root.pointer-in && !root.pip;
+                    // in the Pip window the host gives it no video (`render_video`): shut, no hover
+                    pointer-in: root.pointer-in;
                     pointer-x: root.pointer-x;
                     pointer-y: root.pointer-y;
                     command(name, value) => {
