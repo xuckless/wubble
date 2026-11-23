@@ -8,6 +8,7 @@ use wubble_core::devtools::{
     Dock, DockEffect, DockEvent, Mode, PANEL_TAB, Point as DevPoint, transition,
 };
 use wubble_core::motion::spring;
+use wubble_core::space::{ContainerId, Side};
 use wubble_core::split::SourceSeam;
 use wubble_core::tab::TabId;
 use wubble_engine::app::ViewId;
@@ -145,7 +146,7 @@ impl Host {
                 None => self.dock_event(DockEvent::TargetFailed(tab)),
             },
             DockEffect::OpenFrontend { tab, url } => {
-                if !self.open_panel(url) {
+                if !self.open_panel(tab, url) {
                     self.dock_event(DockEvent::OpenFailed(tab));
                 }
             }
@@ -163,10 +164,14 @@ impl Host {
         }
     }
 
-    /// Opens the panel's view; false when it cannot be (no window yet, nothing listening on
-    /// the endpoint's port, the engine refused), so the dock falls back to the window.
-    fn open_panel(&mut self, url: String) -> bool {
+    /// Opens the panel's view, the docked front end inspecting `tab` at `url`; false when it
+    /// cannot be (no window yet, an unknown tab, nothing listening on the endpoint's port, the
+    /// engine refused), so the dock falls back to the window.
+    fn open_panel(&mut self, tab: TabId, url: String) -> bool {
         let (Some(window), Some(frame_rate)) = (self.w.window.upgrade(), self.frame_rate) else {
+            return false;
+        };
+        let Some(inspected) = self.model.tabs.get(&tab).map(|t| t.container) else {
             return false;
         };
         if self.devtools.view.is_some() {
@@ -185,15 +190,21 @@ impl Host {
         seam.open = true;
         seam.w = spring(seam.want);
         let layout = self.pane_layout(&window, PANEL_TAB);
+        let container = match self.model.side_of_container(inspected) {
+            Side::Normal => ContainerId::DEFAULT,
+            Side::Private => inspected,
+        };
         let config = ViewConfig {
             url,
             layout,
             frame_rate,
             begin_frames: self.begin_frames(),
             gpu: self.w.presenters[0].context().clone(),
-            // The front end is wubble's own page; it keeps its settings in the default store.
-            container: wubble_core::space::ContainerId::DEFAULT,
-            storage: wubble_core::space::Storage::Disk,
+            // The front end is wubble's own page; it keeps its settings in the default store,
+            // or for a private tab in the private windows' container (in memory, as Chrome's
+            // DevTools of an incognito tab run off the record).
+            container,
+            storage: self.model.storage_of(container),
         };
         match self.engine.open_view(config) {
             Ok(id) => {
