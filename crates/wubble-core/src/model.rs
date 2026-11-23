@@ -522,7 +522,7 @@ impl Model {
             tabs,
             windows,
             self.glances.clone(),
-            self.pip_geometry,
+            self.pip_geometry.clone(),
             self.clock,
             self.pressure,
             self.wall_ms,

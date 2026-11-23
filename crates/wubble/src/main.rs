@@ -1081,7 +1081,7 @@ impl WindowFactory {
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
-        if let Some(g) = geometry {
+        if let Some(g) = &geometry {
             host::place_window(&window, g);
         }
         let glass = Rc::new(RefCell::new(backdrop::choose(
@@ -2134,10 +2134,18 @@ fn run(
         gpu: gpu.clone(),
         glass_scene: loaded.settings.glass_scene(),
     };
-    // The focused window first; the host opens the session's others.
-    let focused = loaded.model.focused();
-    let geometry = loaded.model.window(focused).and_then(|w| w.geometry);
-    let first = factory.open(focused, WindowKind::Main, loaded.settings.ui, geometry)?;
+    // The focused Main window first, with the saved sidebar; the host opens the session's
+    // others (Popup windows too) and raises the last focused once they exist
+    // (`Host::open_session_windows`). It comes back in its state, never minimized when it is
+    // the focused one (`Geometry::restoring`).
+    let first_id = loaded.model.main_window();
+    let focused = loaded.model.focused() == first_id;
+    let geometry = loaded
+        .model
+        .window(first_id)
+        .and_then(|w| w.geometry.as_ref())
+        .map(|g| g.restoring(focused));
+    let first = factory.open(first_id, WindowKind::Main, loaded.settings.ui, geometry)?;
     measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);

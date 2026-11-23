@@ -20,6 +20,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (14, include_str!("../sql/014_agent_log.sql")),
     (15, include_str!("../sql/015_agent_spaces.sql")),
     (16, include_str!("../sql/016_download_containers.sql")),
+    (17, include_str!("../sql/017_window_state.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {

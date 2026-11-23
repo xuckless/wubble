@@ -226,7 +226,12 @@ impl Model {
             },
             None => self.space_for_window(),
         };
-        let id = self.push_window(Shown::Space(space), None);
+        // the size of the window it was opened from, cascaded (Chrome's `WindowSizer`)
+        let geometry = self
+            .window(self.main_window())
+            .and_then(|w| w.geometry.as_ref())
+            .map(Geometry::cascaded);
+        let id = self.push_window(Shown::Space(space), geometry);
         let si = self.space_idx(space).expect("space");
         vec![
             Effect::WindowOpened(id),
@@ -332,7 +337,13 @@ impl Model {
         let Some((tab, _, create)) = self.place_new_tab(url, None, Some(opener), None) else {
             return vec![];
         };
-        let geometry = size.map(|(width, height)| Geometry { width, height, pos });
+        // the window's size, from the page's (`window::popup_window`), where it asked to be
+        let geometry = size.map(|(width, height)| Geometry {
+            width,
+            height,
+            pos,
+            ..Geometry::default()
+        });
         let id = self.push_window(Shown::Popup(tab), geometry);
         self.focus(id);
         vec![create, Effect::WindowOpened(id)]
@@ -388,7 +399,7 @@ impl Model {
             Window {
                 id,
                 shown: Shown::Pip(tab),
-                geometry: self.pip_geometry,
+                geometry: self.pip_geometry.clone(),
             },
         );
         vec![Effect::WindowOpened(id)]
@@ -416,13 +427,15 @@ impl Model {
         fx
     }
 
-    /// The window's size or position changed; a Pip window's is also remembered for the next.
+    /// The window's size, position, show state or monitor changed; kept as its restored
+    /// bounds ([`Geometry::observed`]). A Pip window's is also remembered for the next.
     pub(super) fn resize_window(&mut self, id: WindowId, geometry: Geometry) {
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
-            w.geometry = Some(geometry);
+            let kept = Geometry::observed(w.geometry.as_ref(), geometry);
             if w.kind() == WindowKind::Pip {
-                self.pip_geometry = Some(geometry);
+                self.pip_geometry = Some(kept.clone());
             }
+            w.geometry = Some(kept);
         }
     }
 

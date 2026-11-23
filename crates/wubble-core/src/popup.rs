@@ -60,9 +60,12 @@ pub const ROWS: &[(Opened, bool, Outcome)] = &[
 
 /// The table's answer, then the site's remembered choice: an allowed site opens without a
 /// gesture what a gesture would have opened. A click always opens (Chromium's rule too: the
-/// popup setting only judges requests without one), so a blocked site differs from an
-/// undecided one only in that the pill does not offer to allow it again. With `glance` off (the
-/// `glance.enabled` setting), a peek is a foreground tab.
+/// popup setting only judges requests without one), so a blocked site is held as an undecided
+/// one is: for the address pill (Chromium shows its blocked pop-up icon for both). With
+/// `glance` off (the `glance.enabled` setting), a peek is a foreground tab.
+///
+/// Chromium's own blocker is off (wubble-engine's `disable-popup-blocking` switch), so requests
+/// without a gesture reach this table; were it on, they would never arrive.
 pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: bool) -> Outcome {
     let row = |g: bool| {
         ROWS.iter()

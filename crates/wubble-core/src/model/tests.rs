@@ -2568,6 +2568,28 @@ fn closing_windows() {
 }
 
 #[test]
+fn a_new_window_opens_cascaded_from_the_focused_main_window() {
+    let (m, _) = with_tabs(1);
+    let g = Geometry {
+        width: 800,
+        height: 600,
+        pos: Some((100, 50)),
+        monitor: Some("A".into()),
+        ..Geometry::default()
+    };
+    let (m, _) = run(
+        m,
+        Command::ResizeWindow {
+            window: WindowId(0),
+            geometry: g.clone(),
+        },
+    );
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    assert_eq!(m.window(w).unwrap().geometry, Some(g.cascaded()));
+}
+
+#[test]
 fn popup_and_little_windows_own_their_tab() {
     let (m, t) = with_tabs(1);
     let (m, fx) = run(
@@ -2587,7 +2609,7 @@ fn popup_and_little_windows_own_their_tab() {
         Some(Geometry {
             width: 400,
             height: 300,
-            pos: None
+            ..Geometry::default()
         })
     );
     // `left`/`top` place the window; without a size there is no geometry to put them in
@@ -2605,7 +2627,8 @@ fn popup_and_little_windows_own_their_tab() {
         Some(Geometry {
             width: 400,
             height: 300,
-            pos: Some((-1800, 40))
+            pos: Some((-1800, 40)),
+            ..Geometry::default()
         })
     );
     let (m2, fx) = run(
@@ -3302,12 +3325,13 @@ fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
         width: 480,
         height: 270,
         pos: Some((10, 20)),
+        ..Geometry::default()
     };
     let (m, _) = run(
         m,
         Command::ResizeWindow {
             window: p,
-            geometry: g,
+            geometry: g.clone(),
         },
     );
     let (m, fx) = run(m, Command::CloseTab(t[1]));
