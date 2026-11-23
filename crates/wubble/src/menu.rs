@@ -1766,6 +1766,7 @@ mod tests {
             labels(&e),
             [
                 "Copy",
+                "Copy Link to Highlight",
                 "-",
                 "Search the Web for \u{201c}hello\u{201d}",
                 "Print\u{2026}",
@@ -1775,13 +1776,13 @@ mod tests {
             ]
         );
         assert!(e[0].enabled);
-        assert_eq!(e[2].command, Command::Search("hello".into()));
+        assert_eq!(e[3].command, Command::Search("hello".into()));
         let named = NavFlags {
             search: Some("DuckDuckGo"),
             ..NavFlags::default()
         };
         assert_eq!(
-            entries(&m, named)[2].label,
+            entries(&m, named)[3].label,
             "Search DuckDuckGo for \u{201c}hello\u{201d}"
         );
     }
