@@ -113,6 +113,10 @@ const READS: &[(Kind, &[Reader], &[&str])] = &[
     (Kind::WebMap, &[Reader::AsyncApi], &[WEB_MAP]),
 ];
 
+/// The most pixels a page's copied picture may have (a 8192 x 8192 PNG): the host decodes it
+/// to check it, and one that says it is larger is refused before any pixel is read.
+pub const PAGE_PICTURE_PIXELS: u64 = 1 << 26;
+
 /// The longest primary selection a page sets (`clipboard.js` caps it too); a longer one is
 /// dropped, as no one middle-click pastes a book.
 pub const PRIMARY_CAP: usize = 1 << 20;

@@ -981,13 +981,29 @@ impl Host {
             return;
         }
         let (buffer, reader, read) = match request {
+            // Its pictures are checked off the window's thread (`page_copy`), then stored.
             ClipboardRequest::Copy(payload) => {
-                let payload = page_copy(payload);
-                let text = payload.text.clone();
-                if !self.clipboard.store_rich(window.window(), payload)
-                    && let Some(text) = text
-                {
-                    self.copy(&text);
+                let id = self.w.id;
+                let spawned = std::thread::Builder::new()
+                    .name("wubble-page-copy".into())
+                    .spawn(move || {
+                        let payload = page_copy(payload);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            crate::with_host_in(id, |host| {
+                                let Some(window) = host.w.window.upgrade() else {
+                                    return;
+                                };
+                                let text = payload.text.clone();
+                                if !host.clipboard.store_rich(window.window(), payload)
+                                    && let Some(text) = text
+                                {
+                                    host.copy(&text);
+                                }
+                            })
+                        });
+                    });
+                if let Err(e) = spawned {
+                    eprintln!("wubble: a page's copy: {e}");
                 }
                 return;
             }
@@ -1072,13 +1088,18 @@ impl Host {
     }
 }
 
-/// A page's copy as the host puts it on the clipboard: its pictures only as PNG, decoded and
-/// encoded again, so no page hands another app a malformed or other image file through it.
+/// A page's copy as the host puts it on the clipboard: its pictures only as PNG of at most
+/// `clipboard::PAGE_PICTURE_PIXELS` (by its header, before decoding), decoded and encoded
+/// again, so no page hands another app a malformed or other image file through it.
 fn page_copy(payload: Payload) -> Payload {
+    let fits = |png: &[u8]| {
+        crate::shot_io::png_size(png)
+            .is_some_and(|(w, h)| u64::from(w) * u64::from(h) <= clipboard::PAGE_PICTURE_PIXELS)
+    };
     let files = payload
         .files
         .into_iter()
-        .filter(|f| f.mime.eq_ignore_ascii_case(dnd::PNG))
+        .filter(|f| f.mime.eq_ignore_ascii_case(dnd::PNG) && fits(&f.bytes))
         .filter_map(|f| {
             let (width, height, rgba) = crate::shot_io::rgba(&f.bytes).ok()?;
             let bytes = crate::shot_io::encode_png(width, height, &rgba).ok()?;
