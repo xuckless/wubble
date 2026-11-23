@@ -475,6 +475,10 @@ pub struct Extension {
     pub permissions: Vec<String>,
     /// Its options page inside the extension ([`Manifest::options_page`]).
     pub options_page: Option<String>,
+    /// "Allow in Private Windows" (Chrome's "Allow in Incognito", Safari's "Allow in Private
+    /// Browsing"): off unless the user turns it on; what reaches private windows is
+    /// [`reaches`].
+    pub private: bool,
 }
 
 impl Extension {
@@ -488,6 +492,7 @@ impl Extension {
             source,
             permissions: manifest.permissions,
             options_page: manifest.options_page,
+            private: false,
         }
     }
 
@@ -522,6 +527,7 @@ impl Extension {
             "source": source,
             "permissions": self.permissions,
             "options_page": self.options_page,
+            "private": self.private,
         })
     }
 
@@ -551,6 +557,8 @@ impl Extension {
                 .collect::<Option<_>>()?,
             // (absent in lists stored before the options page was read)
             options_page: text(v, "options_page"),
+            // (absent in lists stored before private windows: off, as for a new one)
+            private: v.get("private").and_then(Value::as_bool).unwrap_or(false),
         })
     }
 }
@@ -589,10 +597,13 @@ impl Installed {
 /// What the user does to the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// A new extension, or a new copy of one installed (same id), which keeps its enabled flag.
+    /// A new extension (allowed in private windows as the install prompt said), or a new copy
+    /// of one installed (same id), which keeps its enabled and private flags.
     Install(Extension),
     Enable(ExtensionId),
     Disable(ExtensionId),
+    /// "Allow in Private Windows" turned on (`true`) or off.
+    AllowPrivate(ExtensionId, bool),
     Remove(ExtensionId),
 }
 
@@ -630,6 +641,7 @@ pub fn transition(list: Installed, event: Event) -> (Installed, Vec<Effect>) {
             match at(&items, &ext.id) {
                 Some(i) => {
                     ext.enabled = items[i].enabled;
+                    ext.private = items[i].private;
                     items[i] = ext;
                 }
                 None => {
@@ -647,6 +659,11 @@ pub fn transition(list: Installed, event: Event) -> (Installed, Vec<Effect>) {
         Event::Disable(id) => {
             if let Some(i) = at(&items, &id) {
                 items[i].enabled = false;
+            }
+        }
+        Event::AllowPrivate(id, on) => {
+            if let Some(i) = at(&items, &id) {
+                items[i].private = on;
             }
         }
         Event::Remove(id) => {
@@ -688,19 +705,39 @@ pub fn load_paths(available: bool, list: &Installed) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether the sidebar footer shows the Extensions button: an engine with the extension
-/// patches (`available`) and something installed.
-pub fn footer_button(available: bool, list: &Installed) -> bool {
-    available && !list.extensions().is_empty()
+/// Whether `ext` acts in a window, `private` or not, and on its tabs: enabled, and in a private
+/// window only when the user allowed it there ([`Extension::private`]; Chrome's and Safari's
+/// rule). The one gate every host-side reach of an extension into a private window passes: its
+/// action button and its popup, its clicks on the page. Chromium's own half (content scripts,
+/// events, `tabs`/`windows` in the off-the-record profile) is the engine's: docs/research/
+/// extensions.md, "Private windows".
+pub fn reaches(ext: &Extension, private: bool) -> bool {
+    ext.enabled && (ext.private || !private)
+}
+
+/// Whether the sidebar footer shows the Extensions button in a window, `private` or not: an
+/// engine with the extension patches (`available`) and something installed that may act there
+/// (enabled or not: the list is where it is turned on).
+pub fn footer_button(available: bool, list: &Installed, private: bool) -> bool {
+    available && list.extensions().iter().any(|e| e.private || !private)
 }
 
 /// Whether the list differs from what this run loaded (`at_start`, the list when CEF started):
 /// the UI's "restart to apply". Every enabled entry counts, not only its directory: a new copy
 /// in the same directory (an unpacked extension edited and installed again) is only read at
 /// start too.
+///
+/// "Allow in Private Windows" does not count: wubble's gate ([`reaches`]) reads it live.
 pub fn restart_needed(at_start: &Installed, now: &Installed) -> bool {
     let loaded = |list: &Installed| -> Vec<Extension> {
-        list.0.iter().filter(|e| e.enabled).cloned().collect()
+        list.0
+            .iter()
+            .filter(|e| e.enabled)
+            .map(|e| Extension {
+                private: false,
+                ..e.clone()
+            })
+            .collect()
     };
     loaded(at_start) != loaded(now)
 }
@@ -882,6 +919,7 @@ mod tests {
             source,
             permissions: vec!["storage".into()],
             options_page: Some("options.html".into()),
+            private: false,
         }
     }
 
@@ -1048,9 +1086,69 @@ mod tests {
         // an engine without the extension patches loads none and shows no button; the list
         // stays as it is
         assert!(load_paths(false, &list).is_empty());
-        assert!(!footer_button(false, &list) && footer_button(true, &list));
-        assert!(!footer_button(true, &Installed::default()));
+        assert!(!footer_button(false, &list, false) && footer_button(true, &list, false));
+        assert!(!footer_button(true, &Installed::default(), false));
         assert_eq!(list.extensions().len(), 3);
+    }
+
+    #[test]
+    fn private_windows_are_reached_only_when_allowed() {
+        // (enabled, allowed in private windows, reaches a normal window, reaches a private one)
+        for (enabled, private, normal, in_private) in [
+            (true, false, true, false),
+            (true, true, true, true),
+            (false, false, false, false),
+            (false, true, false, false),
+        ] {
+            let e = Extension {
+                enabled,
+                private,
+                ..unpacked("a")
+            };
+            assert_eq!(reaches(&e, false), normal, "{enabled} {private} normal");
+            assert_eq!(reaches(&e, true), in_private, "{enabled} {private} private");
+        }
+        // off unless allowed: a new install, and a list stored before the choice existed
+        let manifest = parse_manifest(MANIFEST).unwrap();
+        let dir = Source::Unpacked { dir: "/m".into() };
+        assert!(!Extension::new(id_from_key(b"m"), manifest, dir).private);
+        let a = id_from_key(b"a");
+        let (list, _) = transition(Installed::default(), Event::Install(unpacked("a")));
+        assert!(!list.get(&a).unwrap().private);
+        let old = list.to_json().replace(",\"private\":false", "");
+        assert!(!old.contains("private"));
+        assert!(!Installed::from_json(&old).unwrap().get(&a).unwrap().private);
+        // allowed: stored, kept by a new copy, and no restart (the gate reads it live)
+        let at_start = list.clone();
+        let (list, fx) = transition(list, Event::AllowPrivate(a.clone(), true));
+        assert_eq!(fx, [saved(&list)]);
+        assert!(list.get(&a).unwrap().private);
+        assert!(!restart_needed(&at_start, &list));
+        assert_eq!(Installed::from_json(&list.to_json()), Some(list.clone()));
+        let (list, _) = transition(list, Event::Install(unpacked("a")));
+        assert!(list.get(&a).unwrap().private, "a new copy keeps the choice");
+        let (same, fx) = transition(list.clone(), Event::AllowPrivate(a.clone(), true));
+        assert!(fx.is_empty() && same == list);
+        let (list, _) = transition(list, Event::AllowPrivate(a.clone(), false));
+        assert!(!list.get(&a).unwrap().private);
+        // an install the prompt allowed starts allowed
+        let allowed = Extension {
+            private: true,
+            ..unpacked("b")
+        };
+        let (list, _) = transition(list, Event::Install(allowed));
+        assert!(list.get(&id_from_key(b"b")).unwrap().private);
+        // the footer button: in a private window only with an allowed extension installed
+        for (list, private, want) in [
+            (list.clone(), false, true),
+            (list.clone(), true, true),
+            (at_start.clone(), false, true),
+            (at_start, true, false),
+            (Installed::default(), true, false),
+        ] {
+            assert_eq!(footer_button(true, &list, private), want, "{private}");
+            assert!(!footer_button(false, &list, private));
+        }
     }
 
     #[test]

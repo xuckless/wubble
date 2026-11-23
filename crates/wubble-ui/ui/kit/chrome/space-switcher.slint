@@ -24,6 +24,7 @@ import { Calm } from "../motion/calm.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { SpaceItem } from "../../components/model.slint";
 import { AgentMark } from "agent-mark.slint";
+import { PrivateChip } from "private-mark.slint";
 
 export global SpaceTint {
     // computed: `.wb-space:hover` (0,2,0) when hovered, else `.wb button`'s inherited `.wb` ink
@@ -104,6 +105,9 @@ export component SpaceName inherits Rectangle {
     // wubble: an agent session's Space: the mark at the end of the header (kit AgentMark).
     in property <bool> agent;
     callback agent-stop();
+    // wubble: a private window's Space: its name ("Private") as the Private chip in place of the
+    // plain name (kit PrivateChip).
+    in property <bool> private;
     height: BrowserCss.wb-space-name--height;
     Entering {
         e: root.enter;
@@ -120,6 +124,7 @@ export component SpaceName inherits Rectangle {
                 color: BrowserCss.wb-space-name--color;
                 vertical-alignment: center;
                 overflow: elide;
+                visible: !root.private;
             }
             if root.agent: VerticalLayout {
                 alignment: center;
@@ -129,6 +134,11 @@ export component SpaceName inherits Rectangle {
                     }
                 }
             }
+        }
+        if root.private: PrivateChip {
+            x: BrowserCss.wb-space-name--padding-left;
+            y: (parent.height - self.height) / 2;
+            text: root.text;
         }
     }
 }

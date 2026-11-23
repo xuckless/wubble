@@ -224,6 +224,9 @@ pub struct ViewConfig {
     /// Whose cookies, storage and cache the view uses (`crate::storage`):
     /// the tab's container.
     pub container: wubble_core::space::ContainerId,
+    /// Where that container keeps them: the engine opens its context from
+    /// this value, and refuses a context already open with the other one.
+    pub storage: wubble_core::space::Storage,
 }
 
 /// One live windowless browser.

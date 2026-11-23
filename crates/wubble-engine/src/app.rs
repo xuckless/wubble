@@ -31,7 +31,7 @@ use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
 use crate::storage::{self, Profiles};
 use crate::view::{View, ViewConfig};
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Storage};
 
 /// The debugging argument that turns the sandbox off: Chromium's own switch, so CEF
 /// also passes it on to every subprocess, where wubble-helper applies the same rule,
@@ -922,6 +922,16 @@ pub struct Engine {
 impl Engine {
     /// Initialises CEF. Call once per process, on the UI thread.
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
+        // CEF resolves `root_cache_path` through symlinks, then refuses a container's profile
+        // that is not a child of the resolved path ("Cannot create profile at path", `storage`):
+        // macOS's temp dir is under `/var`, a link to `/private/var`. Resolved once, for both.
+        let cache_dir = std::fs::create_dir_all(&config.cache_dir)
+            .and_then(|()| std::fs::canonicalize(&config.cache_dir))
+            .unwrap_or_else(|_| config.cache_dir.clone());
+        let config = EngineConfig {
+            cache_dir,
+            ..config
+        };
         if config.no_sandbox {
             eprintln!(
                 "wubble: WARNING: the CEF sandbox is OFF ({NO_SANDBOX_ARG}). Pages run \
@@ -973,7 +983,8 @@ impl Engine {
         // macOS host cannot do from inside one.
         if let Some(runtime) = &engine.runtime {
             for container in config.containers {
-                if let Err(e) = engine.profiles.get(runtime, container) {
+                // the saved containers: every one is on disk
+                if let Err(e) = engine.profiles.get(runtime, container, Storage::Disk) {
                     eprintln!("wubble-engine: {e}");
                 }
             }
@@ -1051,7 +1062,9 @@ impl Engine {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
-        let profile = self.profiles.get(runtime, config.container)?;
+        let profile = self
+            .profiles
+            .get(runtime, config.container, config.storage)?;
         let view = View::open(
             runtime,
             config,
@@ -1072,13 +1085,19 @@ impl Engine {
     /// up any not open yet. Site storage (local storage, IndexedDB, service
     /// workers) stays: [`View::forget_site`] clears one site's, deleting the
     /// container clears all of it.
-    pub fn clear_browsing_data(&mut self, containers: &[ContainerId]) -> Result<(), EngineError> {
+    pub fn clear_browsing_data(
+        &mut self,
+        containers: &[(ContainerId, Storage)],
+    ) -> Result<(), EngineError> {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
-        for container in containers {
-            let context = self.profiles.get(runtime, *container)?.request_context();
-            storage::clear(&context, *container);
+        for &(container, kept) in containers {
+            let context = self
+                .profiles
+                .get(runtime, container, kept)?
+                .request_context();
+            storage::clear(&context, container);
         }
         Ok(())
     }
@@ -1098,8 +1117,15 @@ impl Engine {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
-        let source = self.profiles.get(runtime, from)?.request_context();
-        let target = self.profiles.get(runtime, to)?.request_context();
+        // agent sign-ins: both are saved containers (a private one is never a source)
+        let source = self
+            .profiles
+            .get(runtime, from, Storage::Disk)?
+            .request_context();
+        let target = self
+            .profiles
+            .get(runtime, to, Storage::Disk)?
+            .request_context();
         storage::copy_cookies(&source, &target, filter, done).ok_or_else(|| {
             EngineError::View(format!(
                 "container {}: CEF refused to read its cookies",
@@ -1109,14 +1135,17 @@ impl Engine {
     }
 
     /// `container` was deleted (its views are closing): its cookies go now,
-    /// the rest of its storage at the next start, before CEF opens it (its
-    /// files may still be open now).
-    pub fn forget_container(&mut self, container: ContainerId) {
+    /// the rest of a [`Storage::Disk`] one's storage at the next start, before
+    /// CEF opens it (its files may still be open now). A [`Storage::Memory`]
+    /// one has nothing on disk: CEF drops its profile with its last browser.
+    pub fn forget_container(&mut self, container: ContainerId, kept: Storage) {
         if let Some(profile) = self.profiles.open(container) {
             storage::clear(&profile.request_context(), container);
         }
         self.profiles.close(container);
-        storage::forget(self.profiles.root(), container);
+        if kept == Storage::Disk {
+            storage::forget(self.profiles.root(), container);
+        }
     }
 
     /// CEF's cache directory (the profile's, or the per-process smoke one).

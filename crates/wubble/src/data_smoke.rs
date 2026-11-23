@@ -38,7 +38,15 @@ pub enum Ending {
     Quit,
     /// SIGKILL, once the store has answered a read sent after the last write.
     Kill,
+    /// `--smoke private`'s script (`host/data/private.rs`) in place of the pages', ending in a
+    /// quit; the parent then looks for the private pages everywhere ([`private_leaks`]).
+    Private,
 }
+
+/// The hosts (on loopback: Chromium resolves `*.localhost` there) of `--smoke private`'s normal
+/// and private pages, so each has its own site and every trace of one is found by its name.
+pub const NORMAL_HOST: &str = "normalmark";
+pub const PRIVATE_HOST: &str = "privmark";
 
 /// The loopback server's state, shared with the host's steps.
 #[derive(Debug, Default)]
@@ -69,6 +77,11 @@ impl Server {
 
     pub fn url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{path}", self.port)
+    }
+
+    /// `path` on `host.localhost` ([`NORMAL_HOST`], [`PRIVATE_HOST`]).
+    pub fn url_at(&self, host: &str, path: &str) -> String {
+        format!("http://{host}.localhost:{}{path}", self.port)
     }
 }
 
@@ -148,6 +161,10 @@ fn answer(mut stream: TcpStream, server: &Server) -> std::io::Result<()> {
         "/page" => html(&mut stream, "", &page("Page One")),
         "/other" => html(&mut stream, "", &page("Page Two")),
         "/uni" => html(&mut stream, "", &page(UNI_TITLE)),
+        // `--smoke private`'s pages: their titles carry their host's mark too
+        "/a" => html(&mut stream, "", &page("normalmark A")),
+        "/b" => html(&mut stream, "", &page("privmark B")),
+        "/b2" => html(&mut stream, "", &page("privmark B2")),
         // a sign-in form and a textarea: what Chromium's own autofill and spelling services ask
         // their servers about (`net_audit`)
         "/form" => html(
@@ -287,6 +304,118 @@ pub fn compare(shown: &str, db: &Path, ending: Ending) -> Result<(), String> {
         "after a {ending:?} the database differs from what the pages showed: \
          shown but not stored {missing:?}; stored but not shown {extra:?}"
     ))
+}
+
+/// `--smoke private`'s check after its run quit, on its profile `dir`: the store holds the
+/// normal page (history, session) and nothing of the private one (history, closed tabs, the
+/// session, downloads, site permissions, settings: zoom and themes among them); no file under
+/// the profile holds the private host's name (as UTF-8 or UTF-16) while the normal one's is
+/// found (so the scan can see); and no container directory is left of a container the session
+/// does not have (the private windows' in-memory one).
+pub fn private_leaks(dir: &Path, db: &Path) -> Result<(), String> {
+    use wubble_store::Store;
+    let fail = |e: wubble_store::Error| format!("cannot read the database: {e}");
+    let store = pollster::block_on(Store::open(db)).map_err(fail)?;
+    let visits: Vec<String> = pollster::block_on(store.list_visits(10_000, None, ""))
+        .map_err(fail)?
+        .into_iter()
+        .map(|v| format!("{}|{}", v.url, v.title))
+        .collect();
+    let closed: Vec<String> = pollster::block_on(store.recently_closed())
+        .map_err(fail)?
+        .into_iter()
+        .map(|c| format!("{c:?}"))
+        .collect();
+    let session =
+        pollster::block_on(store.load_session(std::time::Instant::now())).map_err(fail)?;
+    let tabs: Vec<String> = session
+        .tabs
+        .values()
+        .map(|t| format!("{}|{}", t.url, t.title))
+        .collect();
+    let downloads: Vec<String> = pollster::block_on(store.downloads(10_000))
+        .map_err(fail)?
+        .into_iter()
+        .map(|d| format!("{d:?}"))
+        .collect();
+    let permissions: Vec<String> = pollster::block_on(store.site_permissions())
+        .map_err(fail)?
+        .into_iter()
+        .map(|p| format!("{p:?}"))
+        .collect();
+    let settings: Vec<String> = pollster::block_on(store.all_settings())
+        .map_err(fail)?
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    drop(store);
+    // (what, its lines, whether the normal page must be there to prove the check sees it)
+    let tables: [(&str, &[String], bool); 6] = [
+        ("history", &visits, true),
+        ("closed tabs", &closed, false),
+        ("the session's tabs", &tabs, true),
+        ("downloads", &downloads, false),
+        ("site permissions", &permissions, false),
+        ("settings", &settings, true),
+    ];
+    for (what, lines, proves) in tables {
+        if let Some(leak) = lines.iter().find(|l| l.contains(PRIVATE_HOST)) {
+            return Err(format!("{what} holds the private page: {leak}"));
+        }
+        if proves && !lines.iter().any(|l| l.contains(NORMAL_HOST)) {
+            return Err(format!("{what} lacks the normal page: {lines:?}"));
+        }
+    }
+    let utf16 = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_le_bytes).collect() };
+    let marks = [PRIVATE_HOST.as_bytes().to_vec(), utf16(PRIVATE_HOST)];
+    let found = |bytes: &[u8], mark: &[u8]| bytes.windows(mark.len()).any(|w| w == mark);
+    let mut seen_normal = false;
+    let mut left = vec![dir.to_path_buf()];
+    while let Some(at) = left.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                let name = entry.file_name();
+                if let Some(id) = name
+                    .to_str()
+                    .and_then(|n| n.strip_prefix("container-"))
+                    .and_then(|n| n.parse::<u32>().ok())
+                    && !session.containers.iter().any(|c| c.id.0 == id)
+                {
+                    return Err(format!(
+                        "{} is left of a container the session does not have",
+                        path.display()
+                    ));
+                }
+                left.push(path);
+            } else if kind.is_file()
+                && let Ok(bytes) = std::fs::read(&path)
+            {
+                if let Some(mark) = marks.iter().find(|m| found(&bytes, m)) {
+                    let how = if mark.len() == PRIVATE_HOST.len() {
+                        "UTF-8"
+                    } else {
+                        "UTF-16"
+                    };
+                    return Err(format!(
+                        "{} holds the private host's name ({how})",
+                        path.display()
+                    ));
+                }
+                seen_normal |= found(&bytes, NORMAL_HOST.as_bytes());
+            }
+        }
+    }
+    if !seen_normal {
+        return Err("no file holds the normal host's name: the scan sees nothing".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

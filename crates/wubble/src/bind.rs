@@ -116,6 +116,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             tint: color(s.tint),
             icon: wubble_core::space::glyph_id(s.icon, s.agent_space).into(),
             agent: s.agent,
+            private: s.private,
         })
         .collect();
     changed |= sync(window.get_spaces(), spaces, |m| window.set_spaces(m));

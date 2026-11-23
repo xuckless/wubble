@@ -52,6 +52,7 @@ impl<T: Copy> Fling<T> {
 }
 
 // By hand: a derive would ask `T: Default`, which a pane id is not.
+#[allow(clippy::derivable_impls)]
 impl<T> Default for Fling<T> {
     fn default() -> Self {
         Fling::Idle

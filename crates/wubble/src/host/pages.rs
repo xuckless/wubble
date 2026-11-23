@@ -11,13 +11,12 @@ use std::hash::BuildHasher;
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
-use wubble_core::apply::{self, Applied};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
 use wubble_core::pages::{
     self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
 };
-use wubble_core::settings as defs;
+use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_store::Favicon;
 use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
@@ -468,12 +467,10 @@ impl Host {
 
     // ----- the address pill: the bookmark star and the blocker badge
 
-    /// The hosts the blocker skips, from the stored setting.
-    fn blocker_exceptions(&self) -> Vec<String> {
-        match apply::effect_of(defs::BLOCKER_EXCEPTIONS.key, &self.settings.stored) {
-            Some(Applied::BlockerExceptions(hosts)) => hosts,
-            _ => vec![],
-        }
+    /// The hosts the blocker skips for `tab` (`SiteView::blocker`; no tab: the stored ones).
+    fn blocker_exceptions(&self, tab: Option<TabId>) -> Vec<String> {
+        tab.map_or_else(|| self.site_view_of(Side::Normal), |t| self.site_view(t))
+            .blocker()
     }
 
     pub(super) fn render_pill(&mut self, window: &AppWindow) {
@@ -485,7 +482,7 @@ impl Host {
         let web = wubble_core::url::is_recordable(&url);
         let star = web && pages::bookmark_for_url(&self.pages.bookmarks.rows, &url).is_some();
         let count = tab.and_then(|t| self.blocked_of(t)).unwrap_or(0);
-        let badge = pages::blocker_state(count, &url, &self.blocker_exceptions());
+        let badge = pages::blocker_state(count, &url, &self.blocker_exceptions(tab));
         window.set_address_bookmarkable(web);
         window.set_address_bookmarked(star);
         window.set_address_blocker_visible(web && badge.visible);
@@ -516,7 +513,7 @@ impl Host {
         };
         // the entry the switch is about: the one turning blocking off here (a parent's, or the
         // site's own), else this site's host (a port is no part of it)
-        let exceptions = self.blocker_exceptions();
+        let exceptions = self.blocker_exceptions(Some(tab));
         let covering = pages::blocker_exception(&url, &exceptions);
         let allowed = covering.is_some();
         let host = covering.map_or(page_host, str::to_owned);
@@ -526,35 +523,11 @@ impl Host {
         let mut entries = crate::menu::blocker_entries(count, &hosts, &host, allowed);
         entries.extend(crate::menu::page_theme_entries(
             &site,
-            self.page_theme_of(&url),
+            self.site_view(tab).theme(&url),
         ));
         entries.extend(self.boost_entries(&url));
         self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
-    }
-
-    /// The menu's switch: the site joins or leaves the blocker's exceptions (the stored setting
-    /// the settings page shows).
-    pub(super) fn toggle_blocker(&mut self, host: &str) {
-        let key = defs::BLOCKER_EXCEPTIONS.key;
-        if self.blocker_exceptions().iter().any(|h| h == host) {
-            self.setting_entry_removed(key, host);
-        } else {
-            self.setting_entry_added(key, host);
-        }
-        self.render_pages();
-    }
-
-    /// The menu's switch: the site joins or leaves the never-sleep list (the stored setting the
-    /// settings page shows).
-    pub(super) fn toggle_never_sleep_site(&mut self, site: &str) {
-        let key = defs::SLEEP_NEVER_SITES.key;
-        if self.model.never_sites().iter().any(|s| s == site) {
-            self.setting_entry_removed(key, site);
-        } else {
-            self.setting_entry_added(key, site);
-        }
-        self.render_pages();
     }
 
     // ----- history and archive

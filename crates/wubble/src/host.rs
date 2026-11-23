@@ -95,8 +95,8 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
-use wubble_core::site::SitePermissions;
-use wubble_core::space::{ContainerId, Item, SpaceId};
+use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, Stored};
+use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::{FingerInput, InputEvent};
 use wubble_core::window::{Geometry, WindowId, WindowKind, WindowState};
@@ -179,7 +179,7 @@ pub enum Call {
     /// The last Main window closed.
     Quit,
     /// Delete the container's web storage (`Engine::forget_container`).
-    ForgetContainer(ContainerId),
+    ForgetContainer(ContainerId, Storage),
     Nothing,
 }
 
@@ -212,7 +212,7 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
         Effect::FocusWindow(w) => Call::FocusWindow(*w),
         Effect::LastWindowClosed => Call::Quit,
         Effect::Tidied { .. } => Call::Nothing,
-        Effect::ContainerDeleted(c) => Call::ForgetContainer(*c),
+        Effect::ContainerDeleted { id, storage } => Call::ForgetContainer(*id, *storage),
         Effect::Lifecycle { tab, effect } => match effect {
             Life::Show => Call::SetVisible {
                 tab: *tab,
@@ -520,6 +520,13 @@ pub struct Host {
     blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
     site_permissions: SitePermissions,
+    /// `settings::BLOCKER_EXCEPTIONS` and `settings::SLEEP_NEVER_SITES` as stored; the
+    /// blocker and the model run them with the private windows' switches applied.
+    blocker_hosts: Vec<String>,
+    never_sleep_sites: Vec<String>,
+    /// Every per-site choice made in private windows: in memory only (`write_site`), read over
+    /// the stored ones (`site_view`), dropped with the private windows' container.
+    private_choices: PrivateChoices,
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
@@ -756,6 +763,9 @@ impl Host {
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
+            blocker_hosts: vec![],
+            never_sleep_sites: vec![],
+            private_choices: PrivateChoices::default(),
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
             media: media::Media::new(media_observer),
@@ -994,6 +1004,13 @@ impl Host {
         {
             return;
         }
+        // a close that would cancel private downloads asks first (Chrome's "N downloads will
+        // be cancelled"); the answer closes (`close_cancelling_downloads`)
+        if let Command::CloseWindow(id) = command
+            && self.close_asks(wubble_core::window::Closing::Window(id))
+        {
+            return;
+        }
         // A tab is never opened or loaded for a link another app handles: the user asked for
         // it (typed, a bookmark, a menu row), so it goes to the app as if clicked.
         if let Some((opener, url)) = external_target(&command)
@@ -1111,18 +1128,18 @@ impl Host {
                 let opened = match self.adopted(&url) {
                     Some(id) => self.adopt_view(id, layout, frame_rate),
                     None => {
+                        // The tab's own cookies, storage and cache: its container's.
+                        // an unknown tab gets no view (no Default stand-in)
+                        let container = self.model.container_of(tab)?;
                         let config = ViewConfig {
                             url: url.clone(),
                             layout,
                             frame_rate,
                             begin_frames: self.begin_frames(),
                             gpu: self.w.presenters[0].context().clone(),
-                            // The tab's own cookies, storage and cache: its container's.
-                            container: self
-                                .model
-                                .tabs
-                                .get(&tab)
-                                .map_or(ContainerId::DEFAULT, |t| t.container),
+                            container,
+                            // a private window's container is kept in memory only
+                            storage: self.model.storage_of(container),
                         };
                         self.engine.open_view(config)
                     }
@@ -1139,6 +1156,8 @@ impl Host {
                         }
                         self.builtins_view_opened(tab, &url);
                         self.ax_view_opened(tab);
+                        // the blocker knows a private tab's view from its first request
+                        self.forget_gone_blocks();
                         self.agent_rules();
                         self.pace(PaceEvent::Wake);
                         self.pace_unshown();
@@ -1220,7 +1239,17 @@ impl Host {
                 });
             }
             Call::Quit => quit(),
-            Call::ForgetContainer(c) => self.engine.forget_container(c),
+            Call::ForgetContainer(c, storage) => {
+                // the private windows' container leaves no download rows and no site choices
+                // behind
+                if storage == Storage::Memory {
+                    self.forget_private_downloads(c);
+                    self.private_choices = PrivateChoices::default();
+                    self.boosts_forget_private();
+                    self.run_site_lists();
+                }
+                self.engine.forget_container(c, storage);
+            }
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
             Call::FocusWindow(id) => self.raise_window(id),
@@ -1337,12 +1366,17 @@ impl Host {
 
     /// Drops the blocker's counts of views that are gone.
     pub(super) fn forget_gone_blocks(&mut self) {
-        let ids: Vec<_> = self.views.values().copied().collect();
-        let live: Vec<i32> = ids
-            .into_iter()
-            .filter_map(|id| Some(self.engine.view(id)?.browser_id()))
-            .collect();
-        self.blocking.keep_views(&live);
+        let ids: Vec<_> = self.views.iter().map(|(&t, &id)| (t, id)).collect();
+        let (mut live, mut private) = (vec![], vec![]);
+        for (tab, id) in ids {
+            if let Some(browser) = self.engine.view(id).map(|v| v.browser_id()) {
+                live.push(browser);
+                if self.model.side_of_tab(tab) == Side::Private {
+                    private.push(browser);
+                }
+            }
+        }
+        self.blocking.keep_views(&live, &private);
     }
 
     /// The blocker's count for each tab with a view.
@@ -1362,7 +1396,7 @@ impl Host {
         {
             return;
         }
-        if !self.agent_drives(tab)
+        if self.records(tab)
             && let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone())
         {
             self.store.put_favicon(&url, &icon, now_ms());
@@ -1778,7 +1812,7 @@ impl Host {
             }
             WebEvent::TitleChanged(title) => {
                 self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
-                if !self.agent_drives(tab)
+                if self.records(tab)
                     && let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {
@@ -1833,10 +1867,145 @@ impl Host {
         self.after_change();
     }
 
+    /// Whether what `tab` does goes into the user's records (history visits, titles, favicons):
+    /// not an agent session's loads, not a private window's, and not an unknown tab's (fails
+    /// closed: `Model::side_of_tab`).
+    pub(super) fn records(&self, tab: TabId) -> bool {
+        !self.agent_drives(tab) && self.model.side_of_tab(tab) == Side::Normal
+    }
+
     /// The origin of `tab`'s page, for remembered site choices.
     fn site_of(&self, tab: TabId) -> Option<String> {
         let url = self.model.tabs.get(&tab)?.url.as_str();
         wubble_core::site::origin_of(url)
+    }
+
+    /// Every per-site table as stored.
+    fn stored_sites(&self) -> Stored<'_> {
+        let (theme_default, themes) = self.page_themes();
+        Stored {
+            permissions: &self.site_permissions,
+            zoom: &self.site_zoom,
+            zoom_default: self.zoom_default,
+            themes,
+            theme_default,
+            blocker: &self.blocker_hosts,
+            never_sleep: &self.never_sleep_sites,
+        }
+    }
+
+    /// The one read of the per-site tables for `tab`: the stored ones, under its own choices
+    /// for a private tab (an unknown tab reads as private: `Model::side_of_tab`).
+    pub(super) fn site_view(&self, tab: TabId) -> SiteView<'_> {
+        self.site_view_of(self.model.side_of_tab(tab))
+    }
+
+    /// What every tab on `side` reads.
+    fn site_view_of(&self, side: Side) -> SiteView<'_> {
+        SiteView {
+            stored: self.stored_sites(),
+            private: (side == Side::Private).then_some(&self.private_choices),
+        }
+    }
+
+    /// The one write of the per-site tables, for a change made in `tab`: a private tab's to
+    /// its own table, in memory only; any other's to the store and the settings (which apply
+    /// it back as the tables).
+    pub(super) fn write_site(&mut self, tab: TabId, change: SiteChange) {
+        if self.model.side_of_tab(tab) == Side::Private {
+            let mut private = std::mem::take(&mut self.private_choices);
+            private.write(&self.stored_sites(), change.clone());
+            self.private_choices = private;
+            match change {
+                SiteChange::Theme { .. } => self.resync_page_themes(),
+                SiteChange::Blocker(_) | SiteChange::NeverSleep(_) => {
+                    self.run_site_lists();
+                    self.render_pages();
+                }
+                SiteChange::Permission(..) | SiteChange::Zoom { .. } => {}
+            }
+            return;
+        }
+        let entry =
+            |list: &[String], key: &'static str, host: String| (key, list.contains(&host), host);
+        let toggle = match change {
+            SiteChange::Permission(site, kind, decision) => {
+                self.site_permissions.set(&site, kind, decision);
+                self.store
+                    .set_site_permission(&site, kind, decision, now_ms());
+                None
+            }
+            SiteChange::Zoom { page, percent } => {
+                if let Some(host) = wubble_core::zoom::host_of(&page) {
+                    let table = wubble_core::zoom::next_table(
+                        self.site_zoom.clone(),
+                        &host,
+                        percent,
+                        self.zoom_default,
+                    );
+                    // Applied as the setting: the table becomes `site_zoom` there.
+                    self.write_setting(
+                        wubble_core::settings::SITE_ZOOM.key,
+                        &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
+                    );
+                }
+                None
+            }
+            SiteChange::Theme { page, theme } => {
+                if let Some(host) = wubble_core::zoom::host_of(&page) {
+                    let (default, themes) = self.page_themes();
+                    let table =
+                        wubble_core::pagetheme::next_table(themes.clone(), &host, theme, default);
+                    // Applied as the setting: the table becomes the built-ins' there.
+                    self.write_setting(
+                        wubble_core::settings::PAGE_THEME_SITES.key,
+                        &wubble_store::text_of::<wubble_store::PageThemeSites>(&table),
+                    );
+                }
+                None
+            }
+            SiteChange::Blocker(host) => Some(entry(
+                &self.blocker_hosts,
+                wubble_core::settings::BLOCKER_EXCEPTIONS.key,
+                host,
+            )),
+            SiteChange::NeverSleep(site) => Some(entry(
+                &self.never_sleep_sites,
+                wubble_core::settings::SLEEP_NEVER_SITES.key,
+                site,
+            )),
+        };
+        // a list's row: the stored setting the settings page shows
+        if let Some((key, listed, host)) = toggle {
+            if listed {
+                self.setting_entry_removed(key, &host);
+            } else {
+                self.setting_entry_added(key, &host);
+            }
+            self.render_pages();
+        }
+    }
+
+    /// The blocker and the model run, per side, what that side's tabs read (`SiteView`): the
+    /// stored lists for normal tabs, with the private windows' switches for private ones. A
+    /// private switch never reaches a normal tab, its menus or the stored settings.
+    pub(super) fn run_site_lists(&mut self) {
+        let (normal, private) = (
+            self.site_view_of(Side::Normal),
+            self.site_view_of(Side::Private),
+        );
+        let blocker = [normal.blocker(), private.blocker()];
+        let never = [
+            (Side::Normal, normal.never_sleep()),
+            (Side::Private, private.never_sleep()),
+        ];
+        self.blocking.set_exceptions(&blocker[0]);
+        self.blocking.set_private_exceptions(&blocker[1]);
+        for (side, sites) in never {
+            if sites != self.model.never_sites(side) {
+                self.dispatch(Command::SetNeverSleepSites { side, sites });
+            }
+        }
     }
 
     // ----- browsing data
@@ -1844,15 +2013,23 @@ impl Host {
     /// `Action::ClearBrowsingData`: what can be cleared for `tab`, as the shell's menu near the
     /// top of the window. Choosing a row is the confirmation.
     pub(super) fn clear_data_menu(&mut self, tab: TabId) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let origin = self.site_of(tab);
         let entries = crate::menu::clear_entries(&self.model, tab, origin.as_deref());
+        self.ask_in_menu(tab, entries);
+    }
+
+    /// A question as the shell's menu near the top of the window, over `tab`'s page: its rows
+    /// say what each answer does, choosing one is the answer, and dismissing it does nothing
+    /// (Clear Browsing Data, the private downloads a close would cancel). Whether it opened.
+    pub(super) fn ask_in_menu(&mut self, tab: TabId, entries: Vec<crate::menu::Entry>) -> bool {
+        let Some(window) = self.w.window.upgrade() else {
+            return false;
+        };
         let size = window.window().size();
         let at = ((size.width / 2) as i32, (size.height / 5) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+        true
     }
 
     /// Deletes what the clear menu's row named, then says so.
@@ -1860,6 +2037,11 @@ impl Host {
         use crate::menu::ClearData;
         let done = match what {
             ClearData::Containers(containers) => {
+                // each brought up with its own storage: a private one in memory, never on disk
+                let containers: Vec<_> = containers
+                    .iter()
+                    .map(|&c| (c, self.model.storage_of(c)))
+                    .collect();
                 match self.engine.clear_browsing_data(&containers) {
                     Ok(()) => Some("Cookies and cached files deleted"),
                     Err(e) => {
@@ -1991,16 +2173,21 @@ impl Host {
         }
     }
 
+    /// What this window's bar consults: a private window's suggests from this machine only.
+    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings {
+        wubble_core::suggest::SuggestSettings {
+            engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
+            live: wubble_core::suggest::LiveSuggestions::of(
+                self.live_suggestions,
+                self.search_engine.is_some(),
+                self.model.side_of_window(self.w.id),
+            ),
+        }
+    }
+
     /// One event of the live suggestion fetch; re-renders the rows when its list changed.
     pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
-        let settings = wubble_core::suggest::SuggestSettings {
-            engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
-            live: if self.live_suggestions && self.search_engine.is_some() {
-                wubble_core::suggest::LiveSuggestions::On
-            } else {
-                wubble_core::suggest::LiveSuggestions::Off
-            },
-        };
+        let settings = self.suggest_settings();
         if let Some(list) = self.suggest.event(event, &settings)
             && list != self.bar.suggestions
         {
@@ -2166,7 +2353,11 @@ impl Host {
                 }
             }
             Plan::StopAgents => self.agents_stop(),
-            Plan::Quit => quit(),
+            Plan::Quit => {
+                if !self.close_asks(wubble_core::window::Closing::App) {
+                    quit();
+                }
+            }
             Plan::Nothing => {}
         }
     }
@@ -2230,14 +2421,20 @@ impl Host {
     }
 
     /// Opens `url` again, the one way a tab comes back: in `space` if it still exists (the view
-    /// moves there), else the active one; in `container` if that still exists.
+    /// moves there), else the last normal window's; in `container` if that still exists. A
+    /// closed tab is a normal one (private tabs are never kept), so it never reopens in a
+    /// private window: from one, its Space shows in the last normal window
+    /// (`Crossing::ToNormalWindow`), and a container on the other side is refused.
     pub(super) fn reopen(
         &mut self,
         url: String,
         space: Option<SpaceId>,
         container: Option<ContainerId>,
     ) {
-        self.open_in(url, space, container, None);
+        let space = space
+            .filter(|s| self.model.spaces.iter().any(|k| k.id == *s))
+            .unwrap_or_else(|| self.model.normal_space());
+        self.open_in(url, Some(space), container, None);
     }
 
     fn open_in(
@@ -2266,8 +2463,17 @@ impl Host {
     /// A link the user opened in a new tab (or one from the command line): where the routing
     /// rules say, else beside `opener` in the active Space. Typed addresses, pop-ups,
     /// background tabs and same-tab navigation are not routed.
+    /// In a private window no rule applies: its links stay in it (Chrome's incognito window).
     pub(super) fn open_routed(&mut self, url: String, opener: Option<TabId>) {
-        let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+        let private = opener.map_or_else(
+            || self.model.side_of_space(self.model.active_space()) == Side::Private,
+            |t| self.model.side_of_tab(t) == Side::Private,
+        );
+        let routed = if private {
+            wubble_core::routing::Routed::default()
+        } else {
+            wubble_core::routing::resolve(&self.model, &self.routing_rules, &url)
+        };
         self.open_in(url, routed.space, routed.container, opener);
     }
 
@@ -2377,7 +2583,8 @@ impl Host {
         tab: TabId,
         command: &Command,
     ) -> Option<(ClosedTab, closed::Closed)> {
-        if self.archiving.contains_key(&tab) || self.agent_drives(tab) {
+        // an agent's and a private window's closed tabs are none of the user's records
+        if self.archiving.contains_key(&tab) || !self.records(tab) {
             return None;
         }
         let undo = closed::Closed::of(&self.model, tab, command, now_ms())?;
@@ -2412,8 +2619,7 @@ impl Host {
             self.drag_gone(tab);
         }
         let typed = self.typed_nav.committed(tab);
-        // an agent session's loads are none of the user's history
-        if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
+        if persist::visit_to_record(previous.as_deref(), url) && self.records(tab) {
             let transition = if typed {
                 Transition::Typed
             } else {
@@ -4505,8 +4711,18 @@ mod tests {
             ),
             (Effect::LastWindowClosed, Call::Quit),
             (
-                Effect::ContainerDeleted(ContainerId(3)),
-                Call::ForgetContainer(ContainerId(3)),
+                Effect::ContainerDeleted {
+                    id: ContainerId(3),
+                    storage: Storage::Disk,
+                },
+                Call::ForgetContainer(ContainerId(3), Storage::Disk),
+            ),
+            (
+                Effect::ContainerDeleted {
+                    id: ContainerId(4),
+                    storage: Storage::Memory,
+                },
+                Call::ForgetContainer(ContainerId(4), Storage::Memory),
             ),
         ];
         for (effect, want) in cases {
@@ -4589,7 +4805,7 @@ mod tests {
                 | Call::CloseWindow(_)
                 | Call::FocusWindow(_)
                 | Call::Quit
-                | Call::ForgetContainer(_)
+                | Call::ForgetContainer(..)
                 | Call::Nothing => {}
             }
         }

@@ -201,6 +201,7 @@ enum SmokeArg {
     PasswordsPhase(VaultPhase),
     Data,
     DataPhase(crate::data_smoke::Ending),
+    Private,
     /// `extensions` or `extensions-none`.
     Extensions {
         installed: bool,
@@ -261,6 +262,10 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "data" => Ok(SmokeArg::Data),
         Some(("data-phase", "quit")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Quit)),
         Some(("data-phase", "kill")) => Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Kill)),
+        Some(("data-phase", "private")) => {
+            Ok(SmokeArg::DataPhase(crate::data_smoke::Ending::Private))
+        }
+        None if value == "private" => Ok(SmokeArg::Private),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)
@@ -361,11 +366,17 @@ pub enum Smoke {
     /// The built-in pages and their data on a loopback server, one run that quits and one that
     /// is killed, the database compared with the pages after each (`data_smoke.rs`).
     Data,
-    /// One run of `Data`, on the profile in `profile`.
+    /// One run of `Data` (or of `Private`, its window shot into `dir` when given), on the
+    /// profile in `profile`.
     DataPhase {
         ending: crate::data_smoke::Ending,
         profile: PathBuf,
+        dir: Option<PathBuf>,
     },
+    /// A private window beside a normal one on a temporary profile, then the profile searched
+    /// for anything of its pages (`data_smoke::private_leaks`); the private window shot into
+    /// `dir` when given.
+    Private { dir: Option<PathBuf> },
     /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
     /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
     Start { dir: Option<PathBuf> },
@@ -488,7 +499,13 @@ impl TryFrom<Cli> for Command {
         let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
         let overlay = matches!(
             cli.smoke,
-            Some(SmokeArg::Overlay { .. } | SmokeArg::Start | SmokeArg::Dnd)
+            Some(
+                SmokeArg::Overlay { .. }
+                    | SmokeArg::Start
+                    | SmokeArg::Dnd
+                    | SmokeArg::Private
+                    | SmokeArg::DataPhase(crate::data_smoke::Ending::Private)
+            )
         );
         if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
@@ -504,13 +521,15 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::SessionPhase(phase)), None, Some(profile)) => {
                 Smoke::SessionPhase { phase, profile }
             }
-            (Some(SmokeArg::DataPhase(ending)), None, Some(profile)) => {
-                Smoke::DataPhase { ending, profile }
-            }
+            (Some(SmokeArg::DataPhase(ending)), None, Some(profile)) => Smoke::DataPhase {
+                ending,
+                profile,
+                dir: cli.shot_dir,
+            },
             (Some(SmokeArg::DataPhase(_)), _, None) => {
                 return Err(Cli::command().error(
                     ErrorKind::MissingRequiredArgument,
-                    "--smoke data-phase=quit|kill needs --profile",
+                    "--smoke data-phase=quit|kill|private needs --profile",
                 ));
             }
             (Some(SmokeArg::SessionPhase(_)), _, None) => {
@@ -576,6 +595,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Passwords), None, None) => Smoke::Passwords,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill { probe: None },
             (Some(SmokeArg::Data), None, None) => Smoke::Data,
+            (Some(SmokeArg::Private), None, None) => Smoke::Private { dir: cli.shot_dir },
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Popup), None, None) => Smoke::Popup,
             (Some(SmokeArg::Media), None, None) => Smoke::Media { probe: None },
@@ -1056,15 +1076,21 @@ mod tests {
             parse(["wubble", "--smoke", "data"]).ok(),
             Some(Command::Smoke(Smoke::Data))
         );
+        assert_eq!(
+            parse(["wubble", "--smoke", "private"]).ok(),
+            Some(Command::Smoke(Smoke::Private { dir: None }))
+        );
         for (arg, ending) in [
             ("data-phase=quit", Ending::Quit),
             ("data-phase=kill", Ending::Kill),
+            ("data-phase=private", Ending::Private),
         ] {
             assert_eq!(
                 parse(["wubble", "--smoke", arg, "--profile", "/tmp/p"]).ok(),
                 Some(Command::Smoke(Smoke::DataPhase {
                     ending,
-                    profile: "/tmp/p".into()
+                    profile: "/tmp/p".into(),
+                    dir: None,
                 })),
                 "{arg}"
             );

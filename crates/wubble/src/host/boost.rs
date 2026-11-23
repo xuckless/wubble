@@ -226,14 +226,42 @@ impl Host {
     }
 
     /// Stores `b`; once the store answered, the table and the pages follow (`boost_stored`).
+    /// One made or changed from a private window is kept for the private windows' run only
+    /// (a new one under a negative id, which no stored row has) and never stored; it runs on
+    /// every page of its site meanwhile, as the Boosts table is one (`boosts_forget_private`).
     pub(super) fn store_boost(&mut self, b: Boost) {
         let tab = self.shown();
+        if tab.is_none_or(|t| !self.records(t)) {
+            let id = if b.id != 0 {
+                b.id
+            } else {
+                self.boosts
+                    .all
+                    .iter()
+                    .map(|x| x.id)
+                    .min()
+                    .unwrap_or(0)
+                    .min(0)
+                    - 1
+            };
+            return self.boost_stored(b, Some(id), tab);
+        }
         let draft = b.clone();
         self.store.put_boost(&b, move |id| {
             let _ = slint::invoke_from_event_loop(move || {
                 crate::with_host(|host| host.boost_stored(draft, id, tab));
             });
         });
+    }
+
+    /// The private windows ended: their Boosts go (a stored one changed there keeps the change
+    /// in memory until the next start, as it was never written).
+    pub(super) fn boosts_forget_private(&mut self) {
+        let before = self.boosts.all.len();
+        self.boosts.all.retain(|b| b.id > 0);
+        if self.boosts.all.len() != before {
+            self.boosts_changed();
+        }
     }
 
     fn boost_stored(&mut self, mut b: Boost, id: Saved, tab: Option<TabId>) {
@@ -347,7 +375,10 @@ impl Host {
                 self.stop_zap();
                 self.boosts.editor = None;
                 self.boosts.all.retain(|b| b.id != id);
-                self.store.delete_boost(id);
+                // from a private window only for the run: the stored row comes back next start
+                if self.records(tab) {
+                    self.store.delete_boost(id);
+                }
                 self.boosts_changed();
                 self.reload_for_boosts(tab);
             }

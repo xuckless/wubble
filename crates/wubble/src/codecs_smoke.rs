@@ -424,6 +424,7 @@ fn drive(
             begin_frames: false,
             gpu: gpu.presenter().context().clone(),
             container: ContainerId::DEFAULT,
+            storage: wubble_core::space::Storage::Disk,
         })
     };
     let view = open(engine, "about:blank")?;

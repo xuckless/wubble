@@ -190,7 +190,7 @@ impl Host {
     }
 
     /// The entries wubble owns, by app: what it wrote (`agent.mcp_added`).
-    fn records(&self) -> BTreeMap<String, Value> {
+    fn mcp_records(&self) -> BTreeMap<String, Value> {
         serde_json::from_str(value_of(&defs::AGENT_MCP_ADDED, &self.settings.stored))
             .unwrap_or_default()
     }
@@ -244,7 +244,7 @@ impl Host {
         };
         let text = before.as_deref().unwrap_or("");
         let existing = h.existing(text).map_err(|e| fail(e.to_string()))?;
-        let mut records = self.records();
+        let mut records = self.mcp_records();
         let wanted = h.entry(&self.mcp_command());
         let plan = harness::plan(moment, existing.as_ref(), records.get(h.id), &wanted);
         let after = match plan {
@@ -292,7 +292,7 @@ impl Host {
 
     /// `Effect::Unregister`: exactly the entries wubble owns, still as it wrote them, come out.
     pub(super) fn mcp_unregister(&mut self) {
-        for id in self.records().into_keys() {
+        for id in self.mcp_records().into_keys() {
             if let Some(h) = harness::find(&id) {
                 self.harness_apply(h, Moment::TurnOff);
             }
@@ -365,7 +365,7 @@ impl Host {
         let home = self.harness_home();
         let found = self.harnesses_found();
         let command = self.mcp_command();
-        let records = self.records();
+        let records = self.mcp_records();
         let apps: Vec<AgentAppItem> = found
             .iter()
             .map(|h| {

@@ -7,8 +7,8 @@ Legend: `[ ]` open · `[~]` in progress. Done items are removed: `git log` has t
 
 ## Status (2026-11-21)
 `main` builds, lints and passes 2293 tests; every window smoke passes on the invisible test display
-(`scripts/headless.sh`), and an idle window draws nothing. CI is green on Linux and macOS; Windows does not pass yet.
-Released: `0.1.0-preview.5` for Linux and macOS (signed; the Mac build notarised, made by the owner on the Mac with
+(`scripts/headless.sh`), and an idle window draws nothing. CI is green on Linux and macOS; Windows is parked (below).
+Next: `0.6.1`, the first semantic version (branch `int/0.6.1`: performance pass 3, web view parity, window state restore, private windows). Released: `0.1.0-preview.5` for Linux and macOS (signed; the Mac build notarised, made by the owner on the Mac with
 `sh /Users/Shared/wubble-preview<N>-mac.sh`, then signed and uploaded from here). preview.4 brought drag and drop,
 pinch zoom, spellcheck, the media save control with a bundled ffmpeg, partial rendering of the shell, the hardening
 pass and PRs #1 and #2, and switched off Chromium's autofill-server request; preview.5 fixes updates on macOS
@@ -63,7 +63,6 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] a tab moved into an agent session's Space keeps its back-forward cache and any prerender made before: activating either runs no navigation throttle, so the guard is not asked and only the commit backstop takes the tab back (after the page showed); drop those for a tab that joins a session (or disable the cache and prerender for session tabs) and add a smoke probe
 - [ ] publish wubble-mcp to npm (owner go, owner's npm account; steps in docs/release.md)
 - [ ] agent apps wubble does not write yet (VS Code, Copilot CLI, Goose; Windsurf on macOS): verify each file's name and entry shape, then make them `Format`s in `agent::harness`
-- [ ] Windows: the agent apps' paths (`agent::harness` lists Linux and macOS only) and the manifest's runtime dir
 - [ ] `scroll` with a direction over a nested scroller (an `overflow: auto` pane): the wheel event reaches the pane but in most `--smoke mcp` runs the document takes the scroll; a user's wheel goes the same path (`View::wheel`): check by hand, then fix (the smoke checks the page only)
 - [ ] `wait_for load` does not follow an in-page (history API) navigation's fetches (documented in the tool; `url` and `navigation` cover the address change): network idle would need DevTools' network events through the engine
 - [ ] `read_page` lists no `<option>`, list box or `<select multiple>`/`size` (a collapsed select's options are AX-invisible; `listBox` and its options are no `wubble_ax` item kind): `select` takes an option's ref and a multiple list, but no ref reaches one yet
@@ -103,6 +102,7 @@ owner's eye land here and are fixed as they come up.
 Done on 2026-11-19 and 2026-11-20, after the kit merges listed under "Design fidelity":
 
 Open, for the owner's eye:
+- [ ] `GlassKeys.extension-sheet` and `.agent-sheet` are both 1000092
 - [ ] Glass over white: faint ink (disabled rows, shortcuts, counts) sits near 2:1; glass reads flat grey
 - [ ] Menus grow from the design's 236 to 320 for long rows (derived; on the review sheet)
 - [ ] Sidebar mid-collapse shows the rail look below 140 wide (the design's own behaviour; QA read it as a reflow)
@@ -144,7 +144,6 @@ Open, to build or check:
 - [ ] Re-measure `--begin-frames` on a 120 Hz (and the 300 Hz) display on Linux: it was left off there in b2 for a worse video render interval at 240 Hz
 - [ ] Mac console hand checks: ProMotion, window, Cmd keys, IME, popups, Keychain, file chooser, media keys, fullscreen
 - [ ] macOS: CEF does not finish shutting down after a windowless run over ssh; find the commit and the cause
-- [ ] Windows CI: the Test step now finishes and 4 tests of the `wubble` binary fail there (run 44988591703, 2026-11-22): `instance::tests::the_private_root_by_platform`, `mcp::tests::a_connection_answers_discovery_and_hands_calls_to_the_host`, `mcp::tests::a_stop_closes_open_connections_and_ids_never_repeat`, `updater::install::tests::linux_stages_switches_current_and_rolls_back` (the last is a Linux-only test not gated)
 
 ## M1: Engine layer
 - [ ] Hand checks: dead keys, autoscroll cursor feel, IME with ibus, popups, `window.open` and its badge, a download, fullscreen
@@ -153,14 +152,12 @@ Open, to build or check:
 - [ ] IME gaps: no caret rect before the first composed character; no underline styles or replacement range
 - [ ] Drag: custom MIME types to other apps
 - [ ] macOS drags (`wl/macos.rs`) run on a Mac: written and compile-checked from Linux only. Out: session starts from winit's `mouseDragged:` (the current event), image placement and 2x sharpness, Finder takes the promised picture, Safari or Notes the link with its title; in: the `draggingEntered:` family added to winit's view (file drops now come through it, not winit's `DroppedFile`), the page's answer reaching `draggingUpdated:`
-- [ ] Drag out on Windows (the stub: `wl::Null`)
 - [ ] Drags out of the window and in from other apps checked by hand on a desktop (the smoke cannot move the compositor's pointer: `--smoke dnd` covers drags inside the window, the Wayland offer is unit-tested)
 - [ ] A bookmark dropped into a folder row lands at its end; Chrome's drop line between rows (a position) waits for drag reorder of bookmarks
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
 - [ ] Text selection handles (touch) and a match-case toggle in the find bar
 - [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6)
 - [ ] Web content as a real accessibility subtree (waits for a Slint graft API or a winit backend patch)
-- [ ] Windows sandbox: restructure as a client DLL behind CEF's `bootstrap.exe`
 
 ## M2: Shell
 - [ ] Film rim on the remaining controls (buttons, menu rows)
@@ -183,7 +180,10 @@ Open, to build or check:
 - [ ] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
 
 ## Privacy and containers (hardening pass, open)
-- [ ] "Allow pop-ups" for a site never takes effect without a click, and the pop-up pill never appears: Chromium refuses a script `window.open` with no gesture before the host hears of it (`CanCreateWindow`, default pop-up setting block), so `popup::decide`'s no-gesture rows are dead; set the request context's pop-up content setting to allow (`CefRequestContext::SetContentSetting`, a welding call) so the table decides (with a click it works: remembered Allow/Block read right and survive a restart)
+- [ ] Private windows: a gallery scene and shots for the owner's eye (the Private chip and tint, the close question, the extension private row and prompt box; `derived-review.md`); `--smoke private --shot-dir` shoots the window
+- [ ] Private windows: Settings shows stored site choices only (the private ones are invisible there); reopen closed private tabs from memory, as Chrome; the install prompt's private box can keep the last tick when a second pick replaces an open prompt; Chrome's keep-a-normal-window-open-when-emptied question (owner)
+- [ ] Private windows, unchecked: docked DevTools reopening in the right container between a normal and a private tab; reopen from a private window, `open_routed`, ext `open_command`, Open as Tab; whether CEF's off-the-record profile inherits the primary's stored content settings or zoom
+- [ ] Extensions P5: "Allow in private windows" reaches only the action button and its popup; needed: `SetIsIncognitoEnabled` per extension through `cef_wubble_ext_v1`, registry controllers for off-the-record profiles, the projection carrying private windows, `ExtRequest` naming its extension (unknown whether Chromium runs an extension in a non-primary off-the-record profile)
 - [ ] No way to create, rename or delete a container (only agent sessions make one): the routing rules' Container column can name only Default or a live agent container
 - [ ] Site permission decisions are per origin, not per container (a camera allowed in one container is allowed in all)
 - [ ] Routing rules: renaming or deleting a Space (or container) a rule names silently turns the rule off, with no mark in the list; Space names are not unique; a Space named with `,` or `->` cannot be named by a rule; the row label does not say typed addresses and page links are not routed
@@ -243,32 +243,45 @@ Open, to build or check:
 - [ ] Hardening: vault unlock off the store thread
 
 ## Performance pass 3 (owner, 2026-11-22)
-Target: the main process under 5 % of a core while a page moves (it is 8 to 9 % for video or a spinner at 60 Hz, 14 % on the 300 Hz display; idle is 1 to 2 %). The owner approved all six on 2026-11-22, the core fork and the faked glass included. Branch `untested/perf3` holds the first three as code written without a compile or a run (the machine was busy): build, test and measure it before anything else. Not in a release yet: PR #4's performance work (fcc4d23: scene dirty rects, the blur's reach, idle timers, cached bind groups), merged after preview.7 was tagged.
-- [ ] Build and test `untested/perf3` (`cargo test -p wubble-core -p wubble-gfx`, then the workspace), then measure each commit alone: `--measure idle` (pump runs a second), the spinner and caret pages on the 300 Hz display (CEF frames a second), `scripts/bench/profile.sh`
+Target: the main process under 5 % of a core while a page moves (it is 8 to 9 % for video or a spinner at 60 Hz, 14 % on the 300 Hz display; idle is 1 to 2 %). The owner approved all six on 2026-11-22, the core fork and the faked glass included. The first three are in `0.6.1`, built and tested; each still wants its own measurement. Not in a release yet: PR #4's performance work (fcc4d23: scene dirty rects, the blur's reach, idle timers, cached bind groups), merged after preview.7 was tagged.
+- [ ] Measure each perf-pass-3 commit alone: `--measure idle` (pump runs a second), the spinner and caret pages on the 300 Hz display (CEF frames a second), `scripts/bench/profile.sh`
 - [ ] Frame rate by content (written, `pacing::ContentRate`): a page with small damage and no input for 300 ms paints at 60 Hz at most. Left: the shell's begin frames (macOS) are not capped, so a spinner there still paints at 120 Hz; a pop-up view takes its opener's ceiling; look at a small animation at 60 on the 300 Hz display by eye
 - [ ] Quiet pump (written, `pump::Tempo::Quiet`): 250 ms between runs once nothing painted for a second, not 33 ms. Left: check nothing waits on the pump as a clock (`Host::show_frame` runs after each pump; start-up, downloads, an agent's page); the begin-frame driver's own 33 ms idle timer on macOS; then try no ceiling at all
+- [ ] One store for every shell surface ([docs/research/surface-store.md](docs/research/surface-store.md)): seven items as one lane batch after 0.6.1, step 1 first
+- [ ] Page layer stage 1 (macOS fullscreen and PiP, [docs/research/page-layer.md](docs/research/page-layer.md)) on `feat/page-layer`: core `page_layer`, welding change 64, gfx `CaLayer` and the engine pass-through are written; the wiring waits for the surface store's step 1
+- [ ] After the store batch, decide (owner, 2026-11-23: "add if we need to"): one despawn path for keyed state, the one ECS idea worth having. Every per-tab and per-window table in the host is in one registered list that the single "tab gone" / "window gone" effect clears, with a test that fails when a keyed table is not in the list. Three bugs of this shape were found on 2026-11-23 (the clipboard read mark, the input-method flag, private site choices). No ECS framework: state stays one enum per lifecycle and one reducer
+- [ ] `--smoke data` step 52 (a download cut off after 8 KiB) counts pump runs and now takes about 8 minutes with the Quiet pump: wait on a clock
+- [ ] Updater: when is an old `versions/<V>` folder removed (preview.7's is still there after 0.6.1 is marked good)
+- [ ] macOS: a window restored fullscreen lands on the monitor its saved position gives, not the named one (winit treats borderless-to-borderless as a no-op); a Dock Quit in the background shows the downloads question in a window that is not brought forward
 - [ ] Profile-guided build (written, `scripts/bench/pgo.sh`, never run): compare with the plain `dist` build, then decide whether releases use it
 - [ ] Fork `i-slint-core` (vendored beside the Skia renderer): skip unchanged sub-trees in the render walk, then in the dirty-region walk (renderer-roads.md section 6, changes 1 and 2; up to 30 % of the main thread during page frames)
 - [ ] One copy less per page frame, by a CEF patch: OSR keeps the frame's buffer until wubble releases it and delivers RGBA; wubble imports each pooled dmabuf (IOSurface) once and samples it, so the copy and its wait in the paint callback (`vendor/welding/src/native_frame/mod.rs`), the swizzle blit and the per-frame import go
 - [ ] The page on a compositor surface: each pane's page on its own `wl_subsurface` (macOS: a `CALayer` on the IOSurface) with CEF's buffer attached directly, the shell above it; glass over a page is faked (a low-rate sample of the page, as the ambience's 8 Hz). A page frame then costs one attach and commit: no import, blit, Slint walk, flush or present. Overturns four frame-path decisions; prototype one pane without glass on Linux and measure first
 
 ## Web view parity with Chrome (owner, 2026-11-22)
-The owner wants the page view to feel like Chrome's, 1:1. `untested/perf3` holds five lanes of it, written from an audit of the code without a compile or a run: nothing below is known to work until it is built and tried. Drags inside a window, between panes, onto the shell and to and from other apps on Wayland worked before.
-- [ ] Build it first: `cargo fmt --all`, `cargo check --workspace`, `cargo test --workspace` (the lanes' reports list where each expects compile errors; `kit_lock` may count the new `MouseCursor` tokens in `app.slint`; the menu tests' row indices were written by two lanes), then `--smoke parity`, `page`, `dnd`, `popup` and the gallery
+The owner wants the page view to feel like Chrome's, 1:1. Five lanes of it are in `0.6.1`, built, reviewed and smoke-tested (parity, page, dnd, popup); what no smoke reaches is checked by hand below. Drags inside a window, between panes, onto the shell and to and from other apps on Wayland worked before.
 - [ ] Written, to check by hand, the riskiest first:
-  - [ ] IME per field (`OnVirtualKeyboardRequested` switches the input method): if CEF says nothing when focus arrives by Tab the IME stays off; password fields are not told apart; the one underline's colour (0) may draw nothing; the caret rect before the first composed character depends on CEF sending it. With fcitx or ibus on Wayland
   - [ ] Touch as touch (`wubble_core::touch`, `host/touch.rs`): on a touchscreen, `touchstart` and `pointerType` "touch" fire (else `--touch-events=enabled`), the shell still takes touches, no mouse event made of a touch reaches a page, a tap on a context menu goes to the menu, two-finger pinch
   - [ ] Wayland clipboard, every type (`wubble_core::clipboard`, `clipboard.js`): the parity smoke's B items, rich text into LibreOffice, a screenshot pasted into a page (`clipboardData.files`), files copied in Nautilus, `navigator.clipboard.read()`; Chromium's `web ` format names and the 16 MiB frame message were written from memory
   - [ ] Screen and window geometry (`welding::Desktop`): `screen.*`, `window.screenX/Y`, `outerWidth` against Chrome on two monitors and at 1.25x; a `<select>` near the window's bottom edge; macOS's flipped y; many `Moved` events on X11 during a window drag
   - [ ] Cursors (`host/cursor.rs`): every CSS cursor against Chrome, an image cursor with a hotspot (CEF's buffer is taken as premultiplied BGRA), no hidden pointer over the extension popup card
   - [ ] Wheel: a notched mouse wheel now scrolls with Blink's animation (not marked precise), a touchpad stays precise; the fling after a two-finger scroll on Wayland (`wubble_core::fling`, our own decay: tune it against Chrome)
   - [ ] The new menu rows: Open Link in New Window, Add to Dictionary (CEF's command 206), Search Google for Image (the URL is unchecked), Copy Link to Highlight, the frame rows; Paste as Plain Text now runs as an edit command on every platform
-- [ ] `<datalist>`: the page script, the filter and the host's state are written; no list is drawn (a list under the field that takes no focus is not in the kit: the owner's design)
+- [ ] Pump: `--measure idle` with an unshown agent tab open (pump wakes, not renders); no smoke opens one
+- [ ] The macOS begin-frame throttle by content rate (`begin_frame_due`, `PaceEvent::Skipped`) has never run on a Mac: a calm page at 120 Hz, video CPU
+- [ ] The parity smoke has no per-item timeout: one lost page turns into a 400 s run
+- [ ] Clipboard: a page's `navigator.clipboard.write` HTML is dropped (no host-side sanitiser); a page's copy lands a moment later (checked on a thread); hand check: a cross-origin frame with an overridden `Promise.prototype.then` calling `readText()` unfocused gets NotAllowedError, from a background tab too; Paste as Plain Text does nothing in a script-less frame (PDF)
+- [ ] `clipboard::plan` and `dnd::plan` are two planners over the same MIME tables (two `Kind`s): merge them
+- [ ] Touch: the view origin is frozen at `Landed` (a split spring or resize mid-touch shifts points); X11 sends one stray mouse move before the first Touch; pinch emulation ids 0/1 can collide with real fingers
+- [ ] Fling: the decay curve is ours, tune it by eye against Chrome; winit gives no event timestamps; hi-res wheels count as precise and lose smooth scrolling
+- [ ] `window.screenX/Y` is the content's corner (off by the title bar under a native frame); a mixed-DPI second display gets slightly wrong `screen.*` origins; the window clamp uses the whole monitor (winit has no work area)
+- [ ] Pop-ups: an allowed site's pop-up opened without a click has no `window.opener` (the factory cannot see site permissions; pass it the decision if sign-ins need it); Popup windows inherit `Chrome.windowMin` (560x380: a pop-up minimum needs a design token, owner); after a click a cross-origin frame can navigate the top page (Chrome's rule with a gesture)
+- [ ] Window state restore, by hand on X11, Wayland and macOS: settling; `window.open(u,'x','width=500,height=600')` gives inner 500x600; drag by the gutters while clicks in the page's top 28 px reach the page; Cmd+W and the peeked sidebar close a pop-up; restore maximized, fullscreen on a second display, half off-screen; a no-gesture pop-up on a loading page shows the pill and Allow opens the next without a click; after a restart the last focused window is in front
 - [ ] The back and forward mouse buttons never reach the page: CEF sends only left, middle and right, and a CDP event does not say whether the page cancelled it
 - [ ] `cursor: all-scroll` arrives as CEF's autoscroll cursor and starts the autoscroll overlay: an armed state in `wubble_core::autoscroll`, entered on a middle press
 - [ ] Pen: winit 0.30 has no pen type (Windows: a touch; Wayland and X11: the pointer; macOS: nothing): tablet readers per platform (build-out `pen-input`); touch selection handles need kit parts; a drag started by a long press gets no positions
 - [ ] Screen: no work area (`screen.availWidth` is the monitor's); a `<select>` that overflows the window slides over its control (no flip: the popup carries no anchor); `window.open`'s `left`/`top` without a size are dropped
-- [ ] Wayland clipboard: copied HTML lacks Blink's inlined styles, pasted HTML loses `<style>` formatting, screenshots still copy through arboard, a rich paste can block the loop for 2 s
+- [ ] Wayland clipboard: copied HTML lacks Blink's inlined styles, pasted HTML loses `<style>` formatting, screenshots still copy through arboard
 - [ ] Fling: stop it on the touchpad's hold gesture (`zwp_pointer_gesture_hold_v1` in the wl worker); momentum phases and elastic overscroll on macOS need a CEF patch
 - [ ] Drags to and from other apps: none on X11 and Windows beyond dropped files (`wl::Null`), macOS written and never run; custom dataTransfer types leave the window nowhere; a page drag to a second wubble window (build-out `x11-xdnd`, `windows-drag-drop`, `drag-custom-types-out`, `cross-window-page-drag`)
 - [ ] Pointer lock: the permission prompt exists, nothing confines the pointer or sends relative motion (a CEF patch, likely)
@@ -311,6 +324,13 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] A page frame touches the scene and the blur pyramid only while overlay glass or motion is on screen (1.3 % today: low value)
 - [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step (`scripts/bench/`; the Speedometer and MotionMark checkouts are not kept: fetch them into a scratch directory)
 
+## Windows (parked)
+Not a target for now (owner, 2026-11-23): no CI job, no release; the code is kept and stays syntactically sane.
+- [ ] Windows: the agent apps' paths (`agent::harness` lists Linux and macOS only) and the manifest's runtime dir
+- [ ] Windows CI: the Test step now finishes and 4 tests of the `wubble` binary fail there (run 44988591703, 2026-11-22): `instance::tests::the_private_root_by_platform`, `mcp::tests::a_connection_answers_discovery_and_hands_calls_to_the_host`, `mcp::tests::a_stop_closes_open_connections_and_ids_never_repeat`, `updater::install::tests::linux_stages_switches_current_and_rolls_back` (the last is a Linux-only test not gated)
+- [ ] Drag out on Windows (the stub: `wl::Null`)
+- [ ] Windows sandbox: restructure as a client DLL behind CEF's `bootstrap.exe`
+
 ## Open decisions (owner)
 - Mac heat (measure first with `scripts/bench/mac-energy.sh`): an opaque window on macOS, a lower rate for the start page's liquid
 - PR #1's defaults as merged: `install.sh` installs on the sha256 alone without `minisign` (a warning), page Escape, sentence-case labels, agent-tab refusals, the shortcut reset
@@ -334,7 +354,7 @@ starts with a measurement on the Mac that names the cause before any code change
 5. Extensions under windowless CEF need our patch queue (`patches/chromium`), rebuilt with every CEF upgrade and not yet built for macOS or Windows.
 6. OSR costs one extra composite per frame and bypasses direct scanout for video.
 7. An ungoogled + CEF patch queue rebased every Chromium milestone is permanent work for one person.
-8. Windows is CI-only: input, IME and windowing bugs there are found late.
+8. Windows is parked: its code is kept but neither built nor tried, so it decays.
 9. Turso is pre-release: keep the file format SQLite-compatible and back up before migrations.
 
   - [ ] `E.hover-cursor FAIL: cursor 0` once in 10 parity runs with `--begin-frames` on Linux (2026-11-21), 0 in 8 repeats of the E items in either mode: watch for it; cause unknown

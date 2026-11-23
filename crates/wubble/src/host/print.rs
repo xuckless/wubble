@@ -292,26 +292,26 @@ impl Host {
                 return;
             }
         }
-        let url = match &self.print {
-            Sheet::Open { tab, .. } | Sheet::Working { tab, .. } => {
-                self.committed.get(tab).cloned()
-            }
+        let printed = match &self.print {
+            Sheet::Open { tab, .. } | Sheet::Working { tab, .. } => Some(*tab),
             Sheet::Closed => None,
         };
+        let url = printed.and_then(|tab| self.committed.get(&tab).cloned());
         let (next, effects) = print::transition(std::mem::take(&mut self.print), event);
         if opening && matches!(next, Sheet::Open { .. }) {
             self.print_serial += 1;
         }
         self.print = next;
         for effect in effects {
-            self.print_effect(effect, url.as_deref());
+            self.print_effect(effect, url.as_deref(), printed);
         }
         if let Some(window) = self.w.window.upgrade() {
             self.render_print(&window);
         }
     }
 
-    fn print_effect(&mut self, effect: Effect, url: Option<&str>) {
+    /// `printed`: the tab the sheet prints, whose side decides whether its PDF's row is stored.
+    fn print_effect(&mut self, effect: Effect, url: Option<&str>, printed: Option<TabId>) {
         match effect {
             Effect::PrintToPdf { tab, path, options } => {
                 let started = self.tab_view(tab).map(|v| v.print_to_pdf(&path, &options));
@@ -340,7 +340,7 @@ impl Host {
             Effect::ListDownload(path) => {
                 self.downloads.release(&path);
                 let url = url.map_or_else(|| wubble_core::dnd::file_uri(&path), str::to_owned);
-                self.add_finished_download(&url, &path);
+                self.add_finished_download(&url, &path, printed);
             }
             Effect::RemoveFile(path) => {
                 self.downloads.release(&path);

@@ -264,6 +264,7 @@ pub const DEFAULTS: &[Binding] = rows![
     "Ctrl+F4", LW, Action::CloseTab, Shell;
     "Mod+Shift+T", ALL, Action::ReopenClosedTab, Shell;
     "Mod+N", ALL, Action::NewWindow, Shell;
+    "Mod+Shift+N", ALL, Action::NewPrivateWindow, Shell;
     "Mod+Shift+W", ALL, Action::CloseWindow, Shell;
     "Mod+L", ALL, Action::FocusAddress, PageFirst;
     "Alt+D", LW, Action::FocusAddress, PageFirst;

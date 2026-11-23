@@ -300,7 +300,7 @@ pub fn wheel_deltas(
     (
         WheelRemainder::axis(&mut rest.x, dx),
         WheelRemainder::axis(&mut rest.y, dy),
-        cef_modifiers(m) | flag::PRECISION_SCROLLING_DELTA * u32::from(precise),
+        cef_modifiers(m) | (flag::PRECISION_SCROLLING_DELTA * u32::from(precise)),
     )
 }
 

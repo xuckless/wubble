@@ -154,7 +154,7 @@ impl Smoke<'_> {
         let set = self.open("/set", CLEARED)?;
         self.wait(set, |e| console(e).filter(|m| *m == "smoke set").map(drop))?;
         self.engine
-            .clear_browsing_data(&[CLEARED])
+            .clear_browsing_data(&[(CLEARED, wubble_core::space::Storage::Disk)])
             .map_err(|e| e.to_string())?;
         let item_only = Seen {
             item: true,
@@ -220,6 +220,7 @@ impl Smoke<'_> {
                 begin_frames: false,
                 gpu: self.gpu.presenter().context().clone(),
                 container,
+                storage: wubble_core::space::Storage::Disk,
             })
             .map_err(|e| e.to_string())
     }

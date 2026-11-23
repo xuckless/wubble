@@ -171,6 +171,7 @@ pub fn run(config: Result<EngineConfig, EngineError>) -> Result<usize, Box<dyn E
             begin_frames: false,
             gpu: gpu.presenter().context().clone(),
             container: wubble_core::space::ContainerId::DEFAULT,
+            storage: wubble_core::space::Storage::Disk,
         })
     };
     let [first, second, third] = [open(&mut engine)?, open(&mut engine)?, open(&mut engine)?];

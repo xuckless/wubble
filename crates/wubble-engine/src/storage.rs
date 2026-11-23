@@ -33,7 +33,7 @@ use cef::{
 };
 use std::sync::{Arc, Mutex};
 use welding::{CefRuntime, SharedProfile};
-use wubble_core::space::ContainerId;
+use wubble_core::space::{ContainerId, Storage};
 
 use crate::app::EngineError;
 
@@ -98,7 +98,9 @@ pub(crate) fn sweep(root: &Path) {
     }
 }
 
-/// Marks `container`'s storage for deletion at the next start.
+/// Marks `container`'s storage for deletion at the next start. Never called
+/// for a [`Storage::Memory`] container: it has no directory, and a tombstone
+/// would name a disk container of that id.
 pub(crate) fn forget(root: &Path, container: ContainerId) {
     let marker = tombstone(root, container);
     let written = marker
@@ -292,11 +294,12 @@ pub(crate) fn copy_cookies(
     Some(cancel)
 }
 
-/// The open container contexts. Owned by the engine; empty after
-/// [`Self::release`], which shutdown calls before `cef::shutdown`.
+/// The open container contexts, each with the storage it was opened with.
+/// Owned by the engine; empty after [`Self::release`], which shutdown calls
+/// before `cef::shutdown`.
 pub(crate) struct Profiles {
     root: PathBuf,
-    open: BTreeMap<ContainerId, SharedProfile>,
+    open: BTreeMap<ContainerId, (Storage, SharedProfile)>,
 }
 
 impl Profiles {
@@ -307,18 +310,33 @@ impl Profiles {
         }
     }
 
-    /// `container`'s context, created and brought up on first use (CEF is
-    /// pumped until it reports the context initialized).
+    /// `container`'s context with `storage`, created and brought up on first
+    /// use (CEF is pumped until it reports the context initialized). A
+    /// [`Storage::Memory`] context has no directory, which CEF's Chrome runtime
+    /// makes an off-the-record profile (`ChromeBrowserContext`: an empty
+    /// `cache_path` is a new `OTRProfileID::CreateUniqueForCEF` profile of the
+    /// primary user profile, destroyed when the context shuts down). Fails
+    /// closed: a context open with the other storage is refused, never reused.
     pub(crate) fn get(
         &mut self,
         runtime: &CefRuntime,
         container: ContainerId,
+        storage: Storage,
     ) -> Result<SharedProfile, EngineError> {
-        if let Some(profile) = self.open.get(&container) {
+        if let Some((opened, profile)) = self.open.get(&container) {
+            if *opened != storage {
+                return Err(EngineError::View(format!(
+                    "container {}: open as {opened:?}, asked for {storage:?}",
+                    container.0
+                )));
+            }
             return Ok(profile.clone());
         }
-        let dir = container_dir(&self.root, container);
-        let profile = SharedProfile::new(runtime, Some(dir))
+        let dir = match storage {
+            Storage::Disk => Some(container_dir(&self.root, container)),
+            Storage::Memory => None,
+        };
+        let profile = SharedProfile::new(runtime, dir)
             .map_err(|e| EngineError::View(format!("container {}: {e}", container.0)))?;
         let mut runs = 0;
         while !profile.is_ready() {
@@ -332,13 +350,13 @@ impl Profiles {
             std::thread::sleep(READY_NAP);
             runs += 1;
         }
-        self.open.insert(container, profile.clone());
+        self.open.insert(container, (storage, profile.clone()));
         Ok(profile)
     }
 
     /// `container`'s context if it is open in this run.
     pub(crate) fn open(&self, container: ContainerId) -> Option<&SharedProfile> {
-        self.open.get(&container)
+        self.open.get(&container).map(|(_, profile)| profile)
     }
 
     /// Drops the engine's references. Browsers still open keep theirs until
@@ -351,7 +369,8 @@ impl Profiles {
         &self.root
     }
 
-    /// Drops `container`'s context, so a later use opens it afresh.
+    /// Drops `container`'s context, so a later use opens it afresh (CEF
+    /// destroys an in-memory profile when its last browser has gone).
     pub(crate) fn close(&mut self, container: ContainerId) {
         self.open.remove(&container);
     }
