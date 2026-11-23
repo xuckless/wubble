@@ -7,7 +7,8 @@
 //! winit's view's layer) and is shown only while the page is the window's whole content (page
 //! fullscreen, the picture-in-picture window), so the shell's frame under it is never seen. With
 //! the hole of stage 2 it goes under the shell's layer instead (`insertSublayer:below:`). Every
-//! change is one `CATransaction` with its implicit animations off, on the main thread.
+//! change is one `CATransaction` with its implicit animations off, on the main thread; a hide
+//! while the shell presents with the transaction joins the shell's own instead.
 
 use crate::import::{GfxError, NativeFrame};
 
@@ -27,6 +28,12 @@ pub trait PageLayer {
 
     /// Hides the layer and lets its buffers go.
     fn hide(&mut self);
+
+    /// While `on`, the shell's drawable is shown with the Core Animation transaction that
+    /// carries this layer's changes (`presentsWithTransaction`), so a hide and the shell's frame
+    /// that replaces it land together. Read when the drawable is acquired: set before the render
+    /// that needs it, cleared after the hide.
+    fn present_in_transaction(&mut self, _on: bool) {}
 }
 
 /// No layer: every frame goes through the shell.
@@ -55,8 +62,8 @@ mod mac {
     use std::ptr::NonNull;
 
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, NSObjectProtocol};
-    use objc2::{ClassType, MainThreadMarker, msg_send};
+    use objc2::runtime::AnyObject;
+    use objc2::{MainThreadMarker, msg_send};
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_quartz_core::{CALayer, CAMetalLayer, CATransaction, kCAGravityResize};
 
@@ -81,6 +88,8 @@ mod mac {
     pub struct CaLayer {
         layer: Retained<CALayer>,
         root: Retained<CALayer>,
+        /// The shell's layer (wgpu's): its `presentsWithTransaction` is set from here.
+        metal: Retained<CAMetalLayer>,
         /// The buffer on the layer and the one before it: the compositor may still show that
         /// one until the transaction that replaced it lands, so neither is copied into again
         /// (welding's pool counts a live buffer as in use).
@@ -106,7 +115,7 @@ mod mac {
                 .map(|layers| layers.to_vec())
                 .unwrap_or_default()
                 .into_iter()
-                .find(|layer| layer.isKindOfClass(CAMetalLayer::class()))
+                .find_map(|layer| layer.downcast::<CAMetalLayer>().ok())
                 .ok_or_else(|| fail("the window's view has no CAMetalLayer"))?;
             let layer = CALayer::new();
             transaction(|| {
@@ -114,11 +123,12 @@ mod mac {
                 layer.setOpaque(true);
                 // SAFETY: Core Animation's own constant.
                 layer.setContentsGravity(unsafe { kCAGravityResize });
-                root.insertSublayer_above(&layer, Some(&*metal));
+                root.insertSublayer_above(&layer, Some(&**metal));
             });
             Ok(Self {
                 layer,
                 root,
+                metal,
                 shown: [None, None],
             })
         }
@@ -160,12 +170,24 @@ mod mac {
         }
 
         fn hide(&mut self) {
-            transaction(|| {
+            let hide = || {
                 self.layer.setHidden(true);
                 // SAFETY: no contents is always valid.
                 unsafe { self.layer.setContents(None) };
-            });
+            };
+            // the shell's drawable is presented with the current transaction: join it, so the
+            // layer goes in the same commit as the frame that shows the page instead
+            if self.metal.presentsWithTransaction() {
+                CATransaction::setDisableActions(true);
+                hide();
+            } else {
+                transaction(hide);
+            }
             self.shown = [None, None];
+        }
+
+        fn present_in_transaction(&mut self, on: bool) {
+            self.metal.setPresentsWithTransaction(on);
         }
     }
 

@@ -538,6 +538,36 @@ mod tests {
         }
     }
 
+    /// A page on its OS layer (`wubble_core::page_layer`) costs no shell render, so no `Vsync`
+    /// comes: the timer every `Send` arms is the clock, one begin frame per period while the
+    /// page answers, the idle rate once it stops, and back on its next frame.
+    #[test]
+    fn page_layer_route_pacing_has_no_vsync() {
+        use {BeginFrames::*, PaceEffect::*, PaceEvent::*};
+        let p = Duration::from_micros(8_333);
+        let mut state = Active { unanswered: 0 };
+        for step in 0..10 {
+            let (next, effects) = transition(state, Timer, p);
+            assert_eq!(
+                (next, effects),
+                (Active { unanswered: 1 }, vec![Send, ArmTimer(p)]),
+                "{step}"
+            );
+            state = transition(next, FrameArrived, p).0;
+            assert_eq!(state, Active { unanswered: 0 }, "{step}");
+        }
+        for _ in 0..IDLE_AFTER {
+            state = transition(state, Timer, p).0;
+        }
+        assert_eq!(state, Idle);
+        assert_eq!(
+            transition(Idle, Timer, p),
+            (Idle, vec![Send, ArmTimer(IDLE_INTERVAL)])
+        );
+        state = transition(Idle, FrameArrived, p).0;
+        assert_eq!(transition(state, Timer, p).1, vec![Send, ArmTimer(p)]);
+    }
+
     #[test]
     fn a_page_that_stops_painting_idles_after_the_limit() {
         let p = Duration::from_millis(4);
