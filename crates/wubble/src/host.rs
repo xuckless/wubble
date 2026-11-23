@@ -3404,8 +3404,23 @@ impl Host {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
             // Slint hands the page a wheel as pixels either way (`TouchArea.scroll-event`), so
             // what the device sent is read here, before Slint sees the event.
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
                 self.input.wheel_precise = input::wheel_is_precise(delta);
+                // A touchpad scroll's stop (Wayland's `axis_stop`; X11 and Windows send none,
+                // macOS glides itself): the page glides on. Queued, so the stop frame's own
+                // scroll, which Slint sends after this, comes first.
+                #[cfg(target_os = "linux")]
+                if *phase == slint::winit_030::winit::event::TouchPhase::Ended {
+                    let id = self.w.id;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        crate::with_host_in(id, |host| {
+                            let now = host.fling_now();
+                            host.fling(wubble_core::fling::FlingInput::Lift { now });
+                        })
+                    });
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = phase;
             }
             WindowEvent::Touch(t) => {
                 let at = t
@@ -3435,22 +3450,6 @@ impl Host {
                 if self.w.fingers.on_page() {
                     return EventResult::PreventDefault;
                 }
-            }
-            // A touchpad scroll's stop (Wayland's `axis_stop`; X11 and Windows send none, macOS
-            // glides itself): the page glides on. Queued, so the stop frame's own scroll, which
-            // Slint sends after this, comes first.
-            #[cfg(target_os = "linux")]
-            WindowEvent::MouseWheel {
-                phase: slint::winit_030::winit::event::TouchPhase::Ended,
-                ..
-            } => {
-                let id = self.w.id;
-                let _ = slint::invoke_from_event_loop(move || {
-                    crate::with_host_in(id, |host| {
-                        let now = host.fling_now();
-                        host.fling(wubble_core::fling::FlingInput::Lift { now });
-                    })
-                });
             }
             // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
             WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
