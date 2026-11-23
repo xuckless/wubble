@@ -879,6 +879,21 @@ impl View {
         self.send(|host| host.send_external_begin_frame());
     }
 
+    /// The page layer's `Effect::Buffers` (`wubble_core::page_layer`): this view's frames are
+    /// copied into OS buffers (`on`), [`wubble_core::page_layer::POOL_SLOTS`] of them chosen by
+    /// `pick_slot`, which each frame then carries for the layer; or into textures of their
+    /// own. `Err` where welding has none (every platform but macOS).
+    pub fn set_os_buffers(&mut self, on: bool) -> Result<(), String> {
+        use wubble_core::page_layer::{POOL_SLOTS, pick_slot};
+        let request = on.then_some(welding::OsBufferRequest {
+            slots: POOL_SLOTS,
+            choose: pick_slot,
+        });
+        self.producer
+            .set_os_buffers(request)
+            .map_err(|e| e.to_string())
+    }
+
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
     /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
     /// set on this view's request context; Chromium pushes it to the profile's open pages.
