@@ -176,7 +176,10 @@ impl Host {
     /// What the shell draws over the page in `pane` of this window now: the page layer's
     /// `Need::Covered` (`Needs::covered`). The peek and the picture-in-picture card are their
     /// owners' (the model's), so they come as facts.
-    #[expect(dead_code, reason = "the page layer's host wiring (the next step) reads it")]
+    #[expect(
+        dead_code,
+        reason = "the page layer's host wiring (the next step) reads it"
+    )]
     pub(super) fn page_covered(&self, window: &AppWindow, pane: TabId) -> Coverage {
         let facts = Facts {
             glass: window.global::<GlassLayer>().get_over_on(),

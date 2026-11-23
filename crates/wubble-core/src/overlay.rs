@@ -270,6 +270,19 @@ pub struct Row {
 /// How long a plain toast stays (wubble-only: no design counterpart).
 pub const TOAST_SHOWN_MS: u64 = 1_500;
 
+/// How long a toast shows, by `[button][sticky]`: a plain one [`TOAST_SHOWN_MS`], one with a
+/// button long enough to reach it ([`crate::sponsor::TOAST_MS`]), a sticky one until its owner
+/// hides it (`None`). A new toast time is a cell here.
+const TOAST_TIMES: [[Option<u64>; 2]; 2] = [
+    [Some(TOAST_SHOWN_MS), None],
+    [Some(crate::sponsor::TOAST_MS), None],
+];
+
+/// The host's timer for a toast shown now: `None`, no timer.
+pub fn toast_ms(button: bool, sticky: bool) -> Option<u64> {
+    TOAST_TIMES[usize::from(button)][usize::from(sticky)]
+}
+
 const ALL: &[WindowKind] = &[
     WindowKind::Main,
     WindowKind::Little,
@@ -386,7 +399,10 @@ impl Kind {
 
     /// One at a time.
     pub fn exclusive(self) -> bool {
-        matches!(self.row().group, Group::Exclusive | Group::Modal | Group::Holds)
+        matches!(
+            self.row().group,
+            Group::Exclusive | Group::Modal | Group::Holds
+        )
     }
 
     /// Holds the page under a scrim: the find bar waits for it.
@@ -466,7 +482,11 @@ impl Stack {
     /// drawn surface with no visible layer of its kind open is leaving.
     pub fn with_drawn(mut self, drawn: &[Layer]) -> Stack {
         for d in drawn {
-            if !self.layers.iter().any(|l| l.kind == d.kind && self.visible(l)) {
+            if !self
+                .layers
+                .iter()
+                .any(|l| l.kind == d.kind && self.visible(l))
+            {
                 self.leaving.push(*d);
             }
         }
@@ -1153,7 +1173,10 @@ mod tests {
         // open and drawn: not leaving
         assert!(with(&[on(Find, A)], &[on(Find, A)]).is_empty());
         // closed, still drawn: leaving
-        assert_eq!(with(&[], &[on(Find, A), win(Menu)]), [on(Find, A), win(Menu)]);
+        assert_eq!(
+            with(&[], &[on(Find, A), win(Menu)]),
+            [on(Find, A), win(Menu)]
+        );
         // open on a hidden tab, drawn over the visible one as its bar fades: leaving
         assert_eq!(with(&[on(Find, B)], &[on(Find, A)]), [on(Find, A)]);
         // a pane's surface open on another pane counts as open: it is drawn there
@@ -1161,7 +1184,10 @@ mod tests {
         assert!(with(&[strip], &[Layer::new(VideoStrip, Some(A))]).is_empty());
         // nothing drawn, nothing leaving; the open layers stay as they are
         assert!(with(&[on(Find, A)], &[]).is_empty());
-        assert_eq!(stack(&[on(Find, A)]).with_drawn(&[win(Menu)]).layers, [on(Find, A)]);
+        assert_eq!(
+            stack(&[on(Find, A)]).with_drawn(&[win(Menu)]).layers,
+            [on(Find, A)]
+        );
     }
 
     /// Each row sits at its kind's index (`Kind::row` reads it so); `Specimen` is the last kind,
@@ -1172,6 +1198,35 @@ mod tests {
             assert_eq!(row.kind as usize, i, "{:?} out of place", row.kind);
         }
         assert_eq!(ROWS.len(), Specimen as usize + 1);
+        // the overlays come first (Kind's order is their Escape order), the free surfaces after
+        let overlays = ROWS.iter().take_while(|r| r.group != Group::Free).count();
+        assert_eq!(
+            overlays,
+            Menu as usize + 1,
+            "the overlays are the first kinds"
+        );
+        assert!(
+            ROWS[overlays..].iter().all(|r| r.group == Group::Free),
+            "no overlay after the first free surface"
+        );
+    }
+
+    #[test]
+    fn a_toast_shows_for_its_time() {
+        let rows = [
+            ("plain", false, false, Some(TOAST_SHOWN_MS)),
+            ("with a button", true, false, Some(crate::sponsor::TOAST_MS)),
+            ("sticky", false, true, None),
+            ("sticky with a button", true, true, None),
+        ];
+        for (name, button, sticky, want) in rows {
+            assert_eq!(toast_ms(button, sticky), want, "{name}");
+        }
+        assert_eq!(
+            (TOAST_SHOWN_MS, crate::sponsor::TOAST_MS),
+            (1_500, 6_000),
+            "the times as before"
+        );
     }
 
     #[test]
@@ -1180,7 +1235,10 @@ mod tests {
             let mut seen = std::collections::BTreeMap::new();
             for row in ROWS.iter().filter(|r| r.windows.contains(window)) {
                 if let Some(other) = seen.insert(row.z, row.kind) {
-                    panic!("{:?} and {other:?} share z {} in {window:?}", row.kind, row.z);
+                    panic!(
+                        "{:?} and {other:?} share z {} in {window:?}",
+                        row.kind, row.z
+                    );
                 }
             }
         }
@@ -1207,26 +1265,30 @@ mod tests {
     }
 
     /// Each kind alone on screen, over its pane and another one (the peek and the
-    /// picture-in-picture card come from their owners, as `Facts`).
+    /// picture-in-picture card come from their owners, as `Facts`): open, leaving (its exit
+    /// still drawn: the same), and with the scene's glass off (its row's `cover`).
     #[test]
     #[rustfmt::skip]
     fn each_kind_covers_the_panes_it_is_over() {
-        let lit = Facts {
-            glass: true,
-            ..Facts::default()
-        };
         for row in ROWS {
             let kind = row.kind;
-            let (stack, facts) = match kind {
-                Glance => (stack(&[]), Facts { glance: true, ..lit }),
-                PipCard => (stack(&[]), Facts { pip_card: Some(A), ..lit }),
-                _ => (stack(&[Layer::new(kind, Some(A))]), lit),
-            };
-            assert_eq!(
-                (covers(&stack, &facts, A), covers(&stack, &facts, B)),
-                over(kind),
-                "{kind:?}"
-            );
+            for glass in [true, false] {
+                let lit = Facts { glass, ..Facts::default() };
+                let (open, facts) = match kind {
+                    Glance => (stack(&[]), Facts { glance: true, ..lit }),
+                    PipCard => (stack(&[]), Facts { pip_card: Some(A), ..lit }),
+                    _ => (stack(&[Layer::new(kind, Some(A))]), lit),
+                };
+                let leaving = Stack { leaving: open.layers.clone(), layers: vec![], ..open.clone() };
+                let want = if glass { over(kind) } else { (row.cover, over(kind).1.min(row.cover)) };
+                for (state, stack) in [("open", &open), ("leaving", &leaving)] {
+                    assert_eq!(
+                        (covers(stack, &facts, A), covers(stack, &facts, B)),
+                        want,
+                        "{kind:?} {state}, glass {glass}"
+                    );
+                }
+            }
         }
     }
 

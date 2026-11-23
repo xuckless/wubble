@@ -267,9 +267,7 @@ pub const MODES: &[(&str, Mode)] = &[("off", Mode::Off), ("fullscreen", Mode::Fu
 
 /// The mode `name` names.
 pub fn mode(name: &str) -> Option<Mode> {
-    MODES
-        .iter()
-        .find_map(|&(n, m)| (n == name).then_some(m))
+    MODES.iter().find_map(|&(n, m)| (n == name).then_some(m))
 }
 
 #[cfg(test)]
@@ -386,7 +384,11 @@ mod tests {
     impl Edge {
         fn run(&mut self, event: Event, effects: &[Effect]) {
             if let Presenting { drawn } = event {
-                assert!(drawn <= self.given, "the walk drew {drawn:?}, given {:?}", self.given);
+                assert!(
+                    drawn <= self.given,
+                    "the walk drew {drawn:?}, given {:?}",
+                    self.given
+                );
                 self.drew = drawn.max(self.drew);
             }
             let painted = match event {
@@ -603,7 +605,11 @@ mod tests {
         for &(name, pane, root_h, flipped, scale, buffer, clip, frame, contents) in rows {
             assert_eq!(
                 place(pane, root_h, flipped, scale, buffer, clip),
-                Placement { frame, contents, scale },
+                Placement {
+                    frame,
+                    contents,
+                    scale
+                },
                 "{name}"
             );
         }

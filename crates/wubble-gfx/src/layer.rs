@@ -95,7 +95,8 @@ mod mac {
         /// `ns_view` is a live `NSView` (winit's view of the window), and outlives the layer.
         pub unsafe fn new(ns_view: NonNull<c_void>) -> Result<Self, GfxError> {
             let fail = |why: &str| GfxError::Layer(why.into());
-            MainThreadMarker::new().ok_or_else(|| fail("the page layer is made off the main thread"))?;
+            MainThreadMarker::new()
+                .ok_or_else(|| fail("the page layer is made off the main thread"))?;
             // SAFETY: the caller's view; `-[NSView layer]` returns its (optional) layer.
             let view: &AnyObject = unsafe { ns_view.cast::<AnyObject>().as_ref() };
             let root: Option<Retained<CALayer>> = unsafe { msg_send![view, layer] };
@@ -125,7 +126,10 @@ mod mac {
 
     impl PageLayer for CaLayer {
         fn root(&self) -> (f64, bool) {
-            (self.root.bounds().size.height, self.root.isGeometryFlipped())
+            (
+                self.root.bounds().size.height,
+                self.root.isGeometryFlipped(),
+            )
         }
 
         fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64) {
