@@ -27,6 +27,7 @@ use wubble_core::autofill::{
 };
 use wubble_core::secret::Secret;
 use wubble_core::site::{Decision, Permission, SiteChange};
+use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_engine::page::{FrameChannel, FrameInfo};
 use wubble_ui::{AppWindow, AutofillAnswer, AutofillView};
@@ -217,6 +218,8 @@ impl Host {
                 password_field,
             } => {
                 let top = self.page_origin(tab);
+                // a fill in a private tab (or an unknown one) leaves no last-used stamp
+                let stamp = self.model.side_of_tab(tab) == Side::Normal;
                 self.store.vault(move |vault| {
                     let id = RecordId(record);
                     let mut fields: Vec<(FieldId, Secret)> = username_field
@@ -228,7 +231,9 @@ impl Host {
                         let Ok(password) = vault.reveal(&id) else {
                             return;
                         };
-                        let _ = vault.mark_used(&id, now_ms());
+                        if stamp {
+                            let _ = vault.mark_used(&id, now_ms());
+                        }
                         fields.push((field, Secret::new(password.as_str())));
                     }
                     let _ = slint::invoke_from_event_loop(move || {
