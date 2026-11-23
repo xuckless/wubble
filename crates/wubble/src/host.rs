@@ -3429,6 +3429,22 @@ impl Host {
                     return EventResult::PreventDefault;
                 }
             }
+            // A touchpad scroll's stop (Wayland's `axis_stop`; X11 and Windows send none, macOS
+            // glides itself): the page glides on. Queued, so the stop frame's own scroll, which
+            // Slint sends after this, comes first.
+            #[cfg(target_os = "linux")]
+            WindowEvent::MouseWheel {
+                phase: slint::winit_030::winit::event::TouchPhase::Ended,
+                ..
+            } => {
+                let id = self.w.id;
+                let _ = slint::invoke_from_event_loop(move || {
+                    crate::with_host_in(id, |host| {
+                        let now = host.fling_now();
+                        host.fling(wubble_core::fling::FlingInput::Lift { now });
+                    })
+                });
+            }
             // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
             WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
             WindowEvent::HoveredFile(_)
@@ -3848,13 +3864,14 @@ impl Host {
         }
     }
 
-    /// A press on a pane (a button, a finger): autoscroll and tips hear it, and
+    /// A press on a pane (a button, a finger): autoscroll and tips hear it, a glide stops, and
     /// the pane takes the keys and becomes the shown tab.
     fn page_pressed(&mut self, tab: Option<TabId>) {
         if let Some(window) = self.w.window.upgrade() {
             self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
         }
         self.tip_dismiss();
+        self.fling(wubble_core::fling::FlingInput::Interrupt);
         let Some(tab) = tab else {
             return;
         };
@@ -3888,6 +3905,13 @@ impl Host {
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
         self.hints_scrolled();
+        let now = self.fling_now();
+        self.fling(wubble_core::fling::FlingInput::Scroll {
+            target: (pane, point),
+            dx: dx.into(),
+            dy: dy.into(),
+            now,
+        });
         let modifiers = self.input.modifiers();
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
