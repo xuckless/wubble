@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use slint::ComponentHandle;
 use slint::winit_030::winit::keyboard::ModifiersState;
 use wubble_core::model::Command;
 use wubble_core::site::Permission;
@@ -49,6 +50,14 @@ impl Host {
             .and_then(|o| self.site_permissions.get(o, Permission::Popups));
         let glance = self.glance_enabled;
         let url = request.url.clone();
+        // `left`/`top` are screen DIP; the window's position is physical.
+        let scale = f64::from(self.w.handle.window().scale_factor());
+        let pos = request.position.map(|(x, y)| {
+            (
+                (f64::from(x) * scale).round() as i32,
+                (f64::from(y) * scale).round() as i32,
+            )
+        });
         let command = match popup::decide(request.opened, request.gesture, remembered, glance) {
             Outcome::Tab { foreground: true } => new_tab(url, Some(tab)),
             Outcome::Tab { foreground: false } => Command::BackgroundTab { url, opener: tab },
@@ -56,6 +65,7 @@ impl Host {
                 url,
                 opener: tab,
                 size: request.size,
+                pos,
             },
             // a peek and a held request get a page of their own when they open
             Outcome::Glance if view.is_none() => match self.model.window_of(tab) {

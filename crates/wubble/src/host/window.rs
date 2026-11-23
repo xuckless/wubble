@@ -20,6 +20,7 @@ use slint::ComponentHandle;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
+use wubble_engine::view::Desktop;
 use wubble_gfx::FramePresenter;
 use wubble_ui::AppWindow;
 use wubble_ui::glass::GlassRegistry;
@@ -99,6 +100,9 @@ pub(crate) struct WindowHost {
     pub(super) frames: BTreeMap<TabId, PaneFrame>,
     /// Where the pages on screen sit: the split physics, stepped per rendered frame.
     pub(super) panes: Panes,
+    /// The window's monitor and place on the desktop, read by `Host::follow_desktop`: told to
+    /// every page as its screen.
+    pub(super) desktop: Option<Desktop>,
     /// The previous pane frame's time while the strings or a pane's stretch move.
     pub(super) panes_last: Option<Instant>,
     /// What the strings settled, waiting to be dispatched outside rendering.
@@ -139,6 +143,7 @@ impl WindowHost {
             panels,
             frames: BTreeMap::new(),
             panes: Panes::default(),
+            desktop: None,
             panes_last: None,
             split_commands: vec![],
             drawn: Default::default(),

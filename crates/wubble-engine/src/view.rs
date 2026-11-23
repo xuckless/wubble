@@ -49,14 +49,28 @@ use crate::pinch::{self, Pinch};
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
 
-/// Where a view sits in the host window (both physical pixels). The window
-/// stands in for the screen, so Blink can place popups such as `<select>`
-/// lists outside the view; see welding's `ScreenArea`.
+/// Where a view sits in the host window (both physical pixels), and where the window and its
+/// monitor are on the desktop: what the page reads as `screen.*`, `window.screenX/Y`,
+/// `outerWidth` and `MouseEvent.screenX/Y`, and what Blink places popups such as `<select>`
+/// lists against; see welding's `ScreenArea`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenArea {
     pub window: FrameSize,
     /// The view's top-left corner in the window.
     pub origin: (i32, i32),
+    /// `None` until the host knows (the window is then the screen, at 0,0).
+    pub desktop: Option<Desktop>,
+}
+
+/// The window's monitor and the window on the desktop, physical pixels in the platform's
+/// global space (winit's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Desktop {
+    pub monitor_origin: (i32, i32),
+    pub monitor_size: FrameSize,
+    /// `None` where the platform will not say (Wayland): the window is taken at the monitor's
+    /// origin, as Chrome reports it there.
+    pub window_origin: Option<(i32, i32)>,
 }
 
 impl ScreenArea {
@@ -64,6 +78,11 @@ impl ScreenArea {
         welding::ScreenArea {
             window: dpi_size(self.window),
             origin: self.origin,
+            desktop: self.desktop.map(|d| welding::Desktop {
+                monitor_origin: d.monitor_origin,
+                monitor_size: dpi_size(d.monitor_size),
+                window_origin: d.window_origin,
+            }),
         }
     }
 }
@@ -466,6 +485,7 @@ impl View {
             gesture: opened.user_gesture,
             opened: popup_opened(opened.kind),
             size: opened.size,
+            position: opened.position,
         };
         self.opened.push((child, request));
     }
@@ -1976,11 +1996,13 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             user_gesture,
             kind,
             size,
+            position,
         } => one(Route::Nav(NavInput::Popup(crate::nav::PopupRequest {
             url,
             gesture: user_gesture,
             opened: popup_opened(kind),
             size,
+            position,
         }))),
         E::PopupBrowserCreated(opened) => one(Route::PopupCreated(opened)),
         E::PopupAborted { popup_id } => one(Route::PopupAborted(popup_id)),
@@ -2372,10 +2394,21 @@ mod tests {
     const AREA: ScreenArea = ScreenArea {
         window: FrameSize::new(1000, 700),
         origin: (10, 20),
+        desktop: None,
     };
     const OTHER_AREA: ScreenArea = ScreenArea {
         window: FrameSize::new(1000, 700),
         origin: (30, 20),
+        desktop: None,
+    };
+    /// The same view after the window moved on the desktop.
+    const MOVED_AREA: ScreenArea = ScreenArea {
+        desktop: Some(Desktop {
+            monitor_origin: (0, 0),
+            monitor_size: FrameSize::new(1920, 1080),
+            window_origin: Some((300, 200)),
+        }),
+        ..AREA
     };
 
     fn placed(size: FrameSize, scale: f32, area: ScreenArea) -> super::Layout {
@@ -2503,6 +2536,14 @@ mod tests {
         // A layout that does not say where the view is keeps what CEF has.
         let (_, effects) = run(state, &[Layout(layout(SMALL, 1.0))]);
         assert_eq!(effects, vec![]);
+    }
+
+    #[test]
+    fn a_window_moved_on_the_desktop_is_announced_without_a_resize() {
+        let (state, _) = run(live(), &[Layout(placed(SMALL, 1.0, AREA))]);
+        let (state, effects) = run(state, &[Layout(placed(SMALL, 1.0, MOVED_AREA))]);
+        assert_eq!(effects, vec![SetScreenArea(MOVED_AREA)]);
+        assert!(matches!(state, Live { .. }));
     }
 
     #[test]
@@ -2738,6 +2779,7 @@ mod tests {
                 user_gesture: true,
                 kind,
                 size,
+                position: Some((40, 60)),
             })
         };
         assert_eq!(
@@ -2747,6 +2789,7 @@ mod tests {
                 gesture: true,
                 opened: Opened::PopupWindow,
                 size: Some((400, 300)),
+                position: Some((40, 60)),
             }))
         );
         for (kind, opened) in [

@@ -124,6 +124,8 @@ pub struct PopupRequest {
     pub opened: wubble_core::popup::Opened,
     /// The `width`/`height` window features, when both were given.
     pub size: Option<(u32, u32)>,
+    /// The `left`/`top` window features, when both were given (screen DIP).
+    pub position: Option<(i32, i32)>,
 }
 
 /// What the host learns about a view, in the order it happened.
@@ -592,6 +594,7 @@ mod tests {
             gesture: false,
             opened: wubble_core::popup::Opened::PopupWindow,
             size: Some((400, 300)),
+            position: Some((40, 60)),
         };
         let (next, effects) = transition(state.clone(), I::Popup(request.clone()));
         assert_eq!(next, state);

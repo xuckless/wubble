@@ -48,8 +48,12 @@ cef::wrap_render_handler! {
             if let Some(info) = screen_info {
                 let metrics = self.handler.metrics.lock().unwrap();
                 info.device_scale_factor = metrics.scale();
-                // wubble change: the window is the screen, so Blink can place
-                // popups outside the view (cefclient `real_screen_bounds`).
+                // wubble change (58): Chrome's `screen.colorDepth` and
+                // `pixelDepth`, set here rather than left to CEF's default.
+                info.depth = 24;
+                info.depth_per_component = 8;
+                // wubble change (58): the window's monitor, so `screen.*` is
+                // Chrome's; Blink also places popups against it.
                 if let Some((x, y, w, h)) = metrics.screen_rect_dip() {
                     let rect = cef::Rect { x, y, width: w, height: h };
                     info.rect = rect.clone();
@@ -65,8 +69,8 @@ cef::wrap_render_handler! {
             _browser: Option<&mut cef::Browser>,
             rect: Option<&mut cef::Rect>,
         ) -> ::std::os::raw::c_int {
-            // wubble change: see `screen_info`.
-            let area = self.handler.metrics.lock().unwrap().screen_rect_dip();
+            // wubble change (58): the window on the desktop (`window.screenX`).
+            let area = self.handler.metrics.lock().unwrap().root_rect_dip();
             match (rect, area) {
                 (Some(rect), Some((x, y, w, h))) => {
                     *rect = cef::Rect { x, y, width: w, height: h };

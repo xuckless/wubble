@@ -31,14 +31,40 @@ use crate::surface::PopupRect;
 
 /// Where the view sits inside the host window, both physical. wubble change:
 /// reporting this (instead of only the scale) is what lets Blink place a
-/// `<select>` popup outside the page rectangle. The window stands in for the
-/// screen, so no global window position is needed (Wayland has none).
+/// `<select>` popup outside the page rectangle, and (with `desktop`) gives
+/// the page Chrome's `screen.*`, `window.screenX/Y` and `outerWidth/Height`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenArea {
     /// The host window's size in physical pixels.
     pub window: PhysicalSize<u32>,
     /// The view's top-left corner inside the window, in physical pixels.
     pub origin: (i32, i32),
+    /// Where the window and its monitor are; `None` makes the window the
+    /// screen, at 0,0.
+    pub desktop: Option<Desktop>,
+}
+
+/// wubble change (58): the window's monitor and the window on the desktop,
+/// physical pixels in the platform's global space (the host reads them from
+/// winit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Desktop {
+    pub monitor_origin: (i32, i32),
+    pub monitor_size: PhysicalSize<u32>,
+    /// The window's top-left; `None` where the platform will not say
+    /// (Wayland): the window is then taken at the monitor's origin, as Chrome
+    /// reports it there.
+    pub window_origin: Option<(i32, i32)>,
+}
+
+impl ScreenArea {
+    /// The window's top-left on the desktop (physical): the platform's, else
+    /// the monitor's origin, else 0,0 (the window is the screen).
+    fn window_origin(&self) -> (i32, i32) {
+        self.desktop
+            .and_then(|d| d.window_origin.or(Some(d.monitor_origin)))
+            .unwrap_or((0, 0))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,24 +112,53 @@ impl ViewMetrics {
     }
 
     /// What `GetViewRect` reports as x, y, width, height (DIP): the view's
-    /// offset in the window, or 0,0 without a screen area.
+    /// place on the desktop (its offset in the window, from the window's
+    /// origin), or 0,0 without a screen area.
     pub(crate) fn view_rect_dip(&self) -> (i32, i32, i32, i32) {
         let (w, h) = self.logical();
-        let (x, y) = self.area.map_or((0, 0), |a| self.point_to_dip(a.origin.0, a.origin.1));
+        let (x, y) = self.area.map_or((0, 0), |a| {
+            let o = a.window_origin();
+            self.point_to_dip(o.0 + a.origin.0, o.1 + a.origin.1)
+        });
         (x, y, w, h)
     }
 
-    /// The "screen" for `GetScreenInfo` (rect and available rect) and
-    /// `GetRootScreenRect`: the window in DIP. `None` without a screen area,
-    /// which leaves CEF's default of using the view.
+    /// A physical rectangle in DIP, at least 1x1.
+    fn rect_dip(&self, x: i32, y: i32, w: u32, h: u32) -> (i32, i32, i32, i32) {
+        let (x, y) = self.point_to_dip(x, y);
+        let dip = |n: u32| (n as f32 / self.scale).round().max(1.0) as i32;
+        (x, y, dip(w), dip(h))
+    }
+
+    /// The screen for `GetScreenInfo` (rect and available rect) in DIP: the
+    /// window's monitor (winit has no work area, so both are the monitor), or
+    /// the window itself without one. `None` without a screen area, which
+    /// leaves CEF's default of using the view.
     ///
-    /// Source: cefclient `osr_window_win.cc` `GetRootScreenRect` /
-    /// `GetScreenInfo` in its `real_screen_bounds` mode (BSD-3-Clause).
+    /// Source: cefclient `osr_window_win.cc` `GetScreenInfo` (BSD-3-Clause).
     pub(crate) fn screen_rect_dip(&self) -> Option<(i32, i32, i32, i32)> {
         let a = self.area?;
-        let w = (a.window.width as f32 / self.scale).round().max(1.0) as i32;
-        let h = (a.window.height as f32 / self.scale).round().max(1.0) as i32;
-        Some((0, 0, w, h))
+        Some(match a.desktop {
+            Some(d) => self.rect_dip(
+                d.monitor_origin.0,
+                d.monitor_origin.1,
+                d.monitor_size.width,
+                d.monitor_size.height,
+            ),
+            None => self.rect_dip(0, 0, a.window.width, a.window.height),
+        })
+    }
+
+    /// `GetRootScreenRect`: the window's outer rectangle on the desktop in
+    /// DIP (`window.screenX/Y`, `outerWidth/Height`). `None` without a screen
+    /// area.
+    ///
+    /// Source: cefclient `osr_window_win.cc` `GetRootScreenRect`
+    /// (BSD-3-Clause).
+    pub(crate) fn root_rect_dip(&self) -> Option<(i32, i32, i32, i32)> {
+        let a = self.area?;
+        let o = a.window_origin();
+        Some(self.rect_dip(o.0, o.1, a.window.width, a.window.height))
     }
 
     /// `GetScreenPoint`: a point in the view (DIP) as a screen point in
@@ -111,9 +166,10 @@ impl ViewMetrics {
     /// [`Self::screen_point_dip`]). `None` without a screen area.
     pub(crate) fn screen_point(&self, view_x: i32, view_y: i32) -> Option<(i32, i32)> {
         let a = self.area?;
+        let o = a.window_origin();
         Some((
-            (view_x as f32 * self.scale).round() as i32 + a.origin.0,
-            (view_y as f32 * self.scale).round() as i32 + a.origin.1,
+            (view_x as f32 * self.scale).round() as i32 + o.0 + a.origin.0,
+            (view_y as f32 * self.scale).round() as i32 + o.1 + a.origin.1,
         ))
     }
 
@@ -193,6 +249,136 @@ mod tests {
         ScreenArea {
             window: PhysicalSize::new(w, h),
             origin: (x, y),
+            desktop: None,
+        }
+    }
+
+    /// wubble change (58): one row per desktop layout; every rectangle in DIP,
+    /// the screen point in device pixels (view point 10,20).
+    struct Desk {
+        name: &'static str,
+        scale: f32,
+        view: (u32, u32),
+        window: (u32, u32),
+        origin: (i32, i32),
+        monitor: Option<((i32, i32), (u32, u32))>,
+        window_origin: Option<(i32, i32)>,
+        screen: (i32, i32, i32, i32),
+        root: (i32, i32, i32, i32),
+        view_rect: (i32, i32, i32, i32),
+        point: (i32, i32),
+    }
+
+    #[test]
+    fn the_page_sees_its_monitor_and_window_on_the_desktop() {
+        let rows = [
+            Desk {
+                name: "1x primary, window inside it",
+                scale: 1.0,
+                view: (1000, 620),
+                window: (1000, 700),
+                origin: (0, 80),
+                monitor: Some(((0, 0), (1920, 1080))),
+                window_origin: Some((100, 50)),
+                screen: (0, 0, 1920, 1080),
+                root: (100, 50, 1000, 700),
+                view_rect: (100, 130, 1000, 620),
+                point: (110, 150),
+            },
+            Desk {
+                name: "monitor left of the primary, negative origin",
+                scale: 1.0,
+                view: (900, 600),
+                window: (1000, 700),
+                origin: (50, 80),
+                monitor: Some(((-1920, 0), (1920, 1080))),
+                window_origin: Some((-1800, 40)),
+                screen: (-1920, 0, 1920, 1080),
+                root: (-1800, 40, 1000, 700),
+                view_rect: (-1750, 120, 900, 600),
+                point: (-1740, 140),
+            },
+            Desk {
+                name: "1.25x monitor right of the primary",
+                scale: 1.25,
+                view: (1250, 775),
+                window: (1250, 875),
+                origin: (0, 100),
+                monitor: Some(((1920, 0), (2560, 1440))),
+                window_origin: Some((2000, 100)),
+                screen: (1536, 0, 2048, 1152),
+                root: (1600, 80, 1000, 700),
+                view_rect: (1600, 160, 1000, 620),
+                point: (2013, 225),
+            },
+            Desk {
+                name: "2x",
+                scale: 2.0,
+                view: (1600, 1200),
+                window: (2000, 1400),
+                origin: (400, 120),
+                monitor: Some(((0, 0), (3840, 2160))),
+                window_origin: Some((200, 100)),
+                screen: (0, 0, 1920, 1080),
+                root: (100, 50, 1000, 700),
+                view_rect: (300, 110, 800, 600),
+                point: (620, 260),
+            },
+            Desk {
+                name: "Wayland: no position, the window sits at the monitor's origin",
+                scale: 1.0,
+                view: (1000, 620),
+                window: (1000, 700),
+                origin: (0, 80),
+                monitor: Some(((0, 0), (2560, 1440))),
+                window_origin: None,
+                screen: (0, 0, 2560, 1440),
+                root: (0, 0, 1000, 700),
+                view_rect: (0, 80, 1000, 620),
+                point: (10, 100),
+            },
+            Desk {
+                name: "Wayland on a second monitor",
+                scale: 1.0,
+                view: (1000, 620),
+                window: (1000, 700),
+                origin: (0, 80),
+                monitor: Some(((1920, 0), (1920, 1080))),
+                window_origin: None,
+                screen: (1920, 0, 1920, 1080),
+                root: (1920, 0, 1000, 700),
+                view_rect: (1920, 80, 1000, 620),
+                point: (1930, 100),
+            },
+            Desk {
+                name: "no monitor known: the window is the screen",
+                scale: 1.5,
+                view: (1200, 600),
+                window: (1920, 1080),
+                origin: (150, 75),
+                monitor: None,
+                window_origin: None,
+                screen: (0, 0, 1280, 720),
+                root: (0, 0, 1280, 720),
+                view_rect: (100, 50, 800, 400),
+                point: (165, 105),
+            },
+        ];
+        for r in rows {
+            let mut m = ViewMetrics::new(PhysicalSize::new(r.view.0, r.view.1), r.scale);
+            m.set_area(ScreenArea {
+                window: PhysicalSize::new(r.window.0, r.window.1),
+                origin: r.origin,
+                desktop: r.monitor.map(|(origin, size)| Desktop {
+                    monitor_origin: origin,
+                    monitor_size: PhysicalSize::new(size.0, size.1),
+                    window_origin: r.window_origin,
+                }),
+            });
+            assert_eq!(m.screen_rect_dip(), Some(r.screen), "{}: screen", r.name);
+            assert_eq!(m.root_rect_dip(), Some(r.root), "{}: root", r.name);
+            assert_eq!(m.view_rect_dip(), r.view_rect, "{}: view", r.name);
+            assert_eq!(m.screen_point(10, 20), Some(r.point), "{}: point", r.name);
         }
     }
 

@@ -102,7 +102,7 @@ use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, KeyInput, Point};
 use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
-use wubble_engine::view::{View, ViewConfig};
+use wubble_engine::view::{Desktop, View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent, Pacing};
 use wubble_gfx::scene::run::RunEvent;
 use wubble_store::{ArchivedTab, ClosedTab, Transition};
@@ -2375,6 +2375,7 @@ impl Host {
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
         self.follow_frame_rate();
+        self.follow_desktop();
         self.devtools_tick();
         let pressure = self.read_pressure();
         let wall_ms = now_ms();
@@ -3380,6 +3381,16 @@ impl Host {
         };
         self.clipboard.open(window.window());
         self.add_aux_window(&window);
+        // The first event of a window finds its desktop (winit has no event for the window's
+        // creation); a move or a scale change finds a new one.
+        if self.w.desktop.is_none()
+            || matches!(
+                event,
+                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
+            self.follow_desktop();
+        }
         if let Some(e) = crate::run_state::event_of(event, || {
             window
                 .window()
@@ -3645,6 +3656,23 @@ impl Host {
         }
     }
 
+    /// Tells every view on screen where the window and its monitor are on the desktop when that
+    /// changed (the page's `screen.*` and `window.screenX`). Winit's `Moved` and
+    /// `ScaleFactorChanged` say the window moved or its scale changed; the lifecycle tick
+    /// finds the rest (the window dragged to another monitor at the same scale, the first
+    /// output a Wayland surface enters).
+    fn follow_desktop(&mut self) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let desktop = window.window().with_winit_window(desktop_of).flatten();
+        if desktop != self.w.desktop {
+            self.w.desktop = desktop;
+            let rects = self.pane_rects(&window);
+            self.lay_out_views_with(&window, &rects);
+        }
+    }
+
     /// Views open on external begin frames (`Pacing::Shell`).
     pub(super) fn begin_frames(&self) -> bool {
         self.pacing == Pacing::Shell
@@ -3860,6 +3888,24 @@ impl Host {
         }
         quit();
     }
+}
+
+/// Where the window and its monitor are on the desktop. The monitor is the window's, else the
+/// primary or the first listed (Wayland names the window's only once its surface has entered an
+/// output); the window's position is unknown on Wayland (`outer_position` is unsupported), where
+/// the page sees it at the monitor's origin, as in Chrome. winit has no work area, so none is
+/// reported.
+fn desktop_of(window: &slint::winit_030::winit::window::Window) -> Option<Desktop> {
+    let monitor = window
+        .current_monitor()
+        .or_else(|| window.primary_monitor())
+        .or_else(|| window.available_monitors().next())?;
+    let (at, size) = (monitor.position(), monitor.size());
+    Some(Desktop {
+        monitor_origin: (at.x, at.y),
+        monitor_size: wubble_gfx::FrameSize::new(size.width, size.height),
+        window_origin: window.outer_position().ok().map(|p| (p.x, p.y)),
+    })
 }
 
 /// What of the shell's state is saved with the session: the sidebar's mode

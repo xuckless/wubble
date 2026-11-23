@@ -195,7 +195,6 @@ impl Host {
     /// The peek's view layout: its page rect, with where it sits in the window.
     fn glance_layout(&self, window: &AppWindow, r: &GlanceRect) -> Layout {
         let scale = window.window().scale_factor();
-        let size = window.window().size();
         let at = |v: f32| (f64::from(v) * f64::from(scale)).round() as i32;
         Layout {
             size: FrameSize::new(
@@ -203,13 +202,24 @@ impl Host {
                 physical(r.height as f32, scale),
             ),
             scale,
-            area: Some(ScreenArea {
-                window: FrameSize::new(size.width, size.height),
-                origin: (
+            area: Some(self.screen_area(
+                window,
+                (
                     at(window.get_content_x() + r.x as f32),
                     at(window.get_content_y() + r.y as f32),
                 ),
-            }),
+            )),
+        }
+    }
+
+    /// Where a view whose top left is `origin` in the window (physical px) sits: in the window,
+    /// and (`Host::follow_desktop`) the window's place on its monitor.
+    fn screen_area(&self, window: &AppWindow, origin: (i32, i32)) -> ScreenArea {
+        let size = window.window().size();
+        ScreenArea {
+            window: FrameSize::new(size.width, size.height),
+            origin,
+            desktop: self.w.desktop,
         }
     }
 
@@ -252,8 +262,9 @@ impl Host {
         self.layout_of(window, &rect)
     }
 
-    /// `rect`'s view layout, with where it sits in the window: CEF treats the window as the
-    /// screen, so a `<select>` list can open outside the page.
+    /// `rect`'s view layout, with where it sits in the window and the window on the desktop:
+    /// what the page reads as its screen, and what a `<select>` list is placed against (it can
+    /// open outside the page; `popup_view` keeps it in the window).
     fn layout_of(&self, window: &AppWindow, rect: &PageRect) -> Layout {
         let (_, height) = content_size(window);
         let scale = window.window().scale_factor();
@@ -261,15 +272,14 @@ impl Host {
             window.get_content_x() + rect.x as f32,
             window.get_content_y(),
         );
-        let size = window.window().size();
         Layout {
-            area: Some(ScreenArea {
-                window: FrameSize::new(size.width, size.height),
-                origin: (
+            area: Some(self.screen_area(
+                window,
+                (
                     (f64::from(x) * f64::from(scale)).round() as i32,
                     (f64::from(y) * f64::from(scale)).round() as i32,
                 ),
-            }),
+            )),
             ..rect.layout(height, scale)
         }
     }
@@ -389,7 +399,7 @@ impl Host {
 
     /// Each view on screen gets its pane's layout; its pane follows the size the view now wants
     /// (the engine's `ViewState` owns it).
-    fn lay_out_views_with(&mut self, window: &AppWindow, rects: &[PageRect]) {
+    pub(super) fn lay_out_views_with(&mut self, window: &AppWindow, rects: &[PageRect]) {
         for (tab, layout) in self.view_layouts_with(window, rects) {
             let Some(view) = self.tab_view(tab) else {
                 continue;

@@ -327,15 +327,12 @@ impl Model {
         url: String,
         opener: TabId,
         size: Option<(u32, u32)>,
+        pos: Option<(i32, i32)>,
     ) -> Vec<Effect> {
         let Some((tab, _, create)) = self.place_new_tab(url, None, Some(opener), None) else {
             return vec![];
         };
-        let geometry = size.map(|(width, height)| Geometry {
-            width,
-            height,
-            pos: None,
-        });
+        let geometry = size.map(|(width, height)| Geometry { width, height, pos });
         let id = self.push_window(Shown::Popup(tab), geometry);
         self.focus(id);
         vec![create, Effect::WindowOpened(id)]

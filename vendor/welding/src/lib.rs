@@ -136,7 +136,7 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 #[cfg(feature = "cef-runtime")]
 pub use handlers::chromium_handles;
 pub use auth::AuthId;
-pub use view::ScreenArea;
+pub use view::{Desktop, ScreenArea};
 pub use downloads::DownloadId;
 pub use error::WeldError;
 pub use held::RequestId;

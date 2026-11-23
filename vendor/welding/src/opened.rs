@@ -132,7 +132,6 @@ pub(crate) fn opened_window(
     user_gesture: bool,
     features: Option<&cef::PopupFeatures>,
 ) -> OpenedWindow {
-    let position = features.and_then(|f| (f.x_set != 0 && f.y_set != 0).then_some((f.x, f.y)));
     OpenedWindow {
         popup_id,
         url: url.map(|u| u.to_string()).unwrap_or_default(),
@@ -140,7 +139,7 @@ pub(crate) fn opened_window(
         kind: crate::handlers::new_window_kind(disposition),
         user_gesture,
         size: features.and_then(crate::handlers::popup_size),
-        position,
+        position: features.and_then(crate::handlers::popup_position),
     }
 }
 

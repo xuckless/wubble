@@ -2144,6 +2144,9 @@ pub enum NavigationEvent {
         kind: NewWindowKind,
         /// The `width`/`height` window features, when both were given.
         size: Option<(u32, u32)>,
+        /// wubble change (59): the `left`/`top` window features, when both
+        /// were given (screen DIP).
+        position: Option<(i32, i32)>,
     },
     /// wubble change 57: CEF created the window the page opened as a
     /// browser of its own ([`CefSurfaceConfig::popup_factory`] gave it a
