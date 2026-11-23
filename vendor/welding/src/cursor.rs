@@ -28,100 +28,132 @@ impl LatestCursor {
     }
 }
 
-/// wubble change (32): CEF's autoscroll cursors.
-#[cfg(feature = "cef-runtime")]
-fn panning(type_: cef::CursorType) -> Option<crate::surface::Panning> {
-    use crate::surface::Panning as P;
-    use cef::CursorType as C;
-    [
-        (C::MIDDLEPANNING, P::Middle),
-        (C::MIDDLE_PANNING_VERTICAL, P::MiddleVertical),
-        (C::MIDDLE_PANNING_HORIZONTAL, P::MiddleHorizontal),
-        (C::NORTHPANNING, P::North),
-        (C::NORTHEASTPANNING, P::NorthEast),
-        (C::EASTPANNING, P::East),
-        (C::SOUTHEASTPANNING, P::SouthEast),
-        (C::SOUTHPANNING, P::South),
-        (C::SOUTHWESTPANNING, P::SouthWest),
-        (C::WESTPANNING, P::West),
-        (C::NORTHWESTPANNING, P::NorthWest),
-    ]
-    .into_iter()
-    .find(|(c, _)| *c == type_)
-    .map(|(_, p)| p)
-}
-
 /// Map CEF's cursor type onto the shared vocabulary.
 ///
 /// The two names that matter are crossed, which is exactly the sort of thing
 /// that gets miswired once and then looks "nearly right" forever: CEF's
 /// `POINTER` is the ordinary arrow, while `CursorShape::Pointer` is the CSS
 /// `pointer`, i.e. the link hand, which CEF calls `HAND`.
+///
+/// wubble change (58): every type Chromium sends has its own shape (the
+/// table's rows follow `ui/base/cursor/mojom/cursor_type.mojom`), and
+/// `CUSTOM` carries the page's image from `info`.
 #[cfg(feature = "cef-runtime")]
-pub(crate) fn from_cef(type_: cef::CursorType) -> CursorShape {
+pub(crate) fn from_cef(type_: cef::CursorType, info: Option<&cef::CursorInfo>) -> CursorShape {
+    use crate::surface::Panning as P;
+    use CursorShape as S;
     use cef::CursorType as C;
 
-    // Written as comparisons rather than a match: CursorType is a newtype over
-    // a #[non_exhaustive] C enum, so its variants are associated consts.
-    if type_ == C::POINTER {
-        CursorShape::Default
-    } else if type_ == C::HAND {
-        CursorShape::Pointer
-    } else if type_ == C::IBEAM || type_ == C::VERTICALTEXT {
-        CursorShape::Text
-    } else if type_ == C::CROSS || type_ == C::CELL {
-        CursorShape::Crosshair
-    } else if type_ == C::WAIT {
-        CursorShape::Wait
-    } else if type_ == C::PROGRESS {
-        CursorShape::Progress
-    } else if type_ == C::HELP {
-        CursorShape::Help
-    } else if let Some(panning) = panning(type_) {
+    // Rows are the whole mapping: add a CEF type as a row, not as a branch.
+    // A local array rather than a static: CursorType's variants are
+    // associated consts of a newtype over a #[non_exhaustive] C enum.
+    let table = [
+        (C::POINTER, S::Default),
+        (C::HAND, S::Pointer),
+        (C::IBEAM, S::Text),
+        (C::VERTICALTEXT, S::VerticalText),
+        (C::CROSS, S::Crosshair),
+        (C::CELL, S::Cell),
+        (C::WAIT, S::Wait),
+        (C::PROGRESS, S::Progress),
+        (C::HELP, S::Help),
+        (C::CONTEXTMENU, S::ContextMenu),
+        (C::MOVE, S::Move),
+        (C::DND_MOVE, S::Move),
+        (C::NOTALLOWED, S::NotAllowed),
+        (C::DND_NONE, S::NotAllowed),
+        (C::NODROP, S::NoDrop),
+        (C::COPY, S::Copy),
+        (C::DND_COPY, S::Copy),
+        (C::ALIAS, S::Alias),
+        (C::DND_LINK, S::Alias),
+        (C::ZOOMIN, S::ZoomIn),
+        (C::ZOOMOUT, S::ZoomOut),
+        (C::GRAB, S::Grab),
+        (C::GRABBING, S::Grabbing),
+        (C::NORTHSOUTHRESIZE, S::ResizeNs),
+        (C::EASTWESTRESIZE, S::ResizeEw),
+        (C::NORTHEASTSOUTHWESTRESIZE, S::ResizeNeSw),
+        (C::NORTHWESTSOUTHEASTRESIZE, S::ResizeNwSe),
+        (C::COLUMNRESIZE, S::ColResize),
+        (C::ROWRESIZE, S::RowResize),
+        (C::NORTHRESIZE, S::ResizeN),
+        (C::EASTRESIZE, S::ResizeE),
+        (C::SOUTHRESIZE, S::ResizeS),
+        (C::WESTRESIZE, S::ResizeW),
+        (C::NORTHEASTRESIZE, S::ResizeNe),
+        (C::NORTHWESTRESIZE, S::ResizeNw),
+        (C::SOUTHEASTRESIZE, S::ResizeSe),
+        (C::SOUTHWESTRESIZE, S::ResizeSw),
         // wubble change (32): autoscroll's cursors, by name.
-        CursorShape::Panning(panning)
-    } else if type_ == C::MOVE {
-        CursorShape::Move
-    } else if type_ == C::NOTALLOWED || type_ == C::NODROP || type_ == C::DND_NONE {
-        CursorShape::NotAllowed
-    } else if type_ == C::ZOOMIN {
-        CursorShape::ZoomIn
-    } else if type_ == C::ZOOMOUT {
-        CursorShape::ZoomOut
-    } else if type_ == C::GRAB {
-        CursorShape::Grab
-    } else if type_ == C::GRABBING {
-        CursorShape::Grabbing
-    } else if type_ == C::NORTHSOUTHRESIZE
-        || type_ == C::NORTHRESIZE
-        || type_ == C::SOUTHRESIZE
-        || type_ == C::ROWRESIZE
-    {
-        CursorShape::ResizeNs
-    } else if type_ == C::EASTWESTRESIZE
-        || type_ == C::EASTRESIZE
-        || type_ == C::WESTRESIZE
-        || type_ == C::COLUMNRESIZE
-    {
-        CursorShape::ResizeEw
-    } else if type_ == C::NORTHEASTSOUTHWESTRESIZE
-        || type_ == C::NORTHEASTRESIZE
-        || type_ == C::SOUTHWESTRESIZE
-    {
-        CursorShape::ResizeNeSw
-    } else if type_ == C::NORTHWESTSOUTHEASTRESIZE
-        || type_ == C::NORTHWESTRESIZE
-        || type_ == C::SOUTHEASTRESIZE
-    {
-        CursorShape::ResizeNwSe
+        (C::MIDDLEPANNING, S::Panning(P::Middle)),
+        (C::MIDDLE_PANNING_VERTICAL, S::Panning(P::MiddleVertical)),
+        (C::MIDDLE_PANNING_HORIZONTAL, S::Panning(P::MiddleHorizontal)),
+        (C::NORTHPANNING, S::Panning(P::North)),
+        (C::NORTHEASTPANNING, S::Panning(P::NorthEast)),
+        (C::EASTPANNING, S::Panning(P::East)),
+        (C::SOUTHEASTPANNING, S::Panning(P::SouthEast)),
+        (C::SOUTHPANNING, S::Panning(P::South)),
+        (C::SOUTHWESTPANNING, S::Panning(P::SouthWest)),
+        (C::WESTPANNING, S::Panning(P::West)),
+        (C::NORTHWESTPANNING, S::Panning(P::NorthWest)),
+    ];
+    if let Some((_, shape)) = table.into_iter().find(|(c, _)| *c == type_) {
+        shape
+    } else if type_ == C::CUSTOM {
+        // Chromium falls back to the arrow when the image is unusable.
+        info.and_then(image_of).map_or(S::Default, S::Image)
     } else if type_ == C::NONE {
         // The shared vocabulary has no "hidden" shape. Named rather than
         // silently mapped to Default, because a host that wants to honour it
         // can, and one that does not at least sees the difference.
-        CursorShape::Custom("none".into())
+        S::Custom("none".into())
     } else {
-        CursorShape::Custom("cef-other".into())
+        S::Custom("cef-other".into())
     }
+}
+
+/// wubble change (58): the page's `cursor: url()` image. CEF's buffer is
+/// `size.width * size.height * 4` bytes of premultiplied BGRA, upper-left
+/// origin (`cef_cursor_info_t`); `None` when it is empty or too big for
+/// winit's `u16` sizes.
+#[cfg(feature = "cef-runtime")]
+fn image_of(info: &cef::CursorInfo) -> Option<crate::surface::CursorImage> {
+    let size = |n: i32| u16::try_from(n).ok().filter(|&n| n > 0);
+    let (width, height) = (size(info.size.width)?, size(info.size.height)?);
+    if info.buffer.is_null() {
+        return None;
+    }
+    let len = usize::from(width) * usize::from(height) * 4;
+    // SAFETY: CEF documents `buffer` as `len` bytes, valid for this callback.
+    let bgra = unsafe { std::slice::from_raw_parts(info.buffer as *const u8, len) };
+    Some(crate::surface::CursorImage {
+        width,
+        height,
+        // winit rejects a hotspot outside the image.
+        hotspot_x: u16::try_from(info.hotspot.x).unwrap_or(0).min(width - 1),
+        hotspot_y: u16::try_from(info.hotspot.y).unwrap_or(0).min(height - 1),
+        rgba: straight_rgba(bgra).into(),
+    })
+}
+
+/// Premultiplied BGRA to straight-alpha RGBA, which is what winit's custom
+/// cursors take.
+#[cfg(feature = "cef-runtime")]
+fn straight_rgba(bgra: &[u8]) -> Vec<u8> {
+    bgra.chunks_exact(4)
+        .flat_map(|px| {
+            let a = u32::from(px[3]);
+            let straight = |c: u8| {
+                if a == 0 {
+                    0
+                } else {
+                    ((u32::from(c) * 255 + a / 2) / a).min(255) as u8
+                }
+            };
+            [straight(px[2]), straight(px[1]), straight(px[0]), px[3]]
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -141,8 +173,47 @@ mod tests {
     #[test]
     fn the_crossed_pointer_names_map_the_right_way_round() {
         // CEF POINTER is the arrow; CSS/scrying Pointer is the link hand.
-        assert_eq!(from_cef(cef::CursorType::POINTER), CursorShape::Default);
-        assert_eq!(from_cef(cef::CursorType::HAND), CursorShape::Pointer);
-        assert_eq!(from_cef(cef::CursorType::IBEAM), CursorShape::Text);
+        assert_eq!(from_cef(cef::CursorType::POINTER, None), CursorShape::Default);
+        assert_eq!(from_cef(cef::CursorType::HAND, None), CursorShape::Pointer);
+        assert_eq!(from_cef(cef::CursorType::IBEAM, None), CursorShape::Text);
+    }
+
+    #[cfg(feature = "cef-runtime")]
+    #[test]
+    fn chromiums_cursor_types_keep_their_own_shapes() {
+        use CursorShape as S;
+        use cef::CursorType as C;
+        for (type_, shape) in [
+            (C::CONTEXTMENU, S::ContextMenu),
+            (C::CELL, S::Cell),
+            (C::VERTICALTEXT, S::VerticalText),
+            (C::COPY, S::Copy),
+            (C::ALIAS, S::Alias),
+            (C::NODROP, S::NoDrop),
+            (C::NOTALLOWED, S::NotAllowed),
+            (C::COLUMNRESIZE, S::ColResize),
+            (C::ROWRESIZE, S::RowResize),
+            (C::EASTRESIZE, S::ResizeE),
+            (C::SOUTHWESTRESIZE, S::ResizeSw),
+            (C::EASTWESTRESIZE, S::ResizeEw),
+            (C::ZOOMIN, S::ZoomIn),
+            (C::MIDDLEPANNING, S::Panning(crate::surface::Panning::Middle)),
+            (C::NONE, S::Custom("none".into())),
+            // A custom cursor with no usable image is the arrow.
+            (C::CUSTOM, S::Default),
+        ] {
+            assert_eq!(from_cef(type_, None), shape, "{type_:?}");
+        }
+    }
+
+    #[cfg(feature = "cef-runtime")]
+    #[test]
+    fn premultiplied_bgra_becomes_straight_rgba() {
+        // opaque, half-covered white (premultiplied 128), clear
+        let bgra = [10, 20, 30, 255, 128, 128, 128, 128, 7, 7, 7, 0];
+        assert_eq!(
+            straight_rgba(&bgra),
+            [30, 20, 10, 255, 255, 255, 255, 128, 0, 0, 0, 0]
+        );
     }
 }

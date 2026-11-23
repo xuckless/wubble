@@ -725,9 +725,11 @@ cef::wrap_display_handler! {
             _browser: Option<&mut cef::Browser>,
             _cursor: ::std::os::raw::c_ulong,
             type_: cef::CursorType,
-            _custom_cursor_info: Option<&cef::CursorInfo>,
+            custom_cursor_info: Option<&cef::CursorInfo>,
         ) -> ::std::os::raw::c_int {
-            self.inner.cursor.set(crate::cursor::from_cef(type_));
+            self.inner
+                .cursor
+                .set(crate::cursor::from_cef(type_, custom_cursor_info));
             1 // handled: under OSR the host owns the pointer
         }
 
