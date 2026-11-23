@@ -972,6 +972,17 @@ pub const ITEMS: &[Item] = &[
             H(C::Clipboard("a4"))
         ]
     ),
+    // The pop-up blocker off (`disable-popup-blocking`) must not let a cross-origin frame
+    // navigate the tab without a gesture, as the POPUPS content setting would. Before the
+    // items that click in the frames: a click gives a frame the activation that allows it.
+    item!(
+        "F.frame-bust-refused",
+        [Js("$('frameno').contentWindow.postMessage('bust', '*')")],
+        [
+            J("/SecurityError/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"),
+            J("!!$('frameno') || location.href")
+        ]
+    ),
     item!(
         "B.frame-no-activation",
         [
@@ -1010,16 +1021,6 @@ pub const ITEMS: &[Item] = &[
                 "/^NotAllowedError: .*permissions policy/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"
             ),
             H(C::Clipboard("stale"))
-        ]
-    ),
-    // The pop-up blocker off (`disable-popup-blocking`) must not let a cross-origin frame
-    // navigate the tab without a gesture, as the POPUPS content setting would.
-    item!(
-        "F.frame-bust-refused",
-        [Js("$('frameno').contentWindow.postMessage('bust', '*')")],
-        [
-            J("/SecurityError/.test(seen.clip['f-frameno']) || seen.clip['f-frameno']"),
-            J("!!$('frameno') || location.href")
         ]
     ),
     item!(
