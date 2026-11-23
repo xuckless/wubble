@@ -10,7 +10,9 @@ import { Card, Row, RowText, RowControls, NoteTone } from "../kit/settings/secti
 // place in its nav): the installed list, each with its name, version and what it asks for, an
 // Options button when it has an options page, its switch and a remove button; then the two ways
 // to install (the OS file chooser: a .crx file, or an unpacked folder). Under each extension, its
-// "Allow in private windows" row (off unless turned on; it applies at once). Every other change
+// "Allow in private windows" row (off unless turned on; it applies at once to what ships: the
+// action button and its popup in a private window, the rest waits for patch P5, said in the
+// row's note). Every other change
 // applies at the next start, so the restart note shows once the list differs from what this run
 // loaded. Composition only (kit Card, Row, RowText, Toggle, IconButton, Button): the look is the
 // settings rows'. `install-file()`, `install-folder()`, `toggled`, `private-toggled`, `removed`
@@ -72,7 +74,7 @@ export component ExtensionsCard inherits Card {
             }
             RowText {
                 title: "Allow in private windows";
-                note: ext.private ? "It runs in private windows too, and sees what you do there." : "It does not run in private windows.";
+                note: ext.private ? "Its button works in private windows. It runs on their pages once the extension engine update ships." : "It does not run in private windows.";
             }
             RowControls {
                 Toggle {
