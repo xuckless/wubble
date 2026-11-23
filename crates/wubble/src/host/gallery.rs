@@ -680,13 +680,17 @@ fn rgb(hex: &str) -> Result<wubble_core::space::Rgb, String> {
     ))
 }
 
-/// The pointer rests where the scene says (a hover state), or leaves the window.
+/// The pointer rests where the scene says (a hover state), or leaves the window: later, outside
+/// the host, as the kit's hover cues (the peek's, a tab row's) call back into it.
 fn gallery_point(window: &AppWindow, scene: &Scene) {
-    let pointer = match scene.pointer {
-        Some((x, y)) => slint::platform::WindowEvent::PointerMoved {
-            position: slint::LogicalPosition::new(f32::from(x), f32::from(y)),
-        },
-        None => slint::platform::WindowEvent::PointerExited,
-    };
-    window.window().dispatch_event(pointer);
+    let pointer = scene.pointer;
+    let _ = window.as_weak().upgrade_in_event_loop(move |window| {
+        let event = match pointer {
+            Some((x, y)) => slint::platform::WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(f32::from(x), f32::from(y)),
+            },
+            None => slint::platform::WindowEvent::PointerExited,
+        };
+        window.window().dispatch_event(event);
+    });
 }
