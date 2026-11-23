@@ -103,7 +103,10 @@ impl Host {
                 }
             }
             Applied::BlockerEnabled(on) => self.blocking.set_enabled(on),
-            Applied::BlockerExceptions(hosts) => self.blocking.set_exceptions(&hosts),
+            Applied::BlockerExceptions(hosts) => {
+                self.blocker_hosts = hosts;
+                self.run_site_lists();
+            }
             Applied::BlockerLists {
                 lists,
                 cookie_banners,
@@ -133,9 +136,8 @@ impl Host {
                 }
             }
             Applied::NeverSleepSites(sites) => {
-                if sites != self.model.never_sites() {
-                    self.dispatch(Command::SetNeverSleepSites(sites));
-                }
+                self.never_sleep_sites = sites;
+                self.run_site_lists();
             }
             Applied::ArchiveAfter(after) => self.archive_after = after,
             Applied::RoutingRules(rules) => self.routing_rules = rules,

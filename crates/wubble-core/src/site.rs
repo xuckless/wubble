@@ -12,6 +12,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::pagetheme::{PageTheme, ThemeTable};
+use crate::zoom::ZoomTable;
+
 /// What a page can be granted through the prompt. The engine's kinds that
 /// are not here (protected media, desktop capture, unknown bits) are never
 /// prompted for: a request naming one is denied.
@@ -138,15 +141,6 @@ impl SitePermissions {
         self.0.get(&(origin.to_string(), kind)).copied()
     }
 
-    /// `self` with `over`'s decisions on top: what a private window's tab reads, its own choices
-    /// (kept in memory) over the stored ones, as Chrome's off-the-record content settings
-    /// inherit the regular profile's.
-    pub fn overlaid(&self, over: &SitePermissions) -> SitePermissions {
-        let mut out = self.clone();
-        out.0.extend(over.0.iter().map(|(k, d)| (k.clone(), *d)));
-        out
-    }
-
     /// A request from `origin` (`None`: an opaque origin, never remembered)
     /// for every kind in `asked`. Any kind blocked: deny; every kind
     /// allowed: grant; otherwise ask (a request is answered whole, so a
@@ -170,15 +164,143 @@ impl SitePermissions {
     }
 }
 
+/// Every per-site table as stored (the store and the settings): what a normal tab reads and
+/// writes, and what a private tab reads under its own choices.
+#[derive(Clone, Copy, Debug)]
+pub struct Stored<'a> {
+    pub permissions: &'a SitePermissions,
+    pub zoom: &'a ZoomTable,
+    pub zoom_default: u32,
+    pub themes: &'a ThemeTable,
+    pub theme_default: PageTheme,
+    /// `settings::BLOCKER_EXCEPTIONS`'s hosts.
+    pub blocker: &'a [String],
+    /// `settings::SLEEP_NEVER_SITES`'s sites.
+    pub never_sleep: &'a [String],
+}
+
+/// Hosts a private tab switched on (`true`) or off in a stored list, where that differs.
+pub type Toggles = BTreeMap<String, bool>;
+
+/// `stored` with `over`'s switches applied.
+pub fn toggled(stored: &[String], over: &Toggles) -> Vec<String> {
+    let mut out: Vec<String> = stored
+        .iter()
+        .filter(|h| over.get(*h) != Some(&false))
+        .cloned()
+        .collect();
+    out.extend(
+        over.iter()
+            .filter(|&(h, on)| *on && !stored.contains(h))
+            .map(|(h, _)| h.clone()),
+    );
+    out
+}
+
+/// One per-site change, as the one write (`Host::write_site`) takes it: to the stored tables
+/// from a normal tab, to [`PrivateChoices`] from a private one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SiteChange {
+    Permission(String, Permission, Decision),
+    /// The site of `page` zoomed to `percent`.
+    Zoom { page: String, percent: u32 },
+    /// The site of `page` shown as `theme`.
+    Theme { page: String, theme: PageTheme },
+    /// The host joins or leaves the blocker's exceptions.
+    Blocker(String),
+    /// The site joins or leaves the never-sleep list.
+    NeverSleep(String),
+}
+
 /// The per-site choices made in private windows (permissions, Allow pop-ups, save-password
-/// "Never", zoom): never stored, read over the stored ones by private tabs only, and dropped
-/// with the private windows' in-memory container (Chrome's off-the-record
-/// `HostContentSettingsMap` and zoom map go with the off-the-record profile).
+/// "Never", zoom, page theme, blocker exceptions, never-sleep sites): never stored, read over
+/// the stored ones, and dropped with the private windows' in-memory container (Chrome's
+/// off-the-record `HostContentSettingsMap` and zoom map go with the off-the-record profile).
+/// Permissions, zoom and theme are read by private tabs only ([`SiteView`]); the blocker and
+/// the sleep policy run for every tab, so their switches hold everywhere for the run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrivateChoices {
     pub permissions: SitePermissions,
-    /// Per-site zoom ([`crate::zoom::next_table`]), read before the stored table.
-    pub zoom: crate::zoom::ZoomTable,
+    pub zoom: ZoomTable,
+    pub themes: ThemeTable,
+    pub blocker: Toggles,
+    pub never_sleep: Toggles,
+}
+
+impl PrivateChoices {
+    /// `change` made in a private tab, over `stored`: a row equal to the stored one goes.
+    pub fn write(&mut self, stored: &Stored, change: SiteChange) {
+        let flip = |over: &mut Toggles, list: &[String], host: String| {
+            let on = !toggled(list, over).contains(&host);
+            if on == list.contains(&host) {
+                over.remove(&host);
+            } else {
+                over.insert(host, on);
+            }
+        };
+        match change {
+            SiteChange::Permission(site, kind, decision) => {
+                self.permissions.set(&site, kind, decision);
+            }
+            SiteChange::Zoom { page, percent } => {
+                if let Some(host) = crate::zoom::host_of(&page) {
+                    let level = crate::zoom::wanted(stored.zoom, &page, stored.zoom_default);
+                    let table = std::mem::take(&mut self.zoom);
+                    self.zoom = crate::zoom::next_table(table, &host, percent, level);
+                }
+            }
+            SiteChange::Theme { page, theme } => {
+                if let Some(host) = crate::zoom::host_of(&page) {
+                    let was = crate::pagetheme::wanted(stored.themes, &page, stored.theme_default);
+                    let table = std::mem::take(&mut self.themes);
+                    self.themes = crate::pagetheme::next_table(table, &host, theme, was);
+                }
+            }
+            SiteChange::Blocker(host) => flip(&mut self.blocker, stored.blocker, host),
+            SiteChange::NeverSleep(site) => flip(&mut self.never_sleep, stored.never_sleep, site),
+        }
+    }
+}
+
+/// One tab's reading of the per-site tables (`Host::site_view`): the stored ones, under a
+/// private tab's own choices.
+#[derive(Clone, Copy, Debug)]
+pub struct SiteView<'a> {
+    pub stored: Stored<'a>,
+    /// `Some` for a private tab.
+    pub private: Option<&'a PrivateChoices>,
+}
+
+impl SiteView<'_> {
+    /// The remembered decisions. A private tab inherits only the stored Block decisions, and
+    /// asks again where the stored answer is Allow (its answer stays private), as Chrome's
+    /// off-the-record profile inherits only BLOCK content settings.
+    pub fn permissions(&self) -> std::borrow::Cow<'_, SitePermissions> {
+        let Some(private) = self.private else {
+            return std::borrow::Cow::Borrowed(self.stored.permissions);
+        };
+        let mut out: SitePermissions = self
+            .stored
+            .permissions
+            .iter()
+            .filter(|&(.., d)| d == Decision::Block)
+            .map(|(o, k, d)| (o.to_owned(), k, d))
+            .collect();
+        out.0.extend(private.permissions.0.iter().map(|(k, d)| (k.clone(), *d)));
+        std::borrow::Cow::Owned(out)
+    }
+
+    pub fn zoom(&self, page: &str) -> u32 {
+        let level = crate::zoom::wanted(self.stored.zoom, page, self.stored.zoom_default);
+        self.private
+            .map_or(level, |p| crate::zoom::wanted(&p.zoom, page, level))
+    }
+
+    pub fn theme(&self, page: &str) -> PageTheme {
+        let theme = crate::pagetheme::wanted(self.stored.themes, page, self.stored.theme_default);
+        self.private
+            .map_or(theme, |p| crate::pagetheme::wanted(&p.themes, page, theme))
+    }
 }
 
 impl FromIterator<(String, Permission, Decision)> for SitePermissions {
@@ -242,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn private_choices_sit_over_the_stored_ones() {
+    fn a_private_tab_reads_stored_blocks_and_its_own_choices_only() {
         let (a, b) = ("https://a.test", "https://b.test");
         let stored: SitePermissions = [
             (a.to_string(), Popups, Decision::Block),
@@ -250,24 +372,82 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let mut private = SitePermissions::default();
-        private.set(a, Popups, Decision::Allow);
-        private.set(b, SavePasswords, Decision::Block);
-        let read = stored.overlaid(&private);
+        let (zoom, themes) = (ZoomTable::new(), ThemeTable::new());
+        let tables = Stored {
+            permissions: &stored,
+            zoom: &zoom,
+            zoom_default: 100,
+            themes: &themes,
+            theme_default: PageTheme::Auto,
+            blocker: &[],
+            never_sleep: &[],
+        };
+        let mut private = PrivateChoices::default();
+        private.write(&tables, SiteChange::Permission(b.into(), SavePasswords, Decision::Block));
+        private.write(&tables, SiteChange::Permission(a.into(), Microphone, Decision::Allow));
+        let in_private = SiteView {
+            stored: tables,
+            private: Some(&private),
+        };
+        let in_normal = SiteView {
+            stored: tables,
+            private: None,
+        };
         // (origin, kind, what a private tab reads, what a normal tab reads)
         let cases = [
-            (a, Popups, Some(Decision::Allow), Some(Decision::Block)),
-            (b, Camera, Some(Decision::Allow), Some(Decision::Allow)),
+            (a, Popups, Some(Decision::Block), Some(Decision::Block)),
+            // a stored Allow is asked again in private
+            (b, Camera, None, Some(Decision::Allow)),
             (b, SavePasswords, Some(Decision::Block), None),
+            (a, Microphone, Some(Decision::Allow), None),
             (a, Camera, None, None),
         ];
-        for (origin, kind, in_private, in_normal) in cases {
-            assert_eq!(read.get(origin, kind), in_private, "{origin} {kind:?} private");
-            assert_eq!(stored.get(origin, kind), in_normal, "{origin} {kind:?} normal");
+        for (origin, kind, private_reads, normal_reads) in cases {
+            assert_eq!(in_private.permissions().get(origin, kind), private_reads, "{origin} {kind:?}");
+            assert_eq!(in_normal.permissions().get(origin, kind), normal_reads, "{origin} {kind:?}");
         }
-        // nothing private reaches the stored table, and nothing is left once it is dropped
+        // nothing private reaches the stored table
         assert_eq!(stored.iter().count(), 2);
-        assert_eq!(stored.overlaid(&PrivateChoices::default().permissions), stored);
+    }
+
+    /// Every per-site change from a private tab lands in its own table only, a change back to
+    /// the stored value drops the row, and a normal tab reads none of it.
+    #[test]
+    fn private_site_changes_stay_private_and_fold_back_to_the_stored_value() {
+        let page = "https://a.test/x";
+        let stored_perms = SitePermissions::default();
+        let zoom: ZoomTable = [("a.test".to_string(), 150)].into_iter().collect();
+        let themes = ThemeTable::new();
+        let blocker = vec!["a.test".to_string()];
+        let never = vec![];
+        let stored = Stored {
+            permissions: &stored_perms,
+            zoom: &zoom,
+            zoom_default: 100,
+            themes: &themes,
+            theme_default: PageTheme::Auto,
+            blocker: &blocker,
+            never_sleep: &never,
+        };
+        let dark = PageTheme::Dark;
+        let mut p = PrivateChoices::default();
+        p.write(&stored, SiteChange::Zoom { page: page.into(), percent: 80 });
+        p.write(&stored, SiteChange::Theme { page: page.into(), theme: dark });
+        p.write(&stored, SiteChange::Blocker("a.test".into()));
+        p.write(&stored, SiteChange::NeverSleep("a.test".into()));
+        let view = SiteView { stored, private: Some(&p) };
+        assert_eq!(view.zoom(page), 80);
+        assert_eq!(view.theme(page), dark);
+        assert_eq!(toggled(&blocker, &p.blocker), Vec::<String>::new());
+        assert_eq!(toggled(&never, &p.never_sleep), vec!["a.test".to_string()]);
+        let normal = SiteView { stored, private: None };
+        assert_eq!((normal.zoom(page), normal.theme(page)), (150, PageTheme::Auto));
+        // back to the stored values: nothing is left
+        p.write(&stored, SiteChange::Zoom { page: page.into(), percent: 150 });
+        p.write(&stored, SiteChange::Theme { page: page.into(), theme: PageTheme::Auto });
+        p.write(&stored, SiteChange::Blocker("a.test".into()));
+        p.write(&stored, SiteChange::NeverSleep("a.test".into()));
+        assert_eq!(p, PrivateChoices::default());
     }
 
     #[test]

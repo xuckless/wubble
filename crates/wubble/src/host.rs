@@ -93,7 +93,9 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
-use wubble_core::site::{Decision, Permission, PrivateChoices, SitePermissions};
+use wubble_core::site::{
+    PrivateChoices, SiteChange, SitePermissions, SiteView, Stored, toggled,
+};
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
@@ -505,8 +507,12 @@ pub struct Host {
     blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
     site_permissions: SitePermissions,
-    /// The site choices made in private windows: in memory only, read over the stored ones by
-    /// private tabs (`site_choices`), dropped with the private windows' container.
+    /// `settings::BLOCKER_EXCEPTIONS` and `settings::SLEEP_NEVER_SITES` as stored; the
+    /// blocker and the model run them with the private windows' switches applied.
+    blocker_hosts: Vec<String>,
+    never_sleep_sites: Vec<String>,
+    /// Every per-site choice made in private windows: in memory only (`write_site`), read over
+    /// the stored ones (`site_view`), dropped with the private windows' container.
     private_choices: PrivateChoices,
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
@@ -742,6 +748,8 @@ impl Host {
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
+            blocker_hosts: vec![],
+            never_sleep_sites: vec![],
             private_choices: PrivateChoices::default(),
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
@@ -1184,6 +1192,8 @@ impl Host {
                 if storage == Storage::Memory {
                     self.forget_private_downloads(c);
                     self.private_choices = PrivateChoices::default();
+                    self.boosts_forget_private();
+                    self.run_site_lists();
                 }
                 self.engine.forget_container(c, storage);
             }
@@ -1795,29 +1805,117 @@ impl Host {
         wubble_core::site::origin_of(url)
     }
 
-    /// The site choices `tab` reads: the stored ones, and for a private window's tab its own
-    /// in-memory ones over them.
-    fn site_choices(&self, tab: TabId) -> std::borrow::Cow<'_, SitePermissions> {
-        if self.model.side_of_tab(tab) == Side::Private {
-            std::borrow::Cow::Owned(
-                self.site_permissions
-                    .overlaid(&self.private_choices.permissions),
-            )
-        } else {
-            std::borrow::Cow::Borrowed(&self.site_permissions)
+    /// Every per-site table as stored.
+    fn stored_sites(&self) -> Stored<'_> {
+        let (theme_default, themes) = self.page_themes();
+        Stored {
+            permissions: &self.site_permissions,
+            zoom: &self.site_zoom,
+            zoom_default: self.zoom_default,
+            themes,
+            theme_default,
+            blocker: &self.blocker_hosts,
+            never_sleep: &self.never_sleep_sites,
         }
     }
 
-    /// Remembers `decision` for `site` as chosen in `tab`: a private window's choice in memory
-    /// only (it goes with the private windows' container), any other in the table and the
-    /// store.
-    fn remember_site(&mut self, tab: TabId, site: &str, kind: Permission, decision: Decision) {
+    /// The one read of the per-site tables for `tab`: the stored ones, under its own choices
+    /// for a private tab (an unknown tab reads as private: `Model::side_of_tab`).
+    pub(super) fn site_view(&self, tab: TabId) -> SiteView<'_> {
+        SiteView {
+            stored: self.stored_sites(),
+            private: (self.model.side_of_tab(tab) == Side::Private)
+                .then_some(&self.private_choices),
+        }
+    }
+
+    /// The one write of the per-site tables, for a change made in `tab`: a private tab's to
+    /// its own table, in memory only; any other's to the store and the settings (which apply
+    /// it back as the tables).
+    pub(super) fn write_site(&mut self, tab: TabId, change: SiteChange) {
         if self.model.side_of_tab(tab) == Side::Private {
-            self.private_choices.permissions.set(site, kind, decision);
-        } else {
-            self.site_permissions.set(site, kind, decision);
-            self.store
-                .set_site_permission(site, kind, decision, now_ms());
+            let mut private = std::mem::take(&mut self.private_choices);
+            private.write(&self.stored_sites(), change.clone());
+            self.private_choices = private;
+            match change {
+                SiteChange::Theme { .. } => self.resync_page_themes(),
+                SiteChange::Blocker(_) | SiteChange::NeverSleep(_) => {
+                    self.run_site_lists();
+                    self.render_pages();
+                }
+                SiteChange::Permission(..) | SiteChange::Zoom { .. } => {}
+            }
+            return;
+        }
+        let entry = |list: &[String], key: &'static str, host: String| {
+            (key, list.contains(&host), host)
+        };
+        let toggle = match change {
+            SiteChange::Permission(site, kind, decision) => {
+                self.site_permissions.set(&site, kind, decision);
+                self.store
+                    .set_site_permission(&site, kind, decision, now_ms());
+                None
+            }
+            SiteChange::Zoom { page, percent } => {
+                if let Some(host) = wubble_core::zoom::host_of(&page) {
+                    let table = wubble_core::zoom::next_table(
+                        self.site_zoom.clone(),
+                        &host,
+                        percent,
+                        self.zoom_default,
+                    );
+                    // Applied as the setting: the table becomes `site_zoom` there.
+                    self.write_setting(
+                        wubble_core::settings::SITE_ZOOM.key,
+                        &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
+                    );
+                }
+                None
+            }
+            SiteChange::Theme { page, theme } => {
+                if let Some(host) = wubble_core::zoom::host_of(&page) {
+                    let (default, themes) = self.page_themes();
+                    let table =
+                        wubble_core::pagetheme::next_table(themes.clone(), &host, theme, default);
+                    // Applied as the setting: the table becomes the built-ins' there.
+                    self.write_setting(
+                        wubble_core::settings::PAGE_THEME_SITES.key,
+                        &wubble_store::text_of::<wubble_store::PageThemeSites>(&table),
+                    );
+                }
+                None
+            }
+            SiteChange::Blocker(host) => Some(entry(
+                &self.blocker_hosts,
+                wubble_core::settings::BLOCKER_EXCEPTIONS.key,
+                host,
+            )),
+            SiteChange::NeverSleep(site) => Some(entry(
+                &self.never_sleep_sites,
+                wubble_core::settings::SLEEP_NEVER_SITES.key,
+                site,
+            )),
+        };
+        // a list's row: the stored setting the settings page shows
+        if let Some((key, listed, host)) = toggle {
+            if listed {
+                self.setting_entry_removed(key, &host);
+            } else {
+                self.setting_entry_added(key, &host);
+            }
+            self.render_pages();
+        }
+    }
+
+    /// The blocker and the model run the stored lists with the private windows' switches.
+    pub(super) fn run_site_lists(&mut self) {
+        let choices = &self.private_choices;
+        self.blocking
+            .set_exceptions(&toggled(&self.blocker_hosts, &choices.blocker));
+        let sites = toggled(&self.never_sleep_sites, &choices.never_sleep);
+        if sites != self.model.never_sites() {
+            self.dispatch(Command::SetNeverSleepSites(sites));
         }
     }
 

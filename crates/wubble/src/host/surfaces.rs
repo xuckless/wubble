@@ -14,7 +14,7 @@ use wubble_core::busy::Reason;
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
-use wubble_core::site::{Decision, Permission};
+use wubble_core::site::{Decision, Permission, SiteChange};
 use wubble_core::space::Side;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
@@ -269,8 +269,8 @@ impl Host {
             return;
         }
         // a private window's tab reads its own choices over the stored ones, and remembers
-        // only in memory (`remember_site`)
-        let table = self.site_choices(tab).into_owned();
+        // only in memory (`site_view`, `write_site`)
+        let table = self.site_view(tab).permissions().into_owned();
         let s = self.surfaces.entry(tab).or_default();
         let (next, answers) =
             prompt::permission(std::mem::take(&mut s.permission), event, &table);
@@ -278,7 +278,7 @@ impl Host {
         for answer in answers {
             if let Some((site, kinds, decision)) = &answer.remember {
                 for &kind in kinds {
-                    self.remember_site(tab, site, kind, *decision);
+                    self.write_site(tab, SiteChange::Permission(site.clone(), kind, *decision));
                 }
             }
             match answer.reply {
@@ -427,12 +427,14 @@ impl Host {
                     }
                 }
                 MenuEffect::Run(MenuCommand::RenameFolder(f)) => self.rename_folder_requested(f),
-                MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
+                MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => {
+                    self.write_site(tab, SiteChange::Blocker(host));
+                }
                 MenuEffect::Run(MenuCommand::SpaceNeverSleep(space, on)) => {
                     self.dispatch(Command::SetSpaceNeverSleep { space, on });
                 }
                 MenuEffect::Run(MenuCommand::ToggleNeverSleepSite(site)) => {
-                    self.toggle_never_sleep_site(&site);
+                    self.write_site(tab, SiteChange::NeverSleep(site));
                 }
                 MenuEffect::Run(MenuCommand::MoveToWindow(t, to)) => {
                     self.dispatch(Command::MoveTabToWindow { tab: t, to });
@@ -443,7 +445,7 @@ impl Host {
                 }
                 MenuEffect::Run(MenuCommand::AllowPopups(site)) => {
                     // a private window's choice stays in memory, with its private windows
-                    self.remember_site(tab, &site, Permission::Popups, Decision::Allow);
+                    self.write_site(tab, SiteChange::Permission(site, Permission::Popups, Decision::Allow));
                     self.open_held_popups(tab);
                 }
                 MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
@@ -458,8 +460,11 @@ impl Host {
                 MenuEffect::Run(MenuCommand::CancelDownloadsAndClose(closing)) => {
                     self.close_cancelling_downloads(closing);
                 }
-                MenuEffect::Run(MenuCommand::SetPageTheme(host, theme)) => {
-                    self.set_site_theme(&host, theme)
+                // the row names the site of the menu's tab, whose page the change is for
+                MenuEffect::Run(MenuCommand::SetPageTheme(_, theme)) => {
+                    if let Some(page) = self.model.tabs.get(&tab).map(|t| t.url.clone()) {
+                        self.set_site_theme(tab, &page, theme);
+                    }
                 }
                 MenuEffect::Run(MenuCommand::ShotElement(at)) => self.shot_element(tab, at),
                 MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
@@ -754,24 +759,10 @@ impl Host {
     /// unchanged. The view's own zoom reports (CEF re-reading the level after
     /// a load, the shell's corrections) are never stored, nor is a private
     /// window's zoom: it is kept in memory over the stored levels
-    /// (`PrivateChoices::zoom`), as Chrome's off-the-record zoom map is.
+    /// (`write_site`), as Chrome's off-the-record zoom map is.
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
-        let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
-        let host = url.as_deref().and_then(zoom::host_of);
-        if let (Some(url), Some(host)) = (url.as_deref(), host.as_deref())
-            && self.model.side_of_tab(tab) == Side::Private
-        {
-            // kept in memory over the stored level, which zooming back to drops it for
-            let stored = zoom::wanted(&self.site_zoom, url, self.zoom_default);
-            let table = std::mem::take(&mut self.private_choices.zoom);
-            self.private_choices.zoom = zoom::next_table(table, host, percent, stored);
-        } else if let Some(host) = host {
-            let table = zoom::next_table(self.site_zoom.clone(), &host, percent, self.zoom_default);
-            // Applied as the setting: the table becomes `site_zoom` there.
-            self.write_setting(
-                wubble_core::settings::SITE_ZOOM.key,
-                &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
-            );
+        if let Some(page) = self.model.tabs.get(&tab).map(|t| t.url.clone()) {
+            self.write_site(tab, SiteChange::Zoom { page, percent });
         }
         if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, &format!("{percent}%"));
@@ -780,13 +771,8 @@ impl Host {
 
     /// A tab committed `url`: show it at the zoom stored for its site.
     pub(super) fn restore_zoom(&mut self, tab: TabId, url: &str) {
-        let want = zoom::wanted(&self.site_zoom, url, self.zoom_default);
         // a private window's own level, else the stored one
-        let want = if self.model.side_of_tab(tab) == Side::Private {
-            zoom::wanted(&self.private_choices.zoom, url, want)
-        } else {
-            want
-        };
+        let want = self.site_view(tab).zoom(url);
         if let Some(view) = self.tab_view(tab)
             && view.zoom_percent() != want
         {

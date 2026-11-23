@@ -11,13 +11,11 @@ use std::hash::BuildHasher;
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
-use wubble_core::apply::{self, Applied};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
 use wubble_core::pages::{
     self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
 };
-use wubble_core::settings as defs;
 use wubble_core::tab::TabId;
 use wubble_store::Favicon;
 use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
@@ -468,12 +466,10 @@ impl Host {
 
     // ----- the address pill: the bookmark star and the blocker badge
 
-    /// The hosts the blocker skips, from the stored setting.
+    /// The hosts the blocker skips: the stored setting, with the private windows' switches
+    /// (`Host::run_site_lists`).
     fn blocker_exceptions(&self) -> Vec<String> {
-        match apply::effect_of(defs::BLOCKER_EXCEPTIONS.key, &self.settings.stored) {
-            Some(Applied::BlockerExceptions(hosts)) => hosts,
-            _ => vec![],
-        }
+        wubble_core::site::toggled(&self.blocker_hosts, &self.private_choices.blocker)
     }
 
     pub(super) fn render_pill(&mut self, window: &AppWindow) {
@@ -526,35 +522,11 @@ impl Host {
         let mut entries = crate::menu::blocker_entries(count, &hosts, &host, allowed);
         entries.extend(crate::menu::page_theme_entries(
             &site,
-            self.page_theme_of(&url),
+            self.site_view(tab).theme(&url),
         ));
         entries.extend(self.boost_entries(&url));
         self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
-    }
-
-    /// The menu's switch: the site joins or leaves the blocker's exceptions (the stored setting
-    /// the settings page shows).
-    pub(super) fn toggle_blocker(&mut self, host: &str) {
-        let key = defs::BLOCKER_EXCEPTIONS.key;
-        if self.blocker_exceptions().iter().any(|h| h == host) {
-            self.setting_entry_removed(key, host);
-        } else {
-            self.setting_entry_added(key, host);
-        }
-        self.render_pages();
-    }
-
-    /// The menu's switch: the site joins or leaves the never-sleep list (the stored setting the
-    /// settings page shows).
-    pub(super) fn toggle_never_sleep_site(&mut self, site: &str) {
-        let key = defs::SLEEP_NEVER_SITES.key;
-        if self.model.never_sites().iter().any(|s| s == site) {
-            self.setting_entry_removed(key, site);
-        } else {
-            self.setting_entry_added(key, site);
-        }
-        self.render_pages();
     }
 
     // ----- history and archive

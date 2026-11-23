@@ -16,6 +16,7 @@ use wubble_core::reader::{
     self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs, ScrollAt,
 };
 use wubble_core::settings as defs;
+use wubble_core::site::SiteChange;
 use wubble_core::shot::{self, Shot, ShotEffect, ShotEvent, ShotOutput, ShotRequest};
 use wubble_core::tab::TabId;
 use wubble_engine::input::{KeyInput, Point};
@@ -123,10 +124,7 @@ impl Host {
         self.builtins.theme_default = default;
         self.builtins.theme_sites = sites;
         self.builtins.media = media;
-        let tabs: Vec<_> = self.views.keys().copied().collect();
-        for tab in tabs {
-            self.sync_page_theme(tab, None);
-        }
+        self.resync_page_themes();
         self.redraw_builtins();
     }
 
@@ -347,12 +345,9 @@ impl Host {
                 None => return,
             },
         };
-        let b = &self.builtins;
-        let wanted = (
-            pagetheme::wanted(&b.theme_sites, &url, b.theme_default),
-            b.media,
-        );
-        let Some(shown) = pagetheme::sync(b.applied.get(&tab).copied(), wanted) else {
+        // a private tab's own theme over the stored ones (`Host::site_view`)
+        let wanted = (self.site_view(tab).theme(&url), self.builtins.media);
+        let Some(shown) = pagetheme::sync(self.builtins.applied.get(&tab).copied(), wanted) else {
             return;
         };
         let Some(view) = self.tab_view(tab) else {
@@ -374,13 +369,9 @@ impl Host {
     fn cycle_page_theme(&mut self, tab: TabId) {
         let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
         let Some(url) = url else { return };
-        let current = pagetheme::wanted(
-            &self.builtins.theme_sites,
-            &url,
-            self.builtins.theme_default,
-        );
+        let current = self.site_view(tab).theme(&url);
         match wubble_core::zoom::host_of(&url) {
-            Some(host) => self.set_site_theme(&host, current.next()),
+            Some(_) => self.set_site_theme(tab, &url, current.next()),
             None => {
                 if let Some(window) = self.w.window.upgrade() {
                     self.toast(&window, "This page has no site to set a theme for");
@@ -389,27 +380,31 @@ impl Host {
         }
     }
 
-    /// The pill menu's choice: `host`'s pages show as `theme`.
-    pub(super) fn set_site_theme(&mut self, host: &str, theme: PageTheme) {
-        let table = pagetheme::next_table(
-            self.builtins.theme_sites.clone(),
-            host,
-            theme,
-            self.builtins.theme_default,
-        );
-        // Applied as the setting: the table becomes `theme_sites` there.
-        self.write_setting(
-            defs::PAGE_THEME_SITES.key,
-            &wubble_store::text_of::<wubble_store::PageThemeSites>(&table),
+    /// The pill menu's choice, made in `tab`: the site of `page` shows as `theme`.
+    pub(super) fn set_site_theme(&mut self, tab: TabId, page: &str, theme: PageTheme) {
+        self.write_site(
+            tab,
+            SiteChange::Theme {
+                page: page.to_owned(),
+                theme,
+            },
         );
         if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, &format!("Page theme: {}", theme.label()));
         }
     }
 
-    /// The page theme the site menu marks for `url`.
-    pub(super) fn page_theme_of(&self, url: &str) -> PageTheme {
-        pagetheme::wanted(&self.builtins.theme_sites, url, self.builtins.theme_default)
+    /// The stored page themes: the default and the per-site table.
+    pub(super) fn page_themes(&self) -> (PageTheme, &ThemeTable) {
+        (self.builtins.theme_default, &self.builtins.theme_sites)
+    }
+
+    /// Every live view shown as its page's theme now wants.
+    pub(super) fn resync_page_themes(&mut self) {
+        let tabs: Vec<_> = self.views.keys().copied().collect();
+        for tab in tabs {
+            self.sync_page_theme(tab, None);
+        }
     }
 
     // ----- reader mode

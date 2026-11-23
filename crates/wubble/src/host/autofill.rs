@@ -26,7 +26,7 @@ use wubble_core::autofill::{
     Policy, SaveKind, SaveVerdict, ScriptMessage, View,
 };
 use wubble_core::secret::Secret;
-use wubble_core::site::{Decision, Permission};
+use wubble_core::site::{Decision, Permission, SiteChange};
 use wubble_core::tab::TabId;
 use wubble_engine::page::{FrameChannel, FrameInfo};
 use wubble_ui::{AppWindow, AutofillAnswer, AutofillView};
@@ -163,7 +163,7 @@ impl Host {
     fn autofill_policy(&mut self, tab: TabId, origin: Option<String>) -> Policy {
         let origin = origin.or_else(|| self.page_url(tab).and_then(|u| autofill::web_origin(&u)));
         let never_save = origin.is_some_and(|o| {
-            self.site_choices(tab).get(&o, Permission::SavePasswords) == Some(Decision::Block)
+            self.site_view(tab).permissions().get(&o, Permission::SavePasswords) == Some(Decision::Block)
         });
         // an agent session's tab: the key menu only on a site whose sign-ins the owner shared
         // with it (for the owner watching; what it fills is the agent's as `fill_secret`'s
@@ -285,7 +285,8 @@ impl Host {
             }),
             // from a private window "Never" lasts while its private windows do, and is not stored
             Effect::Never { origin } => {
-                self.remember_site(tab, &origin, Permission::SavePasswords, Decision::Block);
+                let change = SiteChange::Permission(origin, Permission::SavePasswords, Decision::Block);
+                self.write_site(tab, change);
             }
         }
     }
