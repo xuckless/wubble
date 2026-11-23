@@ -12,7 +12,7 @@ use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, 
 use wubble_core::model::Command;
 use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
-use wubble_core::window::Closing;
+use wubble_core::window::{Closing, WindowId};
 use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
 use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
@@ -447,26 +447,28 @@ impl Host {
 
     /// Whether `closing` waits for an answer: while it would cancel private downloads, the
     /// question (`menu::close_entries`) opens over a page and nothing closes yet. It asks in
-    /// this window when it shows a page, else in a window showing a private tab the close
-    /// ends (raised), else in any window with a page; with no page anywhere it closes.
+    /// the closing window when it shows a page, else in a private window showing a tab the
+    /// close ends (raised), else in this window; with no page there it closes. A normal
+    /// window's page never carries it unless the close is that window's or the app's.
     pub(super) fn close_asks(&mut self, closing: Closing) -> bool {
         let count = self.private_downloads_ending(closing).len();
         if count == 0 {
             return false;
         }
-        let here = self.shown().map(|_| self.w.id);
-        let ending = self.model.private_tabs_ended(closing);
-        let holding = ending
+        let shows = |w: WindowId| !self.model.window_tabs(w).is_empty();
+        let closing_window = match closing {
+            Closing::Window(w) => Some(w).filter(|&w| shows(w)),
+            Closing::App => None,
+        };
+        let holding = self
+            .model
+            .private_tabs_ended(closing)
             .iter()
             .filter_map(|&t| self.model.location(t))
-            .find_map(|(space, _)| self.model.space_window(space));
-        let any = self
-            .model
-            .windows
-            .iter()
-            .find(|w| !self.model.window_tabs(w.id).is_empty())
-            .map(|w| w.id);
-        let Some(window) = here.or(holding).or(any) else {
+            .find_map(|(space, _)| self.model.space_window(space))
+            .filter(|&w| shows(w));
+        let here = matches!(closing, Closing::App).then_some(self.w.id);
+        let Some(window) = closing_window.or(holding).or(here) else {
             return false;
         };
         if window != self.w.id {
