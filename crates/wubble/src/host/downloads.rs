@@ -372,7 +372,7 @@ impl Host {
     /// "Clear finished": every entry that is done goes, through the one remove path (none while
     /// the page's search hides rows: `download::clearable_ids`).
     pub(crate) fn downloads_cleared(&mut self) {
-        for id in download::clearable_ids(&self.downloads.list, &self.downloads.query) {
+        for id in download::clearable_ids(&self.listed_downloads(), &self.downloads.query) {
             self.apply_download(id, DownloadEvent::Remove);
         }
     }
@@ -629,23 +629,36 @@ impl Host {
     }
 
     pub(super) fn render_downloads(&self, window: &AppWindow) {
-        let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
+        let listed = self.listed_downloads();
+        let items: Vec<DownloadItem> = listed.iter().map(item).collect();
         crate::bind::sync(window.get_downloads(), items, |m| window.set_downloads(m));
-        if self.downloads.list.is_empty() {
+        if listed.is_empty() {
             window.set_downloads_open(false);
         }
-        let filtered: Vec<DownloadItem> =
-            download::filter_entries(&self.downloads.list, &self.downloads.query)
-                .iter()
-                .map(item)
-                .collect();
+        let filtered: Vec<DownloadItem> = download::filter_entries(&listed, &self.downloads.query)
+            .iter()
+            .map(item)
+            .collect();
         crate::bind::sync(window.get_downloads_page_items(), filtered, |m| {
             window.set_downloads_page_items(m)
         });
         window.set_downloads_searching(!self.downloads.query.trim().is_empty());
         window.set_downloads_has_finished(
-            !download::clearable_ids(&self.downloads.list, &self.downloads.query).is_empty(),
+            !download::clearable_ids(&listed, &self.downloads.query).is_empty(),
         );
+    }
+
+    /// The entries this window lists: a private window's downloads in private windows only,
+    /// every other one in normal windows only (Chrome's off-the-record profile has a download
+    /// manager of its own).
+    fn listed_downloads(&self) -> Vec<DownloadEntry> {
+        let private = self.model.is_private_window(self.w.id);
+        self.downloads
+            .list
+            .iter()
+            .filter(|e| self.model.is_ephemeral(e.container) == private)
+            .cloned()
+            .collect()
     }
 }
 

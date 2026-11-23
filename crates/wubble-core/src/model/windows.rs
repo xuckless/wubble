@@ -173,6 +173,16 @@ impl Model {
         self.spaces.iter().any(|s| s.private)
     }
 
+    /// The Spaces a window showing `space` lists (its sidebar's Spaces, the command bar's open
+    /// tabs): a private window only its own, any other window every Space that is not private
+    /// (Chrome's incognito window and its tab search stay within one profile).
+    pub fn listed_spaces(&self, space: SpaceId) -> impl Iterator<Item = &Space> + '_ {
+        let private = self.is_private_space(space);
+        self.spaces
+            .iter()
+            .filter(move |s| if private { s.id == space } else { !s.private })
+    }
+
     /// The Space of the last focused Main window that is not private, else the first Space that
     /// is not: where a link from another app, an extension's tab or an agent's lands while a
     /// private window has focus (Chrome opens those in the last normal window).
@@ -292,7 +302,11 @@ impl Model {
         if let Some(s) = self.free_space(0) {
             return s;
         }
-        let name = format!("Space {}", self.spaces.len() + 1);
+        // private Spaces are not counted: they are no Space of the user's list
+        let name = format!(
+            "Space {}",
+            self.spaces.iter().filter(|s| !s.private).count() + 1
+        );
         self.add_space(name, DEFAULT_TINT, ContainerId::DEFAULT)
     }
 
@@ -639,6 +653,10 @@ impl Model {
             .find(|s| s.private && self.shown_by(s.id).is_none())
         {
             return Err(format!("private space {:?} shown by no window", s.id));
+        }
+        // the in-memory container lives exactly as long as the private windows
+        if self.containers.iter().any(|c| c.ephemeral) != self.has_private() {
+            return Err("ephemeral container without private windows, or the reverse".into());
         }
         let mut seen: Vec<TabId> = vec![];
         for (i, w) in self.windows.iter().enumerate() {

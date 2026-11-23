@@ -973,6 +973,15 @@ pub enum ClearData {
 /// goes, and choosing one is the confirmation; dismissing it clears nothing.
 pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Entry> {
     let container = model.tabs.get(&tab).map(|t| t.container);
+    // the containers on the tab's side of the private line: a private window clears its
+    // in-memory container only, a normal one never names it
+    let private = container.is_some_and(|c| model.is_ephemeral(c));
+    let side: Vec<ContainerId> = model
+        .containers
+        .iter()
+        .filter(|c| c.ephemeral == private)
+        .map(|c| c.id)
+        .collect();
     let name = container
         .and_then(|c| model.containers.iter().find(|k| k.id == c))
         .map_or("this container", |c| c.name.as_str());
@@ -999,21 +1008,19 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
             Command::ClearData(ClearData::Site(origin.to_owned())),
         ));
     }
-    if let Some(c) = container.filter(|_| model.containers.len() > 1) {
+    if let Some(c) = container.filter(|_| side.len() > 1) {
         out.push(row(
             format!("Clear {name}"),
             Command::ClearData(ClearData::Containers(vec![c])),
         ));
     }
     out.push(row(
-        if model.containers.len() > 1 {
+        if side.len() > 1 {
             "Clear All Containers".into()
         } else {
             "Clear Cookies and Cache".into()
         },
-        Command::ClearData(ClearData::Containers(
-            model.containers.iter().map(|c| c.id).collect(),
-        )),
+        Command::ClearData(ClearData::Containers(side)),
     ));
     out
 }

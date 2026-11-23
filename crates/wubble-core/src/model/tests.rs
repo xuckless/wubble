@@ -3727,3 +3727,60 @@ fn an_agent_space_s_tabs_are_not_the_user_s_closed_tabs() {
     // another Space's deletion leaves the rule for this one's tabs alone
     assert!(m.closes_into_recent(ids[0], &Command::DeleteSpace(s)));
 }
+
+/// A private window on `url` (focused), its window and Space.
+fn private_window(m: Model, url: &str) -> (Model, WindowId, SpaceId) {
+    let (m, fx) = run(
+        m,
+        Command::NewPrivateWindow {
+            url: Some(url.into()),
+        },
+    );
+    let w = opened(&fx);
+    let s = m.window(w).and_then(Window::space).expect("a Main window");
+    (m, w, s)
+}
+
+/// Each window lists the Spaces of its own side of the private line, and a normal window made
+/// while every normal Space is shown is named among the normal Spaces only.
+#[test]
+fn a_window_lists_the_spaces_of_its_own_side() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, _, p1) = private_window(m, "https://p.test/");
+    let (m, _, p2) = private_window(m, "https://q.test/");
+    let listed =
+        |m: &Model, s: SpaceId| -> Vec<SpaceId> { m.listed_spaces(s).map(|s| s.id).collect() };
+    for (from, want) in [
+        (s0(), vec![s0(), s1]),
+        (s1, vec![s0(), s1]),
+        (p1, vec![p1]),
+        (p2, vec![p2]),
+    ] {
+        assert_eq!(listed(&m, from), want, "from {from:?}");
+    }
+    let (m, _) = run(m, Command::NewWindow { space: Some(s1) });
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    let s = m.window(w).and_then(Window::space).unwrap();
+    let si = m.space_idx(s).unwrap();
+    assert_eq!(m.spaces[si].name, "Space 3", "the two private Spaces are not counted");
+}
+
+/// The in-memory container lives exactly as long as a private window does.
+#[test]
+fn the_ephemeral_container_lives_with_the_private_windows() {
+    let (m, _) = with_tabs(1);
+    let (m, w, _) = private_window(m, "https://p.test/");
+    let c = m.containers.iter().find(|c| c.ephemeral).map(|c| c.id).unwrap();
+    let (m, fx) = run(m, Command::CloseWindow(w));
+    assert!(fx.contains(&Effect::ContainerDeleted(c)), "{fx:?}");
+    assert!(!m.has_private() && !m.containers.iter().any(|c| c.ephemeral));
+    let mut bad = m.clone();
+    bad.containers.push(crate::space::Container {
+        id: ContainerId(99),
+        name: "Private".into(),
+        ephemeral: true,
+    });
+    assert!(bad.check().is_err(), "an ephemeral container without a private window");
+}
