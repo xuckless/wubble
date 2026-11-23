@@ -34,6 +34,16 @@ pub enum Reach {
     OpenLittle,
     /// A Little window's page becoming a tab (`Command::PromoteLittle`): its tab, the Space.
     PromoteLittle,
+    /// A tab shown (`Command::ActivateTab`): the focused window, the tab's Space. A private
+    /// tab is shown in its own window, a normal one from a private window in a normal window.
+    ActivateTab,
+    /// `Command::NewSpace` (a Space is normal): the new Space, the container named for it.
+    NewSpace,
+    /// `Command::NewWindow` naming a Space: the focused window, the Space.
+    NewWindow,
+    /// A tab torn out to a new window (`WindowTarget::New`): the tab, the new window, which is
+    /// made on the tab's side.
+    TearOut,
 }
 
 /// What the command does across the line.
@@ -71,6 +81,16 @@ const CROSSING: &[(Reach, Side, Side, Crossing)] = &[
     (ExtensionTab, Normal, Normal, Allow),
     (OpenLittle, Normal, Normal, Allow),
     (PromoteLittle, Normal, Normal, Allow),
+    (ActivateTab, Normal, Normal, Allow),
+    (ActivateTab, Normal, Private, Allow),
+    (ActivateTab, Private, Private, Allow),
+    (ActivateTab, Private, Normal, ToNormalWindow),
+    (NewSpace, Normal, Normal, Allow),
+    (NewWindow, Normal, Normal, Allow),
+    (NewWindow, Private, Normal, Allow),
+    (NewWindow, Private, Private, Allow),
+    (TearOut, Normal, Normal, Allow),
+    (TearOut, Private, Private, Allow),
 ];
 
 /// What `reach` from `src` to `dst` does: the table's row, else refused.
@@ -85,35 +105,34 @@ pub fn crossing(reach: Reach, src: Side, dst: Side) -> Crossing {
 mod tests {
     use super::*;
 
-    const ALL: [Reach; 13] = [
-        MoveTab,
-        MoveToWindow,
-        SwitchSpace,
-        NewTab,
-        SetSpaceContainer,
-        ReopenInContainer,
-        DeleteContainer,
-        DeleteSpace,
-        MarkAgentSpace,
-        OpenInSpace,
-        ExtensionTab,
-        OpenLittle,
-        PromoteLittle,
+    use Crossing::Refuse as R;
+
+    /// Every reach x side pair, spelled out: (reach, [N->N, N->P, P->N, P->P]).
+    const EXPECTED: [(Reach, [Crossing; 4]); 17] = [
+        (MoveTab, [Allow, R, R, Allow]),
+        (MoveToWindow, [Allow, R, R, Allow]),
+        (SwitchSpace, [Allow, R, ToNormalWindow, R]),
+        (NewTab, [Allow, R, R, Allow]),
+        (SetSpaceContainer, [Allow, R, R, R]),
+        (ReopenInContainer, [Allow, R, R, R]),
+        (DeleteContainer, [Allow, R, R, R]),
+        (DeleteSpace, [Allow, R, R, R]),
+        (MarkAgentSpace, [Allow, R, R, R]),
+        (OpenInSpace, [Allow, R, R, R]),
+        (ExtensionTab, [Allow, R, R, R]),
+        (OpenLittle, [Allow, R, R, R]),
+        (PromoteLittle, [Allow, R, R, R]),
+        (ActivateTab, [Allow, Allow, ToNormalWindow, Allow]),
+        (NewSpace, [Allow, R, R, R]),
+        (NewWindow, [Allow, R, Allow, Allow]),
+        (TearOut, [Allow, R, R, Allow]),
     ];
 
-    /// Every reach x side pair: only these two moves stay within the private side, and only a
-    /// private window's Space switch goes to a normal window; nothing else touches it.
     #[test]
-    fn the_private_line_is_crossed_by_nothing() {
-        let within = [MoveTab, MoveToWindow, NewTab];
-        for reach in ALL {
-            for (src, dst) in [(Normal, Normal), (Normal, Private), (Private, Normal), (Private, Private)] {
-                let want = match (src, dst) {
-                    (Normal, Normal) => Allow,
-                    (Private, Private) if within.contains(&reach) => Allow,
-                    (Private, Normal) if reach == SwitchSpace => ToNormalWindow,
-                    _ => Crossing::Refuse,
-                };
+    fn the_private_line_table() {
+        let pairs = [(Normal, Normal), (Normal, Private), (Private, Normal), (Private, Private)];
+        for (reach, want) in EXPECTED {
+            for ((src, dst), want) in pairs.into_iter().zip(want) {
                 assert_eq!(crossing(reach, src, dst), want, "{reach:?} {src:?} -> {dst:?}");
             }
         }

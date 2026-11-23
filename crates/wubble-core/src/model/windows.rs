@@ -343,8 +343,16 @@ impl Model {
     }
 
     pub(super) fn new_window(&mut self, space: Option<SpaceId>) -> Vec<Effect> {
+        // with no window yet, the new one is a normal window
+        let from = self.windows.last().map_or(Side::Normal, |w| self.side_of_window(w.id));
         let space = match space {
-            Some(s) if self.space_idx(s).is_none() => return vec![],
+            Some(s)
+                if self.space_idx(s).is_none()
+                    || crossing(Reach::NewWindow, from, self.side_of_space(s))
+                        == Crossing::Refuse =>
+            {
+                return vec![];
+            }
             Some(s) => match self.shown_by(s) {
                 Some(i) => return self.focus(self.windows[i].id).into_iter().collect(),
                 None => s,
@@ -512,6 +520,9 @@ impl Model {
                 }
                 _ => return vec![],
             },
+            WindowTarget::New if crossing(Reach::TearOut, side, side) == Crossing::Refuse => {
+                return vec![];
+            }
             // a private tab dragged out makes a private window of its own
             WindowTarget::New if side == Side::Private => {
                 let (_, id) = self.add_private_window();

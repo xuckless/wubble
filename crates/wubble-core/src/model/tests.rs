@@ -3937,7 +3937,9 @@ fn every_command_keeps_to_its_side_of_the_private_line() {
         },
     );
     let (m, pw, ps) = private_window(m, "https://p.test/");
+    let (m, pw2, ps2) = private_window(m, "https://q.test/");
     let p0 = m.order(ps)[0];
+    let n1 = m.order(s1)[0];
     let mem = m.containers.iter().find(|c| c.storage == Storage::Memory).unwrap().id;
     let w0 = WindowId(0);
     let url = || "https://x.test/".to_string();
@@ -3947,6 +3949,50 @@ fn every_command_keeps_to_its_side_of_the_private_line() {
         ("move N->P", w0, Command::MoveTab { tab: n0, to: to(ps) }, Refused),
         ("move P->N", pw, Command::MoveTab { tab: p0, to: to(s0()) }, Refused),
         ("move N->N", w0, Command::MoveTab { tab: n0, to: to(s1) }, Applied),
+        ("move P->P", pw, Command::MoveTab { tab: p0, to: to(ps2) }, Applied),
+        (
+            "to window P->P",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::Existing(pw2),
+            },
+            Applied,
+        ),
+        (
+            "tear out P",
+            pw,
+            Command::MoveTabToWindow {
+                tab: p0,
+                to: WindowTarget::New,
+            },
+            Applied,
+        ),
+        ("activate P from N", w0, Command::ActivateTab(p0), Applied),
+        ("activate N from P", pw, Command::ActivateTab(n1), ToNormalWindow),
+        ("activate N from N", w0, Command::ActivateTab(n1), Applied),
+        (
+            "new space in the memory container",
+            w0,
+            Command::NewSpace {
+                name: "X".into(),
+                tint: DEFAULT_TINT,
+                container: mem,
+            },
+            Refused,
+        ),
+        (
+            "new space in a normal container",
+            w0,
+            Command::NewSpace {
+                name: "X".into(),
+                tint: DEFAULT_TINT,
+                container: work,
+            },
+            Applied,
+        ),
+        ("new window on P from N", w0, Command::NewWindow { space: Some(ps) }, Refused),
+        ("new window on N from P", pw, Command::NewWindow { space: Some(s1) }, Applied),
         (
             "to window N->P",
             w0,

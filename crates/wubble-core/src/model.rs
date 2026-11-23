@@ -1160,6 +1160,11 @@ impl Model {
         if self.spaces[si].active == Some(tab) && self.active_space() == id {
             return vec![];
         }
+        // shown in its own side's window (`set_active_space` finds it)
+        let (src, dst) = (self.side_of_space(self.active_space()), self.side_of_space(id));
+        if crossing(Reach::ActivateTab, src, dst) == Crossing::Refuse {
+            return vec![];
+        }
         let mut fx = self.set_active_space(id);
         // Chromium `OnActiveTabChanged` on a user's switch: the openers stay only while the
         // switch is between a tab and its opener, or between two tabs of one opener.
@@ -2131,7 +2136,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             tint,
             container,
         } => {
-            if m.has_container(container) {
+            // a Space is normal: never in the private windows' container
+            let dst = m.side_of_container(container);
+            if m.has_container(container)
+                && crossing(Reach::NewSpace, Side::Normal, dst) == Crossing::Allow
+            {
                 m.add_space(name, tint, container);
             }
             vec![]
