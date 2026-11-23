@@ -1,5 +1,8 @@
-//! Hover timing as one state machine, for the tab preview card and for tooltips: when a hovered
-//! thing shows its card or tooltip, when that moves to the next thing, when it hides.
+//! Hover timing as one state machine, for every hover or timed surface of the shell (the
+//! store's hover slots, `overlay::Surface`): when a hovered thing shows its card or tooltip,
+//! when that moves to the next thing, when it hides. A surface its owner shows at once (the
+//! peek's edge, the picture-in-picture strip, a notice) is [`Event::Show`]; one shown for a time
+//! (a toast, the video strip after a move) is [`Event::ShowFor`].
 //!
 //! The shape is Firefox's tab hover preview (`tab-hover-preview.mjs`, MPL-2.0; no code copied):
 //! the card shows after a delay; once one has shown and hidden, the next thing shows at once for a
@@ -42,10 +45,19 @@ pub const STATUS_BUBBLE: Timing = Timing {
     sticky_ms: 250,
 };
 
-/// Tooltips: page `title`s and the shell's icon buttons (the design's dock tooltip).
+/// Tooltips: page `title`s and the shell's icon buttons (the design's dock tooltip,
+/// generated: `kit_gen::touch::DOCK`).
 pub const TOOLTIP: Timing = Timing {
-    show_ms: 280,
-    warm_ms: 520,
+    show_ms: crate::kit_gen::touch::DOCK::intent as u64,
+    warm_ms: crate::kit_gen::touch::DOCK::warm as u64,
+    sticky_ms: 0,
+};
+
+/// A surface with no delay of its own: shown at once ([`Event::Show`]) or for a time its owner
+/// gives ([`Event::ShowFor`]), gone the moment it is left.
+pub const AT_ONCE: Timing = Timing {
+    show_ms: 0,
+    warm_ms: 0,
     sticky_ms: 0,
 };
 
@@ -69,10 +81,24 @@ pub enum Event<K> {
         key: K,
         now: u64,
     },
-    /// The pointer left the thing it was on, onto nothing the host knows.
+    /// The pointer left the thing it was on, onto nothing the host knows. On a card already
+    /// on its way out it can only bring the hide closer (the video strip's 250 ms after the
+    /// pointer left cuts its 1200 ms after the last move).
     Leave {
         now: u64,
     },
+    /// Shown now, from any state, and held until left or dismissed.
+    Show {
+        key: K,
+    },
+    /// Shown now, from any state, and hidden `ms` later (a later one moves the time, either way).
+    ShowFor {
+        key: K,
+        now: u64,
+        ms: u64,
+    },
+    /// The pointer is back on a card on its way out: it stays (from rest it starts nothing).
+    Keep,
     /// The armed timer fired.
     Tick {
         now: u64,
@@ -137,6 +163,24 @@ pub fn transition<K: Copy + PartialEq>(
         }
         (Cooling { until }, Tick { now }) if now >= until => (Idle, None),
         (Cooling { .. }, Dismiss) => (Idle, None),
+
+        (Leaving { key, at }, Leave { now }) => (
+            Leaving {
+                key,
+                at: at.min(now + timing.sticky_ms),
+            },
+            None,
+        ),
+        (Leaving { key, .. }, Keep) => (Shown { key }, None),
+        // shown at once: an effect only for a key not shown already
+        (state, Show { key }) => (
+            Shown { key },
+            (shown(state) != Some(key)).then_some(Effect::Show(key)),
+        ),
+        (state, ShowFor { key, now, ms }) => (
+            Leaving { key, at: now + ms },
+            (shown(state) != Some(key)).then_some(Effect::Show(key)),
+        ),
 
         // nothing happens: a tick before its time, a leave with no card, a dismiss at rest
         (state, _) => (state, None),
@@ -361,5 +405,67 @@ mod tests {
         // leaving before the intent ran out: never shown
         let (s, fx) = run_tip(Hover::Idle, &[enter(A, 0), Event::Leave { now: 100 }]);
         assert_eq!((s, fx.len(), shown(s)), (Hover::Idle, 0, None));
+    }
+
+    /// Every state against the events a surface shown at once, for a time, or held sends
+    /// (`Show`, `ShowFor`, `Keep`, and `Leave` on a card on its way out), with the video strip's
+    /// sticky 250 ms. One row per (state, event).
+    #[test]
+    fn show_show_for_keep_and_a_shortening_leave_in_every_state() {
+        let strip = Timing {
+            sticky_ms: 250,
+            ..AT_ONCE
+        };
+        let show = |key| Event::Show { key };
+        let for_ = |key, now, ms| Event::ShowFor { key, now, ms };
+        let idle = Hover::Idle;
+        let pending = Hover::Pending { key: A, due: 50 };
+        let shown = Hover::Shown { key: A };
+        let leaving = Hover::Leaving { key: A, at: 1_200 };
+        let cooling = Hover::Cooling { until: 50 };
+        let on = |key| Hover::Shown { key };
+        let off = |key, at| Hover::Leaving { key, at };
+        #[rustfmt::skip]
+        let rows: &[(&str, Hover, Event, Hover, Option<Effect>)] = &[
+            ("idle show", idle, show(A), on(A), Some(Effect::Show(A))),
+            ("pending show", pending, show(A), on(A), Some(Effect::Show(A))),
+            ("shown show same", shown, show(A), on(A), None),
+            ("shown show other", shown, show(B), on(B), Some(Effect::Show(B))),
+            ("leaving show same", leaving, show(A), on(A), None),
+            ("leaving show other", leaving, show(B), on(B), Some(Effect::Show(B))),
+            ("cooling show", cooling, show(A), on(A), Some(Effect::Show(A))),
+            ("idle show for", idle, for_(A, 10, 1_500), off(A, 1_510), Some(Effect::Show(A))),
+            ("pending show for", pending, for_(A, 10, 1_500), off(A, 1_510), Some(Effect::Show(A))),
+            ("shown show for same", shown, for_(A, 10, 1_500), off(A, 1_510), None),
+            ("shown show for other", shown, for_(B, 10, 1_500), off(B, 1_510), Some(Effect::Show(B))),
+            ("leaving show for later", leaving, for_(A, 1_000, 1_200), off(A, 2_200), None),
+            ("leaving show for sooner", leaving, for_(A, 10, 250), off(A, 260), None),
+            ("leaving show for other", leaving, for_(B, 10, 100), off(B, 110), Some(Effect::Show(B))),
+            ("cooling show for", cooling, for_(A, 10, 100), off(A, 110), Some(Effect::Show(A))),
+            ("idle keep", idle, Event::Keep, idle, None),
+            ("pending keep", pending, Event::Keep, pending, None),
+            ("shown keep", shown, Event::Keep, shown, None),
+            ("leaving keep", leaving, Event::Keep, on(A), None),
+            ("cooling keep", cooling, Event::Keep, cooling, None),
+            ("leaving leave shortens", leaving, Event::Leave { now: 100 }, off(A, 350), None),
+            ("leaving leave never lengthens", leaving, Event::Leave { now: 1_100 }, leaving, None),
+            ("shown leave", shown, Event::Leave { now: 100 }, off(A, 350), None),
+            ("idle leave", idle, Event::Leave { now: 100 }, idle, None),
+        ];
+        for &(name, state, event, want, effect) in rows {
+            assert_eq!(
+                super::transition(state, event, &strip),
+                (want, effect),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tooltip_times_are_the_designs() {
+        use crate::kit_gen::touch::DOCK;
+        assert_eq!(TOOLTIP.show_ms, DOCK::intent as u64);
+        assert_eq!(TOOLTIP.warm_ms, DOCK::warm as u64);
+        assert_eq!((TOOLTIP.show_ms, TOOLTIP.warm_ms), (280, 520));
     }
 }
