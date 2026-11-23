@@ -131,9 +131,10 @@ impl Host {
                 // ends it, so the timer never outlives it.
                 FlingEffect::Start => {
                     let id = self.w.id;
-                    self.gestures
-                        .fling_timer
-                        .start(slint::TimerMode::Repeated, FLING_TICK, move || {
+                    self.gestures.fling_timer.start(
+                        slint::TimerMode::Repeated,
+                        FLING_TICK,
+                        move || {
                             crate::with_host(|host| {
                                 if host.enter(id) {
                                     let now = host.fling_now();
@@ -142,7 +143,8 @@ impl Host {
                                     host.fling(FlingInput::Interrupt);
                                 }
                             })
-                        });
+                        },
+                    );
                 }
                 FlingEffect::Stop => self.gestures.fling_timer.stop(),
             }

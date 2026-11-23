@@ -56,8 +56,9 @@ pub(crate) fn bounds_union(rects: &[PopupRect]) -> Option<PopupRect> {
 
 /// wubble change (61): the underline Chromium's own input method puts under a
 /// whole preedit (`InputMethodAuraLinux`: one thin span over the text, in the
-/// text's colour: a transparent colour is how Blink says that). With none,
-/// the composition is invisible in the page.
+/// text's colour: a transparent colour is how Blink says that). Blink draws
+/// the same one when it is given none (`input_method_controller.cc`), so this
+/// only spells it out.
 #[cfg(feature = "cef-runtime")]
 pub(crate) fn composition_underlines(text: &str) -> [cef::CompositionUnderline; 1] {
     [cef::CompositionUnderline {

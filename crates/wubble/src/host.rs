@@ -3340,7 +3340,9 @@ impl Host {
             // Slint enables IME only for its own text fields (and disables
             // it when one loses focus); the page needs it on the raw window.
             if focused {
-                self.sync_ime(window);
+                window
+                    .window()
+                    .with_winit_window(|w| w.set_ime_allowed(true));
             }
         }
     }

@@ -9,8 +9,7 @@
 //! `set_ime_cursor_area`); nothing reaches a non-text item. So the host
 //! sees winit's events before Slint (`on_winit_window_event`), enables IME
 //! on the raw window while the page has focus and places the candidate
-//! window from the engine's `ImeBounds` itself, and switches it on only while the
-//! focused node takes text (`PageEvent::TextInput`, `Host::sync_ime`). The preedit
+//! window from the engine's `ImeBounds` itself. The preedit
 //! goes to CEF with one underline over all of it (welding, change 58), as Chromium's
 //! own input method does on Linux.
 //!

@@ -290,9 +290,6 @@ pub struct Surfaces {
     pub permission: PermissionPrompt,
     pub auth: Auth,
     pub error: PageError,
-    /// Whether the focused node takes text, as CEF last said; `None` before it did (the input
-    /// method stays on then: CEF reports changes, and a field may have focus from the start).
-    pub text_input: Option<bool>,
     /// The main frame's id and the focused field's `<datalist>` offer, while it makes one.
     /// Nothing shows it yet (a list that takes no focus, under `Offer::rect`; the pick goes
     /// back as `datalist::pick_message` on `FrameChannel::Datalist`).
@@ -324,7 +321,6 @@ impl Surfaces {
             permission,
             auth,
             error,
-            text_input: None,
             datalist: None,
         }
     }
@@ -359,8 +355,6 @@ pub enum Routed {
     TargetId(Result<String, ()>),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
-    /// Whether the focused node takes text (`PageEvent::TextInput`).
-    TextInput(bool),
     /// CEF gave up on these requests: every surface showing one closes.
     Dismissed(Vec<RequestId>),
     Permission(PermissionEvent),
@@ -481,7 +475,6 @@ pub fn route(event: PageEvent) -> Routed {
         // taken before routing (`host/ax.rs`)
         PageEvent::AxTree(_) | PageEvent::AxLocation(_) => Routed::Ignore,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
-        PageEvent::TextInput(on) => Routed::TextInput(on),
         PageEvent::PermissionRequested {
             id,
             origin,
@@ -904,7 +897,6 @@ mod tests {
             route(PageEvent::ZoomChanged { percent: 110 }),
             Routed::Ignore
         );
-        assert_eq!(route(PageEvent::TextInput(false)), Routed::TextInput(false));
         assert_eq!(
             route(PageEvent::FullscreenChanged(true)),
             Routed::Fullscreen(true)
@@ -1073,7 +1065,6 @@ mod tests {
                 proxy: false,
             }),
             error: PageError::Crashed,
-            text_input: Some(true),
             datalist: None,
         };
         assert!(matches!(s.menu, Menu::Open { .. }));

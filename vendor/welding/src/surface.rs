@@ -2235,11 +2235,6 @@ pub enum NavigationEvent {
     /// wubble change 49: CEF's `OnScrollOffsetChanged`, the page's root
     /// scroll offset in DIP, after it changed.
     ScrollOffset { x: f64, y: f64 },
-    /// wubble change (61): CEF's `OnVirtualKeyboardRequested`, after the
-    /// focused node's text-input state changed: `false` when the mode is NONE
-    /// (no text field has focus), so the host switches its input method on
-    /// for a field and off elsewhere.
-    TextInput { wanted: bool },
     /// wubble change 50: an accessibility tree update CEF's
     /// `OnAccessibilityTreeChange` handed over (only once the host enabled
     /// accessibility on the browser host), as `cef_write_json` wrote the value.

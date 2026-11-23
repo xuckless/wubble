@@ -5,8 +5,7 @@
 //!
 //! CEF names no callback for the text cursor but `OnImeCompositionRangeChanged`, which
 //! reports a caret (a zero-wide bound) too when the page has one; welding keeps only the
-//! union of the bounds. Whether the focused node takes text at all is
-//! [`PageEvent::TextInput`] (`OnVirtualKeyboardRequested`).
+//! union of the bounds.
 
 use crate::page::{PageEvent, Rect};
 

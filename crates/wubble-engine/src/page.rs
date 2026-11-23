@@ -585,9 +585,6 @@ pub enum PageEvent {
         rect: Rect,
         selection: (u32, u32),
     },
-    /// Whether the focused node takes text input, so the host's input method is on for a field
-    /// and off elsewhere (CEF's `OnVirtualKeyboardRequested`: the mode is not NONE).
-    TextInput(bool),
     /// The page started dragging (only after `View::set_drag_source(true)`);
     /// run the drag and end it with `View::drag_source_ended`. Physical
     /// pixels.
@@ -703,7 +700,6 @@ impl PageEvent {
             ) => a == b,
             (Self::FindResult { .. }, Self::FindResult { .. })
             | (Self::ImeBounds { .. }, Self::ImeBounds { .. })
-            | (Self::TextInput(_), Self::TextInput(_))
             | (Self::PopupMoved(_), Self::PopupMoved(_))
             | (Self::LinkStatus(_), Self::LinkStatus(_))
             | (Self::Tooltip(_), Self::Tooltip(_)) => true,

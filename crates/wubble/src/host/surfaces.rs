@@ -192,15 +192,6 @@ impl Host {
             Routed::ImeBounds(rect) if self.key_page() == Some(tab) => {
                 place_candidates(window, self.view_origin(window, tab), rect)
             }
-            Routed::TextInput(on) => {
-                let surfaces = self.surfaces.entry(tab).or_default();
-                if surfaces.text_input.replace(on) != Some(on)
-                    && self.key_page() == Some(tab)
-                    && window.get_web_focused()
-                {
-                    self.sync_ime(window);
-                }
-            }
             Routed::Dismissed(ids) => {
                 self.apply_dialog(tab, DialogEvent::Dismissed(ids.clone()));
                 self.apply_permission(tab, PermissionEvent::Dismissed(ids.clone()));
@@ -881,18 +872,6 @@ impl Host {
     }
 
     // ----- IME
-
-    /// Switches the window's input method for the key page: on while its focused node takes
-    /// text (or CEF has not said yet), off elsewhere, so a password or a button gets no
-    /// preedit. Call only while the page has the keyboard: Slint runs it for its own fields.
-    pub(super) fn sync_ime(&self, window: &AppWindow) {
-        let on = self
-            .key_page()
-            .and_then(|t| self.surfaces.get(&t))
-            .and_then(|s| s.text_input)
-            .unwrap_or(true);
-        window.window().with_winit_window(|w| w.set_ime_allowed(on));
-    }
 
     /// winit's IME events while the page has the keyboard; false when they
     /// are Slint's (a shell text field has it).

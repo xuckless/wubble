@@ -252,20 +252,6 @@ cef::wrap_render_handler! {
             });
         }
 
-        // wubble change (61): whether a text field has focus, for the host's input method.
-        fn on_virtual_keyboard_requested(
-            &self,
-            _browser: Option<&mut cef::Browser>,
-            input_mode: cef::TextInputMode,
-        ) {
-            push_navigation(
-                &self.handler.events,
-                crate::surface::NavigationEvent::TextInput {
-                    wanted: input_mode != cef::TextInputMode::NONE,
-                },
-            );
-        }
-
         fn on_popup_show(&self, _browser: Option<&mut cef::Browser>, show: ::std::os::raw::c_int) {
             let showing = show != 0;
             log::debug!("on_popup_show({showing})");

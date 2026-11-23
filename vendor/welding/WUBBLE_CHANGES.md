@@ -577,16 +577,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     instead of dropping. `CursorImage` is re-exported from `lib.rs`. Test:
     `cursor::tests`.
 
-61. **IME: the caret, the underline, the text-input state.** `ime.rs`:
-    `bounds_union` keeps a zero-wide rectangle (a caret) and drops only
-    zero-height padding, so a caret CEF reports before any composition places
-    the host's candidate window; new `composition_underlines`, the one thin
-    underline over a whole preedit that Chromium's own input method puts
-    there (a transparent colour is the text's), passed by `ime_set_composition`
-    on all three platforms (it passed none, and the composition was drawn as
-    plain text). `surface.rs`: new `NavigationEvent::TextInput { wanted }`, from
-    `OnVirtualKeyboardRequested` (mode not NONE) in the three render handlers
-    (Windows only logged it), so the host switches its input method per field.
+61. **IME: the caret, the underline.** `ime.rs`: `bounds_union` keeps a
+    zero-wide rectangle (a caret) and drops only zero-height padding, so a
+    caret CEF reports before any composition places the host's candidate
+    window; new `composition_underlines`, the one thin underline over a whole
+    preedit that Chromium's own input method puts there (a transparent colour
+    is the text's), passed by `ime_set_composition` on all three platforms;
+    Blink draws the same one when given none, so it changes nothing visible.
     Shape from cefclient's OSR IME handler (BSD-3-Clause); no code copied.
     Tests: `ime::tests`.
 
