@@ -1,0 +1,12 @@
+# The surface lock's recorded violations (tests/surface_lock.rs): file, rule, token, count.
+# Counts only go down: a step that moves a surface into the store lowers them here.
+app.slint	binding	root.downloads-open	1
+app.slint	binding	root.spaces-open	2
+app.slint	open-write	root.downloads-open	3
+app.slint	open-write	root.spaces-open	3
+components/downloads-popover.slint	escape	Key.Escape	1
+components/downloads-popover.slint	hover-shown	has-hover	1
+components/extensions-popover.slint	escape	Key.Escape	1
+components/extensions-popover.slint	hover-shown	has-hover	1
+components/settings.slint	open-write	root.notices-open	1
+components/shot-overlay.slint	escape	Key.Escape	1

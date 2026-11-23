@@ -16,47 +16,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Violations counted per (file, rule, token).
-type Counts = BTreeMap<(String, String, String), usize>;
-
-fn ui_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("ui")
-}
+mod lock;
+use lock::{Counts, Lock, code, files, statements, ui_dir, ui_files};
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn files(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).expect("read dir") {
-        let path = entry.expect("dir entry").path();
-        if path.is_dir() {
-            files(&path, ext, out);
-        } else if path.extension().is_some_and(|e| e == ext) {
-            out.push(path);
-        }
-    }
-}
-
-/// Every `.slint` file, as (path relative to `ui/`, text).
-fn ui_files() -> Vec<(String, String)> {
-    let mut paths = Vec::new();
-    files(&ui_dir(), "slint", &mut paths);
-    assert!(!paths.is_empty(), "no slint files found");
-    paths.sort();
-    paths
-        .into_iter()
-        .map(|p| {
-            let rel = p
-                .strip_prefix(ui_dir())
-                .expect("under ui")
-                .to_string_lossy();
-            (
-                rel.replace('\\', "/"),
-                fs::read_to_string(&p).expect("read"),
-            )
-        })
-        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -77,25 +41,6 @@ fn kind(rel: &str) -> Kind {
     } else {
         Kind::Shell
     }
-}
-
-/// One line with `//` comments and string contents blanked out.
-fn code(line: &str) -> String {
-    let mut quoted = false;
-    let mut out = String::new();
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if !quoted && c == '/' && chars.peek() == Some(&'/') {
-            break;
-        }
-        if c == '"' {
-            quoted = !quoted;
-            out.push(c);
-        } else {
-            out.push(if quoted { ' ' } else { c });
-        }
-    }
-    out
 }
 
 /// The literals in one line of code: non-zero `px`/`ms`/`s` numbers, `#hex`, colour functions.
@@ -153,16 +98,7 @@ fn shell_violations(line: &str) -> Vec<(&'static str, String)> {
     let mut out: Vec<(&'static str, String)> =
         literals(line).into_iter().map(|l| ("literal", l)).collect();
     // a property set: `name:` at the start of a statement (after `{`, `;` or `}`)
-    for statement in code.split(['{', ';', '}']) {
-        let Some((name, _)) = statement.split_once(':') else {
-            continue;
-        };
-        let name = name.trim();
-        if name.is_empty()
-            || name.contains(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'))
-        {
-            continue;
-        }
+    for (name, _) in statements(&code) {
         let painted = matches!(
             name,
             "background"
@@ -333,79 +269,19 @@ fn generated(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn baseline_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/kit_lock_baseline.txt")
-}
-
-fn read_baseline() -> Counts {
-    let text = fs::read_to_string(baseline_path()).unwrap_or_default();
-    text.lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            assert_eq!(f.len(), 4, "baseline line: {l}");
-            (
-                (f[0].to_string(), f[1].to_string(), f[2].to_string()),
-                f[3].parse().expect("count"),
-            )
-        })
-        .collect()
-}
-
-fn write_baseline(counts: &Counts) {
-    let mut text = String::from(
-        "# The kit lock's recorded violations (tests/kit_lock.rs): file, rule, token, count.\n\
-         # Counts only go down: a lane that clears violations lowers them here (KIT_LOCK_WRITE=1).\n",
-    );
-    for ((file, rule, token), n) in counts {
-        text.push_str(&format!("{file}\t{rule}\t{token}\t{n}\n"));
-    }
-    fs::write(baseline_path(), text).expect("write baseline");
-}
+const KIT_LOCK: Lock = Lock {
+    name: "kit_lock",
+    env: "KIT_LOCK_WRITE",
+    header: "# The kit lock's recorded violations (tests/kit_lock.rs): file, rule, token, count.\n\
+             # Counts only go down: a lane that clears violations lowers them here (KIT_LOCK_WRITE=1).\n",
+    hint: "compose kit components; values come from ui/kit/gen",
+};
 
 #[test]
 fn the_kit_lock_holds() {
     let (counts, hard) = violations();
     assert!(hard.is_empty(), "kit lock:\n{}", hard.join("\n"));
-    // The first baseline is recorded once, when the file does not exist yet.
-    if !baseline_path().exists() && std::env::var_os("KIT_LOCK_WRITE").is_some() {
-        write_baseline(&counts);
-    }
-    let baseline = read_baseline();
-    let mut grown = Vec::new();
-    let mut shrunk = Vec::new();
-    for (key, n) in &counts {
-        let was = baseline.get(key).copied().unwrap_or(0);
-        if *n > was {
-            grown.push(format!(
-                "{}: {} `{}`: {n} (baseline {was})",
-                key.0, key.1, key.2
-            ));
-        }
-    }
-    for (key, was) in &baseline {
-        let n = counts.get(key).copied().unwrap_or(0);
-        if n < *was {
-            shrunk.push(format!(
-                "{}: {} `{}`: {n} (baseline {was})",
-                key.0, key.1, key.2
-            ));
-        }
-    }
-    assert!(
-        grown.is_empty(),
-        "new kit-lock violations (compose kit components; values come from ui/kit/gen):\n{}",
-        grown.join("\n")
-    );
-    if std::env::var_os("KIT_LOCK_WRITE").is_some() {
-        write_baseline(&counts);
-        return;
-    }
-    assert!(
-        shrunk.is_empty(),
-        "violations cleared: lower the baseline (KIT_LOCK_WRITE=1 cargo test -p wubble-ui --test kit_lock):\n{}",
-        shrunk.join("\n")
-    );
+    KIT_LOCK.ratchet(&counts);
 }
 
 #[test]
