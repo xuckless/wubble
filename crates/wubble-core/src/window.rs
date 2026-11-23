@@ -259,8 +259,10 @@ pub fn display_for<'a>(
     monitor: Option<&str>,
     displays: &'a [Display],
 ) -> Option<&'a Display> {
+    // reversed: of equal overlaps the first listed wins, as in Chromium
     let most = displays
         .iter()
+        .rev()
         .map(|d| (d.area.overlap(bounds), d))
         .filter(|(a, _)| *a > 0)
         .max_by_key(|(a, _)| *a)
@@ -282,31 +284,38 @@ const MIN_VISIBLE: i32 = 30;
 
 /// `bounds` moved so enough of the window is on `area` to grab and move it back (Chrome's
 /// `WindowSizer::AdjustBoundsToBeVisibleOnDisplay`): at least 30 px each way, the title bar
-/// never above the area. `fit` (macOS, where Chrome is aggressive) moves and shrinks the
-/// window to fit wholly inside the area.
+/// never above the area; moved and shrunk to fit inside an area too small for that. `mac` is
+/// Chrome's macOS rule, more aggressive: no taller than the area, and a window partly off it
+/// flush with its left edge, or its top.
 // Ported from Chromium chrome/browser/ui/window_sizer/window_sizer.cc
 // `WindowSizer::AdjustBoundsToBeVisibleOnDisplay` (BSD-3-Clause). The saved work area is not
-// kept (winit tells no work area), so its "resize to the new work area" step is left out.
-pub fn visible_on(bounds: Rect, area: &Rect, fit: bool) -> Rect {
+// kept (winit tells no work area), so its "fit to a changed work area" step is left out.
+pub fn visible_on(bounds: Rect, area: &Rect, mac: bool) -> Rect {
     let mut b = Rect {
         width: bounds.width.max(MIN_VISIBLE),
         height: bounds.height.max(MIN_VISIBLE),
         ..bounds
     };
-    if b.y < area.y {
-        b.y = area.y;
-    }
-    if fit {
+    b.y = b.y.max(area.y);
+    if mac {
         b.height = b.height.min(area.height);
-        return b.adjust_to_fit(area);
+        if b.x < area.x || b.right() > area.right() {
+            b.x = area.x;
+        }
+        if b.y < area.y || b.bottom() > area.bottom() {
+            b.y = area.y;
+        }
+        return b;
     }
     let min_y = area.y + MIN_VISIBLE - b.height;
     let min_x = area.x + MIN_VISIBLE - b.width;
     let max_y = area.bottom() - MIN_VISIBLE;
     let max_x = area.right() - MIN_VISIBLE;
-    // `max` then `min`, not `clamp`: a window taller than its area has min > max
-    b.y = b.y.max(min_y).min(max_y);
-    b.x = b.x.max(min_x).min(max_x);
+    if min_x >= max_x || min_y >= max_y {
+        return b.adjust_to_fit(area);
+    }
+    b.y = b.y.clamp(min_y, max_y);
+    b.x = b.x.clamp(min_x, max_x);
     b
 }
 
@@ -369,4 +378,139 @@ pub enum WindowTarget {
     /// A new Main window (tear-out).
     New,
     Existing(WindowId),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn r(x: i32, y: i32, width: i32, height: i32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    const FHD: Rect = r(0, 0, 1920, 1080);
+
+    #[test]
+    fn visible_on_follows_chromes_window_sizer() {
+        // (case, bounds, area, mac, expected)
+        let cases = [
+            ("inside stays", r(100, 100, 800, 600), FHD, false, r(100, 100, 800, 600)),
+            ("off the right", r(3000, 100, 800, 600), FHD, false, r(1890, 100, 800, 600)),
+            ("off the left", r(-2000, 100, 800, 600), FHD, false, r(-770, 100, 800, 600)),
+            ("above", r(100, -50, 800, 600), FHD, false, r(100, 0, 800, 600)),
+            ("below", r(100, 2000, 800, 600), FHD, false, r(100, 1050, 800, 600)),
+            ("tiny grows", r(100, 100, 10, 10), FHD, false, r(100, 100, 30, 30)),
+            (
+                "a second display",
+                r(5000, 100, 800, 600),
+                r(1920, 0, 1920, 1080),
+                false,
+                r(3810, 100, 800, 600),
+            ),
+            ("area too small: fit", r(100, 100, 10, 10), r(0, 0, 20, 20), false, r(0, 0, 20, 20)),
+            ("mac: inside stays", r(100, 100, 800, 600), FHD, true, r(100, 100, 800, 600)),
+            ("mac: partly right", r(1500, 100, 800, 600), FHD, true, r(0, 100, 800, 600)),
+            ("mac: partly below", r(100, 700, 800, 600), FHD, true, r(100, 0, 800, 600)),
+            ("mac: taller", r(100, 0, 800, 2000), FHD, true, r(100, 0, 800, 1080)),
+            ("mac: above", r(100, -50, 800, 600), FHD, true, r(100, 0, 800, 600)),
+        ];
+        for (case, bounds, area, mac, expected) in cases {
+            assert_eq!(visible_on(bounds, &area, mac), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn display_for_takes_the_most_covered_then_the_named_then_the_nearest() {
+        let displays = [
+            Display {
+                name: Some("A".into()),
+                area: FHD,
+            },
+            Display {
+                name: Some("B".into()),
+                area: r(1920, 0, 2560, 1440),
+            },
+        ];
+        // (case, bounds, monitor, expected display)
+        let cases = [
+            ("inside A", r(100, 100, 800, 600), Some("B"), Some("A")),
+            ("mostly on B", r(1800, 100, 800, 600), None, Some("B")),
+            ("equal on both: the first", r(1820, 0, 200, 100), None, Some("A")),
+            ("off both: its monitor", r(-3000, 100, 800, 600), Some("B"), Some("B")),
+            ("off both, monitor gone: nearest", r(-3000, 100, 800, 600), Some("C"), Some("A")),
+            ("off both, unnamed: nearest", r(10_000, 100, 800, 600), None, Some("B")),
+        ];
+        for (case, bounds, monitor, expected) in cases {
+            let d = display_for(&bounds, monitor, &displays);
+            assert_eq!(d.and_then(|d| d.name.as_deref()), expected, "{case}");
+        }
+        assert_eq!(display_for(&FHD, None, &[]), None, "no displays");
+    }
+
+    #[test]
+    fn geometry_keeps_restored_bounds_and_comes_back_in_its_state() {
+        use WindowState::*;
+        let g = |w: u32, h: u32, pos: Option<(i32, i32)>, state: WindowState, monitor: Option<&str>| Geometry {
+            width: w,
+            height: h,
+            pos,
+            state,
+            monitor: monitor.map(String::from),
+        };
+        let normal = g(800, 600, Some((10, 20)), Normal, Some("A"));
+        // (case, prev, reported, kept)
+        let observed = [
+            ("first report", None, normal.clone(), normal.clone()),
+            (
+                "maximized keeps the normal bounds",
+                Some(&normal),
+                g(1920, 1080, Some((0, 0)), Maximized, Some("B")),
+                g(800, 600, Some((10, 20)), Maximized, Some("B")),
+            ),
+            (
+                "first seen minimized: no position",
+                None,
+                g(160, 28, Some((-32000, -32000)), Minimized, None),
+                g(160, 28, None, Minimized, None),
+            ),
+            (
+                "normal again takes the new bounds",
+                Some(&g(800, 600, Some((10, 20)), Fullscreen, None)),
+                g(900, 700, Some((5, 5)), Normal, None),
+                g(900, 700, Some((5, 5)), Normal, None),
+            ),
+        ];
+        for (case, prev, now, kept) in observed {
+            assert_eq!(Geometry::observed(prev, now), kept, "{case}");
+        }
+        // (state, focused, comes back as)
+        let restored = [
+            (Minimized, true, Normal),
+            (Minimized, false, Minimized),
+            (Maximized, true, Maximized),
+            (Fullscreen, false, Fullscreen),
+        ];
+        for (state, focused, back) in restored {
+            let was = Geometry { state, ..normal.clone() };
+            assert_eq!(was.restoring(focused), Geometry { state: back, ..normal.clone() });
+        }
+        // (from, cascaded)
+        let cascades = [
+            (normal.clone(), g(800, 600, Some((20, 30)), Normal, Some("A"))),
+            (g(800, 600, None, Maximized, None), g(800, 600, None, Maximized, None)),
+            (g(800, 600, Some((0, 0)), Fullscreen, None), g(800, 600, Some((10, 10)), Normal, None)),
+        ];
+        for (from, to) in cascades {
+            assert_eq!(from.cascaded(), to);
+        }
+        for s in [Normal, Maximized, Fullscreen, Minimized] {
+            assert_eq!(WindowState::from_id(s.id()), Some(s));
+        }
+        assert_eq!(WindowState::from_id("hidden"), None);
+    }
 }
