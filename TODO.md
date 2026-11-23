@@ -53,7 +53,7 @@ Beside it, small and unordered:
 
 Built as planned in the research, each as its own pass; nothing downloads or asks a server unless the owner turns it on.
 
-- [ ] Page translation, on-device: the pipeline in [docs/research/translate.md](docs/research/translate.md)
+- [ ] Page translation, on-device: the pipeline in [docs/research/translate.md](docs/research/translate.md) (build-out `translate-detect-offer`, `translate-bergamot-backend`, `translate-selection-reader`). First, spikes of about 1.5 days: does Chrome's `Translator` API answer in CEF's windowless mode (`View::eval` of `Translator.availability`; expected not), Bergamot's HTML and alignment API, the model registry and each model's licence (the models repo is archived). Then a `translate` frame channel and walker script (the cosmetic channel's pattern), `wubble_core::translate` (state, `whatlang` detection), a helper process running bergamot-translator; about 17 days in all
 - [ ] Live text in images, on-device OCR: the pipeline in [docs/research/ocr.md](docs/research/ocr.md)
 
 ## MCP server
@@ -242,6 +242,36 @@ Open, to build or check:
 - [ ] Default-browser registration, URL handlers
 - [ ] Hardening: vault unlock off the store thread
 
+## Performance pass 3 (owner, 2026-11-22)
+Target: the main process under 5 % of a core while a page moves (it is 8 to 9 % for video or a spinner at 60 Hz, 14 % on the 300 Hz display; idle is 1 to 2 %). The owner approved all six on 2026-11-22, the core fork and the faked glass included. Branch `untested/perf3` holds the first three as code written without a compile or a run (the machine was busy): build, test and measure it before anything else. Not in a release yet: PR #4's performance work (fcc4d23: scene dirty rects, the blur's reach, idle timers, cached bind groups), merged after preview.7 was tagged.
+- [ ] Build and test `untested/perf3` (`cargo test -p wubble-core -p wubble-gfx`, then the workspace), then measure each commit alone: `--measure idle` (pump runs a second), the spinner and caret pages on the 300 Hz display (CEF frames a second), `scripts/bench/profile.sh`
+- [ ] Frame rate by content (written, `pacing::ContentRate`): a page with small damage and no input for 300 ms paints at 60 Hz at most. Left: the shell's begin frames (macOS) are not capped, so a spinner there still paints at 120 Hz; a pop-up view takes its opener's ceiling; look at a small animation at 60 on the 300 Hz display by eye
+- [ ] Quiet pump (written, `pump::Tempo::Quiet`): 250 ms between runs once nothing painted for a second, not 33 ms. Left: check nothing waits on the pump as a clock (`Host::show_frame` runs after each pump; start-up, downloads, an agent's page); the begin-frame driver's own 33 ms idle timer on macOS; then try no ceiling at all
+- [ ] Profile-guided build (written, `scripts/bench/pgo.sh`, never run): compare with the plain `dist` build, then decide whether releases use it
+- [ ] Fork `i-slint-core` (vendored beside the Skia renderer): skip unchanged sub-trees in the render walk, then in the dirty-region walk (renderer-roads.md section 6, changes 1 and 2; up to 30 % of the main thread during page frames)
+- [ ] One copy less per page frame, by a CEF patch: OSR keeps the frame's buffer until wubble releases it and delivers RGBA; wubble imports each pooled dmabuf (IOSurface) once and samples it, so the copy and its wait in the paint callback (`vendor/welding/src/native_frame/mod.rs`), the swizzle blit and the per-frame import go
+- [ ] The page on a compositor surface: each pane's page on its own `wl_subsurface` (macOS: a `CALayer` on the IOSurface) with CEF's buffer attached directly, the shell above it; glass over a page is faked (a low-rate sample of the page, as the ambience's 8 Hz). A page frame then costs one attach and commit: no import, blit, Slint walk, flush or present. Overturns four frame-path decisions; prototype one pane without glass on Linux and measure first
+
+## Web view parity with Chrome (owner, 2026-11-22)
+The owner wants the page view to feel like Chrome's, 1:1. Audit of 2026-11-22, read from the code, nothing run; drags inside a window, between panes, onto the shell and to and from other apps on Wayland already work. In the order a user feels them:
+- [ ] Wayland clipboard is text only: a page's copy and paste loses HTML, images, files and custom formats (`clipboard.rs` `bridge_needed`, `wl/wayland.rs` `TEXT_TYPES`; build-out `wayland-clipboard-rich`)
+- [ ] The page is told the window is the screen: `screen.width`, `availLeft`, `window.screenX` (welding `linux_cef/cef_backed.rs` `screen_info`, engine `ScreenArea`); report the monitor and the window's place, keep pop-ups clamped in the host
+- [ ] Touch and pen never reach a page (Slint turns a touch into mouse events): no touchstart, no pen PointerEvents, no touch scroll or long press (build-out `touch-input`, `pen-input`)
+- [ ] Cursors: CSS image cursors and their hotspot are dropped (`on_cursor_change` ignores the custom cursor info); zoom-in, zoom-out, copy, alias, context-menu, all-scroll and cell show the arrow (build-out `cursor-custom-altgr`)
+- [ ] Drags to and from other apps: none on X11 and Windows beyond dropped files (`wl::Null`), macOS written and never run; custom dataTransfer types leave the window nowhere; a page drag to a second wubble window (build-out `x11-xdnd`, `windows-drag-drop`, `drag-custom-types-out`, `cross-window-page-drag`)
+- [ ] Wheel: check by hand that a mouse wheel gets Blink's smooth scroll (the deltas are sent as precise); no fling on Linux touchpads; no momentum phases or elastic overscroll on macOS (needs a CEF patch)
+- [ ] IME: no caret rect before the first composed character (the candidate window starts misplaced), no underline styles, on in password fields on Linux and macOS (build-out `ime-caret-underlines`)
+- [ ] Pointer lock: the permission prompt exists, nothing confines the pointer or sends relative motion (a CEF patch, likely)
+- [ ] The back and forward mouse buttons navigate in the shell and never reach the page (no `auxclick`)
+- [ ] `<datalist>` shows nothing; the context menu lacks Open Link in New Window, Add to dictionary, Search image; `window.open` ignores the position
+
+## Features no plan has yet (scout, 2026-11-22)
+Checked against the build-out list and this file; the owner picks.
+- [ ] Preferred languages: Accept-Language and the page locale (nothing sets them; translation and spell languages need it first)
+- [ ] QR code for a page or a link; search an image (an engine's URL template); copy link to highlight (text fragments)
+- [ ] Device pickers for WebUSB, Serial, HID and Bluetooth; FedCM and Payment Request (spike each: does CEF's windowless mode forward them)
+- [ ] Per-site user agent ("request desktop site"); history grouped by task; sidebar web panels; the shell in other languages
+
 ## Optimization roadmap (the current work)
 Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:
 ### From the owner's Mac run of preview.5 (2026-11-21)
@@ -261,12 +291,9 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] 3. A 60 fps VP9 video in a background tab drops 1.3 % of its frames, more on a tab switch (the one clip macOS decodes in hardware). Measure first whether the drops are decode or presentation (`video.getVideoPlaybackQuality()` against the GPU process's samples). Suspects: a hidden view still holds its frame targets and competes for the GPU, the switch re-creates a surface, the hidden page's frame clock is throttled unevenly. Tied to "Hidden tabs free their frame targets" below and the CEF patch "hide a view's compositor on `Hide()`" (M6)
 - [ ] 4. The main process keeps about 330 MB after every tab closes (850 MB at start, 1.18 GB after). Tell a cache from a leak: repeat open-10/close-10 five times and watch whether the footprint keeps rising or levels off; then a per-allocation breakdown (`heap`/`vmmap` on the Mac, "Memory breakdown" below). Suspects: Skia's resource cache (256 MiB budget, "Skia cache hygiene" in M6), imported page textures or their wgpu bind groups not dropped with the view, Slint image caches for favicons and snapshots, closed tabs' history and snapshots kept for reopen
 - [ ] 5. The GPU stays 60 to 78 % busy during video: the same cause as 1; re-measure after each step of 1 and stop when it follows the video's own area and rate
-- [ ] The shell's items are still walked twice per page frame (Slint's dirty-region pass and render walk): the roads and estimates are in docs/research/renderer-roads.md section 6; the owner decides on a core fork or waiting for slint#15028
 - [ ] An inset shadow (`inner-shadow-*`) at a fractional device position: its anti-aliased edge column comes out up to 5 levels different when a partial frame's clip covers it than in a whole frame, and stays until the item is redrawn (Settings' section pill, the address field; gallery 69 in 2 of 6 runs). Snapping the shadow image to the pixel grid removes it but moves the shadow's edges by up to 3 levels against upstream: the owner's call (measurements.md "Pixel questions")
 - [ ] Chromium's GPU process exits (133, a trap) right after the gallery's agent scenes 12 and 13 end their session (`agents_stop`) in most runs, on main too; when it happens with the page alive, that page lays out again with smaller body text until it is reloaded (`42-toast-question`; reproduced on main by killing the GPU process)
-- [ ] The CEF pump wakes 30 times a second on a still page (its 33 ms ceiling, a recorded decision): report the energy case to the owner before changing it
 - [ ] macOS: the window is transparent (`background: transparent`, so the Metal layer is not opaque) and WindowServer blends the whole window on every present; an opaque window where the shell covers it all, after a look on the Mac
-- [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`
 - [ ] Profile again with kernel time (needs root for `perf`): GPU driver calls and present, about a third of the main process's CPU, unseen so far
 - [ ] The CEF message pump on the main thread (14 % during video): what runs there per frame
 - [ ] Find the Speedometer gap (16 % behind Chromium): run it in plain CEF with our `libcef.so`, no shell
@@ -275,11 +302,9 @@ starts with a measurement on the Mac that names the cause before any code change
 - [ ] Hidden tabs free their frame targets; the blur pyramid exists only while glass is open; revisit Skia's 256 MiB layer budget
 - [ ] A page frame touches the scene and the blur pyramid only while overlay glass or motion is on screen (1.3 % today: low value)
 - [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step (`scripts/bench/`; the Speedometer and MotionMark checkouts are not kept: fetch them into a scratch directory)
-- [ ] Only if plain video still costs far more than Chromium after the above: the page on a native OS surface with faked glass (overturns four frame-path decisions; owner decides)
 
 ## Open decisions (owner)
-- Mac heat (measure first with `scripts/bench/mac-energy.sh`): an opaque window on macOS, a lower rate for the start page's liquid, the CEF pump's 33 ms ceiling on a still page
-- Fork `i-slint-core` to skip the second item walk, or wait for slint#15028
+- Mac heat (measure first with `scripts/bench/mac-energy.sh`): an opaque window on macOS, a lower rate for the start page's liquid
 - PR #1's defaults as merged: `install.sh` installs on the sha256 alone without `minisign` (a warning), page Escape, sentence-case labels, agent-tab refusals, the shortcut reset
 - PR #2's choices as merged: compact mode is the sidebar toggle; the autofill key chip at the page's top left
 - Attach FFmpeg's source tarball to each release, or keep the link in the notes
