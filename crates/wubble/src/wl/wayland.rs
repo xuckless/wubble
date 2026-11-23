@@ -2,7 +2,9 @@
 //! `wl_display` (winit keeps its own queue), serving what winit 0.30 leaves
 //! out on Wayland, for every window of the process:
 //!
-//! - the clipboard and the primary selection (`crate::clipboard`);
+//! - the clipboard and the primary selection (`crate::clipboard`): a page's copy
+//!   with every type it has, and a paste reading every type a page takes
+//!   (`wubble_core::clipboard`), the primary selection text only;
 //! - a `wl_data_device` drop target: drags from other apps (files, links,
 //!   HTML, text) reach the page under the pointer;
 //! - a `wl_data_source` drag source: a page drag that leaves its window
@@ -38,7 +40,7 @@ use std::time::Duration;
 use sctk::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use sctk::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use sctk::data_device_manager::data_source::{CopyPasteSource, DataSourceHandler, DragSource};
-use sctk::data_device_manager::{DataDeviceManagerState, WritePipe};
+use sctk::data_device_manager::{DataDeviceManagerState, ReadPipe, WritePipe};
 use sctk::primary_selection::PrimarySelectionManagerState;
 use sctk::primary_selection::device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler};
 use sctk::primary_selection::selection::{PrimarySelectionSource, PrimarySelectionSourceHandler};
@@ -79,6 +81,7 @@ use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
+use wubble_core::clipboard::{self, Payload, Reader};
 use wubble_core::dnd::{self, Kind, Part, UriList};
 use wubble_core::gesture::{PinchInput, SwipeInput};
 use wubble_core::window::WindowId;
@@ -103,9 +106,6 @@ const LOAD_WAIT: Duration = Duration::from_secs(2);
 const LOCK_MASK: u32 = 1 << 1;
 const MOD2_MASK: u32 = 1 << 4;
 
-/// The text types the clipboard offers and takes (smithay-clipboard's).
-const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
-
 enum Command {
     AddWindow(WindowId, WlSurface),
     RemoveWindow(WindowId),
@@ -120,9 +120,10 @@ enum Command {
         generation: u64,
         data: DragData,
     },
-    Store(Buffer, String),
-    /// Read the selection; the answer goes to the loads channel with this serial.
-    Load(Buffer, u64),
+    Store(Buffer, Payload),
+    /// Read what the reader takes of the selection; the answer goes to the loads channel with
+    /// this serial.
+    Load(Buffer, Reader, u64),
     Exit,
 }
 
@@ -130,7 +131,7 @@ enum Command {
 pub struct Worker {
     connection: Connection,
     tx: Sender<Command>,
-    loads: mpsc::Receiver<(u64, Option<String>)>,
+    loads: mpsc::Receiver<(u64, Option<Payload>)>,
     load_serial: std::cell::Cell<u64>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -169,17 +170,29 @@ impl Worker {
 
     /// Puts `text` on `buffer`.
     pub fn store(&self, buffer: Buffer, text: &str) {
-        let _ = self.tx.send(Command::Store(buffer, text.to_owned()));
+        let text = Some(text.to_owned());
+        self.store_payload(buffer, Payload { text, ..Payload::default() });
+    }
+
+    /// Puts `payload` on `buffer`, under every type it has (`wubble_core::clipboard::offers`).
+    pub fn store_payload(&self, buffer: Buffer, payload: Payload) {
+        let _ = self.tx.send(Command::Store(buffer, payload));
     }
 
     /// The text on `buffer`, waiting a little for its owner to send it.
     pub fn load(&self, buffer: Buffer) -> Option<String> {
+        self.load_payload(buffer, Reader::Text)?.text
+    }
+
+    /// What `reader` takes from `buffer` (the primary selection: its text), waiting a little
+    /// for its owner to send it.
+    pub fn load_payload(&self, buffer: Buffer, reader: Reader) -> Option<Payload> {
         let serial = self.load_serial.get() + 1;
         self.load_serial.set(serial);
-        self.tx.send(Command::Load(buffer, serial)).ok()?;
+        self.tx.send(Command::Load(buffer, reader, serial)).ok()?;
         loop {
             match self.loads.recv_timeout(LOAD_WAIT) {
-                Ok((s, text)) if s == serial => return text,
+                Ok((s, payload)) if s == serial => return payload,
                 // A late answer to a load that gave up.
                 Ok(_) => continue,
                 Err(_) => return None,
@@ -245,7 +258,7 @@ fn run(
     connection: Connection,
     rx: Channel<Command>,
     tx: Sender<Command>,
-    loads: mpsc::Sender<(u64, Option<String>)>,
+    loads: mpsc::Sender<(u64, Option<Payload>)>,
     drag_dir: PathBuf,
 ) {
     let Ok((globals, queue)) = registry_queue_init::<State>(&connection) else {
@@ -358,7 +371,7 @@ struct State {
     shm: Option<Shm>,
     qh: QueueHandle<State>,
     tx: Sender<Command>,
-    loads: mpsc::Sender<(u64, Option<String>)>,
+    loads: mpsc::Sender<(u64, Option<Payload>)>,
     exit: bool,
 
     windows: Vec<(WindowId, WlSurface)>,
@@ -389,12 +402,16 @@ struct State {
     source: Option<DragOut>,
     /// The pictures' files dragged out.
     folders: Folders,
-    /// The selections stored, while offered. The old one is destroyed before a new one is
-    /// set: the compositor (mutter, weston) ignores a `set_selection` whose serial is not newer
-    /// than the current selection's, and the serial stays the same between input events.
-    clipboard: Option<(CopyPasteSource, Arc<[u8]>)>,
-    primary: Option<(PrimarySelectionSource, Arc<[u8]>)>,
+    /// The selections stored, with what each offers, while offered. The old one is destroyed
+    /// before a new one is set: the compositor (mutter, weston) ignores a `set_selection` whose
+    /// serial is not newer than the current selection's, and the serial stays the same between
+    /// input events.
+    clipboard: Option<(CopyPasteSource, Selection)>,
+    primary: Option<(PrimarySelectionSource, Selection)>,
 }
+
+/// What a stored selection offers: each type with its bytes.
+type Selection = Arc<[(String, Arc<[u8]>)]>;
 
 /// An OS drag a page drag became: its window, what it carries, the action
 /// chosen, its icon (kept until it ends).
@@ -438,7 +455,7 @@ impl State {
         globals: &GlobalList,
         qh: &QueueHandle<Self>,
         tx: Sender<Command>,
-        loads: mpsc::Sender<(u64, Option<String>)>,
+        loads: mpsc::Sender<(u64, Option<Payload>)>,
         folders: Folders,
     ) -> Self {
         let gestures = globals
@@ -524,9 +541,9 @@ impl State {
                 data,
                 allowed,
             } => self.start_drag(window, data, allowed),
-            Command::Store(buffer, text) => self.store(buffer, text),
-            Command::Load(buffer, serial) => {
-                if !self.load(buffer, serial) {
+            Command::Store(buffer, payload) => self.store(buffer, payload),
+            Command::Load(buffer, reader, serial) => {
+                if !self.load(buffer, reader, serial) {
                     let _ = self.loads.send((serial, None));
                 }
             }
@@ -653,20 +670,24 @@ impl State {
         deliver(window, AuxEvent::DragEnded(op));
     }
 
-    fn store(&mut self, buffer: Buffer, text: String) {
+    fn store(&mut self, buffer: Buffer, payload: Payload) {
         if self.focus.is_none() {
             return;
         }
-        let bytes: Arc<[u8]> = Arc::from(text.into_bytes());
+        let offers: Selection = clipboard::offers(&payload).into();
+        if offers.is_empty() {
+            return;
+        }
+        let mimes = offers.iter().map(|(mime, _)| mime.as_str());
         match buffer {
             Buffer::Clipboard => {
                 let (Some(manager), Some(device)) = (&self.manager, &self.device) else {
                     return;
                 };
                 self.clipboard = None;
-                let source = manager.create_copy_paste_source(&self.qh, TEXT_TYPES);
+                let source = manager.create_copy_paste_source(&self.qh, mimes);
                 source.set_selection(device, self.serial);
-                self.clipboard = Some((source, bytes));
+                self.clipboard = Some((source, offers));
             }
             Buffer::Primary => {
                 let (Some(manager), Some(device)) = (&self.primary_manager, &self.primary_device)
@@ -674,76 +695,95 @@ impl State {
                     return;
                 };
                 self.primary = None;
-                let source = manager.create_selection_source(&self.qh, TEXT_TYPES);
+                let source = manager.create_selection_source(&self.qh, mimes);
                 source.set_selection(device, self.serial);
-                self.primary = Some((source, bytes));
+                self.primary = Some((source, offers));
             }
         }
     }
 
-    /// Starts reading `buffer`; false when there is nothing to read.
-    fn load(&mut self, buffer: Buffer, serial: u64) -> bool {
-        let pipe = match buffer {
+    /// Starts reading what `reader` takes of `buffer` (the primary selection: its text, as on
+    /// Chrome); false when there is nothing to read.
+    fn load(&mut self, buffer: Buffer, reader: Reader, serial: u64) -> bool {
+        let pipes = match buffer {
             Buffer::Clipboard => self
                 .device
                 .as_ref()
                 .and_then(|d| d.data().selection_offer())
-                .and_then(|offer| {
-                    let mime = offer.with_mime_types(text_type)?;
-                    offer.receive(mime.to_owned()).ok()
+                .map(|offer| {
+                    let plan = offer.with_mime_types(|mimes| clipboard::plan(mimes, reader));
+                    receive_all(plan, |mime| offer.receive(mime).ok())
                 }),
             Buffer::Primary => self
                 .primary_device
                 .as_ref()
                 .and_then(|d| d.data().selection_offer())
-                .and_then(|offer| {
-                    let mime = offer.with_mime_types(text_type)?;
-                    offer.receive(mime.to_owned()).ok()
+                .map(|offer| {
+                    let plan = offer.with_mime_types(|m| clipboard::plan(m, Reader::Text));
+                    receive_all(plan, |mime| offer.receive(mime).ok())
                 }),
-        };
-        // Safety: the pipe is open while `pipe` lives; the clone outlives it.
-        let Some(file) = pipe.and_then(|p| own(unsafe { BorrowedFd::borrow_raw(p.as_raw_fd()) }))
-        else {
+        }
+        .unwrap_or_default();
+        if pipes.is_empty() {
             return false;
-        };
+        }
         let loads = self.loads.clone();
         std::thread::Builder::new()
             .name("wubble-paste".into())
             .spawn(move || {
-                let mut bytes = vec![];
-                let text = file
-                    .take(DROP_CAP)
-                    .read_to_end(&mut bytes)
-                    .ok()
-                    .map(|_| normalize_to_lf(String::from_utf8_lossy(&bytes).into_owned()));
-                let _ = loads.send((serial, text));
+                let parts = pipes
+                    .into_iter()
+                    .filter_map(|(kind, mime, file)| {
+                        let mut bytes = vec![];
+                        file.take(kind.cap()).read_to_end(&mut bytes).ok()?;
+                        Some((kind, mime, bytes))
+                    })
+                    .collect();
+                let (mut payload, paths) = clipboard::read(parts);
+                // A file manager's copy: the files' bytes, as Chromium hands a pasted file to
+                // the page (only a `paste` event's reader takes them).
+                for path in paths {
+                    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    else {
+                        continue;
+                    };
+                    let fits = std::fs::metadata(&path)
+                        .is_ok_and(|m| m.is_file() && m.len() <= clipboard::FILES_CAP);
+                    if let Some(bytes) = fits.then(|| std::fs::read(&path).ok()).flatten() {
+                        clipboard::add_file(&mut payload, name, bytes);
+                    }
+                }
+                let _ = loads.send((serial, Some(payload)));
             })
             .is_ok()
     }
 
-    /// Writes the stored selection to a paste's pipe.
-    fn send_selection(bytes: Arc<[u8]>, mime: &str, pipe: WritePipe) {
-        if !TEXT_TYPES.contains(&mime) {
+    /// Writes the stored selection's `mime` to a paste's pipe.
+    fn send_selection(offers: &Selection, mime: &str, pipe: WritePipe) {
+        let Some((_, bytes)) = offers.iter().find(|(m, _)| m == mime) else {
             return;
-        }
+        };
+        let bytes = bytes.clone();
         send_on_thread(&pipe, move |file| {
             let _ = file.write_all(&bytes);
         });
     }
 }
 
-/// The clipboard's text type among `offered` (smithay-clipboard's `find_allowed`: the
-/// UTF-8 ones, else plain `text/plain`).
-fn text_type(offered: &[String]) -> Option<&'static str> {
-    TEXT_TYPES
-        .iter()
-        .find(|t| offered.iter().any(|o| o == *t))
-        .copied()
-}
-
-/// CR and CRLF as LF (smithay-clipboard `mime.rs` `normalize_to_lf`).
-fn normalize_to_lf(text: String) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
+/// The read ends of the types `plan` names, as files, each with its entry; `receive` asks the
+/// offer for one type.
+fn receive_all<T>(
+    plan: Vec<(T, String)>,
+    receive: impl Fn(String) -> Option<ReadPipe>,
+) -> Vec<(T, String, std::fs::File)> {
+    plan.into_iter()
+        .filter_map(|(entry, mime)| {
+            let pipe = receive(mime.clone())?;
+            // Safety: the pipe is open while `pipe` lives; the clone outlives it.
+            let file = own(unsafe { BorrowedFd::borrow_raw(pipe.as_raw_fd()) })?;
+            Some((entry, mime, file))
+        })
+        .collect()
 }
 
 /// A dragged picture: its type when known, its bytes, its file's name.
@@ -912,20 +952,13 @@ fn read_drop(
     generation: u64,
     tx: Sender<Command>,
 ) {
-    let pipes: Vec<(Kind, std::fs::File)> = plan
-        .into_iter()
-        .filter_map(|(kind, mime)| {
-            let pipe = offer.receive(mime.to_owned()).ok()?;
-            // Safety: the pipe is open while `pipe` lives; the clone outlives it.
-            let file = own(unsafe { BorrowedFd::borrow_raw(pipe.as_raw_fd()) })?;
-            Some((kind, file))
-        })
-        .collect();
+    let plan = plan.into_iter().map(|(kind, mime)| (kind, mime.to_owned()));
+    let pipes = receive_all(plan.collect(), |mime| offer.receive(mime).ok());
     let spawned = std::thread::Builder::new()
         .name("wubble-drop".into())
         .spawn(move || {
             let mut data = DragData::default();
-            for (kind, file) in pipes {
+            for (kind, _, file) in pipes {
                 let mut bytes = vec![];
                 if file.take(DROP_CAP).read_to_end(&mut bytes).is_err() {
                     continue;
@@ -1072,10 +1105,10 @@ impl DataSourceHandler for State {
             }
             return;
         }
-        if let Some((copy, bytes)) = &self.clipboard
+        if let Some((copy, offers)) = &self.clipboard
             && copy.inner() == source
         {
-            State::send_selection(bytes.clone(), &mime, pipe);
+            State::send_selection(offers, &mime, pipe);
         }
     }
 
@@ -1131,10 +1164,10 @@ impl PrimarySelectionSourceHandler for State {
         mime: String,
         pipe: WritePipe,
     ) {
-        if let Some((ours, bytes)) = &self.primary
+        if let Some((ours, offers)) = &self.primary
             && ours.inner() == source
         {
-            State::send_selection(bytes.clone(), &mime, pipe);
+            State::send_selection(offers, &mime, pipe);
         }
     }
 
@@ -1740,17 +1773,5 @@ mod tests {
         assert_eq!(drag_ops(DndAction::Move), DragOps::MOVE);
         assert_eq!(drag_ops(DndAction::Copy), DragOps::COPY);
         assert_eq!(drag_ops(DndAction::empty()), DragOps::NONE);
-    }
-
-    #[test]
-    fn pastes_take_utf8_text_first() {
-        let offered = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            text_type(&offered(&["text/plain", "UTF8_STRING"])),
-            Some("UTF8_STRING")
-        );
-        assert_eq!(text_type(&offered(&["text/plain"])), Some("text/plain"));
-        assert_eq!(text_type(&offered(&["image/png"])), None);
-        assert_eq!(normalize_to_lf("a\r\nb\rc".into()), "a\nb\nc");
     }
 }

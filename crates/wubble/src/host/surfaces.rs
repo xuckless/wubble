@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use wubble_core::action::Action;
 use wubble_core::busy::Reason;
+use wubble_core::clipboard::{Payload, Reader};
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
@@ -18,7 +19,7 @@ use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
-use wubble_engine::page::{ClipboardRequest, PageEvent, Rect, RequestId};
+use wubble_engine::page::{ClipboardRequest, PageEvent, PasteFrom, Rect, RequestId};
 use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
@@ -921,7 +922,8 @@ impl Host {
     }
 
     /// A frame's clipboard request (wubble-helper `clipboard.js`): copies go to the system
-    /// clipboard, pastes come from it, or from the primary selection after a middle click.
+    /// clipboard with every type they have, pastes and reads come from it with the types their
+    /// reader takes, or from the primary selection after a middle click.
     fn clipboard_request(
         &mut self,
         window: &AppWindow,
@@ -929,34 +931,57 @@ impl Host {
         frame: String,
         request: ClipboardRequest,
     ) {
-        let load = |host: &mut Self, buffer| {
-            host.clipboard
-                .load(window.window(), buffer)
-                .unwrap_or_default()
-        };
-        match request {
-            ClipboardRequest::Copy(text) => self.copy(&text),
+        let (buffer, reader, read) = match request {
+            ClipboardRequest::Copy(payload) => {
+                let text = payload.text.clone();
+                if !self.clipboard.store_rich(window.window(), payload)
+                    && let Some(text) = text
+                {
+                    self.copy(&text);
+                }
+                return;
+            }
+            ClipboardRequest::CopyImage(url) => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.download_image(&url);
+                }
+                return;
+            }
             ClipboardRequest::Primary(text) => {
                 self.clipboard
                     .store(window.window(), Buffer::Primary, &text);
+                return;
             }
-            ClipboardRequest::Paste { primary } => {
-                let buffer = if primary {
-                    Buffer::Primary
-                } else {
-                    Buffer::Clipboard
-                };
-                let text = load(self, buffer);
-                if let Some(view) = self.tab_view(tab) {
-                    view.answer_clipboard(&frame, &text, None);
-                }
-            }
-            ClipboardRequest::Read(id) => {
-                let text = load(self, Buffer::Clipboard);
-                if let Some(view) = self.tab_view(tab) {
-                    view.answer_clipboard(&frame, &text, Some(id));
-                }
-            }
+            ClipboardRequest::Paste(from) => match from {
+                PasteFrom::Clipboard => (Buffer::Clipboard, Reader::Paste, None),
+                PasteFrom::PlainText => (Buffer::Clipboard, Reader::Text, None),
+                PasteFrom::Primary => (Buffer::Primary, Reader::Text, None),
+            },
+            ClipboardRequest::Read(id, reader) => (Buffer::Clipboard, reader, Some(id)),
+        };
+        let payload = self.clipboard_payload(window, buffer, reader);
+        if let Some(view) = self.tab_view(tab) {
+            view.answer_clipboard(&frame, &payload, read);
+        }
+    }
+
+    /// What `reader` takes from `buffer`: text through the text read every clipboard has, the
+    /// rest only where the host carries the pages' clipboard.
+    fn clipboard_payload(
+        &mut self,
+        window: &AppWindow,
+        buffer: Buffer,
+        reader: Reader,
+    ) -> Payload {
+        match reader {
+            Reader::Text => Payload {
+                text: self.clipboard.load(window.window(), buffer),
+                ..Payload::default()
+            },
+            Reader::AsyncApi | Reader::Paste => self
+                .clipboard
+                .load_rich(window.window(), reader)
+                .unwrap_or_default(),
         }
     }
 }
