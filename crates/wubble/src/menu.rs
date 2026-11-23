@@ -219,9 +219,12 @@ impl Ctx<'_> {
     fn misspelled(&self) -> bool {
         self.menu.editable && !self.menu.misspelled_word.is_empty()
     }
-    /// A selection outside a field on a page a text fragment can name.
+    /// A selection outside a field on a page a text fragment can name, in its main frame: a
+    /// fragment names text of the page's own document, never a frame's (Chrome offers none
+    /// there).
     fn highlight(&self) -> Option<String> {
-        self.selection()
+        let main = self.menu.frame_url.is_empty() || self.menu.frame_url == self.menu.page_url;
+        (self.selection() && main)
             .then(|| highlight::link_to_highlight(&self.menu.page_url, &self.menu.selection_text))
             .flatten()
     }
@@ -2055,6 +2058,16 @@ mod tests {
         assert_eq!(
             command(&selection, "Copy Link to Highlight"),
             Command::CopyText("https://a.test/#:~:text=hello%20world".into())
+        );
+        // the same selection in a frame: no fragment of the page names it
+        let in_frame = ContextMenu {
+            frame_url: "https://b.test/f".into(),
+            ..selection.clone()
+        };
+        assert!(
+            entries(&in_frame, google)
+                .iter()
+                .all(|e| e.label != "Copy Link to Highlight")
         );
         let frame = ContextMenu {
             frame_url: "https://b.test/f".into(),
