@@ -15,14 +15,11 @@
 //!
 //! The invariant (tests walk it): the layer is visible exactly while the route is [`Route::Layer`]
 //! or [`Route::Leaving`], so it is visible whenever the shell does not draw the page, and it is
-//! never left over the shell once the shell draws the page again. The layer is hidden only after
-//! the shell was given the page (a `Present` or `PresentLatest` since the last `Show`).
+//! never left over the shell once the shell draws the page again. The layer is hidden only once
+//! the shell presents a render that drew the page's frame at least as new as the layer's
+//! ([`Event::Presenting`]): a generation (CEF's paint count), not a guessed number of renders.
 
-/// How many of the shell's renders the layer stays visible for once the shell has the page
-/// again: one for a render already queued before the page was given to it, one for that render's
-/// drawable to reach the screen (the shell's layer presents without a transaction). A guess to
-/// check on the Mac (a flash of an old page frame when leaving fullscreen means more).
-pub const LEAVING_RENDERS: u8 = 2;
+use crate::overlay::Coverage;
 
 /// Where a pane's frames go.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -36,11 +33,12 @@ pub enum Route {
     Composited,
     /// The OS buffers were asked for; the shell draws the page until the first frame in one.
     Entering,
-    /// The layer shows the page; the shell's presenter and render are skipped for it.
-    Layer,
-    /// The shell was given the page again; the layer stays visible for `renders` more of the
-    /// shell's renders ([`LEAVING_RENDERS`]).
-    Leaving { renders: u8 },
+    /// The layer shows the page's frame of generation `shown`; the shell's presenter and render
+    /// are skipped for it.
+    Layer { shown: u64 },
+    /// The shell was given the page's frame of generation `until` (or the layer's own, handed
+    /// over); the layer stays visible until the shell presents a render that drew it.
+    Leaving { until: u64 },
 }
 
 /// A reason the shell must draw the page itself.
@@ -51,8 +49,8 @@ pub enum Need {
     /// fullscreen, not the picture-in-picture window): stage 1 has no hole to show a layer
     /// through.
     Windowed,
-    /// Shell UI over the page: the video controls, an overlay (`crate::overlay`), a toast, a
-    /// popup. The layer would cover it.
+    /// Shell UI over the page, a leaving one included: `overlay::covers` is not
+    /// [`Coverage::None`] ([`Needs::covered`]). The layer would cover it.
     Covered,
     /// The pane's size is changing: the shell stretches its stale frame (`crate::stretch`).
     Resizing,
@@ -71,6 +69,11 @@ impl Needs {
     pub fn with(self, need: Need, on: bool) -> Needs {
         let bit = 1 << need as u8;
         Needs(if on { self.0 | bit } else { self.0 & !bit })
+    }
+
+    /// This set with [`Need::Covered`] as the pane's `coverage` says.
+    pub fn covered(self, coverage: Coverage) -> Needs {
+        self.with(Need::Covered, coverage != Coverage::None)
     }
 
     pub fn has(self, need: Need) -> bool {
@@ -92,10 +95,12 @@ pub enum Event {
     /// entered or left, shell UI over the page shown or gone, a resize begun or settled, a shot
     /// asked or taken).
     Changed,
-    /// The pane's view painted a frame; `os`: it was copied into an OS buffer.
-    Frame { os: bool },
-    /// The shell rendered and presented a frame of this window.
-    Presented,
+    /// The pane's view painted the frame of generation `painted` (CEF's paint count,
+    /// `NativeFrame::generation`); `os`: it was copied into an OS buffer.
+    Frame { os: bool, painted: u64 },
+    /// The shell is presenting a render of this window that drew the page's frame of `drawn`
+    /// (the generation its presenter held as the render began; none: no frame of the page).
+    Presenting { drawn: Option<u64> },
     /// The layer refused a frame.
     Failed,
 }
@@ -116,16 +121,14 @@ pub enum Effect {
     Redraw,
 }
 
-/// The route after `event` with `needs` holding now, and what the host does (in order).
+/// The route after `event` with `needs` holding now, and what the host does (in order). Every
+/// (route, event) pair is an arm: a new behaviour is a new arm or route, not a check beside.
 pub fn transition(route: Route, needs: Needs, event: Event) -> (Route, Vec<Effect>) {
     use {Effect::*, Event::*, Route::*};
     let blocked = needs.any();
-    let leaving = Leaving {
-        renders: LEAVING_RENDERS,
-    };
     match (route, event) {
         // without a layer the shell draws every frame
-        (Unsupported, Capable(false) | Changed | Presented | Failed) => (route, vec![]),
+        (Unsupported, Capable(false) | Changed | Presenting { .. } | Failed) => (route, vec![]),
         (Unsupported, Frame { .. }) => (route, vec![Present]),
         // a layer to use: the copy goes to OS buffers once nothing needs the shell
         (Unsupported | Composited, Capable(true) | Changed) if blocked => (Composited, vec![]),
@@ -133,43 +136,48 @@ pub fn transition(route: Route, needs: Needs, event: Event) -> (Route, Vec<Effec
         (Composited, Capable(false)) => (Unsupported, vec![]),
         (Composited, Frame { .. }) => (route, vec![Present]),
         // nothing is on the layer to fail
-        (Composited, Presented | Failed) => (route, vec![]),
+        (Composited, Presenting { .. } | Failed) => (route, vec![]),
 
         (Entering, Capable(false)) => (Unsupported, vec![Buffers(false)]),
         (Entering, Capable(true) | Changed) if blocked => (Composited, vec![Buffers(false)]),
-        (Entering, Capable(true) | Changed | Presented) => (route, vec![]),
-        (Entering, Frame { os: true }) if blocked => (Composited, vec![Buffers(false), Present]),
-        (Entering, Frame { os: true }) => (Layer, vec![Show]),
+        (Entering, Capable(true) | Changed | Presenting { .. }) => (route, vec![]),
+        (Entering, Frame { os: true, .. }) if blocked => {
+            (Composited, vec![Buffers(false), Present])
+        }
+        (Entering, Frame { os: true, painted }) => (Layer { shown: painted }, vec![Show]),
         // copied before the buffers were in place
-        (Entering, Frame { os: false }) => (route, vec![Present]),
+        (Entering, Frame { os: false, .. }) => (route, vec![Present]),
         // nothing was shown yet
         (Entering, Failed) => (Unsupported, vec![Buffers(false)]),
 
         // the layer goes now: the window closes or the layer broke
-        (Layer, Capable(false) | Failed) => {
+        (Layer { .. }, Capable(false) | Failed) => {
             (Unsupported, vec![Buffers(false), PresentLatest, Hide])
         }
-        (Layer, Capable(true) | Changed) if blocked => (leaving, vec![PresentLatest]),
+        (Layer { shown }, Capable(true) | Changed) if blocked => {
+            (Leaving { until: shown }, vec![PresentLatest])
+        }
         // a render of the shell's chrome (nothing of it shows over the page)
-        (Layer, Capable(true) | Changed | Presented) => (route, vec![]),
-        (Layer, Frame { os: true }) if blocked => (leaving, vec![Present]),
-        (Layer, Frame { os: true }) => (route, vec![Show]),
+        (Layer { .. }, Capable(true) | Changed | Presenting { .. }) => (route, vec![]),
+        (Layer { .. }, Frame { os: true, painted }) if blocked => {
+            (Leaving { until: painted }, vec![Present])
+        }
+        (Layer { .. }, Frame { os: true, painted }) => (Layer { shown: painted }, vec![Show]),
         // the pool could not take it: the shell has to
-        (Layer, Frame { os: false }) => (leaving, vec![Present]),
+        (Layer { .. }, Frame { os: false, painted }) => (Leaving { until: painted }, vec![Present]),
 
         (Leaving { .. }, Capable(false) | Failed) => (Unsupported, vec![Buffers(false), Hide]),
-        // the needs are read again when the shell has presented
+        // the needs are read again when the shell has drawn the page
         (Leaving { .. }, Capable(true) | Changed) => (route, vec![]),
+        // a newer frame to the shell; the one it must draw before the layer goes stays
         (Leaving { .. }, Frame { .. }) => (route, vec![Present]),
-        (Leaving { renders }, Presented) if renders > 1 => (
-            Leaving {
-                renders: renders - 1,
-            },
-            vec![Redraw],
-        ),
-        (Leaving { .. }, Presented) if blocked => (Composited, vec![Hide, Buffers(false)]),
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until && blocked => {
+            (Composited, vec![Hide, Buffers(false)])
+        }
         // nothing needs the shell any more: the next frame goes back to the layer
-        (Leaving { .. }, Presented) => (Entering, vec![Hide]),
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until => (Entering, vec![Hide]),
+        // the shell has not drawn it yet: once more, the layer stays
+        (Leaving { .. }, Presenting { .. }) => (route, vec![Redraw]),
     }
 }
 
@@ -269,20 +277,32 @@ mod tests {
     use super::*;
     use {Effect::*, Event::*, Route::*};
 
-    const L2: Route = Leaving {
-        renders: LEAVING_RENDERS,
-    };
-    const L1: Route = Leaving { renders: 1 };
+    /// The layer on frame 5; leaving for its own frame 5, handed over, or for a newer 7.
+    const ON5: Route = Layer { shown: 5 };
+    const FOR5: Route = Leaving { until: 5 };
+    const FOR7: Route = Leaving { until: 7 };
 
     fn needs(blocked: bool) -> Needs {
         Needs::NONE.with(Need::Covered, blocked)
     }
 
+    fn os(painted: u64) -> Event {
+        Frame { os: true, painted }
+    }
+
+    fn copied(painted: u64) -> Event {
+        Frame { os: false, painted }
+    }
+
+    fn drew(d: u64) -> Event {
+        Presenting { drawn: Some(d) }
+    }
+
+    const BLANK: Event = Presenting { drawn: None };
+
     /// Every route, each event, with the needs clear (false) and holding (true).
     #[test]
     fn every_route_and_event() {
-        let os = Frame { os: true };
-        let copied = Frame { os: false };
         #[rustfmt::skip]
         let rows: &[(&str, Route, bool, Event, Route, &[Effect])] = &[
             // Unsupported: the shell draws every frame, nothing else happens
@@ -291,9 +311,9 @@ mod tests {
             ("unsupported: a layer, the shell is needed", Unsupported, true, Capable(true), Composited, &[]),
             ("unsupported: needs ignored", Unsupported, false, Changed, Unsupported, &[]),
             ("unsupported: needs ignored (holding)", Unsupported, true, Changed, Unsupported, &[]),
-            ("unsupported: a frame to the shell", Unsupported, false, copied, Unsupported, &[Present]),
-            ("unsupported: an os frame to the shell", Unsupported, false, os, Unsupported, &[Present]),
-            ("unsupported: a render ignored", Unsupported, false, Presented, Unsupported, &[]),
+            ("unsupported: a frame to the shell", Unsupported, false, copied(7), Unsupported, &[Present]),
+            ("unsupported: an os frame to the shell", Unsupported, false, os(7), Unsupported, &[Present]),
+            ("unsupported: a render ignored", Unsupported, false, drew(7), Unsupported, &[]),
             ("unsupported: a failure ignored", Unsupported, false, Failed, Unsupported, &[]),
             // Composited
             ("composited: loses the layer", Composited, false, Capable(false), Unsupported, &[]),
@@ -301,9 +321,9 @@ mod tests {
             ("composited: capable again, needed", Composited, true, Capable(true), Composited, &[]),
             ("composited: the needs clear", Composited, false, Changed, Entering, &[Buffers(true)]),
             ("composited: still needed", Composited, true, Changed, Composited, &[]),
-            ("composited: a frame to the shell", Composited, false, copied, Composited, &[Present]),
-            ("composited: a late os frame to the shell", Composited, true, os, Composited, &[Present]),
-            ("composited: a render ignored", Composited, false, Presented, Composited, &[]),
+            ("composited: a frame to the shell", Composited, false, copied(7), Composited, &[Present]),
+            ("composited: a late os frame to the shell", Composited, true, os(7), Composited, &[Present]),
+            ("composited: a render ignored", Composited, false, drew(7), Composited, &[]),
             ("composited: nothing on the layer to fail", Composited, false, Failed, Composited, &[]),
             // Entering
             ("entering: loses the layer", Entering, false, Capable(false), Unsupported, &[Buffers(false)]),
@@ -311,33 +331,36 @@ mod tests {
             ("entering: capable again, needed", Entering, true, Capable(true), Composited, &[Buffers(false)]),
             ("entering: still clear", Entering, false, Changed, Entering, &[]),
             ("entering: needed again", Entering, true, Changed, Composited, &[Buffers(false)]),
-            ("entering: the first os frame goes on the layer", Entering, false, os, Layer, &[Show]),
-            ("entering: an os frame while needed", Entering, true, os, Composited, &[Buffers(false), Present]),
-            ("entering: a frame copied before the buffers", Entering, false, copied, Entering, &[Present]),
-            ("entering: a render ignored", Entering, false, Presented, Entering, &[]),
+            ("entering: the first os frame goes on the layer", Entering, false, os(7), Layer { shown: 7 }, &[Show]),
+            ("entering: an os frame while needed", Entering, true, os(7), Composited, &[Buffers(false), Present]),
+            ("entering: a frame copied before the buffers", Entering, false, copied(7), Entering, &[Present]),
+            ("entering: a render ignored", Entering, false, BLANK, Entering, &[]),
             ("entering: a failure gives the layer up", Entering, false, Failed, Unsupported, &[Buffers(false)]),
             // Layer
-            ("layer: loses the layer", Layer, false, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
-            ("layer: capable again, clear", Layer, false, Capable(true), Layer, &[]),
-            ("layer: capable again, needed", Layer, true, Capable(true), L2, &[PresentLatest]),
-            ("layer: still clear", Layer, false, Changed, Layer, &[]),
-            ("layer: shell UI over the page", Layer, true, Changed, L2, &[PresentLatest]),
-            ("layer: the next frame", Layer, false, os, Layer, &[Show]),
-            ("layer: a frame while needed", Layer, true, os, L2, &[Present]),
-            ("layer: a frame the pool could not take", Layer, false, copied, L2, &[Present]),
-            ("layer: a render of the chrome", Layer, false, Presented, Layer, &[]),
-            ("layer: fails", Layer, false, Failed, Unsupported, &[Buffers(false), PresentLatest, Hide]),
-            // Leaving
-            ("leaving: loses the layer", L2, false, Capable(false), Unsupported, &[Buffers(false), Hide]),
-            ("leaving: capable again", L2, false, Capable(true), L2, &[]),
-            ("leaving: the needs clear (read when presented)", L2, false, Changed, L2, &[]),
-            ("leaving: still needed", L2, true, Changed, L2, &[]),
-            ("leaving: a frame to the shell", L2, false, os, L2, &[Present]),
-            ("leaving: a copied frame to the shell", L2, true, copied, L2, &[Present]),
-            ("leaving: one render more", L2, false, Presented, L1, &[Redraw]),
-            ("leaving: done, still needed", L1, true, Presented, Composited, &[Hide, Buffers(false)]),
-            ("leaving: done, nothing needs the shell", L1, false, Presented, Entering, &[Hide]),
-            ("leaving: fails", L1, false, Failed, Unsupported, &[Buffers(false), Hide]),
+            ("layer: loses the layer", ON5, false, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            ("layer: capable again, clear", ON5, false, Capable(true), ON5, &[]),
+            ("layer: capable again, needed: its frame to the shell", ON5, true, Capable(true), FOR5, &[PresentLatest]),
+            ("layer: still clear", ON5, false, Changed, ON5, &[]),
+            ("layer: shell UI over the page", ON5, true, Changed, FOR5, &[PresentLatest]),
+            ("layer: the next frame", ON5, false, os(7), Layer { shown: 7 }, &[Show]),
+            ("layer: a frame while needed waits to be drawn", ON5, true, os(7), FOR7, &[Present]),
+            ("layer: a frame the pool could not take", ON5, false, copied(7), FOR7, &[Present]),
+            ("layer: a render of the chrome", ON5, false, drew(5), ON5, &[]),
+            ("layer: fails", ON5, false, Failed, Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            // Leaving: hidden only once a render drew the frame given (or a newer one)
+            ("leaving: loses the layer", FOR5, false, Capable(false), Unsupported, &[Buffers(false), Hide]),
+            ("leaving: capable again", FOR5, false, Capable(true), FOR5, &[]),
+            ("leaving: the needs clear (read once drawn)", FOR5, false, Changed, FOR5, &[]),
+            ("leaving: still needed", FOR5, true, Changed, FOR5, &[]),
+            ("leaving: a newer frame to the shell, the same wait", FOR5, false, os(7), FOR5, &[Present]),
+            ("leaving: a copied frame to the shell", FOR5, true, copied(7), FOR5, &[Present]),
+            ("leaving: a render without the page: once more", FOR5, false, BLANK, FOR5, &[Redraw]),
+            ("leaving: a render of an older frame: once more", FOR7, false, drew(5), FOR7, &[Redraw]),
+            ("leaving: one short, still needed", FOR7, true, drew(6), FOR7, &[Redraw]),
+            ("leaving: drawn, still needed", FOR5, true, drew(5), Composited, &[Hide, Buffers(false)]),
+            ("leaving: drawn, nothing needs the shell", FOR5, false, drew(5), Entering, &[Hide]),
+            ("leaving: a newer one drawn", FOR5, false, drew(7), Entering, &[Hide]),
+            ("leaving: fails", FOR7, false, Failed, Unsupported, &[Buffers(false), Hide]),
         ];
         for &(name, route, blocked, event, next, effects) in rows {
             assert_eq!(
@@ -348,33 +371,47 @@ mod tests {
         }
     }
 
-    /// What the host's edge holds as the effects run: whether the layer is visible, the copy
-    /// uses OS buffers, and the shell was given the page since the layer last showed one.
+    /// What the host's edge holds as the effects run: whether the layer is visible and with
+    /// which frame, whether the copy uses OS buffers, the newest frame the shell was given and
+    /// the newest it presented.
     #[derive(Default)]
     struct Edge {
         visible: bool,
         buffers: bool,
-        shell_fed: bool,
+        layer: Option<u64>,
+        given: Option<u64>,
+        drew: Option<u64>,
     }
 
     impl Edge {
-        fn run(&mut self, effects: &[Effect]) {
+        fn run(&mut self, event: Event, effects: &[Effect]) {
+            if let Presenting { drawn } = event {
+                assert!(drawn <= self.given, "the walk drew {drawn:?}, given {:?}", self.given);
+                self.drew = drawn.max(self.drew);
+            }
+            let painted = match event {
+                Frame { painted, .. } => Some(painted),
+                _ => None,
+            };
+            // the window closed or the layer broke: it goes at once, drawn or not
+            let forced = matches!(event, Capable(false) | Failed);
             for effect in effects {
                 match effect {
                     Buffers(on) => self.buffers = *on,
                     Show => {
                         assert!(self.buffers, "a frame on the layer without OS buffers");
                         self.visible = true;
-                        self.shell_fed = false;
+                        self.layer = painted;
                     }
                     Hide => {
                         assert!(
-                            !self.visible || self.shell_fed,
-                            "the layer hidden before the shell has the page"
+                            forced || !self.visible || self.drew >= self.layer,
+                            "the layer hidden before the shell drew its frame"
                         );
                         self.visible = false;
                     }
-                    Present | PresentLatest => self.shell_fed = true,
+                    Present => self.given = painted.max(self.given),
+                    PresentLatest => self.given = self.layer.max(self.given),
                     Redraw => {}
                 }
             }
@@ -382,74 +419,95 @@ mod tests {
     }
 
     /// Event sequences, needs as they hold at each event: the layer is visible exactly in
-    /// Layer and Leaving, and the OS buffers are asked for exactly while a layer is in play.
+    /// Layer and Leaving, the OS buffers are asked for exactly while a layer is in play, and
+    /// the layer is hidden only after a render drew a frame as new as its own.
     #[test]
     fn the_layer_is_visible_whenever_the_shell_does_not_draw_the_page() {
-        let os = Frame { os: true };
-        let copied = Frame { os: false };
         let walks: &[(&str, &[(bool, Event)])] = &[
             (
                 "fullscreen video, then its controls",
                 &[
                     (true, Capable(true)),
                     (false, Changed),
-                    (false, copied),
-                    (false, os),
-                    (false, os),
+                    (false, copied(1)),
+                    (false, os(2)),
+                    (false, os(3)),
                     (true, Changed),
-                    (true, os),
-                    (true, Presented),
-                    (true, Presented),
-                    (true, os),
+                    (true, os(4)),
+                    (true, BLANK),
+                    (true, drew(3)),
+                    (true, copied(5)),
                 ],
             ),
             (
-                "the controls go again",
+                "the controls go again while it leaves",
                 &[
                     (false, Capable(true)),
-                    (false, os),
+                    (false, os(1)),
                     (true, Changed),
                     (false, Changed),
-                    (false, Presented),
-                    (false, Presented),
-                    (false, os),
-                    (false, os),
+                    (false, drew(1)),
+                    (false, os(2)),
+                    (false, os(3)),
                 ],
             ),
             (
                 "the pool runs dry, then the window closes",
                 &[
                     (false, Capable(true)),
-                    (false, os),
-                    (false, copied),
-                    (false, Presented),
-                    (false, os),
-                    (false, os),
+                    (false, os(1)),
+                    (false, copied(2)),
+                    (false, drew(1)),
+                    (false, drew(2)),
+                    (false, os(3)),
+                    (false, os(4)),
                     (false, Capable(false)),
-                    (false, os),
+                    (false, copied(5)),
                 ],
             ),
             (
                 "the layer fails, and comes back",
                 &[
                     (false, Capable(true)),
-                    (false, os),
+                    (false, os(1)),
                     (false, Failed),
-                    (false, os),
+                    (false, copied(2)),
                     (false, Capable(true)),
-                    (false, os),
+                    (false, os(3)),
                     (true, Capable(false)),
                 ],
             ),
             (
-                "a static page leaves fullscreen",
+                "a still page leaves fullscreen",
                 &[
                     (false, Capable(true)),
-                    (false, os),
+                    (false, os(1)),
                     (true, Changed),
-                    (true, Presented),
-                    (true, Presented),
-                    (true, Presented),
+                    (true, BLANK),
+                    (true, BLANK),
+                    (true, drew(1)),
+                ],
+            ),
+            (
+                "frames keep coming while it leaves",
+                &[
+                    (false, Capable(true)),
+                    (false, os(1)),
+                    (false, os(2)),
+                    (true, Changed),
+                    (true, os(3)),
+                    (true, drew(2)),
+                    (true, copied(4)),
+                ],
+            ),
+            (
+                "the layer breaks while it leaves",
+                &[
+                    (false, Capable(true)),
+                    (false, os(1)),
+                    (true, Changed),
+                    (true, Failed),
+                    (true, copied(2)),
                 ],
             ),
         ];
@@ -457,17 +515,17 @@ mod tests {
             let (mut route, mut edge) = (Route::default(), Edge::default());
             for (i, &(blocked, event)) in walk.iter().enumerate() {
                 let (next, effects) = transition(route, needs(blocked), event);
-                edge.run(&effects);
+                edge.run(event, &effects);
                 route = next;
                 let at = format!("{name}, step {i} ({event:?} -> {route:?})");
                 assert_eq!(
                     edge.visible,
-                    matches!(route, Layer | Leaving { .. }),
+                    matches!(route, Layer { .. } | Leaving { .. }),
                     "visible: {at}"
                 );
                 assert_eq!(
                     edge.buffers,
-                    matches!(route, Entering | Layer | Leaving { .. }),
+                    matches!(route, Entering | Layer { .. } | Leaving { .. }),
                     "buffers: {at}"
                 );
             }
@@ -485,6 +543,23 @@ mod tests {
         assert_eq!(n, Needs::NONE);
         assert!(!n.any());
         assert!(!Needs::NONE.with(Need::Resizing, false).any());
+    }
+
+    /// Any shell UI over the page, a leaving one included, is `Covered`.
+    #[test]
+    fn coverage_is_the_covered_need() {
+        let covered = Needs::NONE.with(Need::Covered, true);
+        #[rustfmt::skip]
+        let rows: &[(&str, Needs, Coverage, Needs)] = &[
+            ("nothing over the page", Needs::NONE, Coverage::None, Needs::NONE),
+            ("shell pixels over it", Needs::NONE, Coverage::Part, covered),
+            ("glass reading it", Needs::NONE, Coverage::Pixels, covered),
+            ("the cover gone", covered, Coverage::None, Needs::NONE),
+            ("others kept", Needs::NONE.with(Need::Pixels, true), Coverage::Part, covered.with(Need::Pixels, true)),
+        ];
+        for &(name, before, coverage, after) in rows {
+            assert_eq!(before.covered(coverage), after, "{name}");
+        }
     }
 
     #[test]
