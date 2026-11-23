@@ -170,14 +170,19 @@ cef::wrap_render_handler! {
                 )
             };
             // wubble change: copy before returning, see `copy_metal_to_owned`.
+            // wubble change (64): the view's own frames into the host's OS buffers, if it
+            // asked for them (never the popup's).
+            let mut buffers = self.handler.os_buffers.lock().unwrap();
+            let pool = if is_popup { None } else { buffers.as_mut() };
             let copied = frame
                 .map_err(|error| format!("failed to wrap retained CEF IOSurface: {error}"))
                 .and_then(|frame| {
-                    crate::native_frame::copy_metal_to_owned(frame, &self.handler.gpu, arrived)
+                    crate::native_frame::copy_metal_to_owned(frame, &self.handler.gpu, arrived, pool)
                         .map_err(|error| format!("failed to copy CEF IOSurface: {error}"))
                 });
             match copied {
-                Ok(mut copy) => {
+                Ok(None) => log::debug!("frame dropped: every OS buffer is in use"),
+                Ok(Some(mut copy)) => {
                     // wubble change: what changed since the last frame.
                     let r = &info.extra.capture_update_rect;
                     copy.damage = crate::native_frame::Damage::of_update_rect(

@@ -1227,6 +1227,18 @@ pub trait CefSurfaceProducer {
         ))
     }
 
+    /// wubble change (64): copy this view's frames into OS-presentable buffers (`Some`), which
+    /// each [`crate::CopiedFrame`] then carries for the host's compositor layer, or into a
+    /// texture of their own again (`None`, the default). macOS only.
+    fn set_os_buffers(
+        &mut self,
+        _request: Option<crate::OsBufferRequest>,
+    ) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "OS buffers are not wired for this producer",
+        ))
+    }
+
     /// CPU `OnPaint` frames CEF delivered instead of a shared texture, since
     /// the producer was created. `None` when this producer does not count them
     /// (never a made-up 0). wubble change, see `WUBBLE_CHANGES.md`.
