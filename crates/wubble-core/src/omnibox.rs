@@ -45,7 +45,8 @@ pub const ENGINES: [EngineInfo; 2] = [
         name: "Google",
         search: "https://www.google.com/search?q={q}",
         suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
-        image: Some("https://www.google.com/searchbyimage?image_url={q}"),
+        // Google Lens by URL: `searchbyimage` was retired for it.
+        image: Some("https://lens.google.com/uploadbyurl?url={q}"),
     },
     EngineInfo {
         engine: SearchEngine::DuckDuckGo,
