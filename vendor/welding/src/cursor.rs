@@ -134,6 +134,7 @@ fn image_of(info: &cef::CursorInfo) -> Option<crate::surface::CursorImage> {
         hotspot_x: u16::try_from(info.hotspot.x).unwrap_or(0).min(width - 1),
         hotspot_y: u16::try_from(info.hotspot.y).unwrap_or(0).min(height - 1),
         rgba: straight_rgba(bgra).into(),
+        scale_percent: (info.image_scale_factor * 100.0).round().clamp(1.0, 1000.0) as u16,
     })
 }
 

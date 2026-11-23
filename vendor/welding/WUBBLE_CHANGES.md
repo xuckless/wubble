@@ -572,7 +572,8 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     `DND_MOVE`, `DND_COPY` and `DND_LINK` map to move, copy and alias).
     `CT_CUSTOM` carries `CursorShape::Image(CursorImage)`: the `OnCursorChange`
     `CefCursorInfo` buffer (premultiplied BGRA) as straight-alpha RGBA with its
-    size and hotspot, which `linux_cef`, `macos_cef` and `windows_cef` pass on
+    size, hotspot and `image_scale_factor` (`scale_percent`; the host scales it
+    to the display), which `linux_cef`, `macos_cef` and `windows_cef` pass on
     instead of dropping. `CursorImage` is re-exported from `lib.rs`. Test:
     `cursor::tests`.
 

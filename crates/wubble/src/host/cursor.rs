@@ -114,7 +114,8 @@ impl Host {
                     w.set_cursor(*icon);
                 } else if cursor == Cursor::Image {
                     // The arrow, as Chromium shows when the image is unusable.
-                    match image.and_then(|i| custom(event_loop, &i)) {
+                    let scale = w.scale_factor();
+                    match image.and_then(|i| custom(event_loop, &fit(&i, scale))) {
                         Some(built) => w.set_cursor(built),
                         None => w.set_cursor(CursorIcon::Default),
                     }
@@ -151,9 +152,96 @@ fn custom(event_loop: &ActiveEventLoop, image: &CursorImage) -> Option<CustomCur
     })
 }
 
+/// `image` at the display's `scale`: CEF draws it for its own (`scale_percent`), a 1x CSS image
+/// on a 2x display is half the size Chrome shows. Nearest neighbour, as a cursor's hard edges
+/// want; the hotspot follows, inside the image.
+fn fit(image: &CursorImage, scale: f64) -> CursorImage {
+    let ratio = scale * 100.0 / f64::from(image.scale_percent.max(1));
+    if (ratio - 1.0).abs() < 0.01 {
+        return image.clone();
+    }
+    let size = |n: u16| ((f64::from(n) * ratio).round() as u16).max(1);
+    let (width, height) = (size(image.width), size(image.height));
+    let source = |n: u16, of: u16, to: u16| {
+        (usize::from(n) * usize::from(of) / usize::from(to)).min(usize::from(of) - 1)
+    };
+    let rgba: Vec<u8> = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let at = (source(y, image.height, height) * usize::from(image.width)
+                + source(x, image.width, width))
+                * 4;
+            image.rgba[at..at + 4].to_vec()
+        })
+        .collect();
+    let hotspot = |n: u16, max: u16| ((f64::from(n) * ratio) as u16).min(max - 1);
+    CursorImage {
+        width,
+        height,
+        hotspot_x: hotspot(image.hotspot_x, width),
+        hotspot_y: hotspot(image.hotspot_y, height),
+        rgba: rgba.into(),
+        scale_percent: (scale * 100.0).round() as u16,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_cursor_is_scaled_to_the_display() {
+        // 2x2: red, green / blue, white, drawn for 1x, hotspot at 1,1
+        let px = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255; 4],
+        ];
+        let image = CursorImage {
+            width: 2,
+            height: 2,
+            hotspot_x: 1,
+            hotspot_y: 1,
+            rgba: px.concat().into(),
+            scale_percent: 100,
+        };
+        // (display scale, size, hotspot, the pixel rows by source index)
+        for (scale, size, hotspot, rows) in [
+            (1.0, 2, 1, vec![vec![0, 1], vec![2, 3]]),
+            (
+                2.0,
+                4,
+                2,
+                vec![
+                    vec![0, 0, 1, 1],
+                    vec![0, 0, 1, 1],
+                    vec![2, 2, 3, 3],
+                    vec![2, 2, 3, 3],
+                ],
+            ),
+            (1.5, 3, 1, vec![vec![0, 0, 1], vec![0, 0, 1], vec![2, 2, 3]]),
+        ] {
+            let got = fit(&image, scale);
+            assert_eq!((got.width, got.height), (size, size), "{scale}");
+            assert_eq!(
+                (got.hotspot_x, got.hotspot_y),
+                (hotspot, hotspot),
+                "{scale}"
+            );
+            let want: Vec<u8> = rows.concat().iter().flat_map(|&i| px[i]).collect();
+            assert_eq!(&got.rgba[..], &want[..], "{scale}");
+        }
+        // drawn for 2x on a 1x display: halved
+        let big = fit(
+            &CursorImage {
+                scale_percent: 200,
+                ..image.clone()
+            },
+            1.0,
+        );
+        assert_eq!((big.width, big.height, big.hotspot_x), (1, 1, 0));
+    }
 
     #[test]
     fn only_the_cursors_the_shell_hides_for_the_window_have_icons() {

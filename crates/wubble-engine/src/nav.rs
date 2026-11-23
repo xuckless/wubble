@@ -810,6 +810,7 @@ mod tests {
                     hotspot_x: 0,
                     hotspot_y: 0,
                     rgba: vec![0; 4].into(),
+                    scale_percent: 100,
                 }),
                 Cursor::Image,
             ),

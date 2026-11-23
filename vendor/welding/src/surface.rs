@@ -805,14 +805,16 @@ pub enum CursorShape {
 
 /// wubble change (60): a page's cursor image (CEF's `CefCursorInfo`), as the
 /// straight-alpha RGBA pixels windowing toolkits take (CEF's are premultiplied
-/// BGRA). `width`/`height` and the hotspot are in device pixels, so the image
-/// is already scaled for the display CEF was told about.
+/// BGRA). `width`/`height` and the hotspot are the bitmap's pixels, drawn for
+/// `scale_percent` (CEF's `image_scale_factor`, in hundredths): a 1x CSS image
+/// on a 2x display is 100, and the host scales it to the display's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorImage {
     pub width: u16,
     pub height: u16,
     pub hotspot_x: u16,
     pub hotspot_y: u16,
+    pub scale_percent: u16,
     pub rgba: std::sync::Arc<[u8]>,
 }
 

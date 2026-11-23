@@ -3396,11 +3396,11 @@ impl Host {
             // A drag sends dozens a second, each a screen change for every page: the place
             // the window rests at is told once.
             let id = self.w.id;
-            self.w.desktop_settle.start(
-                slint::TimerMode::SingleShot,
-                DESKTOP_SETTLE,
-                move || crate::with_host_in(id, Host::follow_desktop),
-            );
+            self.w
+                .desktop_settle
+                .start(slint::TimerMode::SingleShot, DESKTOP_SETTLE, move || {
+                    crate::with_host_in(id, Host::follow_desktop)
+                });
         }
         self.input.touching = matches!(event, WindowEvent::Touch(_));
         if let Some(e) = crate::run_state::event_of(event, || {
