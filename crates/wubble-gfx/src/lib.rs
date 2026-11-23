@@ -11,6 +11,7 @@
 //! bitmaps) is a fallback only and must be counted/logged when hit.
 
 pub mod import;
+pub mod layer;
 pub mod mask;
 pub mod orb;
 pub mod pacing;

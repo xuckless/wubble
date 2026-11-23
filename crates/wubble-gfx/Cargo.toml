@@ -14,6 +14,13 @@ welding.workspace = true
 # GPU timestamps of the scene's frames, for the quality governor (MIT OR Apache-2.0).
 wgpu-profiler = "0.28"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The page's CALayer (layer.rs); versions already in the lock file (objc2 MIT, the framework
+# crates Zlib OR Apache-2.0 OR MIT).
+objc2 = "0.6.5"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "objc2-core-foundation"] }
+
 [dev-dependencies]
 # WGSL validation of the scene shaders in tests; same version wgpu 30 uses.
 naga = { version = "30", features = ["wgsl-in"] }

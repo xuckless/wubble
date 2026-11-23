@@ -8785,6 +8785,9 @@ name = "wubble-gfx"
 version = "0.1.0-preview.7"
 dependencies = [
  "naga",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-quartz-core 0.3.2",
  "pollster 0.4.0",
  "slint",
  "welding",
