@@ -226,8 +226,10 @@ export global GlassKeys {
     out property <int> toast: 1000070;
     out property <int> error: 1000080;
     out property <int> bookmark-sheet: 1000090;
-    out property <int> print-sheet: 1000091;
-    out property <int> agent-sheet: 1000092;
+    // the install prompt (a sheet)
+    out property <int> extension-sheet: 1000091;
+    out property <int> print-sheet: 1000092;
+    out property <int> agent-sheet: 1000093;
     out property <int> glance: 1000100;
     out property <int> dialog: 1000110;
     out property <int> command-bar: 1000120;
@@ -239,8 +241,6 @@ export global GlassKeys {
     out property <int> spaces: 1000325;
     // the footer's extensions popover and the action popup under it
     out property <int> extensions: 1000326;
-    // the install prompt (a sheet, after the print sheet)
-    out property <int> extension-sheet: 1000092;
     out property <int> menu: 1000330;
 }
 
