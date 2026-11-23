@@ -3861,3 +3861,38 @@ fn a_new_window_from_a_private_window_is_a_normal_one() {
     assert_eq!(m.private_spaces().len(), 2);
     assert_eq!(m.containers.iter().filter(|c| c.ephemeral).count(), 1);
 }
+
+/// Which private tabs a close ends (their downloads ask first): a private window's own, every
+/// one when the app quits or its last Main window closes, none for a normal window.
+#[test]
+fn a_close_ends_the_private_tabs_it_takes_with_it() {
+    use crate::window::Closing;
+    let (m, _) = with_tabs(1);
+    let (m, w1, s1) = private_window(m, "https://p.test/");
+    let (m, w2, s2) = private_window(m, "https://q.test/");
+    let (m, _) = open(m, None);
+    let p1 = m.order(s1);
+    let p2 = m.order(s2);
+    let p12 = [p1.clone(), p2.clone()].concat();
+    let sorted = |mut v: Vec<TabId>| {
+        v.sort();
+        v
+    };
+    for (closing, want) in [
+        (Closing::Window(w1), p1.clone()),
+        (Closing::Window(w2), p2.clone()),
+        (Closing::Window(WindowId(0)), vec![]),
+        (Closing::Window(WindowId(99)), vec![]),
+        (Closing::App, p12.clone()),
+    ] {
+        assert_eq!(
+            sorted(m.private_tabs_ended(closing)),
+            sorted(want),
+            "{closing:?}"
+        );
+    }
+    // with the normal window gone, closing the one Main window left quits: every private tab
+    let (m, _) = run(m, Command::CloseWindow(WindowId(0)));
+    let (m, _) = run(m, Command::CloseWindow(w2));
+    assert_eq!(sorted(m.private_tabs_ended(Closing::Window(w1))), sorted(p1));
+}

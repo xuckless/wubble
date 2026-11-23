@@ -126,3 +126,12 @@ pub enum WindowTarget {
     New,
     Existing(WindowId),
 }
+
+/// What the user is closing, for the question a private window's running downloads ask first
+/// ([`crate::model::Model::private_tabs_ended`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closing {
+    Window(WindowId),
+    /// Quitting.
+    App,
+}

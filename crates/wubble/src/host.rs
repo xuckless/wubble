@@ -946,6 +946,13 @@ impl Host {
         {
             return;
         }
+        // a close that would cancel private downloads asks first (Chrome's "N downloads will
+        // be cancelled"); the answer closes (`close_cancelling_downloads`)
+        if let Command::CloseWindow(id) = command
+            && self.close_asks(wubble_core::window::Closing::Window(id))
+        {
+            return;
+        }
         // A tab is never opened or loaded for a link another app handles: the user asked for
         // it (typed, a bookmark, a menu row), so it goes to the app as if clicked.
         if let Some((opener, url)) = external_target(&command)
@@ -1816,15 +1823,23 @@ impl Host {
     /// `Action::ClearBrowsingData`: what can be cleared for `tab`, as the shell's menu near the
     /// top of the window. Choosing a row is the confirmation.
     pub(super) fn clear_data_menu(&mut self, tab: TabId) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let origin = self.site_of(tab);
         let entries = crate::menu::clear_entries(&self.model, tab, origin.as_deref());
+        self.ask_in_menu(tab, entries);
+    }
+
+    /// A question as the shell's menu near the top of the window, over `tab`'s page: its rows
+    /// say what each answer does, choosing one is the answer, and dismissing it does nothing
+    /// (Clear Browsing Data, the private downloads a close would cancel). Whether it opened.
+    pub(super) fn ask_in_menu(&mut self, tab: TabId, entries: Vec<crate::menu::Entry>) -> bool {
+        let Some(window) = self.w.window.upgrade() else {
+            return false;
+        };
         let size = window.window().size();
         let at = ((size.width / 2) as i32, (size.height / 5) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+        true
     }
 
     /// Deletes what the clear menu's row named, then says so.
@@ -2146,7 +2161,11 @@ impl Host {
                 }
             }
             Plan::StopAgents => self.agents_stop(),
-            Plan::Quit => quit(),
+            Plan::Quit => {
+                if !self.close_asks(wubble_core::window::Closing::App) {
+                    quit();
+                }
+            }
             Plan::Nothing => {}
         }
     }

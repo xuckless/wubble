@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use slint::ComponentHandle;
 use wubble_core::agent::log::Outcome;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
+use wubble_core::model::Command;
 use wubble_core::space::ContainerId;
 use wubble_core::tab::TabId;
+use wubble_core::window::Closing;
 use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
 use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
@@ -408,6 +410,42 @@ impl Host {
             self.apply_download(id, DownloadEvent::Lost);
         }
         self.downloads.inflight.retain(|_, f| f.tab != tab);
+    }
+
+    /// The downloads still running from private tabs that `closing` ends: closing them cancels
+    /// those (`downloads_closing`).
+    fn private_downloads_ending(&self, closing: Closing) -> Vec<i64> {
+        self.model
+            .private_tabs_ended(closing)
+            .into_iter()
+            .flat_map(|tab| self.downloads.running_in(tab))
+            .filter(|&id| self.downloads.get(id).is_some_and(|e| e.state.is_active()))
+            .collect()
+    }
+
+    /// Whether `closing` waits for an answer: while it would cancel downloads of private tabs,
+    /// the question (`menu::close_entries`) opens over this window's page and nothing closes
+    /// yet. With no page to ask on, it closes; the downloads go with their tabs, which says so.
+    pub(super) fn close_asks(&mut self, closing: Closing) -> bool {
+        let count = self.private_downloads_ending(closing).len();
+        match self.shown() {
+            Some(tab) if count > 0 => {
+                self.ask_in_menu(tab, crate::menu::close_entries(closing, count))
+            }
+            _ => false,
+        }
+    }
+
+    /// The question's "Cancel Downloads and Close": the private downloads `closing` ends are
+    /// cancelled, then it closes (and asks nothing again: none is running).
+    pub(super) fn close_cancelling_downloads(&mut self, closing: Closing) {
+        for id in self.private_downloads_ending(closing) {
+            self.apply_download(id, DownloadEvent::Cancel);
+        }
+        match closing {
+            Closing::Window(w) => self.dispatch(Command::CloseWindow(w)),
+            Closing::App => crate::quit(),
+        }
     }
 
     /// The in-memory container `container` (the private windows') is gone with the last private

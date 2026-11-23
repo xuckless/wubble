@@ -449,8 +449,14 @@ impl Host {
                     self.save_media(tab, item, choice)
                 }
                 MenuEffect::Run(
-                    MenuCommand::Engine(_) | MenuCommand::Separator | MenuCommand::Info,
+                    MenuCommand::Engine(_)
+                    | MenuCommand::Separator
+                    | MenuCommand::Info
+                    | MenuCommand::Dismiss,
                 ) => {}
+                MenuEffect::Run(MenuCommand::CancelDownloadsAndClose(closing)) => {
+                    self.close_cancelling_downloads(closing);
+                }
                 MenuEffect::Run(MenuCommand::SetPageTheme(host, theme)) => {
                     self.set_site_theme(&host, theme)
                 }

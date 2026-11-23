@@ -26,7 +26,7 @@ use wubble_core::pagetheme::PageTheme;
 use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
-use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
+use wubble_core::window::{Closing, Shown, WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -138,6 +138,10 @@ pub enum Command {
     EditBoost(i64),
     /// Delete browsing data (`clear_entries`).
     ClearData(ClearData),
+    /// Cancel the private downloads this close would end, then close (`close_entries`).
+    CancelDownloadsAndClose(Closing),
+    /// A question's "keep" answer: the menu closes, nothing else happens.
+    Dismiss,
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -846,6 +850,44 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
     }
 }
 
+/// The question a close asks while it would cancel `count` downloads of private tabs (Chrome's
+/// "If you close all Incognito windows now, N downloads will be cancelled"): what goes, then
+/// the answers. Dismissing it keeps the window, as "keep" does.
+pub fn close_entries(closing: Closing, count: usize) -> Vec<Entry> {
+    let (what, them) = if count == 1 {
+        ("1 download".to_owned(), "Download")
+    } else {
+        (format!("{count} downloads"), "Downloads")
+    };
+    let (close, keep) = match closing {
+        Closing::Window(_) => ("Close", "Keep Window Open"),
+        Closing::App => ("Quit", "Keep wubble Open"),
+    };
+    let entry = |label: String, command, enabled, danger| Entry {
+        label,
+        command,
+        enabled,
+        icon: "",
+        shortcut: String::new(),
+        danger,
+    };
+    vec![
+        entry(
+            format!("{what} from private windows will be cancelled"),
+            Command::Info,
+            false,
+            false,
+        ),
+        entry(
+            format!("Cancel {them} and {close}"),
+            Command::CancelDownloadsAndClose(closing),
+            true,
+            true,
+        ),
+        entry(keep.into(), Command::Dismiss, true, false),
+    ]
+}
+
 /// The address pill's pop-up menu: open what the page asked for, or allow the site.
 pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
     let mut out = vec![Entry {
@@ -1546,6 +1588,40 @@ mod tests {
                 .iter()
                 .any(|e| e.label == "Take Screenshot of Element")
         );
+    }
+
+    #[test]
+    fn a_close_that_cancels_private_downloads_asks_first() {
+        let w = WindowId(3);
+        for (closing, count, want) in [
+            (
+                Closing::Window(w),
+                1,
+                [
+                    "1 download from private windows will be cancelled",
+                    "Cancel Download and Close",
+                    "Keep Window Open",
+                ],
+            ),
+            (
+                Closing::App,
+                3,
+                [
+                    "3 downloads from private windows will be cancelled",
+                    "Cancel Downloads and Quit",
+                    "Keep wubble Open",
+                ],
+            ),
+        ] {
+            let e = close_entries(closing, count);
+            assert_eq!(labels(&e), want);
+            assert_eq!(
+                e.iter().map(|e| (e.enabled, e.danger)).collect::<Vec<_>>(),
+                [(false, false), (true, true), (true, false)]
+            );
+            assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
+            assert_eq!(e[2].command, Command::Dismiss);
+        }
     }
 
     fn labels(entries: &[Entry]) -> Vec<&str> {

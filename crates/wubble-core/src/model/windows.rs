@@ -5,7 +5,7 @@ use crate::space::{
     Container, ContainerId, PRIVATE_NAME, Rgb, Space, SpaceIcon, SpaceId, SplitGroup,
 };
 use crate::tab::TabId;
-use crate::window::{Geometry, Shown, Window, WindowId, WindowKind, WindowTarget};
+use crate::window::{Closing, Geometry, Shown, Window, WindowId, WindowKind, WindowTarget};
 
 /// A private Space's tint: the design's lilac swatch, Firefox private browsing's purple (the
 /// window's dark tint and Private chip are the shell's, `kit/chrome/private-mark.slint`).
@@ -194,6 +194,33 @@ impl Model {
             .find(|&s| !self.is_private_space(s))
             .or_else(|| self.spaces.iter().find(|s| !s.private).map(|s| s.id))
             .expect("a Space that is not private")
+    }
+
+    /// The private tabs `closing` ends, whose running downloads go with them (the host asks
+    /// first): a private Main window's Space's tabs, a private tab's own Popup window's tab;
+    /// quitting, or closing the last Main window (which quits), every private tab. A normal
+    /// window ends none: its Space and tabs stay.
+    pub fn private_tabs_ended(&self, closing: Closing) -> Vec<TabId> {
+        let mains = self
+            .windows
+            .iter()
+            .filter(|w| w.kind() == WindowKind::Main)
+            .count();
+        let all = || self.tabs.keys().copied().collect::<Vec<_>>();
+        let ended = match closing {
+            Closing::Window(w) => match self.window(w).map(|w| w.shown) {
+                Some(Shown::Space(_)) if mains == 1 => all(),
+                Some(Shown::Space(s)) => self.order(s),
+                Some(Shown::Little(t) | Shown::Popup(t)) => vec![t],
+                // a Pip window's tab stays in its Space
+                Some(Shown::Pip(_)) | None => vec![],
+            },
+            Closing::App => all(),
+        };
+        ended
+            .into_iter()
+            .filter(|&t| self.is_private_tab(t))
+            .collect()
     }
 
     /// The Main window showing `space`, if one does.
