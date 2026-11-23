@@ -83,8 +83,9 @@ struct Cli {
     #[arg(long)]
     no_begin_frames: bool,
     /// Which pages show on their own OS layer instead of through the shell
-    /// (`wubble_core::page_layer`): `off` (none, the default) or `fullscreen` (a page in
-    /// fullscreen and the picture-in-picture window; macOS only, elsewhere the same as off).
+    /// (`wubble_core::page_layer::MODES`): `off` (none, the default), `fullscreen` (a page in
+    /// fullscreen and the picture-in-picture window, over the shell) or `window` (every pane,
+    /// under the shell, through a hole it draws). macOS only, elsewhere the same as off.
     #[arg(long, value_name = "MODE", value_parser = parse_page_layer, default_value = "off")]
     page_layer: PageLayerMode,
     /// `--measure load`: what the engine hooks requests with (default: as shipped).
@@ -1183,6 +1184,7 @@ mod tests {
             ("page_layer_defaults_off", &[], Some(layer(PageLayerMode::Off))),
             ("off", &["--page-layer", "off"], Some(layer(PageLayerMode::Off))),
             ("fullscreen", &["--page-layer=fullscreen"], Some(layer(PageLayerMode::Fullscreen))),
+            ("window", &["--page-layer", "window"], Some(layer(PageLayerMode::Window))),
             ("on is not yet a mode", &["--page-layer", "on"], None),
             ("an unknown mode", &["--page-layer", "x"], None),
             ("with the pacing", &["--begin-frames", "--page-layer", "fullscreen", "--smoke", "page"],
