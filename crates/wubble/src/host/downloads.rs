@@ -408,27 +408,58 @@ impl Host {
         self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
-    /// The downloads still running from private tabs that `closing` ends: closing them cancels
-    /// those (`downloads_closing`).
+    /// The downloads still running that `closing` cancels: the engine's from the private tabs
+    /// it ends, and when it ends every private tab, the media jobs of the private windows'
+    /// container too (they outlive their tab, not the container: `forget_private_downloads`).
     fn private_downloads_ending(&self, closing: Closing) -> Vec<i64> {
-        self.model
-            .private_tabs_ended(closing)
-            .into_iter()
-            .flat_map(|tab| self.downloads.running_in(tab))
+        let ended = self.model.private_tabs_ended(closing);
+        let every = self
+            .model
+            .tabs
+            .keys()
+            .all(|&t| self.model.side_of_tab(t) == Side::Normal || ended.contains(&t));
+        let media = self.downloads.list.iter().filter(|e| {
+            every && self.media.owns(e.id) && self.model.side_of_container(e.container) == Side::Private
+        });
+        ended
+            .iter()
+            .flat_map(|&tab| self.downloads.running_in(tab))
+            .chain(media.map(|e| e.id))
             .filter(|&id| self.downloads.get(id).is_some_and(|e| e.state.is_active()))
             .collect()
     }
 
-    /// Whether `closing` waits for an answer: while it would cancel downloads of private tabs,
-    /// the question (`menu::close_entries`) opens over this window's page and nothing closes
-    /// yet. With no page to ask on, it closes; the downloads go with their tabs, which says so.
+    /// Whether `closing` waits for an answer: while it would cancel private downloads, the
+    /// question (`menu::close_entries`) opens over a page and nothing closes yet. It asks in
+    /// this window when it shows a page, else in a window showing a private tab the close
+    /// ends (raised), else in any window with a page; with no page anywhere it closes.
     pub(super) fn close_asks(&mut self, closing: Closing) -> bool {
         let count = self.private_downloads_ending(closing).len();
+        if count == 0 {
+            return false;
+        }
+        let here = self.shown().map(|_| self.w.id);
+        let ending = self.model.private_tabs_ended(closing);
+        let holding = ending
+            .iter()
+            .filter_map(|&t| self.model.location(t))
+            .find_map(|(space, _)| self.model.space_window(space));
+        let any = self
+            .model
+            .windows
+            .iter()
+            .find(|w| !self.model.window_tabs(w.id).is_empty())
+            .map(|w| w.id);
+        let Some(window) = here.or(holding).or(any) else {
+            return false;
+        };
+        if window != self.w.id {
+            self.raise_window(window);
+            self.enter(window);
+        }
         match self.shown() {
-            Some(tab) if count > 0 => {
-                self.ask_in_menu(tab, crate::menu::close_entries(closing, count))
-            }
-            _ => false,
+            Some(tab) => self.ask_in_menu(tab, crate::menu::close_entries(closing, count)),
+            None => false,
         }
     }
 
@@ -446,7 +477,8 @@ impl Host {
 
     /// The in-memory container `container` (the private windows') is gone with the last private
     /// window: its downloads leave the list, as Chrome's off-the-record download manager goes
-    /// with its profile. Their files stay; none of them was stored.
+    /// with its profile. A media job still running is cancelled first (the close asked:
+    /// `close_asks`). Their files stay; none of them was stored.
     pub(super) fn forget_private_downloads(&mut self, container: ContainerId) {
         let gone: Vec<i64> = self
             .downloads
@@ -457,6 +489,11 @@ impl Host {
             .collect();
         if gone.is_empty() {
             return;
+        }
+        for &id in &gone {
+            if self.media.owns(id) && self.downloads.get(id).is_some_and(|e| e.state.is_active()) {
+                self.apply_download(id, DownloadEvent::Cancel);
+            }
         }
         self.downloads.list.retain(|e| e.container != container);
         for id in &gone {
