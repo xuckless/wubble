@@ -268,7 +268,7 @@ mod tests {
             timer_pending,
             active,
             reentrant,
-            tempo: Tempo::default(),
+            ..PumpState::default()
         }
     }
 
@@ -366,16 +366,18 @@ mod tests {
 
     #[test]
     fn a_positive_delay_restarts_the_timer_clamped_to_the_maximum() {
+        let armed = |delay| PumpState {
+            armed: delay,
+            ..st(true, false, false)
+        };
+        let soon = Duration::from_millis(5);
         assert_eq!(
             transition(st(true, false, false), Schedule(5)),
-            (
-                st(true, false, false),
-                vec![CancelTimer, StartTimer(Duration::from_millis(5))]
-            )
+            (armed(soon), vec![CancelTimer, StartTimer(soon)])
         );
         assert_eq!(
             transition(PumpState::default(), Schedule(1_000)),
-            (st(true, false, false), vec![StartTimer(MAX)])
+            (armed(MAX), vec![StartTimer(MAX)])
         );
         assert_eq!(MAX, Duration::from_millis(33));
     }
@@ -411,7 +413,13 @@ mod tests {
     fn work_done_arms_the_placeholder_only_without_a_pending_timer() {
         assert_eq!(
             transition(st(false, true, false), DONE),
-            (st(true, false, false), vec![StartTimer(MAX)])
+            (
+                PumpState {
+                    armed: MAX,
+                    ..st(true, false, false)
+                },
+                vec![StartTimer(MAX)]
+            )
         );
         assert_eq!(
             transition(st(true, true, false), DONE),
