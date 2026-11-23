@@ -20,8 +20,10 @@
 //! menu the shell opened itself ([`Menu::Shell`]): nothing to answer.
 
 use wubble_core::action::Action;
+use wubble_core::highlight;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
+use wubble_core::omnibox;
 use wubble_core::pagetheme::PageTheme;
 use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
@@ -45,6 +47,7 @@ pub mod cef_id {
     /// The first spelling suggestion; CEF numbers up to five from here.
     pub const SPELLCHECK_SUGGESTION_0: i32 = 200;
     pub const SPELLCHECK_SUGGESTION_LAST: i32 = 204;
+    pub const ADD_TO_DICTIONARY: i32 = 206;
 }
 
 /// What a media entry does to the element under the pointer.
@@ -73,6 +76,10 @@ pub enum Command {
     Engine(i32),
     /// Open the URL in a new tab next to the page's.
     OpenInNewTab(String),
+    /// Open the URL in a new tab, then show that tab in a window of its own.
+    OpenInNewWindow(String),
+    /// Run a script in the frame CEF named (`View::run_script_in`).
+    FrameScript { frame: String, script: &'static str },
     /// Put the text on the clipboard.
     CopyText(String),
     /// Download the URL with the page's cookies, asking where to save it.
@@ -162,6 +169,8 @@ pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
     pub search: Option<&'static str>,
+    /// The chosen engine's search by image URL (`omnibox::EngineInfo::image`).
+    pub image: Option<&'static str>,
 }
 
 /// The context a row's predicates read.
@@ -189,6 +198,31 @@ impl Ctx<'_> {
     }
     fn video(&self) -> bool {
         self.menu.media == MediaKind::Video
+    }
+    /// An image a search engine can fetch: its URL is on the web, and the engine has an image
+    /// search.
+    fn image_search(&self) -> bool {
+        self.image()
+            && self.nav.image.is_some()
+            && (self.menu.media_url.starts_with("https://")
+                || self.menu.media_url.starts_with("http://"))
+    }
+    /// The `view-source:` URL of the frame clicked in, when that is a frame other than the
+    /// page's own and one Chromium can show the source of (a web or file frame, not
+    /// `about:srcdoc`).
+    fn frame_source(&self) -> Option<String> {
+        (self.menu.frame_url != self.menu.page_url)
+            .then(|| wubble_core::url::view_source(&self.menu.frame_url))
+            .flatten()
+    }
+    fn misspelled(&self) -> bool {
+        self.menu.editable && !self.menu.misspelled_word.is_empty()
+    }
+    /// A selection outside a field on a page a text fragment can name.
+    fn highlight(&self) -> Option<String> {
+        self.selection()
+            .then(|| highlight::link_to_highlight(&self.menu.page_url, &self.menu.selection_text))
+            .flatten()
     }
     fn editable(&self) -> bool {
         self.menu.editable
@@ -308,13 +342,30 @@ macro_rules! row {
 /// Every fixed entry, in menu order (Chromium's `AppendLinkItems`,
 /// `AppendImageItems`, `AppendMediaItems`, `AppendEditableItems`,
 /// `AppendCopyItem`, `AppendSearchProvider`, `AppendPageItems`,
-/// `AppendDeveloperItems`). Spelling suggestions go first and come from the
-/// request itself. Left out, with the reason in TODO.md: "Open Link in New
-/// Window" (one window), "Picture in Picture" (CEF's windowless views have no
-/// PiP window).
+/// `AppendDeveloperItems`, and the frame rows of `AppendFrameItems`). Spelling suggestions go
+/// first and come from the request itself. Left out, with the reason in TODO.md:
+/// "Picture in Picture" (CEF's windowless views have no PiP window).
+///
+/// A group number only has to differ from its neighbours' (a divider goes where it changes):
+/// the spelling rows lead the table in groups 0 and 11 so "Add to Dictionary" sits under the
+/// suggestions and above the link rows.
 const ROWS: &[Row] = &[
+    row!(
+        0,
+        "No Spelling Suggestions",
+        |c| c.misspelled() && c.menu.suggestions.is_empty(),
+        |_| false,
+        |_| Command::Info
+    ),
+    // CEF runs it itself: `AddWordToDictionary` for the request's misspelled word.
+    row!(11, "Add to Dictionary", |c| c.misspelled(), always, |_| {
+        Command::Engine(cef_id::ADD_TO_DICTIONARY)
+    }),
     row!(1, "Open Link in New Tab", |c| c.link(), always, |c| {
         Command::OpenInNewTab(c.menu.link_url.clone())
+    }),
+    row!(1, "Open Link in New Window", |c| c.link(), always, |c| {
+        Command::OpenInNewWindow(c.menu.link_url.clone())
     }),
     row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
         Command::SaveAs(c.menu.link_url.clone())
@@ -339,6 +390,18 @@ const ROWS: &[Row] = &[
     row!(2, "Copy Image Address", |c| c.image(), always, |c| {
         Command::CopyText(c.menu.media_url.clone())
     }),
+    Row {
+        group: 2,
+        label: |c| format!("Search {} for Image", c.nav.search.unwrap_or_default()),
+        show: |c| c.image_search(),
+        enabled: always,
+        command: |c| {
+            Command::OpenInNewTab(omnibox::fill(
+                c.nav.image.unwrap_or_default(),
+                &c.menu.media_url,
+            ))
+        },
+    },
     Row {
         group: 3,
         label: |c| {
@@ -432,6 +495,9 @@ const ROWS: &[Row] = &[
         |c| c.selection() || c.edit(F::CAN_COPY),
         |_| { Command::Engine(cef_id::COPY) }
     ),
+    row!(6, "Copy Link to Highlight", |c| c.highlight().is_some(), always, |c| {
+        Command::CopyText(c.highlight().unwrap_or_default())
+    }),
     row!(
         6,
         "Paste",
@@ -492,6 +558,26 @@ const ROWS: &[Row] = &[
     row!(10, "View Page Source", |c| c.page(), always, |_| {
         Command::Perform(Action::ViewSource)
     }),
+    row!(
+        10,
+        "View Frame Source",
+        |c| c.frame_source().is_some(),
+        always,
+        |c| Command::OpenInNewTab(c.frame_source().unwrap_or_default())
+    ),
+    row!(10, "Reload Frame", |c| c.frame_source().is_some(), always, |c| {
+        Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "location.reload()",
+        }
+    }),
+    row!(
+        10,
+        "Open Frame in New Tab",
+        |c| c.frame_source().is_some(),
+        always,
+        |c| Command::OpenInNewTab(c.menu.frame_url.clone())
+    ),
     // wubble's screenshots: the element under the pointer (an image, a link, a block).
     row!(
         10,
@@ -510,7 +596,8 @@ const ROWS: &[Row] = &[
 pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
     let ctx = Ctx { menu, nav };
     // Group 0: CEF's spelling suggestions for a misspelled word in a field.
-    let suggestions = (menu.editable && !menu.misspelled_word.is_empty())
+    let suggestions = ctx
+        .misspelled()
         .then_some(menu.suggestions.iter())
         .into_iter()
         .flatten()
@@ -1548,7 +1635,7 @@ mod tests {
         let nav = NavFlags {
             back: true,
             forward: false,
-            search: None,
+            ..NavFlags::default()
         };
         let e = entries(&page(), nav);
         assert_eq!(
@@ -1593,6 +1680,7 @@ mod tests {
             labels(&e),
             [
                 "Open Link in New Tab",
+                "Open Link in New Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -1604,13 +1692,17 @@ mod tests {
             e[0].command,
             Command::OpenInNewTab("https://a.test/next".into())
         );
-        assert_eq!(e[1].command, Command::SaveAs("https://a.test/next".into()));
         assert_eq!(
-            e[2].command,
+            e[1].command,
+            Command::OpenInNewWindow("https://a.test/next".into())
+        );
+        assert_eq!(e[2].command, Command::SaveAs("https://a.test/next".into()));
+        assert_eq!(
+            e[3].command,
             Command::CopyText("https://a.test/next".into())
         );
-        assert_eq!(e[4].command, Command::ShotElement((10, 20)));
-        assert_eq!(e[5].command, Command::Inspect { x: 10, y: 20 });
+        assert_eq!(e[5].command, Command::ShotElement((10, 20)));
+        assert_eq!(e[6].command, Command::Inspect { x: 10, y: 20 });
     }
 
     #[test]
@@ -1626,6 +1718,7 @@ mod tests {
             labels(&e),
             [
                 "Open Link in New Tab",
+                "Open Link in New Window",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -1639,7 +1732,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            e[6].command,
+            e[7].command,
             Command::CopyImage("https://a.test/i.png".into())
         );
         // An image that has not loaded has nothing to copy.
@@ -1746,6 +1839,198 @@ mod tests {
             ..m
         };
         assert_eq!(labels(&entries(&m, NavFlags::default()))[0], "Undo");
+    }
+
+    /// Each row Chromium adds to a target, where it adds it: the whole menu's labels, dividers
+    /// as "-".
+    #[test]
+    fn rows_follow_chromiums_groups() {
+        let google = NavFlags {
+            search: Some("Google"),
+            image: Some("https://g.test/i?u={q}"),
+            ..NavFlags::default()
+        };
+        let image = |url: &str| ContextMenu {
+            media: MediaKind::Image,
+            media_url: url.into(),
+            has_image: true,
+            ..page()
+        };
+        let spelling = |suggestions: &[&str]| ContextMenu {
+            editable: true,
+            misspelled_word: "teh".into(),
+            suggestions: suggestions.iter().map(|s| s.to_string()).collect(),
+            ..page()
+        };
+        let frame = |url: &str| ContextMenu {
+            frame_url: url.into(),
+            frame: "7".into(),
+            ..page()
+        };
+        let selection = |page_url: &str| ContextMenu {
+            selection_text: "hello world".into(),
+            page_url: page_url.into(),
+            ..page()
+        };
+        let image_rows = [
+            "Open Image in New Tab",
+            "Save Image As\u{2026}",
+            "Copy Image",
+            "Copy Image Address",
+        ];
+        let field_rows = [
+            "Undo",
+            "Redo",
+            "-",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Paste as Plain Text",
+            "Delete",
+            "Select All",
+            "-",
+            "Inspect",
+        ];
+        let bare = ["Back", "Forward", "Reload", "-", "Save Page As\u{2026}", "Print\u{2026}", "-"];
+        let tail = ["Take Screenshot of Element", "Inspect"];
+        let search = "Search Google for \u{201c}hello world\u{201d}";
+        let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 10] = [
+            (
+                "image search on an engine that has one",
+                image("https://a.test/i.png"),
+                google,
+                [&image_rows[..], &["Search Google for Image", "-"], &tail].concat(),
+            ),
+            (
+                "none on an engine without",
+                image("https://a.test/i.png"),
+                NavFlags::default(),
+                [&image_rows[..], &["-"], &tail].concat(),
+            ),
+            (
+                "none for an image that is not on the web",
+                image("data:image/png;base64,AA=="),
+                google,
+                [&image_rows[..], &["-"], &tail].concat(),
+            ),
+            (
+                "suggestions, then the dictionary",
+                spelling(&["the", "tea"]),
+                google,
+                [&["the", "tea", "-", "Add to Dictionary", "-"][..], &field_rows].concat(),
+            ),
+            (
+                "nothing to suggest",
+                spelling(&[]),
+                google,
+                [&["No Spelling Suggestions", "-", "Add to Dictionary", "-"][..], &field_rows]
+                    .concat(),
+            ),
+            (
+                "a frame's rows follow the page's source",
+                frame("https://b.test/f"),
+                google,
+                [
+                    &bare[..],
+                    &["View Page Source", "View Frame Source", "Reload Frame", "Open Frame in New Tab"],
+                    &tail,
+                ]
+                .concat(),
+            ),
+            (
+                "the page's own frame has none",
+                frame("https://a.test/"),
+                google,
+                [&bare[..], &["View Page Source"], &tail].concat(),
+            ),
+            (
+                "nor a frame with no address",
+                frame("about:srcdoc"),
+                google,
+                [&bare[..], &["View Page Source"], &tail].concat(),
+            ),
+            (
+                "the highlight follows Copy",
+                selection("https://a.test/"),
+                google,
+                [&["Copy", "Copy Link to Highlight", "-", search, "Print\u{2026}", "-"][..], &tail]
+                    .concat(),
+            ),
+            (
+                "none on a page that has no fragments",
+                selection("wubble://start"),
+                google,
+                [&["Copy", "-", search, "Print\u{2026}", "-"][..], &tail].concat(),
+            ),
+        ];
+        for (what, menu, nav, want) in cases {
+            assert_eq!(labels(&entries(&menu, nav)), want, "{what}");
+        }
+    }
+
+    #[test]
+    fn the_new_rows_run_what_chrome_runs() {
+        let google = NavFlags {
+            search: Some("Google"),
+            image: Some("https://g.test/i?u={q}"),
+            ..NavFlags::default()
+        };
+        let command = |menu: &ContextMenu, label: &str| {
+            entries(menu, google)
+                .into_iter()
+                .find(|e| e.label == label)
+                .unwrap_or_else(|| panic!("{label}"))
+                .command
+        };
+        let image = ContextMenu {
+            media: MediaKind::Image,
+            media_url: "https://a.test/i.png".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&image, "Search Google for Image"),
+            Command::OpenInNewTab("https://g.test/i?u=https%3A%2F%2Fa.test%2Fi.png".into())
+        );
+        let word = ContextMenu {
+            editable: true,
+            misspelled_word: "teh".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&word, "Add to Dictionary"),
+            Command::Engine(cef_id::ADD_TO_DICTIONARY)
+        );
+        let none = entries(&word, google);
+        assert_eq!(none[0].command, Command::Info);
+        assert!(!none[0].enabled);
+        let selection = ContextMenu {
+            selection_text: "hello world".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&selection, "Copy Link to Highlight"),
+            Command::CopyText("https://a.test/#:~:text=hello%20world".into())
+        );
+        let frame = ContextMenu {
+            frame_url: "https://b.test/f".into(),
+            frame: "7".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&frame, "View Frame Source"),
+            Command::OpenInNewTab("view-source:https://b.test/f".into())
+        );
+        assert_eq!(
+            command(&frame, "Open Frame in New Tab"),
+            Command::OpenInNewTab("https://b.test/f".into())
+        );
+        assert_eq!(
+            command(&frame, "Reload Frame"),
+            Command::FrameScript {
+                frame: "7".into(),
+                script: "location.reload()"
+            }
+        );
     }
 
     #[test]

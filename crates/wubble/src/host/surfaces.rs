@@ -16,6 +16,7 @@ use wubble_core::model::Command;
 use wubble_core::overlay::{Event as OverlayEvent, Kind};
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowTarget;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
 use wubble_engine::page::{ClipboardRequest, PageEvent, Rect, RequestId};
@@ -120,10 +121,11 @@ impl Host {
                     .map_or(NavFlags::default(), |v| NavFlags {
                         back: v.nav().page.can_go_back,
                         forward: v.nav().page.can_go_forward,
-                        search: None,
+                        ..NavFlags::default()
                     });
                 let nav = NavFlags {
                     search: self.search_engine.map(|e| e.info().name),
+                    image: self.search_engine.and_then(|e| e.info().image),
                     ..nav
                 };
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
@@ -441,6 +443,22 @@ impl Host {
                 }
                 MenuEffect::Run(MenuCommand::OpenInNewTab(url)) => {
                     self.open_routed(url, Some(tab));
+                }
+                MenuEffect::Run(MenuCommand::OpenInNewWindow(url)) => {
+                    let before = self.model.visible_tab();
+                    self.open_routed(url, Some(tab));
+                    // A link another app takes opens no tab: only a new one is torn out.
+                    if let Some(new) = self.model.visible_tab().filter(|t| Some(*t) != before) {
+                        self.dispatch(Command::MoveTabToWindow {
+                            tab: new,
+                            to: WindowTarget::New,
+                        });
+                    }
+                }
+                MenuEffect::Run(MenuCommand::FrameScript { frame, script }) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.run_script_in(&frame, script);
+                    }
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),
