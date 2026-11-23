@@ -23,7 +23,10 @@
 //! while CEF works (a compositor deadline, a frame timer's next tick) is never announced: it
 //! runs at the next wake for any other reason, at the latest at cefclient's 30 Hz fallback. A
 //! page that paints keeps the fallback at one display refresh ([`Tempo::Painting`]) for
-//! [`PAINTING_HOLD`] runs after its last frame; a still page keeps cefclient's 33 ms.
+//! [`PAINTING_HOLD`] runs after its last frame; a still page keeps cefclient's 33 ms for
+//! [`SETTLE_RUNS`] more runs, then waits [`QUIET_TIMER_DELAY`] ([`Tempo::Quiet`]): the run
+//! after a spent slice (below) lets CEF announce what it holds, so the fallback is only a
+//! net under work nobody announced, and 30 wake-ups a second were most of an idle window's.
 
 use std::time::Duration;
 
@@ -44,35 +47,55 @@ pub const CEF_TIME_SLICE: Duration = Duration::from_millis(10);
 /// gaps between a page's frames keep it, and a page that stopped returns to 30 Hz soon.
 pub const PAINTING_HOLD: u8 = 8;
 
-/// The longest the host waits between two runs of work.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Timer runs a [`Tempo::Still`] lasts: about a second at [`MAX_TIMER_DELAY`], so a start-up
+/// or a page that just stopped painting is still pumped at cefclient's rate.
+pub const SETTLE_RUNS: u8 = 30;
+
+/// The longest wait between two runs once nothing has painted for [`SETTLE_RUNS`] runs. CEF's
+/// own requests for sooner work are kept; this only bounds work it did not ask for.
+pub const QUIET_TIMER_DELAY: Duration = Duration::from_millis(250);
+
+/// The longest the host waits between two runs of work. Each row of [`Tempo::ceiling`] and
+/// [`Tempo::timer_ran`] is one tempo: a new one is a variant and a row in both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tempo {
-    /// No page paints: [`MAX_TIMER_DELAY`].
-    #[default]
-    Still,
+    /// No page paints: [`MAX_TIMER_DELAY`], for `left` more timer runs.
+    Still { left: u8 },
     /// A page painted: one display refresh (`refresh`, never above [`MAX_TIMER_DELAY`]), for
     /// `left` more timer runs unless another frame comes.
     Painting { refresh: Duration, left: u8 },
+    /// Nothing painted for [`SETTLE_RUNS`] timer runs: [`QUIET_TIMER_DELAY`], until a frame.
+    Quiet,
+}
+
+impl Default for Tempo {
+    fn default() -> Self {
+        Self::Still { left: SETTLE_RUNS }
+    }
 }
 
 impl Tempo {
     /// The longest wait between two runs of work.
     pub fn ceiling(self) -> Duration {
         match self {
-            Self::Still => MAX_TIMER_DELAY,
+            Self::Still { .. } => MAX_TIMER_DELAY,
             Self::Painting { refresh, .. } => refresh.min(MAX_TIMER_DELAY),
+            Self::Quiet => QUIET_TIMER_DELAY,
         }
     }
 
-    /// After a timer run: one fewer left; the last one returns to [`Tempo::Still`].
+    /// After a timer run: one fewer left; the last one moves on, painting to still and still
+    /// to quiet.
     fn timer_ran(self) -> Self {
         match self {
-            Self::Painting { left, .. } if left <= 1 => Self::Still,
+            Self::Painting { left, .. } if left <= 1 => Self::default(),
             Self::Painting { refresh, left } => Self::Painting {
                 refresh,
                 left: left - 1,
             },
-            Self::Still => Self::Still,
+            Self::Still { left } if left <= 1 => Self::Quiet,
+            Self::Still { left } => Self::Still { left: left - 1 },
+            Self::Quiet => Self::Quiet,
         }
     }
 }
@@ -215,7 +238,16 @@ mod tests {
             timer_pending,
             active,
             reentrant,
-            tempo: Tempo::Still,
+            tempo: Tempo::default(),
+        }
+    }
+
+    /// `state` at the tempo of [`st`]: for the rows that are not about the tempo, which every
+    /// timer run counts down.
+    fn settled(state: PumpState) -> PumpState {
+        PumpState {
+            tempo: Tempo::default(),
+            ..state
         }
     }
 
@@ -282,8 +314,9 @@ mod tests {
     fn table_covers_every_pair() {
         for state in states() {
             for event in EVENTS {
+                let (next, effects) = transition(state, event);
                 assert_eq!(
-                    transition(state, event),
+                    (settled(next), effects),
                     expected(state, event),
                     "{state:?} + {event:?}"
                 );
@@ -357,8 +390,9 @@ mod tests {
 
     #[test]
     fn timer_fired_clears_pending_and_runs_work() {
+        let (state, effects) = transition(st(true, false, false), TimerFired);
         assert_eq!(
-            transition(st(true, false, false), TimerFired),
+            (settled(state), effects),
             (st(false, true, false), vec![RunWork])
         );
     }
@@ -395,7 +429,7 @@ mod tests {
             &[TimerFired],
         ] {
             let (state, effects) = drive(path);
-            assert_eq!(state, st(true, false, false), "{path:?}");
+            assert_eq!(settled(state), st(true, false, false), "{path:?}");
             assert_eq!(effects.last(), Some(&StartTimer(MAX)), "{path:?}");
         }
     }
@@ -470,7 +504,7 @@ mod tests {
             assert_eq!(state.tempo, painting(left));
         }
         let (state, effects) = drive_from(state, &[TimerFired]);
-        assert_eq!(state.tempo, Tempo::Still);
+        assert_eq!(state.tempo, Tempo::default());
         assert_eq!(effects.last(), Some(&StartTimer(MAX)));
         // a frame meanwhile starts the hold again; immediate work does not count it down
         let (state, _) = drive_from(
@@ -481,6 +515,56 @@ mod tests {
             &[Painted(REFRESH), Schedule(0)],
         );
         assert_eq!(state.tempo, painting(PAINTING_HOLD));
+    }
+
+    #[test]
+    fn a_still_page_goes_quiet_after_a_second_of_timer_runs() {
+        let mut state = PumpState::default();
+        for left in (1..SETTLE_RUNS).rev() {
+            let (next, effects) = drive_from(state, &[TimerFired]);
+            assert_eq!(next.tempo, Tempo::Still { left });
+            assert_eq!(effects.last(), Some(&StartTimer(MAX)));
+            state = next;
+        }
+        let (quiet, effects) = drive_from(state, &[TimerFired]);
+        assert_eq!(quiet.tempo, Tempo::Quiet);
+        assert_eq!(effects.last(), Some(&StartTimer(QUIET_TIMER_DELAY)));
+        // (name, events from quiet, the tempo after, the last timer armed)
+        for (name, events, tempo, timer) in [
+            ("it stays quiet", &[TimerFired][..], Tempo::Quiet, QUIET_TIMER_DELAY),
+            (
+                "work CEF asks for runs at once and keeps it quiet",
+                &[Schedule(0)],
+                Tempo::Quiet,
+                QUIET_TIMER_DELAY,
+            ),
+            (
+                "a sooner request of CEF's is kept",
+                &[TimerFired, Schedule(10)],
+                Tempo::Quiet,
+                Duration::from_millis(10),
+            ),
+            (
+                "a later one waits the quiet delay",
+                &[TimerFired, Schedule(1_000)],
+                Tempo::Quiet,
+                QUIET_TIMER_DELAY,
+            ),
+            (
+                "a frame brings back one refresh",
+                &[Painted(REFRESH), TimerFired],
+                painting(PAINTING_HOLD - 1),
+                REFRESH,
+            ),
+        ] {
+            let (state, effects) = drive_from(quiet, events);
+            assert_eq!(state.tempo, tempo, "{name}");
+            let armed = effects.iter().rev().find_map(|e| match e {
+                StartTimer(delay) => Some(*delay),
+                _ => None,
+            });
+            assert_eq!(armed, Some(timer), "{name}");
+        }
     }
 
     /// Runs `events` from `state` like the engine does.
