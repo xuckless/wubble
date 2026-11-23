@@ -127,15 +127,20 @@ impl Host {
                         view.wheel(point, dx as f32, dy as f32, true, &Modifiers::default());
                     }
                 }
-                // On whichever window is focused: a tick always reaches the glide, which ends itself
-                // (its page just stops getting it once no window shows it).
+                // In the window the glide started in (its panes); a window closed meanwhile
+                // ends it, so the timer never outlives it.
                 FlingEffect::Start => {
+                    let id = self.w.id;
                     self.gestures
                         .fling_timer
-                        .start(slint::TimerMode::Repeated, FLING_TICK, || {
+                        .start(slint::TimerMode::Repeated, FLING_TICK, move || {
                             crate::with_host(|host| {
-                                let now = host.fling_now();
-                                host.fling(FlingInput::Tick { now });
+                                if host.enter(id) {
+                                    let now = host.fling_now();
+                                    host.fling(FlingInput::Tick { now });
+                                } else {
+                                    host.fling(FlingInput::Interrupt);
+                                }
                             })
                         });
                 }
