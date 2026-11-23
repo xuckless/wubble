@@ -256,13 +256,14 @@ impl Host {
                 }
             }
         }
-        let retired = std::mem::take(&mut self.w.layers.retired);
+        // all hidden in this present's transaction (this render still presents with it: it was
+        // acquired so), only then the shell's layer told what the next render does; then dropped
+        let mut retired = std::mem::take(&mut self.w.layers.retired);
         let on = self.w.layers.on_layer();
-        for mut layer in retired {
-            // in this present's transaction (the shell still presents with it), then dropped
-            layer.hide();
-            layer.present_in_transaction(on);
-        }
+        retired.iter_mut().for_each(|layer| layer.hide());
+        retired
+            .iter_mut()
+            .for_each(|layer| layer.present_in_transaction(on));
         self.enter(here);
     }
 
