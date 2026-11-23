@@ -184,6 +184,9 @@ pub enum PaceEvent {
     FrameArrived,
     /// Input, a layout change or a newly shown view: paint soon.
     Wake,
+    /// The last [`PaceEffect::Send`] reached no page: each took only its share
+    /// ([`begin_frame_due`]), so it is not a begin frame left unanswered.
+    Skipped,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,6 +220,12 @@ pub fn transition(
         (Active { unanswered }, Timer) => send(unanswered.saturating_add(1)),
         (Idle, Timer) => (Idle, vec![Send, ArmTimer(IDLE_INTERVAL)]),
         (Active { .. } | Idle, FrameArrived) => (Active { unanswered: 0 }, vec![]),
+        (Active { unanswered }, Skipped) => (
+            Active {
+                unanswered: unanswered.saturating_sub(1),
+            },
+            vec![],
+        ),
         _ => (state, vec![]),
     }
 }
@@ -504,6 +513,21 @@ mod tests {
             (Idle, Vsync, Idle, vec![]),
             (Idle, Wake, Active { unanswered: 1 }, fast.clone()),
             (Idle, FrameArrived, Active { unanswered: 0 }, vec![]),
+            // A send no page took does not count toward idling.
+            (
+                Active { unanswered: 2 },
+                Skipped,
+                Active { unanswered: 1 },
+                vec![],
+            ),
+            (
+                Active { unanswered: 0 },
+                Skipped,
+                Active { unanswered: 0 },
+                vec![],
+            ),
+            (Idle, Skipped, Idle, vec![]),
+            (Off, Skipped, Off, vec![]),
         ];
         for (state, event, want, effects) in cases {
             assert_eq!(

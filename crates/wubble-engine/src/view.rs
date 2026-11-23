@@ -877,13 +877,17 @@ impl View {
     }
 
     /// Asks CEF for one frame (`SendExternalBeginFrame`); only for a view
-    /// opened with `begin_frames`. A calm page takes only its rate's share of them.
-    pub fn send_begin_frame(&mut self) {
+    /// opened with `begin_frames`. A calm page takes only its rate's share of them: whether
+    /// this one went out.
+    pub fn send_begin_frame(&mut self) -> bool {
         let tick = self.begin_ticks;
         self.begin_ticks = tick.wrapping_add(1);
-        if pacing::begin_frame_due(self.ceiling, self.content.frame_rate(self.ceiling), tick) {
+        let due =
+            pacing::begin_frame_due(self.ceiling, self.content.frame_rate(self.ceiling), tick);
+        if due {
             self.send(|host| host.send_external_begin_frame());
         }
+        due
     }
 
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no

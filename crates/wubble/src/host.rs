@@ -3763,10 +3763,14 @@ impl Host {
             match effect {
                 // Every page on screen (the panes of a split) paints.
                 PaceEffect::Send => {
+                    let mut sent = false;
                     for tab in self.shown_tabs() {
                         if let Some(view) = self.tab_view(tab) {
-                            view.send_begin_frame();
+                            sent |= view.send_begin_frame();
                         }
+                    }
+                    if !sent {
+                        self.pace(PaceEvent::Skipped);
                     }
                 }
                 PaceEffect::ArmTimer(delay) => {
