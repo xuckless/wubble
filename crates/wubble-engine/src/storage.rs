@@ -332,6 +332,16 @@ impl Profiles {
             std::thread::sleep(READY_NAP);
             runs += 1;
         }
+        // Every pop-up reaches the host, which blocks by its own table
+        // (`wubble_core::popup`). If the setting does not take, Chromium keeps
+        // blocking those without a gesture unseen: none opens, none is offered.
+        if !profile.allow_popups() {
+            eprintln!(
+                "wubble-engine: container {}: Chromium's pop-up blocker stays on: pop-ups \
+                 without a click are refused before wubble sees them",
+                container.0
+            );
+        }
         self.open.insert(container, profile.clone());
         Ok(profile)
     }

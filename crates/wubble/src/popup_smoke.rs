@@ -4,7 +4,8 @@
 //! view through CEF's input (a user gesture); every wait is "until the host sees X", bounded by a
 //! count of CEF work runs, never by time.
 //!
-//! 1. The opener's `window.open` while loading, with no gesture: blocked (`null`), nothing opens.
+//! 1. The opener's `window.open` while loading, with no gesture: blocked (`null`), nothing opens,
+//!    and the address pill holds it (Chromium's own blocker is off, so wubble's table decides).
 //! 2. "Sign in": `window.open('', 'signin', 'width=500,height=600')`, then `w.location` set to the
 //!    other origin's page. A Popup window shows that page (its title, set by its own script, says
 //!    `window.opener` was set), with a frame; it posts a token the opener counts. Told to by the
@@ -223,7 +224,9 @@ pub fn next(s: PopupSmoke, seen: &Seen) -> (PopupSmoke, Option<Action>) {
                     ))),
                 );
             }
-            Some((SignIn, Action::Click(SIGNIN_AT)))
+            // until the host has it for the pill (it comes after the title, or never, if
+            // Chromium refused it unseen)
+            (seen.held == 1).then_some((SignIn, Action::Click(SIGNIN_AT)))
         }
         SignIn if popup_titled(seen, SIGNED_IN) && opener_title(seen).ends_with("tokens=1") => {
             Some((SignedIn, Action::InOpener(CLOSE_SIGNIN_SCRIPT)))
@@ -292,6 +295,8 @@ mod tests {
         Seen {
             opener: Some(title.into()),
             opener_framed: true,
+            // the load-time pop-up, held for the pill throughout
+            held: 1,
             ..Seen::default()
         }
     }
@@ -311,6 +316,12 @@ mod tests {
         let s = PopupSmoke::default();
         let (s, a) = next(s, &Seen::default());
         assert_eq!(a, None, "the page has not loaded");
+        let unheld = Seen {
+            held: 0,
+            ..opener("popup opener blocked tokens=0")
+        };
+        let (s, a) = next(s, &unheld);
+        assert_eq!(a, None, "the pill does not hold the load-time pop-up yet");
         let (s, a) = next(s, &opener("popup opener blocked tokens=0"));
         assert_eq!(a, Some(Action::Click(SIGNIN_AT)));
         let blank = with_popup(opener("popup opener blocked tokens=0"), "");
