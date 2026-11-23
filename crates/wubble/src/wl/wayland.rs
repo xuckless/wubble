@@ -98,6 +98,9 @@ const DROP_CAP: u64 = 8 << 20;
 
 /// How long a paste waits for the selection's owner to send it.
 const LOAD_WAIT: Duration = Duration::from_secs(2);
+/// The longest the window's thread waits for the worker to say a copy was set: it sets a
+/// selection without any I/O, so only a worker stuck elsewhere takes longer.
+const STORE_WAIT: Duration = Duration::from_millis(200);
 /// How long a paste reads the offered types (all at once): what arrived by then is the paste,
 /// within [`LOAD_WAIT`].
 const READ_DEADLINE: Duration = Duration::from_millis(1500);
@@ -141,8 +144,8 @@ enum Command {
         generation: u64,
         data: DragData,
     },
-    /// Set the selection; whether it was set goes back.
-    Store(Buffer, Payload, mpsc::Sender<bool>),
+    /// Set the selection; whether it was set goes back, if anyone waits.
+    Store(Buffer, Payload, Option<mpsc::Sender<bool>>),
     /// Read what the reader takes of the selection, for the answer.
     Load(Buffer, Reader, Answer),
     Exit,
@@ -203,11 +206,18 @@ impl Worker {
 
     /// Puts `payload` on `buffer`, under every type it has (`wubble_core::clipboard::offers`);
     /// false when it was not set (no surface of the process has the keyboard, the compositor
-    /// has no such selection, nothing to offer).
+    /// has no such selection, nothing to offer). The clipboard's answer is waited for at most
+    /// [`STORE_WAIT`] (a copy that failed is copied another way); the primary selection's,
+    /// set on every selection change, never: it is taken as set.
     pub fn store_payload(&self, buffer: Buffer, payload: Payload) -> bool {
+        if buffer == Buffer::Primary {
+            return self.tx.send(Command::Store(buffer, payload, None)).is_ok();
+        }
         let (done, stored) = mpsc::channel();
-        self.tx.send(Command::Store(buffer, payload, done)).is_ok()
-            && stored.recv_timeout(LOAD_WAIT).unwrap_or(false)
+        self.tx
+            .send(Command::Store(buffer, payload, Some(done)))
+            .is_ok()
+            && stored.recv_timeout(STORE_WAIT).unwrap_or(false)
     }
 
     /// Reads what `reader` takes from `buffer` and gives it to `done` on the reading thread,
@@ -592,7 +602,10 @@ impl State {
                 allowed,
             } => self.start_drag(window, data, allowed),
             Command::Store(buffer, payload, done) => {
-                let _ = done.send(self.store(buffer, payload));
+                let stored = self.store(buffer, payload);
+                if let Some(done) = done {
+                    let _ = done.send(stored);
+                }
             }
             Command::Load(buffer, reader, answer) => self.load(buffer, reader, answer),
         }
