@@ -122,7 +122,9 @@ pub(crate) fn serve(host: &mut impl ExtHost) {
                 host.engine().answer_open_tab(request, answer);
                 continue;
             }
-            // a private window's tab is none of an extension's
+            // a private window's tab is none of an extension's: the request does not say which
+            // extension asks, so "Allow in Private Windows" cannot let one through here (an
+            // allowed extension's reach is the engine's: docs/research/extensions.md)
             ExtRequest::CloseTab(view) => host
                 .tab_of(view)
                 .filter(|&t| !host.model().is_private_tab(t))

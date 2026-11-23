@@ -147,6 +147,38 @@ Main window (never active), leaves sleeping tabs out (Chrome would keep the tab 
 follow-up), and lists every window in every container's profile, each profile's controller holding only its own
 tabs (indices are the window's, so a profile may see gaps).
 
+## 8. Private windows
+
+Date: 2026-11-23, read in the CEF checkout (`libcef/browser/chrome/chrome_browser_context.cc`) and the patch queue; not run.
+A private window's container is opened with no directory (`SharedProfile::new(runtime, None)`): CEF then makes a
+**unique** off-the-record profile (`Profile::OTRProfileID::CreateUniqueForCEF`) whose parent is CEF's primary user
+profile (the global one, `GetPrimaryUserProfile`), and destroys it when the context shuts down [V]. It is not Chrome's
+primary incognito profile.
+
+Each extension has "Allow in Private Windows" (`wubble_core::extensions::Extension::private`, stored in
+`extensions.installed`, off by default, also offered as a box in the install prompt). `wubble_core::extensions::reaches`
+is the one rule: enabled, and in a private window only when allowed.
+
+| What | Enforced by | State |
+|---|---|---|
+| Action button, its popover list, the popup, a click on the page (`activeTab`) | the host (`host/ext_ui.rs`: `reaches` on the window) | per extension, live |
+| Footer button in a private window | the host (`footer_button(.., private)`) | shown only with an allowed extension installed |
+| Tabs an extension opens (`tabs.create`, options page) | the host (`ext_tabs.rs` `open_command`, `Model::extension_tab`) | never in a private window, whoever asks |
+| `tabs.remove`, `tabs.update {active}` on a private tab | the host (`ext_tabs.rs` `serve`) | refused for every extension: `ExtRequest` does not name the asking extension |
+| `tabs.query`, `windows.*`, tab events (the projection) | the host leaves private windows out of the one projection (`extensions::project`); the patch's registry makes controllers per *regular* profile only, and lists a profile's own tabs only (`TabsIn(window, profile)`) [V] | no extension sees private tabs or windows, allowed or not |
+| Content scripts, `webRequest`/`declarativeNetRequest`, events in the off-the-record profile | Chromium: an extension acts in an off-the-record profile only when `extensions.settings.<id>.incognito` is set in its original profile's prefs (`util::IsIncognitoEnabled`, off for unpacked and command-line extensions) [I] | off for every extension: nothing sets that pref |
+
+So today the host alone makes "not allowed" hold everywhere it can see, and Chromium's default makes it hold in the
+engine [I: to confirm with a content script on a private tab]. "Allowed" reaches only the host-side surfaces (the action
+button and its click). Making it reach the engine needs **P5**, a patch: (a) a `cef_wubble_ext_v1` entry that calls
+`extensions::util::SetIsIncognitoEnabled(id, primary_profile, on)` for each extension at start and on change (setting
+the whole `extensions.settings` dictionary through `CefRequestContext::SetPreference` from the host would race
+Chromium's own writes, so not that); (b) the registry (`10-cef-tabs-windows.patch`) making controllers for
+off-the-record profiles too, so that `BuildTabList` and the events, which already filter on
+`include_incognito_information()`, show private tabs to allowed extensions only; then (c) the projection carrying
+private windows and `ExtRequest` naming its extension so `ext_tabs.rs` can apply `reaches`. Whether Chromium runs an
+incognito-enabled extension in a *non-primary* off-the-record profile at all is [I], to check first.
+
 ## Acceptance
 
 Hand check, 2026-11-20, Linux, the patched CEF (`CEF_PATH=~/Dev/wubble-wt/cef-ext`), `scripts/headless.sh` under

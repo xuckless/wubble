@@ -1396,6 +1396,12 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_extension_toggled(move |id, on| {
         with_host_in(win, |host| host.extension_toggled(&id, on))
     });
+    window.on_extension_private_toggled(move |id, on| {
+        with_host_in(win, |host| host.extension_private_toggled(&id, on))
+    });
+    window.on_extension_prompt_private(move |on| {
+        with_host_in(win, |host| host.extension_prompt_private(on))
+    });
     window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
     window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
     window.on_agents_toggled(move |on| with_host_in(win, |host| host.agents_toggled(on)));

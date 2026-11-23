@@ -13,8 +13,10 @@
 //! - Only live tabs (with a page) are listed; indices stay contiguous.
 //! - The focused window is the Model's last one.
 //! - Private windows (a private Space's Main window, a private tab's Little or Popup window) and
-//!   their tabs are left out: extensions do not run in them (Chrome's "Allow in Incognito" is
-//!   off by default).
+//!   their tabs are left out. The projection is one for every extension, so it cannot follow a
+//!   per-extension "Allow in Private Windows" ([`crate::extensions::reaches`]); an allowed
+//!   extension's view of private tabs is the engine's half (docs/research/extensions.md,
+//!   "Private windows").
 
 use crate::model::Model;
 use crate::pages::InternalPage;

@@ -887,6 +887,8 @@ export struct ExtensionItem {
     note: string,
     enabled: bool,
     options: bool,
+    // wubble: "Allow in Private Windows" (wubble_core `Extension::private`), off by default
+    private: bool,
 }
 
 // One enabled extension's action on the footer's extensions popover (extensions-popover.slint):
@@ -910,6 +912,8 @@ export struct ExtensionPrompt {
     title: string,
     message: string,
     serial: int,
+    // wubble: the "Allow in private windows" box, as the host holds it (off at first)
+    private: bool,
 }
 
 // The action popup (kit/overlay/a/a-popup-card.slint): the popup page's last frame in a card under the

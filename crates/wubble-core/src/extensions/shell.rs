@@ -172,6 +172,9 @@ pub enum Prompt {
 pub enum PromptEvent {
     /// An extension was read from the file the user picked.
     Ask(Extension),
+    /// The prompt's "Allow in private windows" box (off at first): what the install keeps
+    /// ([`Extension::private`]).
+    AllowPrivate(bool),
     Allow,
     Cancel,
 }
@@ -188,6 +191,11 @@ pub fn prompt_transition(state: Prompt, event: PromptEvent) -> (Prompt, Vec<Prom
         (Prompt::Asking(ext), PromptEvent::Allow) => {
             (Prompt::Closed, vec![PromptEffect::Install(ext)])
         }
+        (Prompt::Asking(mut ext), PromptEvent::AllowPrivate(on)) => {
+            ext.private = on;
+            (Prompt::Asking(ext), vec![])
+        }
+        (Prompt::Closed, PromptEvent::AllowPrivate(_)) => (Prompt::Closed, vec![]),
         (_, PromptEvent::Allow | PromptEvent::Cancel) => (Prompt::Closed, vec![]),
     }
 }
@@ -436,6 +444,36 @@ mod tests {
         assert_eq!(fx, [PromptEffect::Install(e)]);
         // an answer with nothing asked does nothing
         let (p, fx) = prompt_transition(Prompt::Closed, PromptEvent::Allow);
+        assert_eq!((p, fx.len()), (Prompt::Closed, 0));
+    }
+
+    #[test]
+    fn the_prompt_s_private_box_goes_with_the_install() {
+        let e = ext(&manifest(""));
+        let allowed = Extension {
+            private: true,
+            ..e.clone()
+        };
+        // (ticks of the box, in order, then what Allow installs)
+        for (ticks, installs) in [
+            (vec![], e.clone()),
+            (vec![true], allowed.clone()),
+            (vec![true, false], e.clone()),
+            (vec![false, true], allowed.clone()),
+        ] {
+            let mut p = prompt_transition(Prompt::Closed, PromptEvent::Ask(e.clone())).0;
+            for on in &ticks {
+                let (next, fx) = prompt_transition(p, PromptEvent::AllowPrivate(*on));
+                assert!(fx.is_empty());
+                p = next;
+            }
+            let (p, fx) = prompt_transition(p, PromptEvent::Allow);
+            assert_eq!((p, fx), (Prompt::Closed, vec![PromptEffect::Install(installs)]));
+        }
+        // a new pick starts unticked; a tick with nothing asked does nothing
+        let p = prompt_transition(Prompt::Asking(allowed), PromptEvent::Ask(e.clone())).0;
+        assert_eq!(p, Prompt::Asking(e));
+        let (p, fx) = prompt_transition(Prompt::Closed, PromptEvent::AllowPrivate(true));
         assert_eq!((p, fx.len()), (Prompt::Closed, 0));
     }
 
