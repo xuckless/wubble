@@ -900,8 +900,16 @@ export component AppWindow inherits Window {
         MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
         MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
         MouseCursor.none, MouseCursor.none, MouseCursor.none,
-        // A drag's feedback: copy, alias (link).
+        // Copy, alias (link): CSS and a drag's feedback.
         MouseCursor.copy, MouseCursor.alias,
+        MouseCursor.col-resize, MouseCursor.row-resize, MouseCursor.no-drop,
+        // The edge resizes: n, e, s, w, ne, nw, se, sw.
+        MouseCursor.n-resize, MouseCursor.e-resize, MouseCursor.s-resize, MouseCursor.w-resize,
+        MouseCursor.ne-resize, MouseCursor.nw-resize, MouseCursor.se-resize, MouseCursor.sw-resize,
+        // What Slint has no cursor for: hidden, the host sets the window's own (host/cursor.rs).
+        // Context menu, cell, vertical text, zoom in, zoom out, and the page's image.
+        MouseCursor.none, MouseCursor.none, MouseCursor.none,
+        MouseCursor.none, MouseCursor.none, MouseCursor.none,
     ];
 
     // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first

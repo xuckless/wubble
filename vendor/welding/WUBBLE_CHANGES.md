@@ -561,6 +561,20 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (screen DIP), as `OpenedWindow::position` already had. Test:
     `new_window_tests::position_needs_both_features`.
 
+58. **Every CEF cursor type, and the page's cursor image.** `cursor.rs`:
+    `from_cef(type, info)` is one table of CEF types to shapes instead of an
+    if-chain, and `CursorShape` (`surface.rs`) gains `ColResize`, `RowResize`,
+    `NoDrop`, `Copy`, `Alias`, `Cell`, `ContextMenu`, `VerticalText` and the
+    eight edge resizes (`ResizeN` ... `ResizeSw`), which CEF's cell, context
+    menu, vertical text, copy, alias, no-drop, column/row and edge-resize types
+    used to fold into near shapes or `Custom("cef-other")` (the drag cursors
+    `DND_MOVE`, `DND_COPY` and `DND_LINK` map to move, copy and alias).
+    `CT_CUSTOM` carries `CursorShape::Image(CursorImage)`: the `OnCursorChange`
+    `CefCursorInfo` buffer (premultiplied BGRA) as straight-alpha RGBA with its
+    size and hotspot, which `linux_cef`, `macos_cef` and `windows_cef` pass on
+    instead of dropping. `CursorImage` is re-exported from `lib.rs`. Test:
+    `cursor::tests`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

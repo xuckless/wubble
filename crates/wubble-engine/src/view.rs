@@ -691,10 +691,11 @@ impl View {
         self.scroll_x
     }
 
-    /// Deltas in logical pixels, positive = up / left.
-    pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, modifiers: &Modifiers) {
+    /// Deltas in logical pixels, positive = up / left; `precise` for a touchpad's, not a
+    /// notched wheel's (`input::wheel_deltas`).
+    pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, precise: bool, modifiers: &Modifiers) {
         self.content(ContentEvent::Input);
-        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, &mut self.wheel);
+        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, precise, &mut self.wheel);
         let event = cef::MouseEvent {
             modifiers: flags,
             ..input::mouse_event(point, modifiers)
@@ -1068,6 +1069,11 @@ impl View {
             }
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
+            // Before the cursor change: the host applies the image with it, and
+            // alone when the cursor was an image already.
+            if let welding::CursorShape::Image(image) = &shape {
+                self.events.push(WebEvent::CursorImage(image.clone()));
+            }
             self.apply_nav(NavInput::Cursor(shape.into()));
         }
         let placement = self.producer.popup_rect().map(Rect::from);

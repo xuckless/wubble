@@ -111,6 +111,8 @@ pub(crate) struct WindowHost {
     pub(super) drawn: surfaces::Drawn,
     /// The begin frames of the pages this window shows (`Pacing::Shell`), one per render.
     pub(super) pace: Pace,
+    /// The page's pointer shape on the window.
+    pub(super) cursor: super::cursor::PageCursor,
 }
 
 impl WindowHost {
@@ -148,6 +150,7 @@ impl WindowHost {
             split_commands: vec![],
             drawn: Default::default(),
             pace: Pace::default(),
+            cursor: Default::default(),
         }
     }
 }
