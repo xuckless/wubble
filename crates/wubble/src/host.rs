@@ -1075,11 +1075,8 @@ impl Host {
                     Some(id) => self.adopt_view(id, layout, frame_rate),
                     None => {
                         // The tab's own cookies, storage and cache: its container's.
-                        let container = self
-                            .model
-                            .tabs
-                            .get(&tab)
-                            .map_or(ContainerId::DEFAULT, |t| t.container);
+                        // an unknown tab gets no view (no Default stand-in)
+                        let container = self.model.container_of(tab)?;
                         let config = ViewConfig {
                             url: url.clone(),
                             layout,

@@ -24,6 +24,9 @@ use super::{Host, now_ms};
 #[derive(Debug)]
 struct Inflight {
     tab: TabId,
+    /// The tab's container when the download was asked for: its row's, even if the tab
+    /// closes before the engine starts it.
+    container: ContainerId,
     /// Reserved, so two at once never get the same name before either file
     /// exists.
     path: PathBuf,
@@ -186,11 +189,19 @@ impl Host {
                 total,
                 ..
             } => {
+                // the container at request time, else the tab's; with neither it is cancelled
                 let container = self
-                    .model
-                    .tabs
-                    .get(&tab)
-                    .map_or(ContainerId::DEFAULT, |t| t.container);
+                    .downloads
+                    .inflight
+                    .get(&download)
+                    .map(|f| f.container)
+                    .or_else(|| self.model.container_of(tab));
+                let Some(container) = container else {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.cancel_download(download);
+                    }
+                    return;
+                };
                 let d = &mut self.downloads;
                 let entry = DownloadEntry {
                     id: d.next_id,
@@ -210,12 +221,13 @@ impl Host {
                     .entry(download)
                     .or_insert_with(|| Inflight {
                         tab,
+                        container,
                         path: entry.path.clone(),
                         entry: None,
                     })
                     .entry = Some(entry.id);
                 let text = format!("Downloading {}", entry.name);
-                self.push_entry(entry, self.model.side_of_tab(tab));
+                self.push_entry(entry, self.model.side_of_container(container));
                 self.toast(window, &text);
                 self.render_downloads(window);
                 self.report_busy(tab);
@@ -299,13 +311,17 @@ impl Host {
         download: DownloadId,
         path: Option<PathBuf>,
     ) {
+        // an unknown tab's download is cancelled (no Default stand-in)
+        let container = self.model.container_of(tab);
+        let path = path.filter(|_| container.is_some());
         let Some(view) = self.tab_view(tab) else {
             return;
         };
         view.answer_download_path(id, path.as_deref());
-        if let Some(path) = path {
+        if let (Some(path), Some(container)) = (path, container) {
             let reserved = Inflight {
                 tab,
+                container,
                 path,
                 entry: None,
             };
@@ -539,10 +555,11 @@ impl Host {
     /// in `tab`'s container (stored only for a normal tab: `push_entry`).
     pub(super) fn add_finished_download(&mut self, url: &str, path: &Path, tab: Option<TabId>) {
         let size = std::fs::metadata(path).map_or(0, |m| m.len());
-        let container = tab
-            .and_then(|t| self.model.tabs.get(&t))
-            .map_or(ContainerId::DEFAULT, |t| t.container);
-        let side = tab.map_or(Side::Private, |t| self.model.side_of_tab(t));
+        // the printed tab closed meanwhile: its file stays, unlisted (no Default stand-in)
+        let Some(container) = tab.and_then(|t| self.model.container_of(t)) else {
+            return;
+        };
+        let side = self.model.side_of_container(container);
         let d = &mut self.downloads;
         let entry = DownloadEntry {
             id: d.next_id,

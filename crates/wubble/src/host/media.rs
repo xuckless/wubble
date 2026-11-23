@@ -348,8 +348,8 @@ impl Host {
             .job()
             .and_then(|j| self.media.runs.get(&j))
             .map(|r| r.container)
-            .or_else(|| self.model.tabs.get(&tab).map(|t| t.container))
-            .unwrap_or(ContainerId::DEFAULT);
+            .or_else(|| self.model.container_of(tab))
+            .ok_or("the page it came from is closed: open that site's page again, then resume")?;
         let browser_id = self
             .fetch_browser(tab, container)
             .ok_or("the page it came from is closed: open that site's page again, then resume")?;
@@ -1095,11 +1095,10 @@ impl Host {
             .map(|i| variants[i].clone())
             .collect();
         let pair = matches!(chosen.selection, Selection::Pair { .. });
-        let container = self
-            .model
-            .tabs
-            .get(&tab)
-            .map_or(ContainerId::DEFAULT, |t| t.container);
+        // the tab closed meanwhile: nothing starts (no Default stand-in)
+        let Some(container) = self.model.container_of(tab) else {
+            return;
+        };
         self.start_media(
             tab,
             container,
