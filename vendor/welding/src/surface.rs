@@ -123,11 +123,15 @@ pub enum CefSurfaceEvent {
     },
 }
 
-/// A frame message longer than this (bytes) is dropped. wubble change (27).
-pub const MAX_FRAME_MESSAGE_BYTES: usize = 256 * 1024;
+/// A frame message longer than this (bytes) is dropped. wubble change (27);
+/// 16 MiB, room for a copied picture as base64, since wubble change (58).
+pub const MAX_FRAME_MESSAGE_BYTES: usize = 16 << 20;
 /// At most this many frame messages wait in a view's queue; later ones are
 /// dropped until the host drains it. A count, not a rate. wubble change (27).
 pub const MAX_PENDING_FRAME_MESSAGES: usize = 64;
+/// At most this many bytes of frame messages wait in a view's queue, so long
+/// messages cannot pile up to the count's worth. wubble change (58).
+pub const MAX_PENDING_FRAME_BYTES: usize = 2 * MAX_FRAME_MESSAGE_BYTES;
 
 /// The strings of a list CEF passed to a callback, which still owns it.
 /// wubble change, see `WUBBLE_CHANGES.md`.
@@ -152,8 +156,8 @@ impl WebEventQueue {
             .push_back(event);
     }
 
-    /// Queues a frame message unless it is too long or too many wait
-    /// already; whether it was queued. wubble change (27).
+    /// Queues a frame message unless it is too long or too many (or too many
+    /// bytes) wait already; whether it was queued. wubble change (27, 58).
     pub(crate) fn push_frame_message(&self, event: CefSurfaceEvent) -> bool {
         let CefSurfaceEvent::FrameMessage { text, .. } = &event else {
             return false;
@@ -165,11 +169,14 @@ impl WebEventQueue {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let pending = queue
+        let (count, bytes) = queue
             .iter()
-            .filter(|e| matches!(e, CefSurfaceEvent::FrameMessage { .. }))
-            .count();
-        if pending >= MAX_PENDING_FRAME_MESSAGES {
+            .filter_map(|e| match e {
+                CefSurfaceEvent::FrameMessage { text, .. } => Some(text.len()),
+                _ => None,
+            })
+            .fold((0, 0), |(count, bytes), len| (count + 1, bytes + len));
+        if count >= MAX_PENDING_FRAME_MESSAGES || bytes + text.len() > MAX_PENDING_FRAME_BYTES {
             return false;
         }
         queue.push_back(event);
@@ -325,6 +332,13 @@ mod web_event_tests {
         assert_eq!(texts[..2], ["1", "2"]);
         // Drained: there is room again.
         assert!(events.push_frame_message(frame_message("f", "again")));
+        let _ = events.poll();
+        // Long ones fill the byte budget before the count. wubble change (58).
+        let full = "x".repeat(MAX_FRAME_MESSAGE_BYTES);
+        for _ in 0..MAX_PENDING_FRAME_BYTES / MAX_FRAME_MESSAGE_BYTES {
+            assert!(events.push_frame_message(frame_message("f", &full)));
+        }
+        assert!(!events.push_frame_message(frame_message("f", "x")));
     }
 
     #[test]

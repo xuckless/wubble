@@ -540,6 +540,12 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     BSD-3-Clause); no code copied. Windows is unchanged (it has no views).
     `handlers.rs`: `new_window_kind` and `popup_size` are crate-visible.
     Test: `opened::tests`; wubble's `--smoke popup` drives it in CEF.
+58. **Frame messages big enough for a clipboard.** `surface.rs`:
+    `MAX_FRAME_MESSAGE_BYTES` is 16 MiB (was 256 KiB), so a page's copy with a
+    picture as base64 reaches the browser (wubble's Wayland clipboard bridge);
+    new `MAX_PENDING_FRAME_BYTES` (twice that) caps the bytes queued, beside the
+    count. The renderer's `send` uses the same cap. Test: the byte budget in
+    `frame_messages_keep_order_and_respect_the_caps`.
 
 ## Not changed, on purpose
 
