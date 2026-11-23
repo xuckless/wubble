@@ -72,14 +72,7 @@ impl Host {
         let (tab, at) = match self.input.pointer {
             Some(p) => {
                 let tab = self.pane_under(window, (p.x, p.y))?;
-                let (x, y) = self.view_origin(window, tab);
-                (
-                    tab,
-                    Point {
-                        x: p.x - x,
-                        y: p.y - y,
-                    },
-                )
+                (tab, self.page_point(window, tab, (p.x, p.y)))
             }
             None => {
                 let tab = self.shown()?;

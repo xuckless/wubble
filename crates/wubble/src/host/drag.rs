@@ -279,11 +279,7 @@ impl Host {
 
     /// Where `tab`'s page is under the drag's pointer, in its view's px.
     fn drag_point_in(&self, window: &AppWindow, tab: TabId) -> Point {
-        let (x, y) = self.view_origin(window, tab);
-        Point {
-            x: self.drag_win.0 - x,
-            y: self.drag_win.1 - y,
-        }
+        self.page_point(window, tab, self.drag_win)
     }
 
     /// One page-drag effect; `source` is the drag's source page (`None` for a drop from
@@ -694,13 +690,7 @@ impl Host {
         let under = self
             .page_under(window, at)
             .filter(|t| shell.is_none() && !self.agent_drives(*t));
-        let point_in = |host: &Self, tab: TabId| {
-            let (x, y) = host.view_origin(window, tab);
-            Point {
-                x: at.0 - x,
-                y: at.1 - y,
-            }
-        };
+        let point_in = |host: &Self, tab: TabId| host.page_point(window, tab, at);
         let (leave, enter) = match phase {
             External::Leave => (drag.over, None),
             _ if drag.over != under || phase == External::Enter => (drag.over, under),
