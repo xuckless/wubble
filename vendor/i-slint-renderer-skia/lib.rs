@@ -40,6 +40,8 @@ mod font_cache;
 mod itemrenderer;
 // wubble change: partial rendering on the wgpu 30 surface, see `partial.rs`.
 pub mod partial;
+// wubble change (2): the application's hook before a present, see `presenting.rs`.
+pub mod presenting;
 
 #[cfg(skia_backend_software)]
 pub mod software_surface;

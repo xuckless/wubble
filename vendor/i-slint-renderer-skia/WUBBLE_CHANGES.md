@@ -4,7 +4,7 @@ Vendored from crates.io `i-slint-renderer-skia` 1.19.0 (repository slint-ui/slin
 `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`; wubble
 takes it under GPL-3.0-only. Copied unmodified: everything the published crate ships
 (`Cargo.toml` is the registry's normalised manifest). Added: `partial.rs`, `rustfmt.toml` and
-this file. Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
+this file (and `presenting.rs`, change 2). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
 
 The copy is excluded from the wubble workspace, so `cargo clippy --workspace` does not lint it;
 `rustfmt.toml` sets `disable_all_formatting = true` to keep upstream formatting and a diff
@@ -52,3 +52,12 @@ Every change is marked `wubble change` in the source.
    A texture Slint shows and the application writes in place behind an image that stays the
    same is invisible to the partial renderer: its writer marks the window dirty
    (`crates/wubble/src/partial.rs`, the scene's frames).
+
+2. **A hook before each present.** wubble hides a page's OS layer (`wubble_core::page_layer`) only
+   once the shell presents a frame that drew the page, in the same Core Animation commit as that
+   frame; upstream's `pre_present_callback` is the winit backend's own, out of the application's
+   reach.
+   - `presenting.rs` (new): a thread-local hook (`set_hook`) called with the window (`notify`).
+   - `wgpu_30_surface.rs` `render`: the window parameter (unused upstream, `_window`) is passed to
+     `presenting::notify` right after `pre_present_callback`, before both `queue.present` calls.
+   - `lib.rs`: `pub mod presenting`.

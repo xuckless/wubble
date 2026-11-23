@@ -594,7 +594,8 @@ impl crate::Surface for WGPUSurface {
 
     fn render(
         &self,
-        _window: &Window,
+        // wubble change (2): the window, for `presenting::notify`.
+        window: &Window,
         _size: PhysicalWindowSize,
         callback: &dyn Fn(
             &skia_safe::Canvas,
@@ -658,6 +659,8 @@ impl crate::Surface for WGPUSurface {
             if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
                 pre_present_callback();
             }
+            // wubble change (2): the application's hook, just before the present.
+            crate::presenting::notify(window);
             self.wgpu.queue.present(frame);
             return Ok(DrawOutcome::Success);
         }
@@ -722,6 +725,8 @@ impl crate::Surface for WGPUSurface {
         if let Some(pre_present_callback) = pre_present_callback.borrow_mut().as_mut() {
             pre_present_callback();
         }
+        // wubble change (2): the application's hook, just before the present.
+        crate::presenting::notify(window);
 
         self.wgpu.queue.present(frame);
 
