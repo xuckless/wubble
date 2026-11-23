@@ -485,6 +485,7 @@ impl View {
             gesture: opened.user_gesture,
             opened: popup_opened(opened.kind),
             size: opened.size,
+            position: opened.position,
         };
         self.opened.push((child, request));
     }
@@ -1995,11 +1996,13 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             user_gesture,
             kind,
             size,
+            position,
         } => one(Route::Nav(NavInput::Popup(crate::nav::PopupRequest {
             url,
             gesture: user_gesture,
             opened: popup_opened(kind),
             size,
+            position,
         }))),
         E::PopupBrowserCreated(opened) => one(Route::PopupCreated(opened)),
         E::PopupAborted { popup_id } => one(Route::PopupAborted(popup_id)),
@@ -2776,6 +2779,7 @@ mod tests {
                 user_gesture: true,
                 kind,
                 size,
+                position: Some((40, 60)),
             })
         };
         assert_eq!(
@@ -2785,6 +2789,7 @@ mod tests {
                 gesture: true,
                 opened: Opened::PopupWindow,
                 size: Some((400, 300)),
+                position: Some((40, 60)),
             }))
         );
         for (kind, opened) in [

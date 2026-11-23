@@ -555,6 +555,11 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (`notify_screen_info_changed`). Test: `view::tests`, one row per desktop
     layout (monitors left of and right of the primary, scale 1, 1.25, 2,
     Wayland's unknown position, no monitor).
+59. **`left`/`top` of a pop-up.** `handlers.rs`: new `popup_position` (both
+    `x_set` and `y_set`), used by `new_window_requested` and `opened_window`;
+    `NavigationEvent::NewWindowRequested` gains `position: Option<(i32, i32)>`
+    (screen DIP), as `OpenedWindow::position` already had. Test:
+    `new_window_tests::position_needs_both_features`.
 
 ## Not changed, on purpose
 

@@ -78,6 +78,7 @@ pub(crate) fn new_window_requested(
         user_gesture,
         kind: new_window_kind(disposition),
         size: features.and_then(popup_size),
+        position: features.and_then(popup_position),
     }
 }
 
@@ -98,6 +99,12 @@ pub(crate) fn popup_size(f: &cef::PopupFeatures) -> Option<(u32, u32)> {
         return None;
     }
     Some((u32::try_from(f.width).ok()?, u32::try_from(f.height).ok()?))
+}
+
+/// wubble change (59): the `left`/`top` window features, when both were
+/// given (screen DIP, negative on a monitor left of or above the primary).
+pub(crate) fn popup_position(f: &cef::PopupFeatures) -> Option<(i32, i32)> {
+    (f.x_set != 0 && f.y_set != 0).then_some((f.x, f.y))
 }
 
 // ── Frame messages (wubble changes 27, 34) ─────────────────────────────────
@@ -1549,7 +1556,7 @@ mod request_filter_tests {
 
 #[cfg(test)]
 mod new_window_tests {
-    use super::{new_window_kind, popup_size};
+    use super::{new_window_kind, popup_position, popup_size};
     use crate::surface::NewWindowKind as K;
     use cef::WindowOpenDisposition as D;
 
@@ -1574,6 +1581,21 @@ mod new_window_tests {
         assert_eq!(popup_size(&f(400, 1, 300, 1)), Some((400, 300)));
         assert_eq!(popup_size(&f(400, 1, 300, 0)), None);
         assert_eq!(popup_size(&f(-1, 1, 300, 1)), None);
+    }
+
+    #[test]
+    fn position_needs_both_features() {
+        let f = |x: i32, xs: i32, y: i32, ys: i32| cef::PopupFeatures {
+            x,
+            x_set: xs,
+            y,
+            y_set: ys,
+            ..Default::default()
+        };
+        assert_eq!(popup_position(&f(40, 1, 60, 1)), Some((40, 60)));
+        assert_eq!(popup_position(&f(-1920, 1, 0, 1)), Some((-1920, 0)));
+        assert_eq!(popup_position(&f(40, 1, 60, 0)), None);
+        assert_eq!(popup_position(&f(40, 0, 60, 1)), None);
     }
 }
 

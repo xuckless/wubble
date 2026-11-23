@@ -272,10 +272,13 @@ pub enum Command {
         to: WindowTarget,
     },
     /// A page's `window.open` with a size: a new tab beside `opener`, shown in a Popup window.
+    /// `pos` is the window's outer position (physical px; its `left`/`top`), used only with a
+    /// size, which gives the window a geometry.
     OpenPopupWindow {
         url: String,
         opener: TabId,
         size: Option<(u32, u32)>,
+        pos: Option<(i32, i32)>,
     },
     /// A link from another app: a new tab in `space` (`None`: the active one) shown in a
     /// Little window, in `container` (`None`: the Space's own).
@@ -2124,7 +2127,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::ClosePip => m.close_pip(),
         Command::ReturnPip => m.return_pip(),
         Command::MoveTabToWindow { tab, to } => m.move_tab_to_window(tab, to),
-        Command::OpenPopupWindow { url, opener, size } => m.open_popup_window(url, opener, size),
+        Command::OpenPopupWindow {
+            url,
+            opener,
+            size,
+            pos,
+        } => m.open_popup_window(url, opener, size, pos),
         Command::OpenLittle {
             url,
             space,

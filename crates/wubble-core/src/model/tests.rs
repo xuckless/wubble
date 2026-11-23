@@ -534,6 +534,7 @@ fn pages_opened_from_a_tab_keep_its_container() {
             url: "https://pop.test".into(),
             opener,
             size: None,
+            pos: None,
         },
     );
     let popup = fx
@@ -2446,6 +2447,7 @@ fn a_tab_is_on_screen_in_at_most_one_window() {
             url: "https://p.test".into(),
             opener: t[1],
             size: Some((400, 300)),
+            pos: None,
         },
         Command::ActivateTab(t[0]),
         Command::SwitchSpace(s0()),
@@ -2506,6 +2508,7 @@ fn moving_a_tab_to_a_window_fixes_the_source_space() {
             url: "https://p.test".into(),
             opener: t[2],
             size: None,
+            pos: None,
         },
     );
     let p = opened(&fx);
@@ -2573,6 +2576,7 @@ fn popup_and_little_windows_own_their_tab() {
             url: "https://p.test".into(),
             opener: t[0],
             size: Some((400, 300)),
+            pos: None,
         },
     );
     let p = opened(&fx);
@@ -2586,6 +2590,34 @@ fn popup_and_little_windows_own_their_tab() {
             pos: None
         })
     );
+    // `left`/`top` place the window; without a size there is no geometry to put them in
+    let (m2, fx) = run(
+        m.clone(),
+        Command::OpenPopupWindow {
+            url: "https://q.test".into(),
+            opener: t[0],
+            size: Some((400, 300)),
+            pos: Some((-1800, 40)),
+        },
+    );
+    assert_eq!(
+        m2.window(opened(&fx)).unwrap().geometry,
+        Some(Geometry {
+            width: 400,
+            height: 300,
+            pos: Some((-1800, 40))
+        })
+    );
+    let (m2, fx) = run(
+        m.clone(),
+        Command::OpenPopupWindow {
+            url: "https://q.test".into(),
+            opener: t[0],
+            size: None,
+            pos: Some((40, 60)),
+        },
+    );
+    assert_eq!(m2.window(opened(&fx)).unwrap().geometry, None);
     assert_eq!(m.visible_tab(), Some(pt), "the popup has focus");
     assert_eq!(m.spaces[0].active, Some(t[0]), "the Space keeps its page");
     assert_eq!(m.order(s0()), vec![t[0], pt], "beside its opener");
@@ -2650,6 +2682,7 @@ fn a_little_window_promotes_into_a_space() {
             url: "https://p.test".into(),
             opener: lt,
             size: None,
+            pos: None,
         },
     );
     let p = opened(&fx);
@@ -3209,6 +3242,7 @@ fn pip_is_refused_for_what_it_cannot_show() {
             url: "https://p.test".into(),
             opener: t[0],
             size: None,
+            pos: None,
         },
     );
     let popup_tab = m.window(opened(&fx)).unwrap().tab().unwrap();

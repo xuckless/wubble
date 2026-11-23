@@ -2163,6 +2163,7 @@ mod tests {
                 url: "https://p.test".into(),
                 opener: TabId(1),
                 size: None,
+                pos: None,
             },
         );
         let popup = m.focused();
