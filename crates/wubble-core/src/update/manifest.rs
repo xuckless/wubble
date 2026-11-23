@@ -440,6 +440,15 @@ pub(crate) mod tests {
             offer("0.1.0", Channel::Preview, Some(&v("0.2.0-preview.2"))),
             Ok(None)
         );
+        // the move to plain versions: preview.7 on Preview is offered 0.6.1 (from
+        // `preview.json`), and a 0.6.1 build follows Stable
+        let release = manifest_for(&s, "0.6.1", ARCHIVE);
+        assert_eq!(
+            choose(&release, &v("0.1.0-preview.7"), linux, Channel::Preview, None)
+                .map(|o| o.map(|o| o.version)),
+            Ok(Some(v("0.6.1")))
+        );
+        assert_eq!(Channel::of(&v("0.6.1")), Channel::Stable);
         // wrong platform refused
         assert_eq!(
             choose(&m, &v("0.1.0"), "macos-aarch64", Channel::Preview, None),
