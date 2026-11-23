@@ -840,6 +840,7 @@ impl Host {
                     },
                 };
                 if let Err(e) = &result {
+                    let url = self.model.side_of_tab(tab).loggable(&url);
                     eprintln!("wubble: media {url}: {}", e.message());
                 }
                 match result {

@@ -58,6 +58,17 @@ impl Storage {
     }
 }
 
+impl Side {
+    /// `url` as a log line may name it: never a private tab's (stderr can be kept, as macOS's
+    /// unified log keeps it).
+    pub fn loggable(self, url: &str) -> &str {
+        match self {
+            Side::Normal => url,
+            Side::Private => "(a private page)",
+        }
+    }
+}
+
 /// What a Space is for: the one field of a Space's kind (an agent Space is never private).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpaceKind {
@@ -310,6 +321,13 @@ pub fn next_space<'a>(existing: impl IntoIterator<Item = (&'a str, Rgb)> + Clone
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_private_url_never_reaches_a_log() {
+        let url = "https://bank.test/account";
+        assert_eq!(Side::Normal.loggable(url), url);
+        assert!(!Side::Private.loggable(url).contains("bank"));
+    }
 
     #[test]
     fn space_icons_round_trip_and_rotate() {
