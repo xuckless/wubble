@@ -7,6 +7,7 @@
 
 pub use crate::omnibox::SearchEngine;
 use crate::omnibox::{Intent, classify, suggest_url};
+use crate::space::Side;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -14,6 +15,19 @@ pub enum LiveSuggestions {
     #[default]
     Off,
     On,
+}
+
+impl LiveSuggestions {
+    /// What the bar of a window on `side` runs: live only when the user turned it on and a
+    /// search engine is set, and never in a private window, whose bar suggests from this
+    /// machine only (what is typed there is none of a server's business).
+    pub fn of(on: bool, engine_set: bool, side: Side) -> Self {
+        if on && engine_set && side == Side::Normal {
+            Self::On
+        } else {
+            Self::Off
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +248,21 @@ pub fn transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_private_bar_never_goes_live() {
+        use LiveSuggestions::{Off, On};
+        // (setting on, engine set, side, what runs)
+        for (on, engine, side, want) in [
+            (true, true, Side::Normal, On),
+            (true, true, Side::Private, Off),
+            (false, true, Side::Normal, Off),
+            (true, false, Side::Normal, Off),
+            (false, false, Side::Private, Off),
+        ] {
+            assert_eq!(LiveSuggestions::of(on, engine, side), want, "{on} {engine} {side:?}");
+        }
+    }
 
     fn settings(live: LiveSuggestions) -> SuggestSettings {
         SuggestSettings {

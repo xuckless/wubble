@@ -2101,11 +2101,12 @@ impl Host {
     pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
         let settings = wubble_core::suggest::SuggestSettings {
             engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
-            live: if self.live_suggestions && self.search_engine.is_some() {
-                wubble_core::suggest::LiveSuggestions::On
-            } else {
-                wubble_core::suggest::LiveSuggestions::Off
-            },
+            // a private window's bar suggests from this machine only
+            live: wubble_core::suggest::LiveSuggestions::of(
+                self.live_suggestions,
+                self.search_engine.is_some(),
+                self.model.side_of_window(self.w.id),
+            ),
         };
         if let Some(list) = self.suggest.event(event, &settings)
             && list != self.bar.suggestions
