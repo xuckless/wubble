@@ -243,12 +243,87 @@ mod tests {
         assert_eq!((big.width, big.height, big.hotspot_x), (1, 1, 0));
     }
 
+    /// The engine's `Cursor`, app.slint's `cursors` (indexed by it) and [`WINDOW_ICONS`] are
+    /// one table: every cursor at its index, with the shape Slint shows, and the hidden ones
+    /// exactly those the shell draws (autoscroll), the window shows (`WINDOW_ICONS`, the
+    /// image) or the page hides.
+    #[test]
+    fn the_shells_cursor_table_follows_the_engines() {
+        use Cursor as C;
+        let table = [
+            (C::Default, "default"),
+            (C::None, "none"),
+            (C::Pointer, "pointer"),
+            (C::Text, "text"),
+            (C::Wait, "wait"),
+            (C::Progress, "progress"),
+            (C::Crosshair, "crosshair"),
+            (C::Move, "move"),
+            (C::NotAllowed, "not-allowed"),
+            (C::Help, "help"),
+            (C::Grab, "grab"),
+            (C::Grabbing, "grabbing"),
+            (C::ResizeNs, "ns-resize"),
+            (C::ResizeEw, "ew-resize"),
+            (C::ResizeNeSw, "nesw-resize"),
+            (C::ResizeNwSe, "nwse-resize"),
+            (C::PanStill, "none"),
+            (C::PanStillVertical, "none"),
+            (C::PanStillHorizontal, "none"),
+            (C::PanN, "none"),
+            (C::PanNE, "none"),
+            (C::PanE, "none"),
+            (C::PanSE, "none"),
+            (C::PanS, "none"),
+            (C::PanSW, "none"),
+            (C::PanW, "none"),
+            (C::PanNW, "none"),
+            (C::Copy, "copy"),
+            (C::Alias, "alias"),
+            (C::ColResize, "col-resize"),
+            (C::RowResize, "row-resize"),
+            (C::NoDrop, "no-drop"),
+            (C::ResizeN, "n-resize"),
+            (C::ResizeE, "e-resize"),
+            (C::ResizeS, "s-resize"),
+            (C::ResizeW, "w-resize"),
+            (C::ResizeNe, "ne-resize"),
+            (C::ResizeNw, "nw-resize"),
+            (C::ResizeSe, "se-resize"),
+            (C::ResizeSw, "sw-resize"),
+            (C::ContextMenu, "none"),
+            (C::Cell, "none"),
+            (C::VerticalText, "none"),
+            (C::ZoomIn, "none"),
+            (C::ZoomOut, "none"),
+            (C::Image, "none"),
+        ];
+        let app = include_str!("../../../wubble-ui/ui/app.slint");
+        let list = app
+            .split_once("property <[MouseCursor]> cursors: [")
+            .and_then(|(_, rest)| rest.split_once("];"))
+            .expect("app.slint's cursors")
+            .0;
+        let shown: Vec<&str> = list
+            .lines()
+            .filter_map(|l| l.split("//").next())
+            .flat_map(|l| l.split(','))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(|t| t.trim_start_matches("MouseCursor."))
+            .collect();
+        assert_eq!(shown.len(), table.len(), "app.slint's cursors: {shown:?}");
+        for (i, (cursor, name)) in table.into_iter().enumerate() {
+            assert_eq!(cursor as usize, i, "{cursor:?}");
+            assert_eq!(shown[i], name, "{cursor:?}");
+            let window = WINDOW_ICONS.iter().any(|(c, _)| *c == cursor) || cursor == C::Image;
+            let hidden = cursor == C::None || cursor.pan() != Pan::None || window;
+            assert_eq!(name == "none", hidden, "{cursor:?}");
+        }
+    }
+
     #[test]
     fn only_the_cursors_the_shell_hides_for_the_window_have_icons() {
-        // app.slint's `cursors` hides these; the window shows them.
-        for (cursor, _) in WINDOW_ICONS {
-            assert_eq!(cursor.pan(), Pan::None, "{cursor:?}");
-        }
         let mut c = PageCursor::default();
         for (cursor, hidden) in [
             (Cursor::Default, false),

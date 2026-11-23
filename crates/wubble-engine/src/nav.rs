@@ -766,10 +766,7 @@ mod tests {
         assert_eq!(Cursor::PanStillVertical.pan(), Pan::Still);
         assert_eq!(Cursor::PanS.pan(), Pan::Moving(Direction::S));
         assert_eq!(Cursor::PanNE.pan(), Pan::Moving(Direction::NE));
-        // The shell's cursor table (app.slint) lists them in this order.
-        assert_eq!(Cursor::PanNW as i32, 26);
-        assert_eq!(Cursor::Alias as i32, 28);
-        assert_eq!(Cursor::Image as i32, 45);
+        // The shell's cursor table follows the order: wubble's `host::cursor` tests.
     }
 
     #[test]
