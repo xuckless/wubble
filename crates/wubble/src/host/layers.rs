@@ -7,7 +7,7 @@
 use slint::ComponentHandle;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::overlay::{
-    self, Action, Coverage, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
+    self, Action, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
 };
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
@@ -243,17 +243,17 @@ impl Host {
         stack.with_drawn(&drawn)
     }
 
-    /// What the shell draws over the page in `pane` of this window now: the page layer's
-    /// `Need::Covered` (`Needs::covered`). The peek and the picture-in-picture card are their
-    /// owners' (the model's), so they come as facts.
-    pub(super) fn page_covered(&self, window: &AppWindow, pane: TabId) -> Coverage {
+    /// What the shell draws over the pages of this window now, for `overlay::covers` (the page
+    /// layer's `Need::Covered`, `Needs::covered`) and `overlay::coverers` (its log). The peek and
+    /// the picture-in-picture card are their owners' (the model's), so they come as facts.
+    pub(super) fn page_covers(&self, window: &AppWindow) -> (Stack, Facts) {
         let facts = Facts {
             glass: window.global::<GlassLayer>().get_over_on(),
             glance: self.model.glance_of(self.w.id).is_some() || window.get_mounted().glance,
             glance_rect: self.glance_hit(window),
             pip_card: self.pip_card(),
         };
-        overlay::covers(&self.surface_stack(window), &facts, pane)
+        (self.surface_stack(window), facts)
     }
 
     /// Runs `action` through the store, carries out its effects, writes the store's overlays

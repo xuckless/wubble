@@ -46,7 +46,7 @@ pub(super) struct PageCursor {
     /// The image behind `Cursor::Image`.
     image: Option<CursorImage>,
     /// The pointer is over a page, so the window's cursor is the page's to set.
-    over_page: bool,
+    pub(super) over_page: bool,
 }
 
 impl PageCursor {

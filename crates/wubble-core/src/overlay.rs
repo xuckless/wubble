@@ -590,26 +590,39 @@ pub struct Facts {
 /// What the shell draws over the page in pane `pane` of the window `stack` and `facts` describe:
 /// the most any visible surface over it needs, a leaving one included.
 pub fn covers(stack: &Stack, facts: &Facts, pane: TabId) -> Coverage {
+    coverers(stack, facts, pane)
+        .map(|(_, cover)| cover)
+        .max()
+        .unwrap_or(Coverage::None)
+}
+
+/// Each visible surface over pane `pane`, a leaving one included, with what it needs there:
+/// [`covers`] is the most of them; the page layer's log names them.
+pub fn coverers<'a>(
+    stack: &'a Stack,
+    facts: &Facts,
+    pane: TabId,
+) -> impl Iterator<Item = (Kind, Coverage)> + 'a {
     let owned = [
         facts.glance.then(|| Layer::new(Kind::Glance, None)),
         facts.pip_card.map(|t| Layer::new(Kind::PipCard, Some(t))),
     ];
+    let glass = facts.glass;
     stack
         .layers
         .iter()
         .chain(&stack.leaving)
         .copied()
         .chain(owned.into_iter().flatten())
-        .filter(|l| stack.visible(l) && (l.kind.scope() != Scope::Pane || l.tab == Some(pane)))
-        .map(|l| {
+        .filter(move |l| stack.visible(l) && (l.kind.scope() != Scope::Pane || l.tab == Some(pane)))
+        .map(move |l| {
             let row = l.kind.row();
-            match row.glass {
-                Some(_) if facts.glass && row.cover != Coverage::None => Coverage::Pixels,
+            let cover = match row.glass {
+                Some(_) if glass && row.cover != Coverage::None => Coverage::Pixels,
                 _ => row.cover,
-            }
+            };
+            (l.kind, cover)
         })
-        .max()
-        .unwrap_or(Coverage::None)
 }
 
 #[cfg(test)]

@@ -13,9 +13,11 @@
 //! goes to `present_frame` as before.
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use slint::ComponentHandle;
-use wubble_core::page_layer::{self, Effect, Event, Mode, Needs, Order, Owners, Route};
+use wubble_core::overlay::{self, Coverage};
+use wubble_core::page_layer::{self, Effect, Event, Hold, Mode, Need, Needs, Order, Owners, Route};
 use wubble_core::stretch::after_frame;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
@@ -27,6 +29,7 @@ use wubble_ui::AppWindow;
 use super::Host;
 use super::panes::{content_size, frame_clip, pane_radius, px};
 use super::window::WindowHost;
+use crate::measure::{self, Count};
 use crate::screen::Screen;
 
 /// A window's page layers.
@@ -309,14 +312,25 @@ impl Host {
                 .is_live(),
             None => f.view.is_live(),
         });
+        let (stack, facts) = self.page_covers(window);
         Needs::from_owners(&Owners {
             page_fullscreen,
             pip_window,
             placed: self.placed(window, tab),
-            coverage: self.page_covered(window, tab),
+            coverage: overlay::covers(&stack, &facts, tab),
             view_live,
-            pixels: pixels || crate::shot::pending() || self.checks.check_pixels,
+            pixels: self.pixel_readers(pixels).iter().any(|&(_, on)| on),
         })
+    }
+
+    /// Who wants a page's pixels in the shell's textures now (`Need::Pixels`): a caller's
+    /// (`pixels`, a snapshot), a shot, the pixel checks.
+    fn pixel_readers(&self, pixels: bool) -> [(&'static str, bool); 3] {
+        [
+            ("snapshot", pixels),
+            ("shot", crate::shot::pending()),
+            ("pixel check", self.checks.check_pixels),
+        ]
     }
 
     /// The one executor: `event` for `tab`'s pane through `page_layer::transition` with the
@@ -351,6 +365,53 @@ impl Host {
             if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
                 pane.route = route;
             }
+            // the one place a route is replaced: each change, why, and who holds the page
+            if before.name() != route.name() {
+                measure::count(Count::LayerRoute);
+                let (stack, facts) = self.page_covers(window);
+                let owner = |need: Need| -> String {
+                    match need {
+                        Need::Covered | Need::Sampled => overlay::coverers(&stack, &facts, tab)
+                            .filter(|&(_, c)| c != Coverage::None)
+                            .map(|(kind, c)| format!("{kind:?} {c:?}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        Need::Resizing => self
+                            .w
+                            .frames
+                            .get(&tab)
+                            .map(|f| format!("stretch {:?}", f.view))
+                            .unwrap_or_default(),
+                        Need::Pixels => self
+                            .pixel_readers(pixels)
+                            .iter()
+                            .filter(|&&(_, on)| on)
+                            .map(|&(name, _)| name)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        Need::Windowed | Need::Unplaced => String::new(),
+                    }
+                };
+                let held: Vec<String> = Need::ALL
+                    .into_iter()
+                    .filter(|&n| needs.has(n))
+                    .map(|n| match mode.row().holds[n as usize] {
+                        Hold::Free => format!("{n:?}"),
+                        hold => format!("{n:?} {hold:?} [{}]", owner(n)),
+                    })
+                    .collect();
+                eprintln!(
+                    "wubble: page layer: tab {}: {} -> {} on {event:?}; needs: {}",
+                    tab.0,
+                    before.name(),
+                    route.name(),
+                    if held.is_empty() {
+                        "none".to_string()
+                    } else {
+                        held.join(", ")
+                    },
+                );
+            }
             let mut failed = false;
             for effect in effects {
                 match effect {
@@ -373,6 +434,7 @@ impl Host {
                             // the stretch follows a frame on the layer as it does the shell's
                             // (a refused one reaches the shell, which advances it then)
                             Ok(()) => {
+                                measure::count(Count::LayerShow);
                                 if let Some(f) = self.w.frames.get_mut(&tab) {
                                     f.view = after_frame(f.view, px(a.wanted), px(size)).0;
                                 }
@@ -402,7 +464,10 @@ impl Host {
                     Effect::Present => {
                         if let Some(a) = arrival.take() {
                             match self.present_frame(window, tab, a.layout, a.wanted, a.frame) {
-                                Ok(()) => drew = true,
+                                Ok(()) => {
+                                    measure::count(Count::LayerPresent);
+                                    drew = true;
+                                }
                                 Err(e) => {
                                     failed = true;
                                     error.get_or_insert(e);
@@ -424,7 +489,10 @@ impl Host {
                                 .and_then(|v| v.wanted_frame())
                                 .unwrap_or(layout.frame_size());
                             match self.present_frame(window, tab, layout, wanted, frame) {
-                                Ok(()) => drew = true,
+                                Ok(()) => {
+                                    measure::count(Count::LayerPresent);
+                                    drew = true;
+                                }
                                 Err(e) => {
                                     failed = true;
                                     error.get_or_insert(e);
@@ -433,6 +501,7 @@ impl Host {
                         }
                     }
                     Effect::Redraw => {
+                        measure::count(Count::LayerRedraw);
                         if let Some(clip) = self.w.frames.get(&tab).map(|f| f.clip) {
                             let whole = wubble_gfx::import::Damage {
                                 x: 0,
@@ -470,6 +539,41 @@ impl Host {
         if let Some(size) = latest.filter(|_| changed && self.w.layers.holed(tab)) {
             let layout = self.pane_layout(window, tab);
             self.place_layer(window, tab, size, &layout);
+        }
+        // a second's summary, from this frame path (never a timer of its own: nothing happening,
+        // nothing printed): its counts (`measure`), the frames welding dropped for a busy pool,
+        // each pane's route, the window's focus and where the pointer is
+        if let Some((took, counts)) = measure::layer_second(Instant::now()) {
+            let routes: Vec<(TabId, Route)> = std::iter::once(&self.w)
+                .chain(self.parked.values())
+                .flat_map(|w| w.layers.panes.iter().map(|(&t, p)| (t, p.route)))
+                .collect();
+            let busy: u64 = routes
+                .iter()
+                .map(|&(t, _)| self.tab_view(t).map_or(0, |v| v.take_os_buffers_busy()))
+                .sum();
+            let counted: Vec<String> = Count::ALL
+                .into_iter()
+                .filter(|&c| counts.counted(c) > 0)
+                .map(|c| format!("{} {}", c.name(), counts.counted(c)))
+                .collect();
+            let routes: Vec<String> = routes
+                .iter()
+                .map(|(t, r)| format!("tab {} {}", t.0, r.name()))
+                .collect();
+            let focused = self.input.window_focused && self.model.focused() == self.w.id;
+            let pointer = match self.input.pointer {
+                None => "outside the window",
+                Some(_) if self.w.cursor.over_page => "over a page",
+                Some(_) => "over the shell",
+            };
+            eprintln!(
+                "wubble: page layer: {:.2}s: {}; pool_busy {busy}; {}; window {}, pointer {pointer}",
+                took.as_secs_f64(),
+                counted.join(", "),
+                routes.join(", "),
+                if focused { "focused" } else { "unfocused" },
+            );
         }
         error.map_or(Ok(drew), Err)
     }

@@ -59,6 +59,17 @@ impl Route {
     pub fn holed(self, mode: Mode) -> bool {
         mode.row().order == Order::Below && matches!(self, Route::Layer { .. })
     }
+
+    /// The route without its generation: a change of name is a change of route (the host's log).
+    pub fn name(self) -> &'static str {
+        match self {
+            Route::Unsupported => "Unsupported",
+            Route::Composited => "Composited",
+            Route::Entering => "Entering",
+            Route::Layer { .. } => "Layer",
+            Route::Leaving { .. } => "Leaving",
+        }
+    }
 }
 
 /// A reason the shell must draw the page itself.
@@ -86,6 +97,18 @@ pub enum Need {
 
 /// How many [`Need`]s there are (a [`ModeRow`] has a hold for each).
 pub const NEEDS: usize = Need::Unplaced as usize + 1;
+
+impl Need {
+    /// Every need, in bit order.
+    pub const ALL: [Need; NEEDS] = [
+        Need::Windowed,
+        Need::Covered,
+        Need::Resizing,
+        Need::Pixels,
+        Need::Sampled,
+        Need::Unplaced,
+    ];
+}
 
 /// What a need does to a page on its layer, in a mode. Ordered: the strongest need present wins
 /// ([`Needs::hold`]).
@@ -1018,6 +1041,10 @@ mod tests {
         assert_eq!(n, Needs::NONE);
         assert!(!n.any());
         assert!(!Needs::NONE.with(Need::Resizing, false).any());
+        // `ALL` is every need once, in bit order (the host's log walks it)
+        for (bit, need) in Need::ALL.into_iter().enumerate() {
+            assert_eq!(need as usize, bit);
+        }
     }
 
     /// Any shell UI over the page, a leaving one included, is `Covered`.

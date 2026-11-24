@@ -377,6 +377,9 @@ pub(crate) struct OsBufferPool {
     made: Option<(dpi::PhysicalSize<u32>, wgpu::TextureFormat)>,
     slots: Vec<super::OsBuffer>,
     latest: Option<usize>,
+    /// wubble change (65): frames dropped as [`Next::Busy`] since the host last took the count
+    /// (`CefSurfaceProducer::take_os_buffers_busy`).
+    pub(crate) busy: u64,
 }
 
 impl OsBufferPool {
@@ -386,6 +389,7 @@ impl OsBufferPool {
             made: None,
             slots: Vec::new(),
             latest: None,
+            busy: 0,
         }
     }
 
@@ -414,6 +418,8 @@ impl OsBufferPool {
         let in_use: Vec<bool> = self.slots.iter().map(Slot::in_use).collect();
         let chosen = (self.request.choose)(&in_use, self.latest);
         let Some(i) = chosen.filter(|&i| i < self.slots.len()) else {
+            // wubble change (65): counted for the host.
+            self.busy += 1;
             return Next::Busy;
         };
         self.latest = Some(i);

@@ -908,6 +908,12 @@ impl View {
             .map_err(|e| e.to_string())
     }
 
+    /// Frames welding dropped since the last call because every OS buffer of
+    /// [`Self::set_os_buffers`] was in use (0 without them; macOS only).
+    pub fn take_os_buffers_busy(&mut self) -> u64 {
+        self.producer.take_os_buffers_busy()
+    }
+
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
     /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
     /// set on this view's request context; Chromium pushes it to the profile's open pages.
