@@ -1282,11 +1282,10 @@ pub fn page_theme_entries(host: &str, current: PageTheme) -> Vec<Entry> {
     out
 }
 
-/// The menu of one tab, or one the shell opened.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The open menu's content (`overlay::Kind::Menu` says whether it is open): a page's, or one the
+/// shell opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Menu {
-    #[default]
-    Closed,
     Open {
         id: RequestId,
         /// The pointer, physical pixels relative to the view.
@@ -1328,8 +1327,6 @@ pub enum MenuEvent {
     Dismiss,
     /// CEF closed the menu itself (it already answered).
     Reset,
-    /// The view closed: welding answered every held request.
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1342,9 +1339,16 @@ pub enum MenuEffect {
     Run(Command),
 }
 
-pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
+/// One menu event on the open menu (`None`: none open; the view gone is the overlays' store's,
+/// no event comes here); the menu back, `None` when it closes.
+pub fn transition(state: Option<Menu>, event: MenuEvent) -> (Option<Menu>, Vec<MenuEffect>) {
     use MenuEvent::*;
     let dismiss = |id| MenuEffect::Answer { id, command: None };
+    // CEF holds one menu at a time; a newer one replaces the old, which is dismissed
+    let replaced = |state: &Option<Menu>| match state {
+        Some(Menu::Open { id, .. }) => vec![dismiss(*id)],
+        Some(Menu::Shell { .. }) | None => vec![],
+    };
     match (state, event) {
         (
             state,
@@ -1355,11 +1359,7 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
                 extra,
             },
         ) => {
-            // CEF holds one menu at a time; a newer one replaces the old.
-            let mut effects = match state {
-                Menu::Open { id: old, .. } => vec![dismiss(old)],
-                Menu::Closed | Menu::Shell { .. } => vec![],
-            };
+            let mut effects = replaced(&state);
             let mut entries = entries(&menu, nav);
             if !entries.is_empty() && !extra.is_empty() {
                 entries.push(Entry {
@@ -1374,52 +1374,44 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
             entries.extend(extra);
             if entries.is_empty() {
                 effects.push(dismiss(id));
-                return (Menu::Closed, effects);
+                return (None, effects);
             }
             let open = Menu::Open {
                 id,
                 at: (menu.x, menu.y),
                 entries,
             };
-            (open, effects)
+            (Some(open), effects)
         }
-        (Menu::Open { id, at, entries }, Chosen(i)) => {
+        (Some(Menu::Open { id, at, entries }), Chosen(i)) => {
             match entries.get(i).filter(|e| e.enabled).map(|e| &e.command) {
-                None | Some(Command::Separator) => (Menu::Open { id, at, entries }, vec![]),
+                None | Some(Command::Separator) => (Some(Menu::Open { id, at, entries }), vec![]),
                 Some(Command::Engine(command)) => (
-                    Menu::Closed,
+                    None,
                     vec![MenuEffect::Answer {
                         id,
                         command: Some(*command),
                     }],
                 ),
-                Some(command) => (
-                    Menu::Closed,
-                    vec![dismiss(id), MenuEffect::Run(command.clone())],
-                ),
+                Some(command) => (None, vec![dismiss(id), MenuEffect::Run(command.clone())]),
             }
         }
-        (Menu::Open { id, .. }, Dismiss) => (Menu::Closed, vec![dismiss(id)]),
+        (Some(Menu::Open { id, .. }), Dismiss) => (None, vec![dismiss(id)]),
         (state, ShellRequested { at, entries }) => {
-            let effects = match state {
-                Menu::Open { id, .. } => vec![dismiss(id)],
-                Menu::Closed | Menu::Shell { .. } => vec![],
-            };
+            let effects = replaced(&state);
             if entries.is_empty() {
-                return (Menu::Closed, effects);
+                return (None, effects);
             }
-            (Menu::Shell { at, entries }, effects)
+            (Some(Menu::Shell { at, entries }), effects)
         }
-        (Menu::Shell { at, entries }, Chosen(i)) => {
+        (Some(Menu::Shell { at, entries }), Chosen(i)) => {
             match entries.get(i).filter(|e| e.enabled).map(|e| &e.command) {
-                None | Some(Command::Separator) => (Menu::Shell { at, entries }, vec![]),
-                Some(command) => (Menu::Closed, vec![MenuEffect::Run(command.clone())]),
+                None | Some(Command::Separator) => (Some(Menu::Shell { at, entries }), vec![]),
+                Some(command) => (None, vec![MenuEffect::Run(command.clone())]),
             }
         }
-        (_, Reset | ViewGone) => (Menu::Closed, vec![]),
-        (Menu::Closed | Menu::Shell { .. }, Dismiss) | (Menu::Closed, Chosen(_)) => {
-            (Menu::Closed, vec![])
-        }
+        (_, Reset) => (None, vec![]),
+        (Some(Menu::Shell { .. }) | None, Dismiss) | (None, Chosen(_)) => (None, vec![]),
     }
 }
 
@@ -2329,10 +2321,10 @@ mod tests {
 
     #[test]
     fn engine_commands_answer_with_the_command() {
-        let (s, fx) = transition(Menu::Closed, requested(1, page()));
+        let (s, fx) = transition(None, requested(1, page()));
         assert!(fx.is_empty());
         let (s, fx) = transition(s, MenuEvent::Chosen(2));
-        assert_eq!(s, Menu::Closed);
+        assert_eq!(s, None);
         assert_eq!(
             fx,
             [MenuEffect::Answer {
@@ -2344,9 +2336,9 @@ mod tests {
 
     #[test]
     fn app_commands_dismiss_then_run() {
-        let (s, _) = transition(Menu::Closed, requested(1, link()));
+        let (s, _) = transition(None, requested(1, link()));
         let (s, fx) = transition(s, MenuEvent::Chosen(0));
-        assert_eq!(s, Menu::Closed);
+        assert_eq!(s, None);
         assert_eq!(
             fx,
             [
@@ -2362,19 +2354,18 @@ mod tests {
     #[test]
     fn disabled_entries_and_separators_are_not_chosen() {
         // Back and Forward are disabled without history.
-        let (s, _) = transition(Menu::Closed, requested(1, page()));
+        let (s, _) = transition(None, requested(1, page()));
         let (s, fx) = transition(s, MenuEvent::Chosen(0));
         assert!(fx.is_empty());
         let (s, fx) = transition(s, MenuEvent::Chosen(99));
         assert!(fx.is_empty());
-        assert!(matches!(s, Menu::Open { .. }));
+        assert!(matches!(s, Some(Menu::Open { .. })));
     }
 
     #[test]
     fn only_the_page_s_own_menu_keeps_its_focus() {
-        let open = transition(Menu::Closed, requested(1, link())).0;
+        let open = transition(None, requested(1, link())).0.unwrap();
         assert!(open.keeps_page_focus());
-        assert!(!Menu::Closed.keeps_page_focus());
         let shell = Menu::Shell {
             at: (0, 0),
             entries: vec![],
@@ -2384,7 +2375,7 @@ mod tests {
             "the shell's menu is not the page's"
         );
         // CEF closed it (window blurred, tab hidden): the page is free to blur.
-        assert!(!transition(open, MenuEvent::Reset).0.keeps_page_focus());
+        assert_eq!(transition(Some(open), MenuEvent::Reset).0, None);
     }
 
     #[test]
@@ -2404,11 +2395,11 @@ mod tests {
                 Reset,
                 Dismiss,
                 requested(5, page()),
-                ViewGone,
+                Reset,
                 Chosen(2),
             ]
         };
-        let mut s = Menu::Closed;
+        let mut s: Option<Menu> = None;
         let mut answered = vec![];
         for e in events() {
             let (next, fx) = transition(s, e);
@@ -2679,7 +2670,7 @@ mod tests {
     fn the_shell_s_menu_runs_its_entry_and_answers_nothing() {
         let entries = split_entries(&tabs(3), TabId(1));
         let (open, fx) = transition(
-            Menu::Closed,
+            None,
             MenuEvent::ShellRequested {
                 at: (5, 6),
                 entries: entries.clone(),
@@ -2688,27 +2679,27 @@ mod tests {
         assert!(fx.is_empty());
         assert_eq!(
             open,
-            Menu::Shell {
+            Some(Menu::Shell {
                 at: (5, 6),
                 entries
-            }
+            })
         );
         let (closed, fx) = transition(open.clone(), MenuEvent::Chosen(0));
-        assert_eq!(closed, Menu::Closed);
+        assert_eq!(closed, None);
         assert_eq!(fx, [MenuEffect::Run(Command::SplitWith(TabId(1)))]);
         assert_eq!(transition(open.clone(), MenuEvent::Chosen(9)).0, open);
-        assert_eq!(transition(open, MenuEvent::Dismiss), (Menu::Closed, vec![]));
+        assert_eq!(transition(open, MenuEvent::Dismiss), (None, vec![]));
         // nothing to show: no menu
         let (state, fx) = transition(
-            Menu::Closed,
+            None,
             MenuEvent::ShellRequested {
                 at: (0, 0),
                 entries: vec![],
             },
         );
-        assert_eq!((state, fx), (Menu::Closed, vec![]));
+        assert_eq!((state, fx), (None, vec![]));
         // the shell's menu replaces a page's, which is answered
-        let (page, _) = transition(Menu::Closed, requested(1, page()));
+        let (page, _) = transition(None, requested(1, page()));
         let (_, fx) = transition(
             page,
             MenuEvent::ShellRequested {

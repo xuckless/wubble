@@ -69,6 +69,9 @@ fn win(kind: Kind) -> Layer {
 fn open(layer: Layer) -> Action {
     Action::Open { w: W1, layer }
 }
+fn ask(layer: Layer) -> Action {
+    Action::Ask { w: W1, layer }
+}
 fn close(layer: Layer) -> Action {
     Action::Close { w: W1, layer }
 }
@@ -214,6 +217,11 @@ fn store_table() {
         ("a menu refused under a dialog", A, false, vec![open(on(Dialog, A))], open(menu), vec![], vec![on(Dialog, A)]),
         ("an agent's sheet waits for the user's", A, false, vec![open(on(PrintSheet, A))], open(agent), vec![], vec![on(PrintSheet, A)]),
         ("the user's overlays wait for an agent's sheet", A, false, vec![open(agent)], open(ds), vec![], vec![agent]),
+        // the app's own question: refused by nothing, otherwise an open
+        ("a question over a dialog shows", A, false, vec![open(on(Dialog, A))], ask(menu),
+            vec![Mount(menu), focus(Some(menu))], vec![menu, on(Dialog, A)]),
+        ("a question replaces the user's popover", A, false, vec![open(dl)], ask(menu), vec![Cancel(dl), Mount(menu), focus(Some(menu))], vec![menu]),
+        ("a question over an open menu is that menu's", A, false, vec![open(menu)], ask(menu), vec![], vec![menu]),
         ("boost refused under a dialog", A, false, vec![open(on(Dialog, A))], open(on(Boost, A)), vec![], vec![on(Dialog, A)]),
         ("a dialog is never refused, nor closes an agent's sheet", A, false, vec![open(agent)], open(on(Dialog, A)),
             vec![Mount(on(Dialog, A)), focus(Some(on(Dialog, A)))], vec![agent, on(Dialog, A)]),
@@ -366,6 +374,28 @@ fn tab_keeps_find_across_windows() {
     assert_eq!(ui.stack(&moved, W2).layers, [on(Find, A)]);
     assert_eq!(ui.escape_target(&moved, W2), Some(on(Find, A)));
     assert_eq!(ui.escape_target(&moved, W1), None);
+}
+
+/// The window each action's overlays act in (a window overlay's content is keyed by it).
+#[test]
+#[rustfmt::skip]
+fn the_window_an_action_acts_in() {
+    let two = T { shown: [(W1, Some(A)), (W2, Some(B))].into(), ..env(A) };
+    type ActingRow = (&'static str, Action, Option<WindowId>);
+    let rows: Vec<ActingRow> = vec![
+        ("a window's overlay: its own window", Action::Open { w: W2, layer: win(Menu) }, Some(W2)),
+        ("a tab's: the window showing the tab", Action::Open { w: W2, layer: on(Dialog, A) }, Some(W1)),
+        ("a hidden tab's: where it was asked", Action::Ask { w: W2, layer: on(Dialog, C) }, Some(W2)),
+        ("a close of a shown tab's", Action::Close { w: W2, layer: on(Find, A) }, Some(W1)),
+        ("a navigation: its tab's window", Action::Navigated { w: W2, tab: A }, Some(W1)),
+        ("Escape: its window", Action::Escape { w: W2 }, Some(W2)),
+        ("a window gone", Action::WindowGone(W2), Some(W2)),
+        ("a view gone names none", Action::ViewGone(A), None),
+        ("nor the timer", tick(5), None),
+    ];
+    for (name, action, want) in rows {
+        assert_eq!(acting(&two, action), want, "{name}");
+    }
 }
 
 #[test]

@@ -44,7 +44,7 @@ pub(super) struct GlanceRect {
 use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
-use crate::menu::{self, MenuEvent};
+use crate::menu;
 use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
@@ -1083,11 +1083,7 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
-        if !self.overlay_open(wubble_core::overlay::Kind::Menu, None) {
-            return;
-        }
-        self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(focused, at, entries, false);
     }
 }
 

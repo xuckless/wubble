@@ -130,6 +130,9 @@ pub trait Env {
 pub enum Action {
     /// The user, a key or the page asks for an overlay.
     Open { w: WindowId, layer: Layer },
+    /// The app's own question (the private downloads a close would cancel): an open no overlay
+    /// refuses, whatever holds the window (it closes the user's overlays as an open does).
+    Ask { w: WindowId, layer: Layer },
     /// Its owner closed it (answered, picked, dismissed): nothing to cancel.
     Close { w: WindowId, layer: Layer },
     /// The kit drew its exit to the end.
@@ -588,7 +591,8 @@ impl<E: Env> Step<'_, E> {
         self.focus |= row.keys != Keys::Never;
     }
 
-    fn open(&mut self, l: Layer) {
+    /// Opens `l` (`ask`: the app's question, refused by no overlay).
+    fn open(&mut self, l: Layer, ask: bool) {
         let (w, env) = (self.w, self.env);
         let row = l.kind.row();
         let key = (home(w, l), l.kind);
@@ -606,9 +610,10 @@ impl<E: Env> Step<'_, E> {
         } else {
             vec![]
         };
-        if seen
-            .iter()
-            .any(|o| row.refused_under.contains(&o.kind.row().group))
+        if !ask
+            && seen
+                .iter()
+                .any(|o| row.refused_under.contains(&o.kind.row().group))
         {
             return;
         }
@@ -717,20 +722,34 @@ pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
     (ui, fx)
 }
 
+/// The window an action's overlays act in: a tab's overlay acts in the window that shows its tab,
+/// wherever it was asked (a dialog asked from another window meets that window's overlays), a
+/// window's in its own. None for a tab's view gone and the hover slots' cues and ticks: their
+/// effects name no window overlay. The host keys a window overlay's content by it.
+pub fn acting(env: &impl Env, action: Action) -> Option<WindowId> {
+    let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
+    match action {
+        Action::Open { w, layer }
+        | Action::Ask { w, layer }
+        | Action::Close { w, layer }
+        | Action::Exited { w, layer }
+        | Action::Placed { w, layer, .. } => Some(at(w, layer.tab)),
+        Action::Navigated { w, tab } => Some(at(w, Some(tab))),
+        Action::Escape { w }
+        | Action::Switched { w, .. }
+        | Action::Lost { w }
+        | Action::PaneGone { w, .. }
+        | Action::WindowGone(w) => Some(w),
+        Action::ViewGone(_) | Action::Hover { .. } | Action::Tick { .. } => None,
+    }
+}
+
 /// One step of the overlays: every (phase, action) cell is decided here (absent, Open,
 /// Leaving), each by the acting row's data. A refused open changes nothing; an action on a
 /// leaving overlay is ignored but its reopening (fresh content: Unmount, Mount) and its
 /// `Exited`. Add behaviour as a [`super::Row`] field, not a branch on a kind.
 fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
-    // a tab's overlay meets the overlays of the window that shows its tab, wherever it was asked
-    let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
     let w = match action {
-        Action::Open { w, layer }
-        | Action::Close { w, layer }
-        | Action::Exited { w, layer }
-        | Action::Placed { w, layer, .. } => at(w, layer.tab),
-        Action::Navigated { w, tab } => at(w, Some(tab)),
-        Action::Escape { w } | Action::Switched { w, .. } | Action::Lost { w } => w,
         Action::ViewGone(tab) => {
             let fx = ui.drop_home(Home::Tab(tab), false);
             return (ui, fx);
@@ -756,6 +775,10 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             return (ui, fx);
         }
         Action::Hover { .. } | Action::Tick { .. } => return (ui, vec![]),
+        _ => match acting(env, action) {
+            Some(w) => w,
+            None => return (ui, vec![]),
+        },
     };
     let mut s = Step {
         ui,
@@ -765,7 +788,8 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         focus: false,
     };
     match action {
-        Action::Open { layer, .. } => s.open(Layer::new(layer.kind, layer.tab)),
+        Action::Open { layer, .. } => s.open(Layer::new(layer.kind, layer.tab), false),
+        Action::Ask { layer, .. } => s.open(Layer::new(layer.kind, layer.tab), true),
         Action::Close { layer, .. } => s.close(Layer::new(layer.kind, layer.tab), false),
         Action::Exited { layer, .. } => {
             let key = (home(w, layer), layer.kind);

@@ -1032,8 +1032,7 @@ impl Host {
             crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     /// The downloader is on and lists something for the tab's page (a stream, or why not).

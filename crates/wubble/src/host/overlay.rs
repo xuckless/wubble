@@ -15,7 +15,7 @@ use wubble_gfx::scene::AMBIENCE_STRENGTH;
 use wubble_ui::{AppWindow, CommandBarState, GlassKeys, GlassLayer};
 
 use super::{Host, new_tab, snapshot};
-use crate::menu::{self, Menu};
+use crate::menu;
 use crate::overlay_smoke::{self, Notes, Panel, STEPS, Seen, Setup, Shown};
 use crate::pixels::{self, Region};
 use crate::{physical, quit, shot, with_host};
@@ -64,22 +64,16 @@ impl Host {
         match STEPS[i].setup {
             Setup::Ambience(on) => ambience(self, on),
             Setup::Menu => {
-                if let Some(tab) = self.shown()
-                    && self.overlay_open(Kind::Menu, None)
-                {
+                if let Some(tab) = self.shown() {
                     let scale = window.window().scale_factor();
                     let (x, y) = (
                         window.get_content_x() + 40.0,
                         window.get_content_y() + window.get_content_height() * 0.34,
                     );
                     let facts = wubble_core::tabmenu::Facts { muted: false };
-                    let mut surfaces = self.surfaces.remove(&tab).unwrap_or_default();
-                    surfaces.menu = Menu::Shell {
-                        at: ((x * scale).round() as i32, (y * scale).round() as i32),
-                        entries: menu::tab_entries(&self.model, tab, facts, &self.keymap),
-                    };
-                    self.surfaces.insert(tab, surfaces);
-                    self.render_surfaces(&window);
+                    let at = ((x * scale).round() as i32, (y * scale).round() as i32);
+                    let entries = menu::tab_entries(&self.model, tab, facts, &self.keymap);
+                    self.open_shell_menu(tab, at, entries, false);
                 }
             }
             Setup::Bar | Setup::Peek => {
@@ -162,12 +156,8 @@ impl Host {
     }
 
     fn overlay_close_menu(&mut self, window: &AppWindow) {
-        if let Some(tab) = self.shown()
-            && let Some(surfaces) = self.surfaces.get_mut(&tab)
-        {
-            surfaces.menu = Menu::Closed;
-            self.render_surfaces(window);
-        }
+        self.overlay_closed(Kind::Menu);
+        self.render_surfaces(window);
     }
 
     /// The step settled: measure, check, shoot it if asked, then the next step or the end.

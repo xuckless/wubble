@@ -118,16 +118,13 @@ impl PermissionRequest {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum PermissionPrompt {
-    #[default]
-    None,
-    /// `shown` is asked; requests made meanwhile wait in `queued`, in order
-    /// (Chromium's `PermissionRequestManager` queues them too).
-    Open {
-        shown: PermissionRequest,
-        queued: VecDeque<PermissionRequest>,
-    },
+/// The open prompt's content (`overlay::Kind::Permission` says whether it is open): `shown` is
+/// asked; requests made meanwhile wait in `queued`, in order (Chromium's
+/// `PermissionRequestManager` queues them too).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermissionPrompt {
+    pub shown: PermissionRequest,
+    pub queued: VecDeque<PermissionRequest>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,8 +141,6 @@ pub enum PermissionEvent {
     /// The page committed a new document: links the old one asked to open are dropped
     /// unanswered (the engine dismisses its own requests itself).
     PageChanged,
-    /// The view closed; welding answered every held request.
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -187,32 +182,33 @@ impl PermissionAnswer {
 }
 
 /// Every answer this step gives (a request with a remembered verdict is
-/// answered at once; one made while a prompt is open waits its turn).
+/// answered at once; one made while a prompt is open waits its turn). `None`: no live prompt
+/// (the view gone is the overlays' store's: no event comes here).
 pub fn permission(
-    state: PermissionPrompt,
+    state: Option<PermissionPrompt>,
     event: PermissionEvent,
     table: &SitePermissions,
-) -> (PermissionPrompt, Vec<PermissionAnswer>) {
+) -> (Option<PermissionPrompt>, Vec<PermissionAnswer>) {
     use PermissionEvent::*;
-    use PermissionPrompt::Open;
+    let open = |shown, queued| Some(PermissionPrompt { shown, queued });
     match (state, event) {
         // A link already waiting is not asked about twice.
-        (Open { shown, queued }, Requested(new))
+        (Some(PermissionPrompt { shown, queued }), Requested(new))
             if matches!(new.ask, Ask::ExternalLink { .. })
                 && (shown == new || queued.contains(&new)) =>
         {
-            (Open { shown, queued }, vec![])
+            (open(shown, queued), vec![])
         }
         (state, Requested(new)) => match (new.verdict(table), state) {
             (Verdict::Grant, state) => (state, vec![PermissionAnswer::new(&new, true)]),
             (Verdict::Deny, state) => (state, vec![PermissionAnswer::new(&new, false)]),
-            (Verdict::Ask, PermissionPrompt::None) => next_prompt(VecDeque::from([new]), table),
-            (Verdict::Ask, Open { shown, mut queued }) => {
+            (Verdict::Ask, None) => next_prompt(VecDeque::from([new]), table),
+            (Verdict::Ask, Some(PermissionPrompt { shown, mut queued })) => {
                 queued.push_back(new);
-                (Open { shown, queued }, vec![])
+                (open(shown, queued), vec![])
             }
         },
-        (Open { shown, queued }, Answer { allow, remember }) => {
+        (Some(PermissionPrompt { shown, queued }), Answer { allow, remember }) => {
             let mut answer = PermissionAnswer::new(&shown, allow);
             let mut table = table.clone();
             // Chromium's "always" applies to Open only: a link refused once is asked again.
@@ -232,17 +228,15 @@ pub fn permission(
             let (next, more) = next_prompt(queued, &table);
             (next, [vec![answer], more].concat())
         }
-        (Open { shown, queued }, Dismissed(ids)) => {
+        (Some(PermissionPrompt { shown, queued }), Dismissed(ids)) => {
             let gone = |r: &PermissionRequest| r.engine_id().is_some_and(|id| ids.contains(&id));
             drop_requests(shown, queued, gone, table)
         }
-        (Open { shown, queued }, PageChanged) => {
+        (Some(PermissionPrompt { shown, queued }), PageChanged) => {
             let link = |r: &PermissionRequest| matches!(r.ask, Ask::ExternalLink { .. });
             drop_requests(shown, queued, link, table)
         }
-        (_, ViewGone) | (PermissionPrompt::None, Answer { .. } | Dismissed(_) | PageChanged) => {
-            (PermissionPrompt::None, vec![])
-        }
+        (None, Answer { .. } | Dismissed(_) | PageChanged) => (None, vec![]),
     }
 }
 
@@ -253,12 +247,12 @@ fn drop_requests(
     mut queued: VecDeque<PermissionRequest>,
     gone: impl Fn(&PermissionRequest) -> bool,
     table: &SitePermissions,
-) -> (PermissionPrompt, Vec<PermissionAnswer>) {
+) -> (Option<PermissionPrompt>, Vec<PermissionAnswer>) {
     queued.retain(|r| !gone(r));
     if gone(&shown) {
         next_prompt(queued, table)
     } else {
-        (PermissionPrompt::Open { shown, queued }, vec![])
+        (Some(PermissionPrompt { shown, queued }), vec![])
     }
 }
 
@@ -267,16 +261,16 @@ fn drop_requests(
 fn next_prompt(
     mut queued: VecDeque<PermissionRequest>,
     table: &SitePermissions,
-) -> (PermissionPrompt, Vec<PermissionAnswer>) {
+) -> (Option<PermissionPrompt>, Vec<PermissionAnswer>) {
     let mut answers = vec![];
     while let Some(r) = queued.pop_front() {
         match r.verdict(table) {
             Verdict::Grant => answers.push(PermissionAnswer::new(&r, true)),
             Verdict::Deny => answers.push(PermissionAnswer::new(&r, false)),
-            Verdict::Ask => return (PermissionPrompt::Open { shown: r, queued }, answers),
+            Verdict::Ask => return (Some(PermissionPrompt { shown: r, queued }), answers),
         }
     }
-    (PermissionPrompt::None, answers)
+    (None, answers)
 }
 
 /// What the prompt says and its controls are called.
@@ -354,20 +348,12 @@ pub struct AuthRequest {
     pub proxy: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Auth {
-    #[default]
-    None,
-    Open(AuthRequest),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthEvent {
     Requested(AuthRequest),
     Submit { user: String, password: Secret },
     Cancel,
     Dismissed(Vec<RequestId>),
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -377,25 +363,29 @@ pub struct AuthAnswer {
     pub credentials: Option<(String, Secret)>,
 }
 
-pub fn auth(state: Auth, event: AuthEvent) -> (Auth, Option<AuthAnswer>) {
+/// The sign-in sheet's request (`None`: none waits) after one event, and its answer.
+pub fn auth(
+    state: Option<AuthRequest>,
+    event: AuthEvent,
+) -> (Option<AuthRequest>, Option<AuthAnswer>) {
     use AuthEvent::*;
     let cancel = |r: &AuthRequest| AuthAnswer {
         id: r.id,
         credentials: None,
     };
     match (state, event) {
-        (Auth::Open(old), Requested(new)) => (Auth::Open(new), Some(cancel(&old))),
-        (Auth::None, Requested(new)) => (Auth::Open(new), None),
-        (Auth::Open(r), Submit { user, password }) => (
-            Auth::None,
+        (Some(old), Requested(new)) => (Some(new), Some(cancel(&old))),
+        (None, Requested(new)) => (Some(new), None),
+        (Some(r), Submit { user, password }) => (
+            None,
             Some(AuthAnswer {
                 id: r.id,
                 credentials: Some((user, password)),
             }),
         ),
-        (Auth::Open(r), Cancel) => (Auth::None, Some(cancel(&r))),
-        (Auth::Open(r), Dismissed(ids)) if !ids.contains(&r.id) => (Auth::Open(r), None),
-        (_, Dismissed(_) | ViewGone) | (Auth::None, Submit { .. } | Cancel) => (Auth::None, None),
+        (Some(r), Cancel) => (None, Some(cancel(&r))),
+        (Some(r), Dismissed(ids)) if !ids.contains(&r.id) => (Some(r), None),
+        (_, Dismissed(_)) | (None, Submit { .. } | Cancel) => (None, None),
     }
 }
 
@@ -483,24 +473,21 @@ mod tests {
     #[test]
     fn a_request_opens_and_answers_once() {
         let t = SitePermissions::default();
-        let (s, a) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
-        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
+        let (s, a) = permission(None, ask(1, &[CameraStream]), &t);
+        assert!(a.is_empty() && s.is_some());
         let answer = PermissionEvent::Answer {
             allow: true,
             remember: false,
         };
         let (s, a) = permission(s, answer.clone(), &t);
-        assert_eq!(
-            (s.clone(), a),
-            (PermissionPrompt::None, vec![granted(1, &[CameraStream])])
-        );
+        assert_eq!((s.clone(), a), (None, vec![granted(1, &[CameraStream])]));
         assert_eq!(permission(s, answer, &t).1, vec![]);
     }
 
     #[test]
     fn block_and_escape_deny() {
         let t = SitePermissions::default();
-        let (s, _) = permission(PermissionPrompt::None, ask(1, &[Geolocation]), &t);
+        let (s, _) = permission(None, ask(1, &[Geolocation]), &t);
         let (_, a) = permission(
             s,
             PermissionEvent::Answer {
@@ -515,11 +502,7 @@ mod tests {
     #[test]
     fn remembering_names_the_site_and_kinds() {
         let t = SitePermissions::default();
-        let (s, _) = permission(
-            PermissionPrompt::None,
-            ask(1, &[MicStream, CameraStream]),
-            &t,
-        );
+        let (s, _) = permission(None, ask(1, &[MicStream, CameraStream]), &t);
         let (_, a) = permission(
             s,
             PermissionEvent::Answer {
@@ -541,11 +524,7 @@ mod tests {
             origin: "data:text/html,x".into(),
             ..request(2, &[Geolocation])
         };
-        let (s, _) = permission(
-            PermissionPrompt::None,
-            PermissionEvent::Requested(opaque),
-            &t,
-        );
+        let (s, _) = permission(None, PermissionEvent::Requested(opaque), &t);
         let (_, a) = permission(
             s,
             PermissionEvent::Answer {
@@ -562,20 +541,13 @@ mod tests {
         let mut t = SitePermissions::default();
         t.set("https://a.test", Permission::Camera, Decision::Allow);
         t.set("https://a.test", Permission::Geolocation, Decision::Block);
-        let (s, a) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
-        assert_eq!(
-            (s, a),
-            (PermissionPrompt::None, vec![granted(1, &[CameraStream])])
-        );
-        let (s, a) = permission(PermissionPrompt::None, ask(2, &[Geolocation]), &t);
-        assert_eq!((s, a), (PermissionPrompt::None, vec![granted(2, &[])]));
+        let (s, a) = permission(None, ask(1, &[CameraStream]), &t);
+        assert_eq!((s, a), (None, vec![granted(1, &[CameraStream])]));
+        let (s, a) = permission(None, ask(2, &[Geolocation]), &t);
+        assert_eq!((s, a), (None, vec![granted(2, &[])]));
         // Partly decided: asked.
-        let (s, a) = permission(
-            PermissionPrompt::None,
-            ask(3, &[CameraStream, MicStream]),
-            &t,
-        );
-        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
+        let (s, a) = permission(None, ask(3, &[CameraStream, MicStream]), &t);
+        assert!(a.is_empty() && s.is_some());
         // A remembered answer leaves an open prompt alone.
         let (s2, a) = permission(s.clone(), ask(4, &[CameraStream]), &t);
         assert_eq!((s2, a), (s, vec![granted(4, &[CameraStream])]));
@@ -590,20 +562,13 @@ mod tests {
             vec![Other(7)],
             vec![],
         ] {
-            let (s, a) = permission(PermissionPrompt::None, ask(1, &kinds), &t);
-            assert_eq!(
-                (s, a),
-                (PermissionPrompt::None, vec![granted(1, &[])]),
-                "{kinds:?}"
-            );
+            let (s, a) = permission(None, ask(1, &kinds), &t);
+            assert_eq!((s, a), (None, vec![granted(1, &[])]), "{kinds:?}");
         }
     }
 
-    fn shown(s: &PermissionPrompt) -> Option<u32> {
-        match s {
-            PermissionPrompt::Open { shown, .. } => shown.engine_id().map(|id| id.0),
-            PermissionPrompt::None => None,
-        }
+    fn shown(s: &Option<PermissionPrompt>) -> Option<u32> {
+        s.as_ref().and_then(|p| p.shown.engine_id()).map(|id| id.0)
     }
 
     #[test]
@@ -613,7 +578,7 @@ mod tests {
             allow: true,
             remember: false,
         };
-        let (s, _) = permission(PermissionPrompt::None, ask(1, &[Notifications]), &t);
+        let (s, _) = permission(None, ask(1, &[Notifications]), &t);
         let (s, a) = permission(s, ask(2, &[Geolocation]), &t);
         assert_eq!((shown(&s), a), (Some(1), vec![]));
         let (s, a) = permission(s, allow.clone(), &t);
@@ -628,7 +593,7 @@ mod tests {
     #[test]
     fn a_remembered_answer_covers_the_waiting_ones() {
         let t = SitePermissions::default();
-        let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
+        let (s, _) = permission(None, ask(1, &[CameraStream]), &t);
         let (s, _) = permission(s, ask(2, &[CameraStream]), &t);
         let (s, _) = permission(s, ask(3, &[Geolocation]), &t);
         let remember = PermissionEvent::Answer {
@@ -644,7 +609,7 @@ mod tests {
     #[test]
     fn dismissing_the_shown_one_shows_the_next() {
         let t = SitePermissions::default();
-        let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
+        let (s, _) = permission(None, ask(1, &[CameraStream]), &t);
         let (s, _) = permission(s, ask(2, &[Geolocation]), &t);
         let (s, _) = permission(s, ask(3, &[MicStream]), &t);
         let gone = PermissionEvent::Dismissed(vec![RequestId(1), RequestId(2)]);
@@ -655,15 +620,9 @@ mod tests {
     #[test]
     fn the_engine_answering_closes_without_an_answer() {
         let t = SitePermissions::default();
-        let (open, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
-        for e in [
-            PermissionEvent::ViewGone,
-            PermissionEvent::Dismissed(vec![RequestId(1)]),
-        ] {
-            assert_eq!(
-                permission(open.clone(), e, &t),
-                (PermissionPrompt::None, vec![])
-            );
+        let (open, _) = permission(None, ask(1, &[CameraStream]), &t);
+        for e in [PermissionEvent::Dismissed(vec![RequestId(1)])] {
+            assert_eq!(permission(open.clone(), e, &t), (None, vec![]));
         }
         let (s, a) = permission(
             open.clone(),
@@ -712,12 +671,8 @@ mod tests {
         assert_eq!((t.allow, t.block), ("Open", "Cancel"));
 
         let table = SitePermissions::default();
-        let (s, a) = permission(
-            PermissionPrompt::None,
-            PermissionEvent::Requested(mailto()),
-            &table,
-        );
-        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
+        let (s, a) = permission(None, PermissionEvent::Requested(mailto()), &table);
+        assert!(a.is_empty() && s.is_some());
         let (s, a) = permission(
             s,
             PermissionEvent::Answer {
@@ -726,7 +681,7 @@ mod tests {
             },
             &table,
         );
-        assert_eq!(s, PermissionPrompt::None);
+        assert_eq!(s, None);
         assert_eq!(
             a,
             vec![PermissionAnswer {
@@ -745,23 +700,15 @@ mod tests {
             Permission::ExternalLinks,
             Decision::Allow,
         );
-        let (s, a) = permission(
-            PermissionPrompt::None,
-            PermissionEvent::Requested(mailto()),
-            &table,
-        );
-        assert_eq!(s, PermissionPrompt::None);
+        let (s, a) = permission(None, PermissionEvent::Requested(mailto()), &table);
+        assert_eq!(s, None);
         assert_eq!(a[0].reply, opened(true));
     }
 
     #[test]
     fn a_cancelled_link_is_never_remembered() {
         let table = SitePermissions::default();
-        let (s, _) = permission(
-            PermissionPrompt::None,
-            PermissionEvent::Requested(mailto()),
-            &table,
-        );
+        let (s, _) = permission(None, PermissionEvent::Requested(mailto()), &table);
         let cancel = PermissionEvent::Answer {
             allow: false,
             remember: true,
@@ -793,11 +740,11 @@ mod tests {
     #[test]
     fn a_new_page_drops_links_and_a_repeated_link_is_asked_once() {
         let t = SitePermissions::default();
-        let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
+        let (s, _) = permission(None, ask(1, &[CameraStream]), &t);
         let (s, _) = permission(s, PermissionEvent::Requested(mailto()), &t);
         let (s, a) = permission(s, PermissionEvent::Requested(mailto()), &t);
         assert!(a.is_empty());
-        let PermissionPrompt::Open { queued, .. } = &s else {
+        let Some(PermissionPrompt { queued, .. }) = &s else {
             panic!("open")
         };
         assert_eq!(queued.len(), 1, "the second click is not queued again");
@@ -805,17 +752,13 @@ mod tests {
         assert!(a.is_empty());
         assert_eq!(
             s,
-            permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t).0,
+            permission(None, ask(1, &[CameraStream]), &t).0,
             "the engine's request stays, the link goes"
         );
-        let (s, _) = permission(
-            PermissionPrompt::None,
-            PermissionEvent::Requested(mailto()),
-            &t,
-        );
+        let (s, _) = permission(None, PermissionEvent::Requested(mailto()), &t);
         assert_eq!(
             permission(s, PermissionEvent::PageChanged, &t),
-            (PermissionPrompt::None, vec![]),
+            (None, vec![]),
             "a shown link goes too"
         );
     }
@@ -832,7 +775,7 @@ mod tests {
 
     #[test]
     fn auth_submits_both_fields_or_cancels() {
-        let (s, a) = auth(Auth::None, challenge(1));
+        let (s, a) = auth(None, challenge(1));
         assert_eq!(a, None);
         let (s, a) = auth(
             s,
@@ -841,7 +784,7 @@ mod tests {
                 password: Secret::from("p"),
             },
         );
-        assert_eq!(s, Auth::None);
+        assert_eq!(s, None);
         assert_eq!(
             a,
             Some(AuthAnswer {
@@ -849,11 +792,11 @@ mod tests {
                 credentials: Some(("u".into(), Secret::from("p")))
             })
         );
-        let (s, _) = auth(Auth::None, challenge(2));
+        let (s, _) = auth(None, challenge(2));
         let (_, a) = auth(s, AuthEvent::Cancel);
         assert_eq!(a.unwrap().credentials, None);
         // A newer challenge cancels the older.
-        let (s, _) = auth(Auth::None, challenge(3));
+        let (s, _) = auth(None, challenge(3));
         let (_, a) = auth(s, challenge(4));
         assert_eq!(
             a,
@@ -908,13 +851,12 @@ mod tests {
             },
             Cancel,
             Dismissed(vec![RequestId(1), RequestId(2)]),
-            ViewGone,
             challenge(2),
             challenge(3),
         ];
         let n = events.len();
         'sequence: for code in 0..n.pow(4) {
-            let mut s = Auth::None;
+            let mut s = None;
             let (mut answered, mut engine, mut requested) = (vec![], vec![], vec![]);
             let mut c = code;
             for _ in 0..4 {
@@ -926,12 +868,9 @@ mod tests {
                     }
                     requested.push(r.id);
                 }
-                if let Auth::Open(r) = &s
-                    && match &e {
-                        ViewGone => true,
-                        Dismissed(ids) => ids.contains(&r.id),
-                        _ => false,
-                    }
+                if let Some(r) = &s
+                    && let Dismissed(ids) = &e
+                    && ids.contains(&r.id)
                 {
                     engine.push(r.id);
                 }

@@ -26,7 +26,6 @@ use zeroize::Zeroizing;
 use super::{Host, now_ms};
 use crate::bind::favicon_image;
 use crate::clipboard::{Bridge, Buffer};
-use crate::menu::MenuEvent;
 use crate::persist::{BookmarksPage, HistoryClear, VisitsPage};
 use crate::with_host;
 
@@ -526,8 +525,7 @@ impl Host {
             self.site_view(tab).theme(&url),
         ));
         entries.extend(self.boost_entries(&url));
-        self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     // ----- history and archive

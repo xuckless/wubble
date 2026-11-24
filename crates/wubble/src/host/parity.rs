@@ -13,6 +13,7 @@ use wubble_engine::input::{KeyInput, Point};
 use wubble_ui::{AppWindow, CommandBarState};
 
 use super::Host;
+use super::layers::Content;
 use crate::clipboard::{Bridge as _, Buffer};
 use crate::menu::{Command as MenuCommand, Menu};
 use crate::parity::{self, Action, Button, HostCheck, HostOp, Input, Mods, Parity, Step};
@@ -192,9 +193,13 @@ impl Host {
         if self.checks.parity.is_none() || self.model.visible_tab() != Some(tab) {
             return;
         }
-        let entries: Vec<(String, bool)> = match self.surfaces.get(&tab).map(|s| &s.menu) {
+        let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+        let entries: Vec<(String, bool)> = match self.open_content(self.w.id, menu) {
             // Separators stay in (unlabelled, disabled): a choice is an index into all rows.
-            Some(Menu::Open { entries, .. }) => entries
+            Some(Content::Menu {
+                tab: t,
+                menu: Menu::Open { entries, .. },
+            }) if *t == tab => entries
                 .iter()
                 .map(|e| {
                     (
@@ -206,6 +211,12 @@ impl Host {
             _ => return,
         };
         self.parity_step(Input::Menu(&entries));
+    }
+
+    /// The visible tab's `kind` overlay's content, while it is open.
+    fn parity_open(&self, kind: wubble_core::overlay::Kind) -> Option<&Content> {
+        let tab = self.model.visible_tab()?;
+        self.open_content(self.w.id, wubble_core::overlay::Layer::new(kind, Some(tab)))
     }
 
     pub(super) fn parity_step(&mut self, input: Input) {
@@ -626,10 +637,15 @@ impl Host {
                 }
             }
             HostOp::Neutral => {
-                let surface = self.model.visible_tab().and_then(|t| self.surfaces.get(&t));
-                let menu_open = surface.is_some_and(|s| matches!(s.menu, Menu::Open { .. }));
-                let find_open =
-                    surface.is_some_and(|s| matches!(s.find, crate::surface::FindBar::Open { .. }));
+                let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+                let menu_open = matches!(
+                    self.open_content(self.w.id, menu),
+                    Some(Content::Menu {
+                        menu: Menu::Open { .. },
+                        ..
+                    })
+                );
+                let find_open = self.parity_open(wubble_core::overlay::Kind::Find).is_some();
                 if menu_open {
                     self.menu_dismissed();
                 }
@@ -725,11 +741,7 @@ impl Host {
                 )
             }
             HostCheck::FindOpen(want) => {
-                let open = self
-                    .model
-                    .visible_tab()
-                    .and_then(|t| self.surfaces.get(&t))
-                    .is_some_and(|s| s.find != crate::surface::FindBar::default());
+                let open = self.parity_open(wubble_core::overlay::Kind::Find).is_some();
                 is(open == want, format!("find bar open: {open}"))
             }
             HostCheck::Zoomed(above) => {
@@ -862,10 +874,8 @@ impl Host {
             }
             HostCheck::Prompt(want) => {
                 let open = self
-                    .model
-                    .visible_tab()
-                    .and_then(|t| self.surfaces.get(&t))
-                    .is_some_and(|s| s.permission != crate::prompt::PermissionPrompt::None);
+                    .parity_open(wubble_core::overlay::Kind::Permission)
+                    .is_some();
                 is(open == want, format!("permission prompt open: {open}"))
             }
             HostCheck::Bookmarked(want) => {
@@ -885,14 +895,10 @@ impl Host {
                 is(focused, "the capsule does not hold the keys".into())
             }
             HostCheck::FindQuery(want) => {
-                let got = self
-                    .model
-                    .visible_tab()
-                    .and_then(|t| self.surfaces.get(&t))
-                    .and_then(|s| match &s.find {
-                        crate::surface::FindBar::Open { query, .. } => Some(query.clone()),
-                        crate::surface::FindBar::Closed { .. } => None,
-                    });
+                let got = match self.parity_open(wubble_core::overlay::Kind::Find) {
+                    Some(Content::Find(bar)) => Some(bar.query.clone()),
+                    _ => None,
+                };
                 is(
                     got.as_deref() == Some(want),
                     format!("find bar holds {got:?}"),

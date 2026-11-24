@@ -1371,9 +1371,11 @@ impl Host {
             collapsed: up && overlay.is_some_and(Overlay::collapsed),
             speeds: up && overlay.is_some_and(Overlay::speeds_open),
             menu: tab.is_some_and(|t| {
-                self.surfaces
-                    .get(&t)
-                    .is_some_and(|s| s.menu != crate::menu::Menu::Closed)
+                let menu = wubble_core::overlay::Layer::new(Kind::Menu, None);
+                matches!(
+                    self.open_content(self.w.id, menu),
+                    Some(super::layers::Content::Menu { tab, .. }) if *tab == t
+                )
             }),
             toast,
             save: tab.map(|t| self.video_save_state(t)),

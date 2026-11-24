@@ -2,13 +2,16 @@
 //! (`Host::ui`), runs its pure `reduce` and carries out the effects, derives the stack with the
 //! free surfaces each owner wrote, and answers what covers a page (`overlay::covers`). Every way
 //! an overlay opens asks here first; Escape, a tab switch and a navigation come here before
-//! anything else sees them.
+//! anything else sees them. A store overlay's content (a menu's rows, a prompt's request) is the
+//! one content map ([`Contents`]), which only the `Mount` and `Unmount` executors write.
 
 use slint::ComponentHandle;
+use std::collections::BTreeMap;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::overlay::{
     self, Action, Coverage, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
 };
+
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
@@ -20,13 +23,60 @@ use wubble_ui::{
 
 use super::Host;
 use super::window::WindowHost;
-use crate::menu::{Menu, MenuEvent};
-use crate::prompt::{Auth, AuthEvent, PermissionEvent, PermissionPrompt};
-use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
+use crate::menu::Menu;
+use crate::prompt::PermissionPrompt;
+use crate::surface::{DialogContent, FindBar};
+
+/// What a store overlay shows while the store holds it (open, or leaving while its kit draws
+/// the exit): the old machines' content, one variant per kind.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Content {
+    /// A context menu and the tab whose page or shell asked it (its answers go to that page).
+    Menu {
+        tab: TabId,
+        menu: Menu,
+    },
+    Permission(PermissionPrompt),
+    /// A page's JS dialog and its sign-in sheet: one overlay.
+    Dialog(DialogContent),
+    Find(FindBar),
+}
+
+/// The overlays' content, by the window of a window overlay (a tab's goes with its tab) and the
+/// layer. Only the `Mount` executor inserts and only the `Unmount` executor removes
+/// ([`Host::step`]); a machine changes a live content in place ([`Host::content_after`]).
+#[derive(Default)]
+pub(super) struct Contents(BTreeMap<(Option<WindowId>, Layer), Content>);
+
+impl Contents {
+    fn key(w: WindowId, layer: Layer) -> (Option<WindowId>, Layer) {
+        (layer.tab.is_none().then_some(w), layer)
+    }
+
+    pub(super) fn get(&self, w: WindowId, layer: Layer) -> Option<&Content> {
+        self.0.get(&Self::key(w, layer))
+    }
+
+    fn get_mut(&mut self, w: WindowId, layer: Layer) -> Option<&mut Content> {
+        self.0.get_mut(&Self::key(w, layer))
+    }
+
+    fn insert(&mut self, w: WindowId, layer: Layer, content: Content) {
+        self.0.insert(Self::key(w, layer), content);
+    }
+
+    fn remove(&mut self, w: WindowId, layer: Layer) {
+        self.0.remove(&Self::key(w, layer));
+    }
+}
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 16] = [
+const STORED: [Kind; 20] = [
+    Kind::Permission,
+    Kind::Find,
+    Kind::Dialog,
+    Kind::Menu,
     Kind::Downloads,
     Kind::Spaces,
     Kind::Extensions,
@@ -134,17 +184,6 @@ impl Host {
         if let Some(tab) = self.notice_tab() {
             add(Kind::Notice, Some(tab));
         }
-        for (&tab, s) in &self.surfaces {
-            if matches!(s.permission, PermissionPrompt::Open { .. }) {
-                add(Kind::Permission, Some(tab));
-            }
-            if matches!(s.find, FindBar::Open { .. }) {
-                add(Kind::Find, Some(tab));
-            }
-            if matches!(s.dialog, Dialog::Open(_)) || matches!(s.auth, Auth::Open(_)) {
-                add(Kind::Dialog, Some(tab));
-            }
-        }
         if let Some(tab) = self.bookmark_sheet_tab() {
             add(Kind::BookmarkSheet, Some(tab));
         }
@@ -165,12 +204,6 @@ impl Host {
             && window.get_command_placement() == CommandPlacement::Overlay
         {
             add(Kind::CommandBar, None);
-        }
-        if menu_tab
-            .and_then(|t| self.surfaces.get(&t))
-            .is_some_and(|s| matches!(s.menu, Menu::Open { .. } | Menu::Shell { .. }))
-        {
-            add(Kind::Menu, None);
         }
         // the panels the host wrote for the visible tab
         if window.get_page_error().open {
@@ -256,29 +289,54 @@ impl Host {
     /// into every window and ends the exits the kit no longer draws; returns the effects. The
     /// caller redraws the machines' surfaces.
     pub(super) fn act(&mut self, window: &AppWindow, action: Action) -> Vec<Effect> {
-        let fx = self.step(window, action);
+        self.act_with(window, action, None)
+    }
+
+    /// [`Host::act`] for an open that brings its overlay's content: its `Mount` puts it in the
+    /// content map.
+    fn act_with(
+        &mut self,
+        window: &AppWindow,
+        action: Action,
+        content: Option<Content>,
+    ) -> Vec<Effect> {
+        let fx = self.step(window, action, content);
         self.settle_layers();
         fx
     }
 
     /// One reduce. The store is stored before any effect runs, so an owner that answers a
-    /// `Cancel` by closing meets the new state (and its close is ignored).
-    fn step(&mut self, window: &AppWindow, action: Action) -> Vec<Effect> {
+    /// `Cancel` by closing meets the new state (and its close is ignored). `content`: the opened
+    /// overlay's, put in the content map by its `Mount`, the map's one insert.
+    fn step(
+        &mut self,
+        window: &AppWindow,
+        action: Action,
+        content: Option<Content>,
+    ) -> Vec<Effect> {
         let menu_tab = match action {
             Action::Switched { from, .. } => from,
             _ => self.shown(),
         };
+        // the window the effects' window overlays are in
+        let at = overlay::acting(&self.env(window, menu_tab), action).unwrap_or(self.w.id);
+        let mut content = content;
         let before = self.ui.slots();
         let ui = std::mem::take(&mut self.ui);
         let (ui, fx) = overlay::reduce(ui, &self.env(window, menu_tab), action);
         self.ui = ui;
         for &effect in &fx {
             match effect {
-                Effect::Show(at, key) => self.draw_slot(at, Some(key), &before),
-                Effect::Unshow(at) => self.draw_slot(at, None, &before),
-                Effect::Arm(at) => self.arm_surfaces(at),
-                Effect::Cancel(layer) => self.overlay_cancel(menu_tab, layer),
-                Effect::Unmount(layer) => self.unmounted(layer),
+                Effect::Show(slot, key) => self.draw_slot(slot, Some(key), &before),
+                Effect::Unshow(slot) => self.draw_slot(slot, None, &before),
+                Effect::Arm(time) => self.arm_surfaces(time),
+                Effect::Cancel(layer) => self.overlay_cancel(at, layer),
+                Effect::Mount(layer) => {
+                    if let Some(c) = content.take() {
+                        self.contents.insert(at, layer, c);
+                    }
+                }
+                Effect::Unmount(layer) => self.unmounted(at, layer),
                 Effect::Hide(Layer {
                     kind: Kind::Notice, ..
                 }) => self.notice_shown(false),
@@ -288,7 +346,7 @@ impl Host {
                 // the store's overlays are drawn from their phase (settle_layers), the find bar
                 // and a dialog for the visible tab only (render_surfaces); the keys still follow
                 // `settle-focus` as each *-open changes
-                Effect::Mount(_) | Effect::Focus(..) | Effect::Hide(_) | Effect::Reveal(_) => {}
+                Effect::Focus(..) | Effect::Hide(_) | Effect::Reveal(_) => {}
             }
         }
         fx
@@ -304,7 +362,7 @@ impl Host {
         let at = Surface { w: self.w.id, kind };
         let now = self.surface_now();
         let window = self.w.handle();
-        self.step(&window, Action::Hover { at, key, cue, now });
+        self.step(&window, Action::Hover { at, key, cue, now }, None);
     }
 
     /// The hidden sidebar's peek: the shell's pointer cue as its slot's (chrome.tsx: the edge
@@ -331,7 +389,7 @@ impl Host {
     fn surface_tick(&mut self) {
         let now = self.surface_now();
         let window = self.w.handle();
-        self.step(&window, Action::Tick { now });
+        self.step(&window, Action::Tick { now }, None);
     }
 
     /// `Effect::Arm`: the one timer set for `at` on the store's clock, or stopped. It runs in
@@ -409,6 +467,11 @@ impl Host {
             window.set_drop_mark_on(open(Kind::DropMark));
             window.set_autoscroll_on(open(Kind::Autoscroll));
             self.ext_drawn_in(w, &window);
+            // a window's menu closed by a rule acting in another window (a dialog asked there):
+            // its kit closes here too (the content, while it shows, is `render_surfaces`')
+            if window.get_menu().open && !open(Kind::Menu) {
+                window.set_menu(wubble_ui::MenuView::default());
+            }
             let bits = mounted(&window.get_mounted());
             // a pane's bubble is drawn from its pane's report until the fade over (`status_drawn`);
             // the other pane layers have no exit
@@ -419,7 +482,7 @@ impl Host {
             };
             let gone = self.ui.gone(&self.env(&window, self.shown()), w, drawn);
             for layer in gone {
-                self.step(&window, Action::Exited { w, layer });
+                self.step(&window, Action::Exited { w, layer }, None);
             }
         }
     }
@@ -459,11 +522,69 @@ impl Host {
         }
     }
 
-    /// `Unmount`: a store overlay is gone, its content with it (the one place content goes).
-    fn unmounted(&mut self, layer: Layer) {
+    /// `Unmount` of `layer` (a window overlay's in window `w`): its content goes, the content
+    /// map's one removal, unless the overlay opened again in the same step (a reopening is
+    /// Unmount then Mount; a rule's close whose owner reopened it with its next request).
+    fn unmounted(&mut self, w: WindowId, layer: Layer) {
+        if self.ui.phase(w, layer).is_none() {
+            self.contents.remove(w, layer);
+        }
         match layer.kind {
             Kind::Extensions | Kind::ExtensionSheet => self.ext_unmounted(layer.kind),
             _ => {}
+        }
+    }
+
+    /// `layer`'s content while it is open (a window overlay's in window `w`).
+    pub(super) fn open_content(&self, w: WindowId, layer: Layer) -> Option<&Content> {
+        self.contents
+            .get(w, layer)
+            .filter(|_| self.ui.phase(w, layer) == Some(Phase::Open))
+    }
+
+    /// `layer`'s content for its machine: while it is open, or (`cancel`) while a rule that
+    /// just closed it has its owner answer (the content stays until its `Unmount`).
+    pub(super) fn live(&self, w: WindowId, layer: Layer, cancel: bool) -> Option<Content> {
+        match cancel {
+            true => self.contents.get(w, layer).cloned(),
+            false => self.open_content(w, layer).cloned(),
+        }
+    }
+
+    /// A machine's step on `layer`'s content is done (`next`; `w` the window acting): a content
+    /// for an open layer is written in place; one for a layer not open opens it (fresh, or a
+    /// queue's next after a rule closed it; `ask`: the app's question, which no overlay
+    /// refuses); none for an open layer is its owner closing it. The content back when the
+    /// store refused it: its owner still answers it.
+    pub(super) fn content_after(
+        &mut self,
+        w: WindowId,
+        layer: Layer,
+        next: Option<Content>,
+        ask: bool,
+    ) -> Option<Content> {
+        let open = self.ui.phase(w, layer) == Some(Phase::Open);
+        let window = self.w.window.upgrade()?;
+        match (next, open) {
+            (Some(c), true) => {
+                if let Some(slot) = self.contents.get_mut(w, layer) {
+                    *slot = c;
+                }
+                None
+            }
+            (Some(c), false) => {
+                let action = match ask {
+                    true => Action::Ask { w, layer },
+                    false => Action::Open { w, layer },
+                };
+                let fx = self.act_with(&window, action, Some(c.clone()));
+                (!fx.contains(&Effect::Mount(layer))).then_some(c)
+            }
+            (None, true) => {
+                self.act(&window, Action::Close { w, layer });
+                None
+            }
+            (None, false) => None,
         }
     }
 
@@ -627,30 +748,14 @@ impl Host {
         true
     }
 
-    /// A rule closed `layer`: its owner answers as cancelled (`shown`: the tab whose menu it
-    /// is). The store's own overlays have no one to answer.
-    fn overlay_cancel(&mut self, shown: Option<TabId>, layer: Layer) {
+    /// A rule closed `layer` (a window overlay's in window `w`): its owner answers as cancelled,
+    /// on its content still there. An overlay without an owner to answer has nothing to do.
+    fn overlay_cancel(&mut self, w: WindowId, layer: Layer) {
         match (layer.kind, layer.tab) {
             (Kind::Notice, _) => self.notice_close(),
-            (Kind::Permission, Some(tab)) => self.apply_permission(
-                tab,
-                PermissionEvent::Answer {
-                    allow: false,
-                    remember: false,
-                },
-            ),
-            (Kind::Find, Some(tab)) => self.apply_find(tab, FindEvent::Close),
-            (Kind::Dialog, Some(tab)) => {
-                if self
-                    .surfaces
-                    .get(&tab)
-                    .is_some_and(|s| matches!(s.auth, Auth::Open(_)))
-                {
-                    self.apply_auth(tab, AuthEvent::Cancel);
-                } else {
-                    self.apply_dialog(tab, DialogEvent::Cancel);
-                }
-            }
+            (Kind::Permission, Some(tab)) => self.permission_cancelled(tab),
+            (Kind::Find, Some(tab)) => self.find_cancelled(tab),
+            (Kind::Dialog, Some(tab)) => self.dialog_cancelled(tab),
             (Kind::BookmarkSheet, _) => self.bookmark_sheet_answered(false, false, "", -1),
             (Kind::PrintSheet, _) => self.print_event(wubble_core::print::Event::Cancel),
             (Kind::AgentSheet, _) => self.agent_sheet_answered(false, false),
@@ -666,11 +771,7 @@ impl Host {
             (Kind::Downloads | Kind::Spaces, _) => {}
             (Kind::Extensions, _) => self.panel_cancelled(),
             (Kind::ExtensionSheet, _) => self.prompt_cancelled(),
-            (Kind::Menu, _) => {
-                if let Some(tab) = shown {
-                    self.apply_menu(tab, MenuEvent::Dismiss);
-                }
-            }
+            (Kind::Menu, _) => self.menu_cancelled(w),
             (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
             // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
             (Kind::ErrorPanel | Kind::Boost, _) => {}

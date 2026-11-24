@@ -44,7 +44,8 @@
 mod store;
 
 pub use store::{
-    Action, AxRoots, Cue, Effect, Env, Key, KeyOwner, Phase, PointerOwner, Surface, Ui, reduce,
+    Action, AxRoots, Cue, Effect, Env, Key, KeyOwner, Phase, PointerOwner, Surface, Ui, acting,
+    reduce,
 };
 
 use crate::hovercard::{self, Timing};

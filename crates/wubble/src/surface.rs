@@ -1,11 +1,13 @@
-//! The page's own prompts, drawn by the shell: JS dialogs ([`Dialog`]) and
-//! the find bar ([`FindBar`]), each one enum with a pure transition, plus
+//! The page's own prompts, drawn by the shell: JS dialogs ([`dialog`]) and
+//! the find bar ([`find`]), each content with a pure transition, plus
 //! [`route`], which says which surface a [`PageEvent`] is for (the
 //! permission prompt and sign-in sheet are in `prompt.rs`, the error panel
-//! in `page_error.rs`, the file chooser in `chooser.rs`). The host
-//! keeps one [`Surfaces`] per tab and draws only the visible tab's, so a
-//! dialog is tab-modal: switching tabs leaves it waiting, and it shows again
-//! on return.
+//! in `page_error.rs`, the file chooser in `chooser.rs`). Whether one is open
+//! is the overlays' store's (`wubble_core::overlay`); its content is the
+//! host's content map while it is, and a machine's `None` for live content
+//! is its owner closing it. The store keeps a tab's dialog with its tab, so
+//! it is tab-modal: switching tabs leaves it waiting, and it shows again on
+//! return.
 //!
 //! Dialog wording follows Chromium's `components/javascript_dialogs`
 //! strings (`IDS_JAVASCRIPT_MESSAGEBOX_TITLE` "%s says",
@@ -17,11 +19,9 @@
 use wubble_engine::page::{JsDialogKind, PageEvent, Rect, RequestId};
 
 use crate::chooser::{self, DialogSpec};
-use crate::menu::{self, Menu, MenuEvent};
-use crate::page_error::{self, ErrorEvent, PageError};
-use crate::prompt::{
-    self, Auth, AuthEvent, AuthRequest, PermissionEvent, PermissionPrompt, PermissionRequest,
-};
+use crate::menu::MenuEvent;
+use crate::page_error::{ErrorEvent, PageError};
+use crate::prompt::{self, AuthEvent, AuthRequest, PermissionEvent, PermissionRequest};
 
 // ---------------------------------------------------------------- dialogs
 
@@ -35,11 +35,19 @@ pub struct OpenDialog {
     pub default_text: String,
 }
 
+/// What the tab's dialog overlay (`overlay::Kind::Dialog`) holds: its JS dialog and its sign-in
+/// sheet, which shows over the dialog; the overlay is open while either is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Dialog {
-    #[default]
-    None,
-    Open(OpenDialog),
+pub struct DialogContent {
+    pub js: Option<OpenDialog>,
+    pub auth: Option<AuthRequest>,
+}
+
+impl DialogContent {
+    /// Itself while it holds something, else none (the overlay closes).
+    pub fn live(self) -> Option<Self> {
+        (self.js.is_some() || self.auth.is_some()).then_some(self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,8 +61,6 @@ pub enum DialogEvent {
     Reset,
     /// CEF gave up on these requests; welding answered them.
     Dismissed(Vec<RequestId>),
-    /// The view closed; welding answered every held request.
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,8 +71,12 @@ pub struct DialogAnswer {
 }
 
 /// At most one answer per step, and exactly one per request over its life
-/// unless the engine answered it itself (reset, dismissed, view gone).
-pub fn dialog(state: Dialog, event: DialogEvent) -> (Dialog, Option<DialogAnswer>) {
+/// unless the engine answered it itself (reset, dismissed, the view gone: then the
+/// overlays' store drops it, no event comes here). `None`: no live dialog.
+pub fn dialog(
+    state: Option<OpenDialog>,
+    event: DialogEvent,
+) -> (Option<OpenDialog>, Option<DialogAnswer>) {
     use DialogEvent::*;
     let answer = |d: &OpenDialog, accept: bool, text: String| DialogAnswer {
         id: d.id,
@@ -76,23 +86,23 @@ pub fn dialog(state: Dialog, event: DialogEvent) -> (Dialog, Option<DialogAnswer
     match (state, event) {
         // A page can only wait on one dialog; a newer one replaces the old,
         // which gets its default.
-        (Dialog::Open(old), Requested(new)) => {
+        (Some(old), Requested(new)) => {
             let a = answer(&old, old.kind.default_accept(), String::new());
-            (Dialog::Open(new), Some(a))
+            (Some(new), Some(a))
         }
-        (Dialog::None, Requested(new)) => (Dialog::Open(new), None),
-        (Dialog::Open(d), Accept(text)) => {
+        (None, Requested(new)) => (Some(new), None),
+        (Some(d), Accept(text)) => {
             let text = if d.kind == JsDialogKind::Prompt {
                 text
             } else {
                 String::new()
             };
-            (Dialog::None, Some(answer(&d, true, text)))
+            (None, Some(answer(&d, true, text)))
         }
-        (Dialog::Open(d), Cancel) => (Dialog::None, Some(answer(&d, false, String::new()))),
-        (Dialog::Open(d), Dismissed(ids)) if !ids.contains(&d.id) => (Dialog::Open(d), None),
-        (_, Reset | Dismissed(_) | ViewGone) => (Dialog::None, None),
-        (Dialog::None, Accept(_) | Cancel) => (Dialog::None, None),
+        (Some(d), Cancel) => (None, Some(answer(&d, false, String::new()))),
+        (Some(d), Dismissed(ids)) if !ids.contains(&d.id) => (Some(d), None),
+        (_, Reset | Dismissed(_)) => (None, None),
+        (None, Accept(_) | Cancel) => (None, None),
     }
 }
 
@@ -146,26 +156,16 @@ pub fn dialog_text(d: &OpenDialog) -> DialogText {
 
 // --------------------------------------------------------------- find bar
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FindBar {
-    /// `last`: the query of the last search, for Mod+G with the bar closed.
-    Closed { last: String },
-    Open {
-        query: String,
-        matches: u32,
-        /// 1-based; 0 when nothing is highlighted.
-        active: u32,
-        /// The engine's final count for `query` is in (CEF `final_update`).
-        done: bool,
-    },
-}
-
-impl Default for FindBar {
-    fn default() -> Self {
-        Self::Closed {
-            last: String::new(),
-        }
-    }
+/// The open find bar's content (`overlay::Kind::Find` says whether it is open); the query of
+/// the last search outlives it, for Mod+G with the bar closed (the host's `Surfaces::find_last`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FindBar {
+    pub query: String,
+    pub matches: u32,
+    /// 1-based; 0 when nothing is highlighted.
+    pub active: u32,
+    /// The engine's final count for `query` is in (CEF `final_update`).
+    pub done: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +181,6 @@ pub enum FindEvent {
         active: u32,
         done: bool,
     },
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -195,130 +194,88 @@ pub enum FindEffect {
     Focus,
 }
 
-pub fn find(state: FindBar, event: FindEvent) -> (FindBar, Vec<FindEffect>) {
+/// One find event on the open bar (`None`: closed; `last`: the last search's query, which a
+/// closed bar reopens on). The bar's content back, `None` when it closes.
+pub fn find(
+    state: Option<FindBar>,
+    last: &str,
+    event: FindEvent,
+) -> (Option<FindBar>, Vec<FindEffect>) {
     use FindEvent::*;
-    let open = |query: String| FindBar::Open {
+    let open = |query: String| FindBar {
         query,
-        matches: 0,
-        active: 0,
-        done: false,
+        ..FindBar::default()
     };
     match (state, event) {
-        (FindBar::Closed { last }, Open) => {
+        (None, Open) => {
             let effects = if last.is_empty() {
                 vec![FindEffect::Focus]
             } else {
-                vec![FindEffect::Focus, FindEffect::Find(last.clone())]
+                vec![FindEffect::Focus, FindEffect::Find(last.to_owned())]
             };
-            (open(last), effects)
+            (Some(open(last.to_owned())), effects)
         }
         // Mod+G with the bar closed reopens it on the last search, if any.
-        (s @ FindBar::Closed { .. }, Next | Prev) if s.query().is_empty() => (s, vec![]),
-        (FindBar::Closed { last }, Next | Prev) => {
-            let (s, mut effects) = find(FindBar::Closed { last }, Open);
+        (None, Next | Prev) if last.is_empty() => (None, vec![]),
+        (None, Next | Prev) => {
+            let (s, mut effects) = find(None, last, Open);
             effects.retain(|e| *e != FindEffect::Focus);
             (s, effects)
         }
-        (s @ FindBar::Open { .. }, Open) => (s, vec![FindEffect::Focus]),
-        (FindBar::Open { .. }, Query(q)) if q.is_empty() => (open(q), vec![FindEffect::Stop]),
-        (FindBar::Open { .. }, Query(q)) => (open(q.clone()), vec![FindEffect::Find(q)]),
-        (s @ FindBar::Open { .. }, Next | Prev) if s.query().is_empty() => (s, vec![]),
-        (s @ FindBar::Open { .. }, Next) => (s, vec![FindEffect::Next]),
-        (s @ FindBar::Open { .. }, Prev) => (s, vec![FindEffect::Prev]),
+        (Some(s), Open) => (Some(s), vec![FindEffect::Focus]),
+        (Some(_), Query(q)) if q.is_empty() => (Some(open(q)), vec![FindEffect::Stop]),
+        (Some(_), Query(q)) => (Some(open(q.clone())), vec![FindEffect::Find(q)]),
+        (Some(s), Next | Prev) if s.query.is_empty() => (Some(s), vec![]),
+        (Some(s), Next) => (Some(s), vec![FindEffect::Next]),
+        (Some(s), Prev) => (Some(s), vec![FindEffect::Prev]),
         (
-            FindBar::Open { query, .. },
+            Some(s),
             Result {
                 matches,
                 active,
                 done,
             },
         ) => (
-            FindBar::Open {
-                query,
+            Some(FindBar {
                 matches,
                 active,
                 done,
-            },
+                ..s
+            }),
             vec![],
         ),
-        (FindBar::Open { query, .. }, Close) => {
-            (FindBar::Closed { last: query }, vec![FindEffect::Stop])
-        }
-        (FindBar::Open { query, .. }, ViewGone) => (FindBar::Closed { last: query }, vec![]),
-        (s @ FindBar::Closed { .. }, Query(_) | Close | Result { .. } | ViewGone) => (s, vec![]),
+        (Some(_), Close) => (None, vec![FindEffect::Stop]),
+        (None, Query(_) | Close | Result { .. }) => (None, vec![]),
     }
 }
 
 impl FindBar {
-    pub fn query(&self) -> &str {
-        match self {
-            Self::Closed { last } => last,
-            Self::Open { query, .. } => query,
-        }
-    }
-
     /// "n of m"; empty before anything was searched.
     pub fn counter(&self) -> String {
-        match self {
-            Self::Open {
-                query,
-                matches,
-                active,
-                ..
-            } if !query.is_empty() => format!("{active} of {matches}"),
-            _ => String::new(),
+        if self.query.is_empty() {
+            return String::new();
         }
+        format!("{} of {}", self.active, self.matches)
     }
 
     /// The search is over and found nothing (the count turns coral); not while
     /// a new query waits for the engine's answer.
     pub fn none(&self) -> bool {
-        matches!(self, Self::Open { query, matches: 0, done: true, .. } if !query.is_empty())
+        !self.query.is_empty() && self.matches == 0 && self.done
     }
 }
 
 // ----------------------------------------------------------------- a tab
 
-/// Everything the page has open in the shell, for one tab.
+/// What of the page's shell UI outlives its overlays, for one tab (the overlays' content is
+/// the host's content map, their openness the store's).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Surfaces {
-    pub dialog: Dialog,
-    pub menu: Menu,
-    pub find: FindBar,
     /// The popup widget's rectangle, physical pixels relative to the view.
     pub popup: Option<Rect>,
-    pub permission: PermissionPrompt,
-    pub auth: Auth,
     pub error: PageError,
-}
-
-impl Surfaces {
-    /// The tab's view closed (tab closed, slept or discarded, or the page
-    /// closed itself): welding has answered every held request, so every
-    /// surface closes without answering again.
-    pub fn view_gone(self) -> Surfaces {
-        let (dialog, answer) = dialog(self.dialog, DialogEvent::ViewGone);
-        let (menu, menu_fx) = menu::transition(self.menu, MenuEvent::ViewGone);
-        let (find, find_fx) = find(self.find, FindEvent::ViewGone);
-        let (permission, granted) = prompt::permission(
-            self.permission,
-            PermissionEvent::ViewGone,
-            &Default::default(),
-        );
-        let (auth, auth_answer) = prompt::auth(self.auth, AuthEvent::ViewGone);
-        let (error, error_fx) = page_error::transition(self.error, ErrorEvent::ViewGone);
-        debug_assert!(answer.is_none() && menu_fx.is_empty() && find_fx.is_empty());
-        debug_assert!(granted.is_empty() && auth_answer.is_none() && error_fx.is_empty());
-        Surfaces {
-            dialog,
-            menu,
-            find,
-            popup: None,
-            permission,
-            auth,
-            error,
-        }
-    }
+    /// The query of the last search, for Mod+F and Mod+G with the bar closed.
+    pub find_last: String,
 }
 
 /// Where a page event goes.
@@ -615,21 +572,21 @@ mod tests {
 
     #[test]
     fn accept_and_cancel_answer_once() {
-        let (s, a) = dialog(Dialog::None, req(1, JsDialogKind::Prompt));
+        let (s, a) = dialog(None, req(1, JsDialogKind::Prompt));
         assert_eq!(a, None);
         let (s, a) = dialog(s, DialogEvent::Accept("typed".into()));
-        assert_eq!((s.clone(), a), (Dialog::None, answer(1, true, "typed")));
+        assert_eq!((s.clone(), a), (None, answer(1, true, "typed")));
         assert_eq!(dialog(s, DialogEvent::Accept("again".into())).1, None);
 
-        let (s, _) = dialog(Dialog::None, req(2, JsDialogKind::Confirm));
+        let (s, _) = dialog(None, req(2, JsDialogKind::Confirm));
         let (s, a) = dialog(s, DialogEvent::Cancel);
-        assert_eq!((s.clone(), a), (Dialog::None, answer(2, false, "")));
+        assert_eq!((s.clone(), a), (None, answer(2, false, "")));
         assert_eq!(dialog(s, DialogEvent::Cancel).1, None);
     }
 
     #[test]
     fn only_a_prompt_answers_with_text() {
-        let (s, _) = dialog(Dialog::None, req(1, JsDialogKind::Confirm));
+        let (s, _) = dialog(None, req(1, JsDialogKind::Confirm));
         assert_eq!(
             dialog(s, DialogEvent::Accept("x".into())).1,
             answer(1, true, "")
@@ -638,7 +595,7 @@ mod tests {
 
     #[test]
     fn a_new_request_answers_the_old_with_its_default() {
-        let (s, _) = dialog(Dialog::None, req(1, JsDialogKind::Confirm));
+        let (s, _) = dialog(None, req(1, JsDialogKind::Confirm));
         let (s, a) = dialog(s, req(2, JsDialogKind::BeforeUnload { is_reload: false }));
         assert_eq!(a, answer(1, false, ""));
         // beforeunload's default is leave.
@@ -650,16 +607,15 @@ mod tests {
     fn the_engine_answering_closes_without_an_answer() {
         for event in [
             DialogEvent::Reset,
-            DialogEvent::ViewGone,
             DialogEvent::Dismissed(vec![RequestId(1)]),
         ] {
-            let (s, _) = dialog(Dialog::None, req(1, JsDialogKind::Alert));
-            assert_eq!(dialog(s, event.clone()), (Dialog::None, None), "{event:?}");
+            let (s, _) = dialog(None, req(1, JsDialogKind::Alert));
+            assert_eq!(dialog(s, event.clone()), (None, None), "{event:?}");
         }
         // Another request's dismissal leaves this one open.
-        let (s, _) = dialog(Dialog::None, req(1, JsDialogKind::Alert));
+        let (s, _) = dialog(None, req(1, JsDialogKind::Alert));
         let (s, a) = dialog(s.clone(), DialogEvent::Dismissed(vec![RequestId(9)]));
-        assert!(matches!(s, Dialog::Open(_)) && a.is_none());
+        assert!(s.is_some() && a.is_none());
     }
 
     /// Every ordering of events answers each id at most once, and never
@@ -673,7 +629,6 @@ mod tests {
             Cancel,
             Reset,
             Dismissed(vec![RequestId(1), RequestId(2)]),
-            ViewGone,
             req(2, JsDialogKind::Prompt),
             req(3, JsDialogKind::Confirm),
         ];
@@ -681,7 +636,7 @@ mod tests {
         // reuses an id, so sequences requesting one twice are skipped.
         let n = events.len();
         'sequence: for code in 0..n.pow(4) {
-            let mut s = Dialog::None;
+            let mut s = None;
             let mut answered = vec![];
             let mut engine_answered = vec![];
             let mut requested = vec![];
@@ -695,9 +650,9 @@ mod tests {
                     }
                     requested.push(d.id);
                 }
-                if let Dialog::Open(d) = &s
+                if let Some(d) = &s
                     && match &e {
-                        Reset | ViewGone => true,
+                        Reset => true,
                         Dismissed(ids) => ids.contains(&d.id),
                         _ => false,
                     }
@@ -748,103 +703,87 @@ mod tests {
         assert_eq!(dialog_text(&data).title, "This page says");
     }
 
+    /// The bar's content after `event`, from an open one.
+    fn on(s: &Option<FindBar>, event: FindEvent) -> (Option<FindBar>, Vec<FindEffect>) {
+        find(s.clone(), "", event)
+    }
+
     #[test]
     fn find_searches_steps_and_counts() {
-        let (s, fx) = find(FindBar::default(), FindEvent::Open);
+        let (s, fx) = find(None, "", FindEvent::Open);
         assert_eq!(fx, [FindEffect::Focus]);
-        assert_eq!(s.counter(), "");
+        assert_eq!(s.as_ref().map(FindBar::counter), Some(String::new()));
         // Nothing to step through yet.
-        assert_eq!(find(s.clone(), FindEvent::Next).1, []);
-        let (s, fx) = find(s, FindEvent::Query("needle".into()));
+        assert_eq!(on(&s, FindEvent::Next).1, []);
+        let (s, fx) = on(&s, FindEvent::Query("needle".into()));
         assert_eq!(fx, [FindEffect::Find("needle".into())]);
-        assert_eq!(s.counter(), "0 of 0");
+        let bar = s.clone().unwrap();
+        assert_eq!(bar.counter(), "0 of 0");
         // Waiting for the engine is not "no match".
-        assert!(!s.none());
-        let (s, _) = find(
-            s,
+        assert!(!bar.none());
+        let (s, _) = on(
+            &s,
             FindEvent::Result {
                 matches: 2,
                 active: 1,
                 done: true,
             },
         );
-        assert!(!s.none());
-        assert_eq!(s.counter(), "1 of 2");
-        assert_eq!(find(s.clone(), FindEvent::Next).1, [FindEffect::Next]);
-        assert_eq!(find(s.clone(), FindEvent::Prev).1, [FindEffect::Prev]);
-        assert_eq!(find(s.clone(), FindEvent::Open).1, [FindEffect::Focus]);
-        let (s2, fx) = find(s.clone(), FindEvent::Query(String::new()));
-        assert_eq!((s2.counter(), fx), (String::new(), vec![FindEffect::Stop]));
-        let (s, fx) = find(s, FindEvent::Close);
-        assert_eq!(fx, [FindEffect::Stop]);
+        let bar = s.clone().unwrap();
+        assert!(!bar.none());
+        assert_eq!(bar.counter(), "1 of 2");
+        assert_eq!(on(&s, FindEvent::Next).1, [FindEffect::Next]);
+        assert_eq!(on(&s, FindEvent::Prev).1, [FindEffect::Prev]);
+        assert_eq!(on(&s, FindEvent::Open).1, [FindEffect::Focus]);
+        let (s2, fx) = on(&s, FindEvent::Query(String::new()));
         assert_eq!(
-            s,
-            FindBar::Closed {
-                last: "needle".into()
-            }
+            (s2.map(|b| b.counter()), fx),
+            (Some(String::new()), vec![FindEffect::Stop])
         );
+        // closing stops the search; the host keeps the query as the last one
+        assert_eq!(on(&s, FindEvent::Close), (None, vec![FindEffect::Stop]));
         // A late result does not reopen it.
-        assert_eq!(
-            find(
-                s.clone(),
-                FindEvent::Result {
-                    matches: 1,
-                    active: 1,
-                    done: true
-                }
-            )
-            .0,
-            s
-        );
+        let late = FindEvent::Result {
+            matches: 1,
+            active: 1,
+            done: true,
+        };
+        assert_eq!(find(None, "needle", late), (None, vec![]));
     }
 
     #[test]
     fn find_says_none_only_after_the_final_count() {
-        let (s, _) = find(FindBar::default(), FindEvent::Open);
-        let (s, _) = find(s, FindEvent::Query("wub".into()));
-        assert!(!s.none(), "searching");
+        let (s, _) = find(None, "", FindEvent::Open);
+        let (s, _) = on(&s, FindEvent::Query("wub".into()));
+        assert!(!s.clone().unwrap().none(), "searching");
         let partial = FindEvent::Result {
             matches: 0,
             active: 0,
             done: false,
         };
-        let (s, _) = find(s, partial);
-        assert!(!s.none(), "an interim count");
+        let (s, _) = on(&s, partial);
+        assert!(!s.clone().unwrap().none(), "an interim count");
         let last = FindEvent::Result {
             matches: 0,
             active: 0,
             done: true,
         };
-        let (s, _) = find(s, last);
-        assert!(s.none());
+        let (s, _) = on(&s, last);
+        assert!(s.clone().unwrap().none());
         // The next keystroke waits again.
-        let (s, _) = find(s, FindEvent::Query("wubb".into()));
-        assert!(!s.none());
+        let (s, _) = on(&s, FindEvent::Query("wubb".into()));
+        assert!(!s.unwrap().none());
     }
 
     #[test]
     fn find_next_reopens_the_last_search() {
-        let closed = FindBar::Closed { last: "x".into() };
-        let (s, fx) = find(closed.clone(), FindEvent::Next);
+        let (s, fx) = find(None, "x", FindEvent::Next);
         assert_eq!(fx, [FindEffect::Find("x".into())]);
-        assert!(matches!(s, FindBar::Open { .. }));
-        let (_, fx) = find(closed, FindEvent::Open);
+        assert_eq!(s.map(|b| b.query), Some("x".to_owned()));
+        let (_, fx) = find(None, "x", FindEvent::Open);
         assert_eq!(fx, [FindEffect::Focus, FindEffect::Find("x".into())]);
         // Nothing searched yet: Mod+G does nothing.
-        assert_eq!(
-            find(FindBar::default(), FindEvent::Prev),
-            (FindBar::default(), vec![])
-        );
-    }
-
-    #[test]
-    fn find_view_gone_closes_without_stopping() {
-        let (s, _) = find(FindBar::default(), FindEvent::Open);
-        let (s, _) = find(s, FindEvent::Query("q".into()));
-        assert_eq!(
-            find(s, FindEvent::ViewGone),
-            (FindBar::Closed { last: "q".into() }, vec![])
-        );
+        assert_eq!(find(None, "", FindEvent::Prev), (None, vec![]));
     }
 
     #[test]
@@ -1015,55 +954,32 @@ mod tests {
         }
     }
 
-    /// A tab put to sleep or closed with every surface open answers
-    /// nothing more: the engine answered at view close.
     #[test]
-    fn a_gone_view_closes_every_surface_without_answers() {
-        let (dialog_open, _) = dialog(Dialog::None, req(1, JsDialogKind::Prompt));
-        let (menu_open, _) = menu::transition(
-            Menu::Closed,
-            MenuEvent::Requested {
-                id: RequestId(2),
-                menu: Box::default(),
-                nav: menu::NavFlags::default(),
-                extra: vec![],
-            },
-        );
-        let (find_open, _) = find(FindBar::default(), FindEvent::Open);
-        let (find_open, _) = find(find_open, FindEvent::Query("q".into()));
-        let s = Surfaces {
-            dialog: dialog_open,
-            menu: menu_open,
-            find: find_open,
-            popup: Some(Rect::default()),
-            permission: PermissionPrompt::Open {
-                shown: PermissionRequest {
-                    origin: "https://a.test".into(),
-                    ask: prompt::Ask::Engine {
-                        id: RequestId(3),
-                        kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
-                    },
-                },
-                queued: Default::default(),
-            },
-            auth: Auth::Open(AuthRequest {
-                id: RequestId(4),
-                host: "a.test".into(),
-                port: 443,
-                realm: String::new(),
-                proxy: false,
-            }),
-            error: PageError::Crashed,
+    fn a_dialog_s_content_lives_while_it_holds_something() {
+        let js = OpenDialog {
+            id: RequestId(1),
+            kind: JsDialogKind::Alert,
+            origin: String::new(),
+            message: String::new(),
+            default_text: String::new(),
         };
-        assert!(matches!(s.menu, Menu::Open { .. }));
-        let gone = s.view_gone();
-        assert_eq!(
-            gone,
-            Surfaces {
-                find: FindBar::Closed { last: "q".into() },
-                ..Surfaces::default()
-            }
-        );
+        let auth = AuthRequest {
+            id: RequestId(2),
+            host: "a.test".into(),
+            port: 443,
+            realm: String::new(),
+            proxy: false,
+        };
+        let content =
+            |js: Option<OpenDialog>, auth: Option<AuthRequest>| DialogContent { js, auth };
+        assert_eq!(content(None, None).live(), None);
+        for c in [
+            content(Some(js.clone()), None),
+            content(None, Some(auth.clone())),
+            content(Some(js), Some(auth)),
+        ] {
+            assert_eq!(c.clone().live(), Some(c));
+        }
     }
 
     #[test]

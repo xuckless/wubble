@@ -383,6 +383,9 @@ pub struct Host {
     /// The one owner of which overlays are open or leaving, and of the hover and timed
     /// surfaces (`wubble_core::overlay::Ui`).
     ui: wubble_core::overlay::Ui,
+    /// What the store's open and leaving overlays show (`layers::Contents`): written only by
+    /// the store's `Mount` and `Unmount` executors.
+    contents: layers::Contents,
     /// The store's one clock: the zero of every `now` its actions carry (`Host::surface_now`).
     ui_epoch: Instant,
     /// The store's one timer, armed by its `Effect::Arm` (`host/layers.rs`).
@@ -812,6 +815,7 @@ impl Host {
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
             ui: Default::default(),
+            contents: Default::default(),
             ui_epoch: Instant::now(),
             ui_timer: slint::Timer::default(),
         };
@@ -2027,9 +2031,8 @@ impl Host {
         };
         let size = window.window().size();
         let at = ((size.width / 2) as i32, (size.height / 5) as i32);
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
-        true
+        // the app's own question: no overlay refuses it (a page's dialog waiting keeps it asked)
+        self.open_shell_menu(tab, at, entries, true)
     }
 
     /// Deletes what the clear menu's row named, then says so.
@@ -2088,8 +2091,7 @@ impl Host {
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         let entries = crate::menu::popup_entries(count, self.site_of(tab).as_deref());
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     // ----- command bar
@@ -3479,10 +3481,8 @@ impl Host {
                     page_smoke::Cancel::Press => {}
                 },
                 page_smoke::Action::MenuGone => {
-                    let open = self
-                        .shown()
-                        .and_then(|t| self.surfaces.get(&t))
-                        .is_some_and(|s| s.menu != crate::menu::Menu::Closed);
+                    let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+                    let open = self.open_content(self.w.id, menu).is_some();
                     if open || self.menu_dismissed() != 0 {
                         self.fail(
                             "CEF closed the context menu but the shell still answered it".into(),
@@ -3591,10 +3591,13 @@ impl Host {
             self.focus_view = target;
         }
         // The page's own context menu takes the shell's focus but not the page's.
-        let page_menu = target
-            .and(self.key_page())
-            .and_then(|t| self.surfaces.get(&t))
-            .is_some_and(|s| s.menu.keeps_page_focus());
+        let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+        let page_menu = target.and(self.key_page()).is_some_and(|key| {
+            matches!(
+                self.open_content(self.w.id, menu),
+                Some(layers::Content::Menu { tab, menu }) if *tab == key && menu.keeps_page_focus()
+            )
+        });
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
         let view_open = self.focused_view().is_some();
         if let Some(focused) = self.input.focus_change(focused, view_open)
