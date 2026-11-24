@@ -81,3 +81,22 @@ Focus return after close (step 2); Escape order incl. the keyjacking rule; a11y 
 - Possible bug (unverified): set_page_fullscreen ignores which window owns the fullscreen tab.
 - Step 2 first: downloads and Spaces openness host-owned (`in` properties + actions): clears 9 of 15 baseline entries; then replace Mounted for overlay kinds with Phase::Leaving + Exited driven by mounted-changed.
 - AGENTS.md rule to add when it lands: "Every shell surface is a row in `wubble_core::overlay::ROWS`; its visibility is set by the host (its owner, later the store), never by Slint alone (no `has-hover`->shown, no shell `Timer`, no Slint-written `*-open`); `tests/surface_lock.rs` holds the count down."
+
+## Step 2, rest (written blind)
+Branch `untested/store-step2` from 7bae93c, NEVER COMPILED, no test run (rustfmt parse only). Commits C3 to C7; C8 (command bar) and C9 (focus) not written.
+- C3 extensions: `Panel {List, Popup}` and the install prompt are `Option` contents in `ExtUi` (app-wide, keyed by the holder from `Ui::windows_with`); `panel_owner`/`prompt_owner` gone; `extensions-open` written only by `ext_drawn_in`; the popover draws for `Panel::List` only (`panel_drawn`); its Slint Escape handler is gone.
+- C4 one content map (`layers::Contents`, `(window of a window overlay, Layer) -> Content`): Mount the only insert, Unmount the only removal (skipped when the layer reopened in the same step). Machines run over `Option<content>`; `Host::content_after` opens, rewrites or closes. `overlay::acting` names the window an action acts in; `Action::Ask` is an open no `refused_under` refuses (the private close question in a menu over a page's dialog). Menu, permission, dialog+auth, find bar (`find_last` stays in `Surfaces`, now `{popup, error, find_last}`).
+- C5 bookmark sheet (`Content::Bookmark`), print sheet (`Content::Print`; a printing sheet a rule closed reopens; one the overlays refuse ends as its tab closing), agent sheet (`Content::Agent(SessionId)` in its window).
+- C6 region picker (ShotEffect Show/HideOverlay open and close it; a refused one cancels the shot), link hints (`Content::Hints`), the notice (closed with the toast's act, `toast_taken`). settings.slint's `notices-open` is a disclosure, not an overlay: renamed `notices-listed` (one writer), baseline line removed.
+- C7 error panel and Boost editor: their machines keep the content and open/close the layer (`layer_is`); views drawn only while the store has them open; a rule closing the editor closes it as its Close does.
+- Left for C8: the command bar (driver phase -> store, `command-exited`, the wubble-ui tests). Left for C9: Effect::Focus, `key-owner`/`focus-owner` as `in`, `settle-focus` and the `changed *-open` triggers, `Env::others`/`Env::machine` (only the command bar uses them now), pointer ownership, the two hover-shown bindings.
+
+TODO.md lines (for the owner to apply):
+- Store step 2 (blind, untested/store-step2): compile, cargo test, smokes overlay/windows/parity/mcp/print by hand; then C8 command bar and C9 focus.
+
+docs/decisions.md lines:
+- 2026-11-23 Store overlays keep their content in one map on the host (`layers::Contents`), written only by the Mount and Unmount executors; machines step over `Option<content>`.
+- 2026-11-23 A page's question asked by the app (the private window's close question) opens with `Action::Ask`, refused by no overlay.
+- 2026-11-23 Panels whose machine owns the content and that no rule closes (error panel, Boost) mirror it into the store with `layer_is`, drawn from the store's phase.
+
+AGENTS.md: no wording change until C9 lands (then the rule in Step 1's last line).
