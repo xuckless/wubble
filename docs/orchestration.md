@@ -46,6 +46,16 @@ test: {
 },
 ```
 
+## Features (owner's standing rule, 2026-11-23)
+
+The daily build-out batches of 2026-11-22 are over; the features and their specs are in [todo/upcoming/](../todo/upcoming/)
+in work order ([todo/README.md](../todo/README.md)).
+- Writing: one branch per feature (`feat/<key>`), written without compile and test.
+- Integration: one feature at a time ("1 feature gets integrated at once"), grouped by feature, never by individual
+  commit: compile, test, caveman review then adversarial review, merge. Batch 1's written branches go through it this way.
+- Engine patches are written into `patches/chromium/` and not built; the one engine build comes when the under-5 % CPU
+  patch is ready and carries them all.
+
 ## Rules (2026-11-19)
 
 - Every build-out copies open source first and builds only what is left (owner, 2026-11-22): each brief tells the agent to find and port a proven implementation (AGENTS.md "Copy first") before writing its own.

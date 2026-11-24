@@ -1,6 +1,6 @@
 # Fidelity audit F: wubble-only surfaces
 
-Status (2026-11-19): the audit that scoped lane L6 and the derived pieces; the surfaces it lists are now rebuilt on kit components ([docs/todo/review.md](../todo/review.md) "Design fidelity"). Line numbers are as of the audit.
+Status (2026-11-19): the audit that scoped lane L6 and the derived pieces; the surfaces it lists are now rebuilt on kit components ([todo/shelved/review.md](../../todo/shelved/review.md) "Design fidelity"). Line numbers are as of the audit.
 
 Read-only audit, 19 November 2026. It covers every `.slint` file under
 `crates/wubble-ui/ui/`, the gallery scenes (`crates/wubble/src/gallery_smoke.rs` `SCENES`,

@@ -454,7 +454,7 @@ Also noted: 9 of 10 sites loaded in 0.4 to 1.0 s (The Verge 2.4 s); the on-scree
 about 2 minutes (fullscreen included), the 30 fps one 3; a background 60 fps VP9 video (hardware decode) dropped 130 of
 about 10,300 frames, more on tab switches; pausing the videos freed about 2 GB in the GPU process; the main process's
 footprint went from about 850 MB at the start to 1.18 GB after everything closed. The main process's 26 % for one video
-was 37 to 40 % on preview.1 by the same hand. What follows from it: docs/todo/performance.md, "From the owner's Mac run of preview.5".
+was 37 to 40 % on preview.1 by the same hand. What follows from it: todo/upcoming/01-optimization.md, "From the owner's Mac run of preview.5".
 
 ## The owner's Mac, preview.5, Low Power Mode, with stack samples (2026-11-21)
 

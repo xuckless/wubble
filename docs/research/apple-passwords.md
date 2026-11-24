@@ -1,7 +1,7 @@
 # Apple Passwords (iCloud Keychain) and passkeys in a CEF browser: research
 
 Question: How can wubble use Apple's Passwords app (iCloud Keychain) and passkeys on macOS with prebuilt CEF?
-Status: Shelved ([docs/todo/later.md](../todo/later.md) "Shelved ideas"): the polished path is Apple's browser-extension native messaging helper, which needs an entitlement request the owner files; passkeys follow the same account.
+Status: Shelved ([todo/shelved/ideas.md](../../todo/shelved/ideas.md)): the polished path is Apple's browser-extension native messaging helper, which needs an entitlement request the owner files; passkeys follow the same account.
 
 Date: 2026-11-19. Research only; nothing in the repo was changed.
 
@@ -363,7 +363,7 @@ Passkeys are a separate track (§3): entitlement plus a JS-shim bridge; not bloc
 
 ### 4.3 What needs M6 (own Chromium build)
 
-- Loading Apple's extension in wubble (extension system is off: `disable-extensions`, TODO.md).
+- Loading Apple's extension in wubble (extension system is off: `disable-extensions`, todo/upcoming/09-extensions.md).
 - Chrome's own WebAuthn dialogs and conditional UI (chrome layer). [I]
 - Neither is needed for paths 1 and 2 above.
 

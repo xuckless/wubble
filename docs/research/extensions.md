@@ -79,7 +79,7 @@ grepped for every non-loopback URL [V]:
   migration, external components); with it the extensions-on log has **no host the extensions-off log lacks** [V].
 - Command-line extensions are never auto-updated (`Manifest::IsAutoUpdateableLocation`, `manifest.h:72-77`;
   `extension_updater.cc:422`) [V], so no update check is made for anything wubble loads.
-- **Pre-existing, with or without extensions** (not this lane's to fix, recorded in TODO.md): the component updater
+- **Pre-existing, with or without extensions** (not this lane's to fix, recorded in the roadmap, todo/): the component updater
   (`update.googleapis.com/service/update2/json`), network time (`clients2.google.com/time/1/current`), a component diff
   from `edgedl.me.gvt1.com`, the spellcheck dictionary (`redirector.gvt1.com/edgedl/chrome/dict/en-us-10-2.bdic`) and
   `www.google.com/async/folae` (an omnibox/AI Mode prefetch [I]) are requested on a throwaway profile in both modes.

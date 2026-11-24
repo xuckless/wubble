@@ -1,6 +1,6 @@
 # Locked widget kit: plan, lanes, comparison harness
 
-Status (2026-11-19): phases 0 to 3 are merged (see [docs/todo/review.md](../todo/review.md) "Design fidelity"). The capture and
+Status (2026-11-19): phases 0 to 3 are merged (see [todo/shelved/review.md](../../todo/shelved/review.md) "Design fidelity"). The capture and
 scoring harness (section 5, the gate in phase 4) was removed on 2026-11-19 (commit 187d7a4): review is by
 screenshots and the owner's eye. Harness passages below are historical. Pre-phase audits it cites
 (`inventory.md`, `map.md`) and run results were scratch notes and are not kept in the repo.

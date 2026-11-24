@@ -28,7 +28,7 @@ jobs:
     # A cold build compiles CEF's wrapper and Slint; a hung step must not hold
     # a runner for the 6 hour default.
     timeout-minutes: 60
-    # Windows is parked (its code is kept, not built): docs/todo/windows.md.
+    # Windows is parked (its code is kept, not built): todo/shelved/windows.md.
     strategy:
       fail-fast: false
       matrix:
