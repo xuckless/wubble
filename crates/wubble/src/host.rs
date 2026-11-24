@@ -459,9 +459,7 @@ pub struct Host {
     external_drag: Option<drag::ExternalDrag>,
     /// Touchpad pinch and history swipe (`gesture.rs`).
     gestures: gesture::Gestures,
-    /// The print sheet (`print.rs`).
-    print: wubble_core::print::Sheet,
-    /// Opened print sheets: the pages field restarts with each.
+    /// Opened print sheets (`print.rs`; the sheet is the content map's): the pages field restarts with each.
     print_serial: i32,
     /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
     print_dir: Option<tempfile::TempDir>,
@@ -731,7 +729,6 @@ impl Host {
             bookmark_drop: None,
             external_drag: None,
             gestures: Default::default(),
-            print: Default::default(),
             print_serial: 0,
             print_dir: None,
             search_engine: None,
@@ -3481,7 +3478,8 @@ impl Host {
                     page_smoke::Cancel::Press => {}
                 },
                 page_smoke::Action::MenuGone => {
-                    let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+                    let menu =
+                        wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
                     let open = self.open_content(self.w.id, menu).is_some();
                     if open || self.menu_dismissed() != 0 {
                         self.fail(

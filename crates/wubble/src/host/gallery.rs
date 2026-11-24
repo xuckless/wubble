@@ -200,9 +200,7 @@ impl Host {
         if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
             self.toast_hide();
         }
-        if !matches!(self.print, wubble_core::print::Sheet::Closed) {
-            self.print_event(wubble_core::print::Event::Cancel);
-        }
+        self.print_event(wubble_core::print::Event::Cancel);
         // an agent session of the last scene ends (its sheet, its Space)
         self.agents_stop();
         self.gallery_sound(scene.overlay);

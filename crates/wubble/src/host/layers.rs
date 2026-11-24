@@ -12,6 +12,7 @@ use wubble_core::overlay::{
     self, Action, Coverage, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
 };
 
+use wubble_core::agent::SessionId;
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
@@ -22,6 +23,7 @@ use wubble_ui::{
 };
 
 use super::Host;
+use super::pages::SheetKind;
 use super::window::WindowHost;
 use crate::menu::Menu;
 use crate::prompt::PermissionPrompt;
@@ -40,6 +42,12 @@ pub(super) enum Content {
     /// A page's JS dialog and its sign-in sheet: one overlay.
     Dialog(DialogContent),
     Find(FindBar),
+    /// What the bookmark sheet is for.
+    Bookmark(SheetKind),
+    /// The print sheet, its job while it prints.
+    Print(Sheet),
+    /// The agent session the approval sheet asks for.
+    Agent(SessionId),
 }
 
 /// The overlays' content, by the window of a window overlay (a tab's goes with its tab) and the
@@ -68,11 +76,25 @@ impl Contents {
     fn remove(&mut self, w: WindowId, layer: Layer) {
         self.0.remove(&Self::key(w, layer));
     }
+
+    /// Every `kind` content held, with its window (a tab overlay's: none) and layer.
+    pub(super) fn of(
+        &self,
+        kind: Kind,
+    ) -> impl Iterator<Item = (Option<WindowId>, Layer, &Content)> {
+        self.0
+            .iter()
+            .filter(move |((_, l), _)| l.kind == kind)
+            .map(|(&(w, l), c)| (w, l, c))
+    }
 }
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 20] = [
+const STORED: [Kind; 23] = [
+    Kind::BookmarkSheet,
+    Kind::PrintSheet,
+    Kind::AgentSheet,
     Kind::Permission,
     Kind::Find,
     Kind::Dialog,
@@ -105,9 +127,7 @@ struct HostEnv<'a> {
 
 impl HostEnv<'_> {
     fn window(&self, w: WindowId) -> Option<&WindowHost> {
-        std::iter::once(&self.host.w)
-            .chain(self.host.parked.values())
-            .find(|x| x.id == w)
+        self.host.window_host(w)
     }
 }
 
@@ -167,6 +187,13 @@ fn mounted(m: &Mounted) -> [(Kind, bool); 24] {
 }
 
 impl Host {
+    /// Window `w`'s host: the current one or a parked one.
+    pub(super) fn window_host(&self, w: WindowId) -> Option<&WindowHost> {
+        std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .find(|x| x.id == w)
+    }
+
     fn env<'a>(&'a self, window: &'a AppWindow, menu_tab: Option<TabId>) -> HostEnv<'a> {
         HostEnv {
             host: self,
@@ -183,15 +210,6 @@ impl Host {
         let mut add = |kind, tab| layers.push(Layer::new(kind, tab));
         if let Some(tab) = self.notice_tab() {
             add(Kind::Notice, Some(tab));
-        }
-        if let Some(tab) = self.bookmark_sheet_tab() {
-            add(Kind::BookmarkSheet, Some(tab));
-        }
-        if let Sheet::Open { tab, .. } | Sheet::Working { tab, .. } = &self.print {
-            add(Kind::PrintSheet, Some(*tab));
-        }
-        if self.agent_sheet_open() {
-            add(Kind::AgentSheet, None);
         }
         if let Some(tab) = self.region_tab() {
             add(Kind::Region, Some(tab));
@@ -756,9 +774,9 @@ impl Host {
             (Kind::Permission, Some(tab)) => self.permission_cancelled(tab),
             (Kind::Find, Some(tab)) => self.find_cancelled(tab),
             (Kind::Dialog, Some(tab)) => self.dialog_cancelled(tab),
-            (Kind::BookmarkSheet, _) => self.bookmark_sheet_answered(false, false, "", -1),
-            (Kind::PrintSheet, _) => self.print_event(wubble_core::print::Event::Cancel),
-            (Kind::AgentSheet, _) => self.agent_sheet_answered(false, false),
+            (Kind::BookmarkSheet, Some(tab)) => self.sheet_answer(tab, true, false, false, "", -1),
+            (Kind::PrintSheet, _) => self.print_step(wubble_core::print::Event::Cancel, true),
+            (Kind::AgentSheet, _) => self.agent_answer(false, false, true),
             (Kind::Region, _) => self.shot_cancelled(),
             (Kind::Hints, _) => self.hints_cancel(),
             // later, outside the host: closing the bar calls back into it
@@ -772,7 +790,7 @@ impl Host {
             (Kind::Extensions, _) => self.panel_cancelled(),
             (Kind::ExtensionSheet, _) => self.prompt_cancelled(),
             (Kind::Menu, _) => self.menu_cancelled(w),
-            (Kind::Find | Kind::Dialog | Kind::Permission, None) => {}
+            (Kind::Find | Kind::Dialog | Kind::Permission | Kind::BookmarkSheet, None) => {}
             // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
             (Kind::ErrorPanel | Kind::Boost, _) => {}
             // a drag ends with nothing dropped (its own state closes its surfaces), a swipe and an

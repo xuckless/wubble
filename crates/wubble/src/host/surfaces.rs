@@ -783,6 +783,9 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
+        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it (its
+        // sheet's job ends before the overlays take the sheet).
+        self.print_tab_closed(tab);
         // its hover slots (a page tooltip, a card, its video strip) and its overlays go, with no
         // answer (welding answered every request the view held)
         let window = self.w.handle();
@@ -803,8 +806,6 @@ impl Host {
             self.window_closed(w, Kind::Menu);
         }
         self.ax_view_gone(tab);
-        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
-        self.print_tab_closed(tab);
         if let Some(s) = self.surfaces.get_mut(&tab) {
             s.popup = None;
             let (error, fx) =
