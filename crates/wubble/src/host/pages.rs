@@ -759,8 +759,8 @@ impl Host {
         let b = &self.pages.bookmarks;
         match self.bookmark_sheet(false) {
             Some((_, kind)) => {
-                window.set_bookmark_sheet_view(sheet_view(kind, &b.rows, b.serial));
-                let moving = match kind {
+                window.set_bookmark_sheet_view(sheet_view(&kind, &b.rows, b.serial));
+                let moving = match &kind {
                     SheetKind::Move { id } => Some(*id),
                     _ => None,
                 };
