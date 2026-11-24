@@ -97,7 +97,6 @@ impl Host {
         frame: NativeFrame,
     ) -> Result<bool, String> {
         let mode = crate::page_layer();
-        let (page_fullscreen, pip_window) = self.whole_window(tab);
         // with the mode off nothing here runs, and the map below stays empty; a pane without a
         // layer is asked only where it is
         if mode != Mode::Off
@@ -105,7 +104,10 @@ impl Host {
             && !self.w.layers.panes.contains_key(&tab)
             && !page_layer::layer_unused(
                 Route::Unsupported,
-                Needs::from_place(page_fullscreen || pip_window, self.placed(window, tab)),
+                Needs::from_place(
+                    matches!(self.whole_window(tab), (true, _) | (_, true)),
+                    self.placed(window, tab),
+                ),
                 mode,
             )
         {
