@@ -1,7 +1,7 @@
 # Apple Passwords (iCloud Keychain) and passkeys in a CEF browser: research
 
 Question: How can wubble use Apple's Passwords app (iCloud Keychain) and passkeys on macOS with prebuilt CEF?
-Status: Shelved (TODO.md "Shelved ideas"): the polished path is Apple's browser-extension native messaging helper, which needs an entitlement request the owner files; passkeys follow the same account.
+Status: Shelved ([docs/todo/later.md](../todo/later.md) "Shelved ideas"): the polished path is Apple's browser-extension native messaging helper, which needs an entitlement request the owner files; passkeys follow the same account.
 
 Date: 2026-11-19. Research only; nothing in the repo was changed.
 

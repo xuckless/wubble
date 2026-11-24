@@ -40,7 +40,7 @@ and an independent agent on another model (DuckDuckGo, Wikipedia, Excalidraw by 
 and tab handles (no hint whether a tab exists outside the session), a site outside the session's list, a stale ref,
 `fill_secret` with no secret bound. Not tested: a script or redirect getting past the http(s)-only rule.
 
-What they found, and the order to fix it in (owner, 2026-11-20; the open items are in TODO.md "MCP server"):
+What they found, and the order to fix it in (owner, 2026-11-20; the open items are in [docs/todo/mcp-server.md](../todo/mcp-server.md)):
 
 1. **Bugs.** A `screenshot` cropped to a ref ignores the scroll position and does not scroll the element into view;
    `click` fails on some visible links; `evaluate` takes one expression only and returns `{}` for a promise.

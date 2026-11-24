@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hand-run memory comparison (TODO.md "Performance pass", Memory): starts another browser on a
+# Hand-run memory comparison (docs/todo/performance.md "Performance pass", Memory): starts another browser on a
 # throwaway profile with N tabs of the same static article `--measure memory` uses, each tab on
 # its own site (t<i>.localhost, served on loopback by python3), waits SETTLE seconds, sums PSS
 # from /proc/<pid>/smaps_rollup over the browser's process tree (the method wubble's

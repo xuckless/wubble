@@ -57,7 +57,7 @@ clipboard and GPU) and wrap them in `timeout`.
 - Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 156).
 - No CPU readback on the frame path; a fallback `OnPaint` frame is a bug to count and log. 120 Hz budget: 8.33 ms; glass degrades before animation drops a frame.
 - Platforms: Linux (lead) and macOS, built locally and on CI; Windows parked (its code kept, neither built nor
-  released; TODO.md "Windows (parked)").
+  released; [docs/todo/windows.md](docs/todo/windows.md)).
 - New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
 - Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
 - Keep [TODO.md](TODO.md) current (one line per item; done items are removed, `git log` has them); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
