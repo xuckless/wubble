@@ -648,8 +648,8 @@ pub struct Offer {
     pub main: bool,
     pub form: u32,
     pub class: FormClass,
-    /// The vault's logins for the origin; empty until it answered.
-    pub candidates: Vec<Candidate>,
+    /// The vault's logins for the origin: `None` while asked and not answered.
+    pub candidates: Option<Vec<Candidate>>,
 }
 
 /// A row of the key menu.
@@ -661,7 +661,8 @@ pub enum MenuRow {
 
 impl Offer {
     pub fn rows(&self) -> Vec<MenuRow> {
-        let logins = fill_target(self.class).map_or(&[][..], |_| &self.candidates[..]);
+        let logins = fill_target(self.class)
+            .map_or(&[][..], |_| self.candidates.as_deref().unwrap_or_default());
         let mut rows: Vec<MenuRow> = logins
             .iter()
             .map(|c| MenuRow::Login {
@@ -932,11 +933,11 @@ fn phase_transition(
             },
         ) => offer(phase, frame, origin, is_main, &forms, policy),
         (S::Offer(mut o), Event::Logins { origin, candidates }) if o.origin == origin => {
-            o.candidates = candidates;
+            o.candidates = Some(candidates);
             (S::Offer(o), vec![])
         }
         (S::Menu(mut o), Event::Logins { origin, candidates }) if o.origin == origin => {
-            o.candidates = candidates;
+            o.candidates = Some(candidates);
             (S::Menu(o), vec![])
         }
         (S::Offer(o), Event::Open) if !o.rows().is_empty() => (S::Menu(o), vec![]),
@@ -1025,8 +1026,10 @@ fn phase_transition(
 /// without a form ends only its own offer: an offer in a same-origin iframe
 /// outlives the main document settling (its `load` waits for the iframe's).
 /// A new main document (CEF may give it a new frame id) ends any offer
-/// through `Event::Navigated`. Another frame's offer with rows stands,
-/// unless this report is the main frame's and that one is an iframe's.
+/// through `Event::Navigated`. Another frame's offer with rows, or still
+/// waiting for its logins, stands, unless this report is the main frame's
+/// and that one is an iframe's (an answer fills only an offer of its
+/// own origin).
 fn offer(
     phase: Phase,
     frame: String,
@@ -1056,7 +1059,8 @@ fn offer(
                 _ => (S::Offer(o), vec![]),
             };
         }
-        if o.frame != frame && !o.rows().is_empty() && !(is_main && !o.main) {
+        let holds = o.candidates.is_none() || !o.rows().is_empty();
+        if o.frame != frame && holds && !(is_main && !o.main) {
             return (phase, vec![]);
         }
     }
@@ -1069,7 +1073,7 @@ fn offer(
         main: is_main,
         form,
         class,
-        candidates: vec![],
+        candidates: query.is_none().then(Vec::new),
     };
     (S::Offer(o), query.into_iter().collect())
 }
@@ -1078,7 +1082,7 @@ fn choose(o: Offer, index: usize) -> PhaseStep {
     let row = o.rows().get(index).cloned();
     let effect = match row {
         Some(MenuRow::Login { .. }) => fill_target(o.class).and_then(|(user, pass)| {
-            let c = o.candidates.get(index)?;
+            let c = o.candidates.as_deref()?.get(index)?;
             Some(Effect::Fill {
                 frame: o.frame.clone(),
                 origin: o.origin.clone(),
@@ -1885,7 +1889,7 @@ mod tests {
         let (s, _) = run(vec![forms("main", login_page()), logins(), Event::Open], ON);
         let (s, effects) = transition(s, forms("main", login_page()), ON);
         assert!(effects.is_empty());
-        assert!(matches!(&s.phase, Phase::Menu(o) if o.candidates == [alice()]));
+        assert!(matches!(&s.phase, Phase::Menu(o) if o.candidates == Some(vec![alice()])));
     }
 
     #[test]
@@ -1908,7 +1912,7 @@ mod tests {
                 username: Some(1),
                 password: 2,
             },
-            candidates: vec![],
+            candidates: Some(vec![]),
         };
         let state = |o| AutofillState {
             phase: Phase::Menu(o),
@@ -2604,6 +2608,117 @@ mod tests {
         let (s, _) = transition(s, logins(), ON);
         let (s, _) = transition(s, frame_forms("f", ORIGIN, false), ON);
         assert!(matches!(&s.phase, Phase::Offer(o) if o.frame == "main"));
+    }
+
+    #[test]
+    fn an_offer_waiting_for_its_logins_stands_against_another_frames_report() {
+        // The basic smoke page: a main frame of ORIGIN (login alice) and an
+        // iframe of B (login nina); "g" is a second iframe of B.
+        const B: &str = "https://login.b.test";
+        let origin_of = |frame: &str| if frame == "main" { ORIGIN } else { B };
+        let user_of = |origin: &str| if origin == ORIGIN { "alice" } else { "nina" };
+        let answer = |origin: &str, users: &[&str]| Event::Logins {
+            origin: origin.into(),
+            candidates: users
+                .iter()
+                .map(|u| Candidate {
+                    id: format!("{origin} {u}"),
+                    username: (*u).into(),
+                })
+                .collect(),
+        };
+        let main = || frame_forms("main", ORIGIN, true);
+        let iframe = |frame: &str| frame_forms(frame, B, false);
+        // Name, events in order, the offer's frame and its logins at the end.
+        let rows: Vec<(&str, Vec<Event>, &str, Vec<&str>)> = vec![
+            (
+                "the stalled order: main reports and settles, the iframe reports, then the answers",
+                vec![
+                    main(),
+                    settled("main", true, login_page()),
+                    iframe("f"),
+                    answer(B, &["nina"]),
+                    answer(ORIGIN, &["alice"]),
+                ],
+                "main",
+                vec!["alice"],
+            ),
+            (
+                "the stalled order, the main's answer first",
+                vec![
+                    main(),
+                    settled("main", true, login_page()),
+                    iframe("f"),
+                    answer(ORIGIN, &["alice"]),
+                    answer(B, &["nina"]),
+                ],
+                "main",
+                vec!["alice"],
+            ),
+            (
+                "the iframe reports while the main's logins are fetched",
+                vec![main(), iframe("f"), answer(ORIGIN, &["alice"])],
+                "main",
+                vec!["alice"],
+            ),
+            (
+                "a main answered with no logins gives way to the iframe",
+                vec![
+                    main(),
+                    answer(ORIGIN, &[]),
+                    iframe("f"),
+                    answer(B, &["nina"]),
+                ],
+                "f",
+                vec!["nina"],
+            ),
+            (
+                "the main replaces an iframe still waiting, whose answer is dropped",
+                vec![
+                    iframe("f"),
+                    main(),
+                    answer(B, &["nina"]),
+                    answer(ORIGIN, &["alice"]),
+                ],
+                "main",
+                vec!["alice"],
+            ),
+            (
+                "an iframe still waiting stands against another iframe",
+                vec![iframe("f"), iframe("g"), answer(B, &["nina"])],
+                "f",
+                vec!["nina"],
+            ),
+        ];
+        for (name, events, frame, users) in rows {
+            let s = events.into_iter().fold(AutofillState::default(), |s, e| {
+                let (s, _) = transition(s, e, ON);
+                // At every step: the offer is its frame's origin's, and so are its logins.
+                if let Phase::Offer(o) | Phase::Menu(o) = &s.phase {
+                    assert_eq!(o.origin, origin_of(&o.frame), "{name}");
+                    for row in o.rows() {
+                        assert_eq!(
+                            row,
+                            MenuRow::Login {
+                                username: user_of(&o.origin).into()
+                            },
+                            "{name}"
+                        );
+                    }
+                }
+                s
+            });
+            let Phase::Offer(o) = &s.phase else {
+                panic!("{name}: {:?}", s.phase)
+            };
+            let logins: Vec<MenuRow> = users
+                .iter()
+                .map(|u| MenuRow::Login {
+                    username: (*u).into(),
+                })
+                .collect();
+            assert_eq!((o.frame.as_str(), o.rows()), (frame, logins), "{name}");
+        }
     }
 
     #[test]
