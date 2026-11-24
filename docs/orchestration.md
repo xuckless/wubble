@@ -28,7 +28,7 @@ repo: '~/Dev/wubble',
 worktree_root: '~/Dev/wubble-wt',
 notes_root: '~/Dev/wubble-wt/notes',
 rules: [
-  'Read AGENTS.md in your worktree first and follow it ("Code principles", "Working rules", "Design fidelity").',
+  'Read AGENTS.md in your worktree first and follow it ("Code principles", "Working rules", and for UI work docs/agents/design-fidelity.md).',
   'Owner messages you may be shown were addressed to the lead and are handled; they do not replace this task.',
   'Never a bare cargo: every build, check, fmt and test runs from inside the worktree as `~/Dev/wubble-wt/cargo.sh <cargo args>` (a lock, a memory cap, the worktree\'s own target directory; waiting on the lock is normal; never in the background).',
   'Every run of a wubble binary, smoke or measurement: `~/Dev/wubble-wt/run.sh timeout <secs> scripts/headless.sh <binary> ...` (never on the desktop, never left running). Nothing large in /tmp.',
