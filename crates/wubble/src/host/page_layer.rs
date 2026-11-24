@@ -498,7 +498,8 @@ impl Host {
         let shown = (clip.width, clip.height);
         let p = page_layer::place(pane_rect, root_h, flipped, scale, buffer, shown);
         let (f, c) = (p.frame, p.contents);
-        pane.layer.place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius);
+        pane.layer
+            .place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius);
     }
 }
 

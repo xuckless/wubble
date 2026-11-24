@@ -895,11 +895,18 @@ mod tests {
         ];
         for &(route, fullscreen, window) in rows {
             assert_eq!(
-                (route.holed(Mode::Fullscreen), route.holed(Mode::Window), route.holed(Mode::Off)),
+                (
+                    route.holed(Mode::Fullscreen),
+                    route.holed(Mode::Window),
+                    route.holed(Mode::Off)
+                ),
                 (fullscreen, window, false),
                 "{route:?}"
             );
-            assert!(!route.holed(Mode::Window) || route.on_layer(), "a hole over no layer: {route:?}");
+            assert!(
+                !route.holed(Mode::Window) || route.on_layer(),
+                "a hole over no layer: {route:?}"
+            );
         }
     }
 
@@ -942,7 +949,11 @@ mod tests {
             (Unsupported, Needs::from_place(false, false), Window, true),
         ];
         for &(route, needs, mode, gone) in rows {
-            assert_eq!(layer_unused(route, needs, mode), gone, "{route:?} {needs:?} {mode:?}");
+            assert_eq!(
+                layer_unused(route, needs, mode),
+                gone,
+                "{route:?} {needs:?} {mode:?}"
+            );
         }
     }
 
