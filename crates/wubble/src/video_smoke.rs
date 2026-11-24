@@ -55,6 +55,15 @@ use std::path::{Path, PathBuf};
 use wubble_core::boost::{At, Boost, Tint};
 
 use wubble_core::video::{Save, VideoState};
+
+/// The window's toast slot of the store: a toast that replaces another in place restarts its
+/// time, so the slot tells a new notice from one still up.
+pub type Toast = wubble_core::hovercard::Hover<wubble_core::overlay::Key>;
+
+/// A notice came up since `before` was seen: one shows, and it is not that one.
+fn new_toast(before: Toast, now: Toast) -> bool {
+    wubble_core::hovercard::shown(now).is_some() && now != before
+}
 use wubble_engine::nav::WebEvent;
 use wubble_engine::page::PageEvent;
 
@@ -177,8 +186,9 @@ pub enum Step {
     },
     StripLoopOff,
     StripLoopOn,
+    /// The frame button clicked: waiting for a toast other than the one up (`before`).
     StripFrame {
-        shown: bool,
+        before: Toast,
     },
     /// The collapse button clicked: waiting for the tab.
     StripCollapse,
@@ -195,7 +205,7 @@ pub enum Step {
     StripLeft,
     StripBack,
     StripLastFrame {
-        shown: bool,
+        before: Toast,
     },
     /// The save control pressed with nothing found: waiting for its explaining menu.
     SaveNothingMenu,
@@ -304,8 +314,8 @@ pub struct Seen {
     pub speeds: bool,
     /// A menu of the shell is open (the save control's explanation, a list of qualities).
     pub menu: bool,
-    /// The window's notice: shown, and its text.
-    pub toast: (bool, String),
+    /// The window's notice: its slot of the store, and its text.
+    pub toast: (Toast, String),
     /// The strip's save button, as the host derives it from the downloader.
     pub save: Option<Save>,
     /// The downloader lists a stream of the page it can save.
@@ -704,14 +714,14 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
             to(s, StripLoopOn, vec![Action::Click(Spot::Button("loop"))])
         }
         (StripLoopOn, Snapshot(seen)) if video.as_ref().is_some_and(|v| v.looped) => {
-            let shown = seen.toast.0;
+            let before = seen.toast.0;
             to(
                 s,
-                StripFrame { shown },
+                StripFrame { before },
                 vec![Action::Click(Spot::Button("frame"))],
             )
         }
-        (StripFrame { shown }, Snapshot(seen)) if seen.toast.0 && !shown => {
+        (StripFrame { before }, Snapshot(seen)) if new_toast(before, seen.toast.0) => {
             let line = format!("smoke: strip frame notice {:?}", seen.toast.1);
             to(
                 s,
@@ -751,17 +761,19 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
             to(s, StripBack, vec![Action::PointTo(Spot::Video)])
         }
         (StripBack, Snapshot(seen)) if seen.strip => {
-            let shown = seen.toast.0;
+            let before = seen.toast.0;
             to(
                 s,
-                StripLastFrame { shown },
+                StripLastFrame { before },
                 vec![
                     Action::PointTo(Spot::Button("frame")),
                     Action::Click(Spot::Button("frame")),
                 ],
             )
         }
-        (StripLastFrame { shown }, Snapshot(seen)) if seen.toast.0 && !shown && seen.strip => {
+        (StripLastFrame { before }, Snapshot(seen))
+            if new_toast(before, seen.toast.0) && seen.strip =>
+        {
             // The clip is under the downloader's size floor: it offers nothing, and the control
             // is there anyway, saying so when pressed.
             if seen.save != Some(Save::Offered) || seen.ready {
@@ -1120,6 +1132,7 @@ fn answer(mut stream: TcpStream, log: &Requests) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::overlay::Key;
 
     fn seen(video: Option<VideoState>) -> Seen {
         Seen {
@@ -1261,6 +1274,41 @@ mod tests {
         assert_eq!(s.step, Step::Loop);
     }
 
+    /// The frame button's notice is a toast that came up after the click: also one that
+    /// replaces a toast still up (the sponsor's undo notice, 6 s), not the one already there.
+    #[test]
+    fn the_frame_step_waits_for_a_new_toast() {
+        let leaving = |at| Toast::Leaving { key: Key::None, at };
+        let rows: &[(&str, Toast, Toast, bool)] = &[
+            ("none before, one now", Toast::Idle, leaving(3_000), true),
+            ("none before, none now", Toast::Idle, Toast::Idle, false),
+            ("the one still up", leaving(7_119), leaving(7_119), false),
+            (
+                "one replaces the one up",
+                leaving(7_119),
+                leaving(6_567),
+                true,
+            ),
+            ("the one up went", leaving(7_119), Toast::Idle, false),
+            (
+                "a held one now",
+                Toast::Idle,
+                Toast::Shown { key: Key::None },
+                true,
+            ),
+        ];
+        for &(name, before, now, passes) in rows {
+            let mut s = VideoSmoke::video("http://127.0.0.1:1".into(), Requests::default());
+            s.step = Step::StripFrame { before };
+            let seen = Seen {
+                toast: (now, String::new()),
+                ..seen(Some(playing()))
+            };
+            let (s, _) = next(s, Input::Snapshot(&seen));
+            assert_eq!(s.step == Step::StripCollapse, passes, "{name}");
+        }
+    }
+
     #[test]
     fn the_save_steps_expect_the_control_everywhere_the_strip_shows() {
         let done = WebEvent::LoadingChanged {
@@ -1269,11 +1317,13 @@ mod tests {
             can_go_forward: false,
         };
         let mut s = VideoSmoke::video("http://127.0.0.1:1".into(), Requests::default());
-        s.step = Step::StripLastFrame { shown: false };
+        s.step = Step::StripLastFrame {
+            before: Toast::Idle,
+        };
         let strip = |save, ready| Seen {
             controls: true,
             strip: true,
-            toast: (true, String::new()),
+            toast: (Toast::Shown { key: Key::None }, String::new()),
             save: Some(save),
             ready,
             ..seen(Some(playing()))

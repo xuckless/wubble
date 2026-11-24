@@ -398,3 +398,12 @@ The new primitive the owner approved on 2026-11-23. The web design has no counte
 | Piece | derived | rule it follows | shot |
 |---|---|---|---|
 | Page hole (`kit/material/page-hole.slint`, `PageHole` and its `PageHoleSource` global; composed by `kit/chrome/split-view.slint` as `pane-hole`) | the pane's frame image replaced by an image the vendored renderer clears with (`BlendMode::Clear`, Skia change 3): the pane's fill and the window's ground, glass and scene under it removed, in the pane's own clip (`Radius.md`, none in page fullscreen), the status bubble and the close button still drawn over it; the page's layer behind it has the same corner radius from the same generated token. Drawn only while the pane's page is on its layer (`SplitPane.hole`) | `SplitView`'s pane (`webview.tsx` `.wb-view`), `Radius.md` | none: the hole is transparent in a shot (`--shot` and the gallery hold the page on the shell, `Need::Pixels`); judged on the Mac with `--page-layer=window` |
+
+## Private windows (feat/private-windows)
+
+Chrome marks an incognito window with a dark frame and an "Incognito" label; the design has no private browsing. These pieces are wubble's, for the owner's eye.
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Private chip (`PrivateChip` in `kit/chrome/private-mark.slint`, in `SpaceName`) | a private window's Space header shows its name ("Private") as a pill in place of the plain name: the header's own type (`wb-space-name`, 12 / 500) in lilac, on lilac at the Space capsule's .2 (`.wb-spaces-ind` opacity), 18 high (the header's height), the header's 10 padding each side, radius half its height; inert, named to assistive tech with "This window is private: nothing of it is saved". The private Space's colour is the lilac swatch | `.wb-space-name`, `.wb-spaces-ind`, Palette lilac | not yet shot (no gallery scene) |
+| Private tint (`PrivateTint` in `kit/chrome/private-mark.slint`, in `app.slint` over the glass) | the window's ground and glass darkened by abyss at .35 (`Shell.private-tint`), under the sidebar's content and the page card, with the window's radius; not drawn in page fullscreen. The window title reads "wubble (Private)" | Palette abyss, Chrome's dark incognito frame | not yet shot (no gallery scene) |

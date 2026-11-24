@@ -445,8 +445,9 @@ mod tests {
     /// Every route, each event, with the needs clear (false) and holding (true).
     #[test]
     fn every_route_and_event() {
+        type RouteRow = (&'static str, Route, bool, Event, Route, &'static [Effect]);
         #[rustfmt::skip]
-        let rows: &[(&str, Route, bool, Event, Route, &[Effect])] = &[
+        let rows: &[RouteRow] = &[
             // Unsupported: the shell draws every frame, nothing else happens
             ("unsupported: stays without a layer", Unsupported, false, Capable(false), Unsupported, &[]),
             ("unsupported: a layer, nothing needs the shell", Unsupported, false, Capable(true), Entering, &[Buffers(true)]),
@@ -1028,8 +1029,9 @@ mod tests {
 
     #[test]
     fn the_copy_takes_the_free_slot_used_longest_ago() {
+        type SlotRow = (&'static str, &'static [bool], Option<usize>, Option<usize>);
         #[rustfmt::skip]
-        let rows: &[(&str, &[bool], Option<usize>, Option<usize>)] = &[
+        let rows: &[SlotRow] = &[
             ("the first frame", &[false; 4], None, Some(0)),
             ("after the latest", &[false; 4], Some(0), Some(1)),
             ("wraps around", &[false; 4], Some(3), Some(0)),
@@ -1049,8 +1051,19 @@ mod tests {
     #[test]
     fn the_layer_covers_its_pane_and_shows_the_pane_s_part_of_the_buffer() {
         let r = |x, y, w, h| Rect { x, y, w, h };
+        type PlacementRow = (
+            &'static str,
+            Rect,
+            f64,
+            bool,
+            f64,
+            (u32, u32),
+            (u32, u32),
+            Rect,
+            Rect,
+        );
         #[rustfmt::skip]
-        let rows: &[(&str, Rect, f64, bool, f64, (u32, u32), (u32, u32), Rect, Rect)] = &[
+        let rows: &[PlacementRow] = &[
             ("fullscreen at 2x, flipped", r(0.0, 0.0, 1512.0, 982.0), 982.0, true, 2.0,
                 (3024, 1964), (3024, 1964), r(0.0, 0.0, 1512.0, 982.0), r(0.0, 0.0, 1.0, 1.0)),
             ("CEF painted a pixel more", r(0.0, 0.0, 800.0, 600.0), 600.0, true, 1.0,

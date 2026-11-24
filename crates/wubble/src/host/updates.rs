@@ -54,9 +54,20 @@ impl Host {
         self.update_event(Event::CheckNow);
     }
 
-    /// "Restart to update": quit as usual, then start the install's program once this process
-    /// is gone (it runs the new version).
+    /// "Restart to update": quit as usual (asking first when that cancels private downloads:
+    /// `close_asks`), then start the install's program once this process is gone (it runs the
+    /// new version). A question dismissed restarts nothing, then or at a later quit.
     pub(crate) fn updates_restart(&mut self) {
+        if self.updater.relaunch_exe().is_some()
+            && !self.close_asks(wubble_core::window::Closing::Restart)
+        {
+            self.restart_now();
+        }
+    }
+
+    /// Quits, the install's program to start once this process is gone; nothing without an
+    /// update to run.
+    pub(super) fn restart_now(&mut self) {
         if let Some(exe) = self.updater.relaunch_exe() {
             crate::updater::request_relaunch(exe);
             crate::quit();

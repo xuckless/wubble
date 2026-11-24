@@ -48,7 +48,7 @@ impl Host {
         let site = self.site_of(tab);
         let remembered = site
             .as_deref()
-            .and_then(|o| self.site_permissions.get(o, Permission::Popups));
+            .and_then(|o| self.site_view(tab).permissions().get(o, Permission::Popups));
         let glance = self.glance_enabled;
         let url = request.url.clone();
         // `left`/`top` are screen DIP; the window's position is physical.

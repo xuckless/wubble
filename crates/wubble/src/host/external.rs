@@ -20,8 +20,10 @@ pub(crate) fn open_with_os(url: &str) {
     let spawned = std::thread::Builder::new()
         .name("wubble-open-link".into())
         .spawn(move || {
+            // the scheme only: the link may be a private tab's
             if let Err(e) = opener::open(&url) {
-                eprintln!("wubble: no app opened {url}: {e}");
+                let scheme = url.split_once(':').map_or("", |(s, _)| s);
+                eprintln!("wubble: no app opened a {scheme}: link: {e}");
             }
         });
     if let Err(e) = spawned {
@@ -46,9 +48,19 @@ impl Host {
             return;
         }
         let page = self.committed.get(&tab).cloned().unwrap_or_default();
-        match external::decide(&url, &page, gesture == Some(true), &self.site_permissions) {
+        // a private window's tab reads its own choices over the stored ones
+        let verdict = external::decide(
+            &url,
+            &page,
+            gesture == Some(true),
+            &self.site_view(tab).permissions(),
+        );
+        match verdict {
             Verdict::Open => self.open_in_app(&url),
-            Verdict::Block => eprintln!("wubble: {url}: not opened (no click, or blocked)"),
+            Verdict::Block => eprintln!(
+                "wubble: {}: not opened (no click, or blocked)",
+                self.model.side_of_tab(tab).loggable(&url)
+            ),
             Verdict::Ask => {
                 let request = PermissionRequest {
                     origin: page,

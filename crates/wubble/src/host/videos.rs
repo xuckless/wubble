@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use wubble_core::model::Command;
-use wubble_core::overlay::{Cue, Key, Kind};
+use wubble_core::overlay::{Cue, Key, Kind, Surface};
 use wubble_core::pip::{self, Pip, PipEffect, PipInput};
 use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
@@ -1348,7 +1348,13 @@ impl Host {
         let window = self.w.window.upgrade();
         let toast = window
             .as_ref()
-            .map(|w| (w.get_toast_shown(), w.get_toast_text().to_string()))
+            .map(|w| {
+                let slot = Surface {
+                    w: self.w.id,
+                    kind: Kind::Toast,
+                };
+                (self.ui.hover(slot), w.get_toast_text().to_string())
+            })
             .unwrap_or_default();
         // what the pointer (`video_smoke_pointer`, the same window) finds: `VideoControls`
         // shows only over a video with a size

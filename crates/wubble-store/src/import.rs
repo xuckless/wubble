@@ -20,7 +20,7 @@ use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
 use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
 use wubble_core::space::{
-    Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId,
+    Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId, SpaceKind, Storage,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 
@@ -114,7 +114,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
     let agent_containers: Vec<ContainerId> = model
         .spaces
         .iter()
-        .filter(|s| s.agent)
+        .filter(|s| s.kind == SpaceKind::Agent)
         .map(|s| s.container)
         .collect();
     let mut containers = model.containers.clone();
@@ -134,6 +134,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             containers.push(Container {
                 id,
                 name: c.name.clone(),
+                storage: Storage::Disk,
             });
             sum.containers_added += 1;
             id
@@ -196,7 +197,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             active: None,
             split: None,
             never_sleep: false,
-            agent: false,
+            kind: SpaceKind::Normal,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));
@@ -486,8 +487,8 @@ impl Store {
         } = merge_spaces(model, imported, &marks)?;
         let tx = self.conn.transaction().await?;
         if summary.spaces_added > 0 || summary.containers_added > 0 {
-            let persisted = merged.for_session(&[]);
-            write_model(&tx, &persisted).await?;
+            // the session part of it: a private window's Space and tabs are never written
+            write_model(&tx, &merged.for_session(&[])).await?;
             // Marks of Spaces that no longer exist must not suppress a later import.
             tx.execute(
                 "DELETE FROM import_marks WHERE space_id NOT IN (SELECT id FROM spaces)",
@@ -533,7 +534,7 @@ impl Store {
 mod tests {
     use wubble_core::import::{ImportedFolder, ImportedSpace, ImportedTab, ImportedVisit};
     use wubble_core::model::{Command, apply};
-    use wubble_core::space::Rgb;
+    use wubble_core::space::{Rgb, Side};
 
     use super::*;
 
@@ -616,10 +617,12 @@ mod tests {
                 Container {
                     id: D,
                     name: "Default".into(),
+                    storage: Storage::Disk,
                 },
                 Container {
                     id: ContainerId(3),
                     name: "Work".into(),
+                    storage: Storage::Disk,
                 },
             ],
             spaces: vec![
@@ -1179,7 +1182,13 @@ mod tests {
                 keep_pinned_alive: false,
             };
             let (m, _) = apply(m, Command::SetSleepPolicy(custom_policy));
-            let (m, _) = apply(m, Command::SetNeverSleepSites(vec!["keep.test".into()]));
+            let (m, _) = apply(
+                m,
+                Command::SetNeverSleepSites {
+                    side: Side::Normal,
+                    sites: vec!["keep.test".into()],
+                },
+            );
             let (m, _) = apply(
                 m,
                 Command::NewContainer {
@@ -1202,7 +1211,7 @@ mod tests {
             assert!(sum.spaces_added > 0);
             assert!(merged.glance_of(win).is_some(), "open peek stays alive");
             assert_eq!(merged.policy(), custom_policy);
-            assert_eq!(merged.never_sites(), &["keep.test"]);
+            assert_eq!(merged.never_sites(Side::Normal), &["keep.test"]);
             // The imported "Home" Space (which uses container "Work") must NOT reuse the agent Space's container.
             let imported_home = merged
                 .spaces

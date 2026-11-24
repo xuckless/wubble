@@ -84,7 +84,8 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - **Sprint mode.** Breadth first to spec, each item reviewed for correctness and simplicity; hardening comes at the end of the build-out.
 - Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 156).
 - No CPU readback on the frame path; a fallback `OnPaint` frame is a bug to count and log. 120 Hz budget: 8.33 ms; glass degrades before animation drops a frame.
-- Platforms: Linux (lead) and macOS built locally; Windows CI-only.
+- Platforms: Linux (lead) and macOS, built locally and on CI; Windows parked (its code kept, neither built nor
+  released; TODO.md "Windows (parked)").
 - New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
 - Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
 - Keep [TODO.md](TODO.md) current (one line per item; done items are removed, `git log` has them); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
@@ -110,5 +111,6 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 
 ## Batches
 
-Roadmap items run as parallel lanes through `.claude/workflows/lane-batch.js`: how, and the rules learned,
-in [docs/orchestration.md](docs/orchestration.md).
+Roadmap items run as lanes through the owner's user-level `lane-batch` workflow (scope contract, implement,
+caveman and adversarial reviews, refix, integrate): how, wubble's arguments and the rules learned, in
+[docs/orchestration.md](docs/orchestration.md).

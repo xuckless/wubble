@@ -198,7 +198,7 @@ pub fn run(
             return Err("the engine and the start disagree on the extension patches".into());
         }
         // the footer button is drawn from this rule (`host/ext_ui.rs`)
-        if wubble_core::extensions::footer_button(available, &stored) {
+        if wubble_core::extensions::footer_button(available, &stored, false) {
             return Err("the footer button would show".into());
         }
         println!(
@@ -380,6 +380,7 @@ impl ExtHost for Stand<'_> {
                         begin_frames: false,
                         gpu: self.gpu.presenter().context().clone(),
                         container: container.unwrap_or(ContainerId::DEFAULT),
+                        storage: wubble_core::space::Storage::Disk,
                     };
                     match self.engine.open_view(config) {
                         Ok(view) => {

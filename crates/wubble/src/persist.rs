@@ -101,7 +101,7 @@ pub fn changes_session(command: &Command) -> bool {
             | Command::DiscardNow(_)
             | Command::OpenCommandBar
             | Command::SetSleepPolicy(_)
-            | Command::SetNeverSleepSites(_)
+            | Command::SetNeverSleepSites { .. }
     )
 }
 

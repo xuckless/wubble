@@ -354,8 +354,10 @@ pub fn read_custom_data(bytes: &[u8]) -> Option<Vec<(String, String)>> {
         let raw = bytes.get(*at..*at + len.checked_mul(2)?)?;
         *at += (len * 2).next_multiple_of(4);
         let units: Vec<u16> = raw
-            .chunks_exact(2)
-            .map(|u| u16::from_le_bytes([u[0], u[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|u| u16::from_le_bytes(*u))
             .collect();
         // A lone surrogate (a page's string cut mid-pair) is a replacement character, as
         // Chromium's own UTF-16 strings tolerate it.

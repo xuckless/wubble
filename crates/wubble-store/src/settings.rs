@@ -459,6 +459,7 @@ mod tests {
                 },
                 permissions: vec!["storage".into()],
                 options_page: Some("options.html".into()),
+                private: true,
             };
             let (list, _) = wubble_core::extensions::transition(
                 Installed::default(),

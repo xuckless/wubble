@@ -14,7 +14,8 @@ use slint::{
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_ui::driver::{self, Driver};
 use wubble_ui::{
-    AppWindow, MenuEntry, PopupView, SidebarMode, SpaceItem, SpacesMenuRow, SplitPane, SplitSeam,
+    AppWindow, MenuEntry, PeekCue, PopupView, SidebarMode, SpaceItem, SpacesMenuRow, SplitPane,
+    SplitSeam,
 };
 
 const DT: f32 = 0.016;
@@ -118,16 +119,29 @@ fn three_modes(app: &AppWindow, driver: &Shared) {
     assert!(!app.get_sidebar_rail());
 }
 
+/// The peek's Slint half: the strip, the edge and the panel report their cues, the host's
+/// `peek` (the store's peek slot) slides the panel in, and a peek shows only while hidden. Its
+/// times (at once from the edge, 60 ms from the west strip, out 260 ms after leaving, ended by a
+/// mode change) are the store's: `wubble_core::overlay` `the_peek_through_its_slot`.
 fn peek(app: &AppWindow, driver: &Shared) {
+    let cues = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = cues.clone();
+    app.on_peek_cue(move |c| seen.borrow_mut().push(c));
+    let took = || std::mem::take(&mut *cues.borrow_mut());
     app.invoke_toggle_sidebar();
     settle(app, driver);
     pump(1);
     assert!(!app.get_peeking());
+    assert_eq!(took(), vec![]);
 
-    // Into the edge strip (`.wb-peek-edge` onPointerEnter): it peeks at once.
+    // Into the edge strip (`.wb-peek-edge` onPointerEnter): shows at once, by the host.
     pointer(app, 10.0, 300.0);
+    assert_eq!(took(), vec![PeekCue::EdgeEntered, PeekCue::PanelEntered]);
+    assert!(!app.get_peeking(), "the host sets the peek");
+    app.set_peek(true);
+    pump(1);
     assert!(app.get_peeking());
-    // The slide (340 ms), then over a child row: still peeking.
+    // The slide (340 ms), then over a child row: no cue, still peeking.
     pump(400);
     // The panel pads 10 8 10 10 (no glowing border: the design's peek has none).
     let e = app.get_side_edges();
@@ -135,35 +149,34 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert_eq!(e.pill_end, INSET as f32 + SIDEBAR_DEFAULT as f32 - 8.0);
     pointer(app, 100.0, 80.0);
     pump(400);
-    assert!(app.get_peeking());
-    // Off the sidebar: it leaves 260 ms later.
+    assert_eq!(took(), vec![]);
+    // Off the sidebar: the panel's leave starts the way out.
     pointer(app, 900.0, 300.0);
-    pump(200);
-    assert!(app.get_peeking());
-    pump(100);
-    assert!(!app.get_peeking());
+    assert_eq!(took(), vec![PeekCue::PanelLeft]);
+    app.set_peek(false);
     pump(400);
+    assert!(!app.get_peeking());
 
     // Pushed against the window's edge, over the west resize strip (the design's `onMove`
-    // strip): it peeks 60 ms later.
-    pump(400);
+    // strip): a strip move (the store shows it 60 ms later).
     pointer(app, 2.0, 300.0);
-    pump(100);
-    assert!(app.get_peeking());
+    assert!(took().contains(&PeekCue::StripMoved));
     pointer(app, 900.0, 300.0);
-    pump(300);
-    assert!(!app.get_peeking());
+    assert_eq!(took(), vec![PeekCue::PanelLeft]);
 
-    // A peek never outlives the hidden mode (once the sidebar has slid away from the edge).
-    pump(400);
+    // A peek never outlives the hidden mode: shown by the host, the mode change hides it at
+    // once (the store's Dismiss then ends the slot).
     pointer(app, 10.0, 300.0);
-    pump(100);
+    app.set_peek(true);
+    pump(1);
     assert!(app.get_peeking());
     app.invoke_toggle_sidebar();
     pump(1);
-    assert!(!app.get_peek());
+    assert!(!app.get_peeking());
+    app.set_peek(false);
     settle(app, driver);
     pointer(app, 900.0, 300.0);
+    took();
     assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
 }
 
@@ -648,14 +661,17 @@ fn peek_panel_holds_its_contents(app: &AppWindow, driver: &Shared) {
             inside(&format!("{from}: {what}"), part, panel);
         }
     };
+    // the host's peek follows the cues (`peek` covers them)
     let peek_in = |x: f32| {
         pointer(app, x, 300.0);
+        app.set_peek(true);
         pump(100);
         assert!(app.get_peeking());
         pump(400);
     };
     let peek_out = || {
         pointer(app, 900.0, 300.0);
+        app.set_peek(false);
         pump(300);
         assert!(!app.get_peeking());
         pump(500);

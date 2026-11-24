@@ -12,10 +12,15 @@
 //!   is left out of its Space's window. Pip windows are left out (their tab stays its Space's).
 //! - Only live tabs (with a page) are listed; indices stay contiguous.
 //! - The focused window is the Model's last one.
+//! - Private windows (a private Space's Main window, a private tab's Little or Popup window) and
+//!   their tabs are left out. The projection is one for every extension, so it cannot follow a
+//!   per-extension "Allow in Private Windows" ([`crate::extensions::reaches`]); an allowed
+//!   extension's view of private tabs is the engine's half (docs/research/extensions.md,
+//!   "Private windows").
 
 use crate::model::Model;
 use crate::pages::InternalPage;
-use crate::space::{Item, Space, SpaceId};
+use crate::space::{Item, Side, Space, SpaceId};
 use crate::tab::TabId;
 use crate::window::{Shown, WindowId};
 
@@ -59,9 +64,13 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
         .windows
         .iter()
         .rev()
+        .filter(|w| model.side_of_window(w.id) != Side::Private)
         .find_map(|w| w.space().map(|_| w.id));
     let mut out = Projection::default();
     for w in &model.windows {
+        if model.side_of_window(w.id) == Side::Private {
+            continue;
+        }
         let kind = match w.shown {
             Shown::Space(_) => ExtWindowKind::Normal,
             Shown::Little(_) | Shown::Popup(_) => ExtWindowKind::Popup,
@@ -81,7 +90,9 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
                     listed.extend(space_tabs(s, true));
                 }
                 if Some(w.id) == focused_main {
-                    for s in model.spaces.iter().filter(|s| !shown.contains(&s.id)) {
+                    for s in model.spaces.iter().filter(|s| {
+                        model.side_of_space(s.id) == Side::Normal && !shown.contains(&s.id)
+                    }) {
                         listed.extend(space_tabs(s, false));
                     }
                 }
@@ -268,6 +279,22 @@ mod tests {
             vec![Item::Tab(t(1)), Item::Tab(t(2)), Item::Tab(t(3))],
             Some(1),
         );
+        // tabs the model knows: a window of an unknown tab is taken as private and left out
+        for n in 1..=3 {
+            m.tabs.insert(
+                t(n),
+                crate::tab::Tab {
+                    id: t(n),
+                    url: String::new(),
+                    title: String::new(),
+                    lifecycle: crate::lifecycle::Lifecycle::new(),
+                    container: crate::space::ContainerId::DEFAULT,
+                    opener: None,
+                    last_active_ms: 0,
+                    busy: crate::busy::Busy::NONE,
+                },
+            );
+        }
         let main = m.windows[0].id.0;
         m.windows.insert(
             0,

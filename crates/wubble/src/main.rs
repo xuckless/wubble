@@ -323,8 +323,27 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::DataPhase { ending, profile }) => match smoke_profile(&profile) {
-            Ok(()) => with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile)),
+        Command::Smoke(Smoke::Private { dir }) => match smoke_private(dir) {
+            Ok(()) => {
+                println!("smoke: private ok");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: private FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::DataPhase {
+            ending,
+            profile,
+            dir,
+        }) => match smoke_profile(&profile) {
+            Ok(()) => {
+                if let Some(dir) = dir {
+                    shot::request_dir(dir);
+                }
+                with_smoke_dir(|config, _| report_run(Mode::Data(ending), config, &profile))
+            }
             Err(e) => {
                 eprintln!("smoke: {e}");
                 ExitCode::FAILURE
@@ -453,6 +472,7 @@ fn main() -> ExitCode {
                 | Smoke::Passwords
                 | Smoke::PasswordsPhase { .. }
                 | Smoke::Data
+                | Smoke::Private { .. }
                 | Smoke::DataPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
@@ -755,6 +775,41 @@ fn killed_by(status: &std::process::ExitStatus) -> Option<i32> {
         let _ = status;
         None
     }
+}
+
+/// `--smoke private`: the private-window script on a throwaway profile, ending in a quit; then
+/// the profile is searched for anything of the private pages (`data_smoke::private_leaks`).
+fn smoke_private(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
+    let no_sandbox = app::no_sandbox_requested(std::env::args_os());
+    let profile = std::env::temp_dir().join(format!("wubble-private-{}", std::process::id()));
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        mark_smoke_profile(&profile)?;
+        let mut args: Vec<std::ffi::OsString> = vec![
+            "--smoke".into(),
+            "data-phase=private".into(),
+            "--profile".into(),
+            profile.clone().into(),
+        ];
+        if let Some(dir) = &dir {
+            args.extend(["--shot-dir".into(), dir.clone().into()]);
+        }
+        args.extend(no_sandbox.then(|| app::NO_SANDBOX_ARG.into()));
+        let status = std::process::Command::new(&exe)
+            .args(args)
+            .env("DBUS_SESSION_BUS_ADDRESS", data_smoke::NO_BUS)
+            .status()?;
+        if !status.success() {
+            return Err(format!("the run exited with {status}").into());
+        }
+        let db = Profile {
+            dir: profile.clone(),
+        }
+        .db_path();
+        data_smoke::private_leaks(&profile, &db).map_err(Into::into)
+    })();
+    remove_cache(&profile);
+    result
 }
 
 /// `--smoke data`: the script run twice on throwaway profiles, once ending in a quit and once in
@@ -1161,6 +1216,12 @@ pub fn quit() {
     let _ = slint::quit_event_loop();
 }
 
+/// macOS's `terminate:` (Cmd+Q, the menu bar's Quit, the Dock's): the Quit action's plan,
+/// which asks first when quitting would cancel private downloads (`Host::close_asks`).
+fn quit_asked() {
+    with_host(|host| host.perform(wubble_core::action::Action::Quit));
+}
+
 /// The window's display refresh rate. Wayland names the current monitor only
 /// once the surface has entered an output, so fall back to the fastest
 /// connected display: the CEF frame rate is a ceiling, so too high only costs
@@ -1406,6 +1467,12 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_extension_install_folder(move || with_host_in(win, Host::extension_install_folder));
     window.on_extension_toggled(move |id, on| {
         with_host_in(win, |host| host.extension_toggled(&id, on))
+    });
+    window.on_extension_private_toggled(move |id, on| {
+        with_host_in(win, |host| host.extension_private_toggled(&id, on))
+    });
+    window.on_extension_prompt_private(move |on| {
+        with_host_in(win, |host| host.extension_prompt_private(on))
     });
     window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
     window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
@@ -2053,7 +2120,10 @@ fn run(
             },
         ),
         Mode::Data(ending) => (
-            data_server.as_ref().map(|s| s.url("/page")),
+            data_server.as_ref().map(|s| match ending {
+                data_smoke::Ending::Private => s.url_at(data_smoke::NORMAL_HOST, "/a"),
+                data_smoke::Ending::Quit | data_smoke::Ending::Kill => s.url("/page"),
+            }),
             Checks {
                 data_smoke: data_server.map(|server| host::DataSmoke::new(server, *ending)),
                 ..none
@@ -2313,7 +2383,7 @@ fn run(
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
     measure::mark(measure::Stage::SessionRestored);
-    wubble_engine::app::set_quit_handler(Some(quit));
+    wubble_engine::app::set_quit_handler(Some(quit_asked));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {

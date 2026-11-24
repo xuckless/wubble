@@ -599,6 +599,7 @@ export component SettingsPage inherits Rectangle {
     callback extension-install-file();
     callback extension-install-folder();
     callback extension-toggled(string, bool);
+    callback extension-private-toggled(string, bool);
     callback extension-removed(string);
     callback extension-options(string);
     callback agents-toggled(bool);
@@ -1192,6 +1193,9 @@ export component SettingsPage inherits Rectangle {
                         }
                         toggled(id, on) => {
                             root.extension-toggled(id, on);
+                        }
+                        private-toggled(id, on) => {
+                            root.extension-private-toggled(id, on);
                         }
                         removed(id) => {
                             root.extension-removed(id);

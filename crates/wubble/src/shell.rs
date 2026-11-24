@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use wubble_core::model::{Dest, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{FolderId, Item, Rgb, SpaceIcon, SpaceId};
+use wubble_core::space::{FolderId, Item, Rgb, Side, SpaceIcon, SpaceId, SpaceKind};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
 use wubble_core::window::WindowId;
@@ -67,6 +67,8 @@ pub struct SpaceRow {
     pub agent_space: bool,
     /// A running agent session's Space (`host/agent.rs` marks it): the header's stop mark.
     pub agent: bool,
+    /// A private window's Space (`Space::private`): the header's Private chip, the window's tint.
+    pub private: bool,
 }
 
 /// The sidebar for one model. Ids that do not fit Slint's `int` are
@@ -87,11 +89,17 @@ pub struct ShellView {
     pub secure: bool,
 }
 
-/// The Space `window` shows: its own (a Little or Popup window's), else the active one.
+/// The Space `window` shows: its own (a Main window's), else the active one; a private tab's
+/// Little or Popup window shows its private Space (the window's mark and title say private).
 pub fn window_space(model: &Model, window: WindowId) -> wubble_core::space::SpaceId {
-    model
-        .window(window)
-        .and_then(|w| w.space())
+    let own = model.window(window);
+    own.and_then(|w| w.space())
+        .or_else(|| {
+            own.and_then(|w| w.tab())
+                .and_then(|t| model.location(t))
+                .map(|(s, _)| s)
+                .filter(|&s| model.side_of_space(s) == Side::Private)
+        })
         .unwrap_or_else(|| model.active_space())
 }
 
@@ -153,17 +161,18 @@ pub fn view_model(
         }
         None => (vec![], vec![]),
     };
+    // a private window lists its own Space only, a normal one no private Space
     let spaces = model
-        .spaces
-        .iter()
+        .listed_spaces(space_id)
         .filter_map(|s| {
             Some(SpaceRow {
                 id: slint_id(s.id.0)?,
                 name: s.name.clone(),
                 tint: s.tint,
                 icon: s.icon,
-                agent_space: s.agent,
+                agent_space: s.kind == SpaceKind::Agent,
                 agent: false,
+                private: s.kind == SpaceKind::Private,
             })
         })
         .collect();
