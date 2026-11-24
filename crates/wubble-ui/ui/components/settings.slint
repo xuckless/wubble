@@ -643,7 +643,9 @@ export component SettingsPage inherits Rectangle {
     pure function next-icon(icon: string) -> string {
         return icon == "personal" ? "work" : icon == "work" ? "study" : "personal";
     }
-    property <bool> notices-open: false;
+    // About's third-party notices, listed under the licence row: the page's own disclosure (no
+    // overlay, nothing the host reads), so it has one writer, this button
+    property <bool> notices-listed: false;
     property <string> query;
     property <bool> narrow: root.width <= SettingsLayout.narrow;
 
@@ -1340,14 +1342,14 @@ export component SettingsPage inherits Rectangle {
                             }
                             RowControls {
                                 Button {
-                                    text: root.notices-open ? "Hide notices" : "Third-party notices";
+                                    text: root.notices-listed ? "Hide notices" : "Third-party notices";
                                     clicked => {
-                                        root.notices-open = !root.notices-open;
+                                        root.notices-listed = !root.notices-listed;
                                     }
                                 }
                             }
                         }
-                        if root.notices-open: HorizontalLayout {
+                        if root.notices-listed: HorizontalLayout {
                             padding-left: Shell.row-pad-x;
                             padding-right: Shell.row-pad-x;
                             padding-bottom: Shell.row-pad-y;

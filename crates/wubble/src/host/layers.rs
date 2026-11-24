@@ -13,6 +13,7 @@ use wubble_core::overlay::{
 };
 
 use wubble_core::agent::SessionId;
+use wubble_core::hints::Hints;
 use wubble_core::print::Sheet;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
@@ -48,6 +49,8 @@ pub(super) enum Content {
     Print(Sheet),
     /// The agent session the approval sheet asks for.
     Agent(SessionId),
+    /// Link hint mode on a page.
+    Hints(Hints),
 }
 
 /// The overlays' content, by the window of a window overlay (a tab's goes with its tab) and the
@@ -91,7 +94,10 @@ impl Contents {
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 23] = [
+const STORED: [Kind; 26] = [
+    Kind::Notice,
+    Kind::Region,
+    Kind::Hints,
     Kind::BookmarkSheet,
     Kind::PrintSheet,
     Kind::AgentSheet,
@@ -208,15 +214,6 @@ impl Host {
     fn machine_layers(&self, window: &AppWindow, menu_tab: Option<TabId>) -> Vec<Layer> {
         let mut layers = vec![];
         let mut add = |kind, tab| layers.push(Layer::new(kind, tab));
-        if let Some(tab) = self.notice_tab() {
-            add(Kind::Notice, Some(tab));
-        }
-        if let Some(tab) = self.region_tab() {
-            add(Kind::Region, Some(tab));
-        }
-        if let Some(tab) = self.hints_tab() {
-            add(Kind::Hints, Some(tab));
-        }
         // the start page's capsule is the page's own field, not an overlay
         if window.get_command_bar_state() == CommandBarState::Open
             && window.get_command_placement() == CommandPlacement::Overlay
@@ -778,7 +775,9 @@ impl Host {
             (Kind::PrintSheet, _) => self.print_step(wubble_core::print::Event::Cancel, true),
             (Kind::AgentSheet, _) => self.agent_answer(false, false, true),
             (Kind::Region, _) => self.shot_cancelled(),
-            (Kind::Hints, _) => self.hints_cancel(),
+            (Kind::Hints, Some(tab)) => {
+                self.hint_step(tab, wubble_core::hints::HintEvent::Cancel, true)
+            }
             // later, outside the host: closing the bar calls back into it
             (Kind::CommandBar, _) => {
                 let _ = self.w.window.upgrade_in_event_loop(|window| {
@@ -790,7 +789,10 @@ impl Host {
             (Kind::Extensions, _) => self.panel_cancelled(),
             (Kind::ExtensionSheet, _) => self.prompt_cancelled(),
             (Kind::Menu, _) => self.menu_cancelled(w),
-            (Kind::Find | Kind::Dialog | Kind::Permission | Kind::BookmarkSheet, None) => {}
+            (
+                Kind::Find | Kind::Dialog | Kind::Permission | Kind::BookmarkSheet | Kind::Hints,
+                None,
+            ) => {}
             // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
             (Kind::ErrorPanel | Kind::Boost, _) => {}
             // a drag ends with nothing dropped (its own state closes its surfaces), a swipe and an

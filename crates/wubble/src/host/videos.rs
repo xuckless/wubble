@@ -1064,7 +1064,7 @@ impl Host {
 
     pub(crate) fn toast_acted(&mut self) {
         self.toast_hide();
-        match self.videos.toast.take() {
+        match self.toast_taken() {
             Some(ToastAct::Undo(tab)) => self.sponsor_undo(tab),
             Some(ToastAct::AskSponsor(_)) => {
                 self.videos.asking = false;
@@ -1078,7 +1078,7 @@ impl Host {
 
     pub(crate) fn toast_closed(&mut self) {
         self.toast_hide();
-        if let Some(ToastAct::AskSponsor(_)) = self.videos.toast.take() {
+        if let Some(ToastAct::AskSponsor(_)) = self.toast_taken() {
             self.videos.asking = false;
             self.write_setting(defs::SPONSOR_ASKED.key, "1");
         }
@@ -1087,36 +1087,40 @@ impl Host {
     /// Another notice replaced whatever the toast's button was for. An unanswered question is
     /// not asked again in this run (`asking` stays), only in the next.
     pub(super) fn toast_replaced(&mut self) {
-        self.videos.toast = None;
+        self.toast_taken();
     }
 
-    /// The tab the question is asked over, while it waits.
-    pub(super) fn notice_tab(&self) -> Option<TabId> {
-        match self.videos.toast {
-            Some(ToastAct::AskSponsor(tab)) => Some(tab),
-            _ => None,
+    /// The toast's button is done with (answered, closed or replaced): what it was for. The
+    /// question's store overlay closes with it.
+    fn toast_taken(&mut self) -> Option<ToastAct> {
+        let act = self.videos.toast.take();
+        if let Some(ToastAct::AskSponsor(tab)) = act {
+            self.layer_is(Kind::Notice, tab, false);
         }
+        act
     }
 
-    /// The question goes unanswered (its page went): as replaced, not asked again this run.
+    /// The question goes unanswered (a rule closed its overlay: its page went): as replaced,
+    /// not asked again this run.
     pub(super) fn notice_close(&mut self) {
-        if self.notice_tab().is_some() {
+        if matches!(self.videos.toast, Some(ToastAct::AskSponsor(_))) {
             self.toast_replaced();
             self.toast_hide();
         }
     }
 
-    /// Its tab left (false) or came back (true): the question hides or shows again, waiting.
+    /// Its tab left (false) or came back (true): the question hides or shows again, waiting
+    /// (its overlay stays open: the toast is taken off it only while it shows).
     pub(super) fn notice_shown(&mut self, shown: bool) {
-        let Some(act @ ToastAct::AskSponsor(tab)) = self.videos.toast else {
+        let Some(act @ ToastAct::AskSponsor(tab)) = self.videos.toast.take() else {
             return;
         };
         if shown {
             self.toast_notice(tab, ASK_SPONSOR.0, ASK_SPONSOR.1);
-            self.videos.toast = Some(act);
         } else {
             self.toast_hide();
         }
+        self.videos.toast = Some(act);
     }
 
     /// The update is ready: a notice with "Restart" that runs `updates_restart`.
