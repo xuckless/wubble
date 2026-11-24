@@ -94,7 +94,9 @@ impl Contents {
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 26] = [
+const STORED: [Kind; 28] = [
+    Kind::ErrorPanel,
+    Kind::Boost,
     Kind::Notice,
     Kind::Region,
     Kind::Hints,
@@ -220,13 +222,7 @@ impl Host {
         {
             add(Kind::CommandBar, None);
         }
-        // the panels the host wrote for the visible tab
-        if window.get_page_error().open {
-            add(Kind::ErrorPanel, menu_tab);
-        }
-        if window.get_boost().open {
-            add(Kind::Boost, menu_tab);
-        }
+        let _ = menu_tab;
         layers
     }
 
@@ -793,8 +789,10 @@ impl Host {
                 Kind::Find | Kind::Dialog | Kind::Permission | Kind::BookmarkSheet | Kind::Hints,
                 None,
             ) => {}
-            // the panels close by their machines: no rule closes them (`Row::closes`, `escape`)
-            (Kind::ErrorPanel | Kind::Boost, _) => {}
+            // the error panel closes by its machine: no rule closes it (`Life::Owner`); a rule
+            // that closes the Boost editor closes it as its own close does
+            (Kind::ErrorPanel, _) => {}
+            (Kind::Boost, _) => self.boost_act("close"),
             // a drag ends with nothing dropped (its own state closes its surfaces), a swipe and an
             // autoscroll end as their machines end them
             (Kind::TabGhost, _) => {

@@ -441,7 +441,10 @@ impl Host {
     pub(super) fn apply_error(&mut self, tab: TabId, event: ErrorEvent) {
         let s = self.surfaces.entry(tab).or_default();
         let (next, effects) = page_error::transition(std::mem::take(&mut s.error), event);
+        let open = next != PageError::None;
         s.error = next;
+        // the panel is the tab's store overlay while its machine holds an error
+        self.layer_is(Kind::ErrorPanel, tab, open);
         for effect in effects {
             if let ErrorEffect::Allow { host, code } = &effect {
                 self.cert_exceptions.allow(host, *code);
@@ -879,6 +882,9 @@ impl Host {
         let w = self.w.id;
         let shown_content =
             |kind| tab.and_then(|t| self.open_content(w, Layer::new(kind, Some(t))));
+        let shown_open = |kind| {
+            tab.is_some_and(|t| self.ui.phase(w, Layer::new(kind, Some(t))) == Some(Phase::Open))
+        };
         let menu = match self.open_content(w, Layer::new(Kind::Menu, None)) {
             Some(Content::Menu { menu, .. }) => Some(menu.clone()),
             _ => None,
@@ -913,7 +919,10 @@ impl Host {
                 ..window.get_dialog()
             }
         });
-        let error = error_view(&current.error);
+        let error = match shown_open(Kind::ErrorPanel) {
+            true => error_view(&current.error),
+            false => ErrorView::default(),
+        };
         window.set_page_error(if error.open {
             error
         } else {

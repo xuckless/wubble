@@ -187,7 +187,8 @@ impl Host {
             // the store's overlays of the last scene close as their owners would close them
             let w = self.w.id;
             let layers = [Layer::new(Kind::Menu, None)].into_iter().chain(
-                [Kind::Permission, Kind::Dialog, Kind::Find].map(|k| Layer::new(k, Some(tab))),
+                [Kind::Permission, Kind::Dialog, Kind::Find, Kind::ErrorPanel]
+                    .map(|k| Layer::new(k, Some(tab))),
             );
             for layer in layers {
                 self.act(window, StoreAction::Close { w, layer });
@@ -427,7 +428,9 @@ impl Host {
             }
         }
         if let Some(tab) = shown {
+            let error = surfaces.error != PageError::None;
             self.surfaces.insert(tab, surfaces);
+            self.layer_is(Kind::ErrorPanel, tab, error);
         }
         if let Some((layer, content)) = layer {
             self.content_after(self.w.id, layer, Some(content), false);
