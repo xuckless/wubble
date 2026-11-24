@@ -3,8 +3,8 @@
 ## What this is
 
 wubble is a Chromium-based browser with a Slint shell, GPL-3.0-only. Chromium renders web content
-off-screen; Slint composites it as GPU textures, so the whole UI is one scene. Roadmap and risks:
-[TODO.md](TODO.md). Decisions: [docs/decisions.md](docs/decisions.md), read before proposing architecture.
+off-screen; Slint composites it as GPU textures, so the whole UI is one scene. Roadmap: [todo/](todo/README.md), the only one
+(what is on now: [TODO.md](TODO.md); risks: [todo/risks.md](todo/risks.md)). Decisions: [docs/decisions.md](docs/decisions.md), read before proposing architecture.
 
 ## Layout
 
@@ -57,10 +57,10 @@ clipboard and GPU) and wrap them in `timeout`.
 - Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 156).
 - No CPU readback on the frame path; a fallback `OnPaint` frame is a bug to count and log. 120 Hz budget: 8.33 ms; glass degrades before animation drops a frame.
 - Platforms: Linux (lead) and macOS, built locally and on CI; Windows parked (its code kept, neither built nor
-  released; [docs/todo/windows.md](docs/todo/windows.md)).
+  released; [todo/shelved/windows.md](todo/shelved/windows.md)).
 - New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
 - Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
-- Keep [TODO.md](TODO.md) current (one line per item; done items are removed, `git log` has them); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
+- Keep the roadmap current: [todo/](todo/README.md) has `in-progress/`, `upcoming/` (one file per area, in work order), `shelved/` and `done/` (one file per release); a new item goes to its area's file and moves between folders as [todo/README.md](todo/README.md) says. Root [TODO.md](TODO.md) holds only the work and research of now, with pointers to `todo/upcoming/`. Features: written on their own branch without compile or test, then integrated one feature at a time (compile, test, caveman then adversarial review, merge); engine patches wait for the one engine build. Record decisions in [docs/decisions.md](docs/decisions.md), one line each.
 - After any change to glass, the driver or a per-frame path: `--measure idle --seconds 4` must report 0 to 2 `slint_renders`.
 - No `pgrep -f` wait loops (they match themselves and never end): run the command under `timeout`, or wait on a file.
 - Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths. Commit only when asked; one logical change per commit.
