@@ -26,9 +26,11 @@ use crate::surface::{Dialog, DialogEvent, FindBar, FindEvent};
 
 /// The overlays the store owns so far: the kit draws each from its phase, which only the host
 /// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 14] = [
+const STORED: [Kind; 16] = [
     Kind::Downloads,
     Kind::Spaces,
+    Kind::Extensions,
+    Kind::ExtensionSheet,
     Kind::Popup,
     Kind::AutofillChip,
     Kind::AutofillMenu,
@@ -164,12 +166,6 @@ impl Host {
         {
             add(Kind::CommandBar, None);
         }
-        if self.ext_ui_prompt_open() {
-            add(Kind::ExtensionSheet, None);
-        }
-        if self.ext_ui_panel_open() {
-            add(Kind::Extensions, None);
-        }
         if menu_tab
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| matches!(s.menu, Menu::Open { .. } | Menu::Shell { .. }))
@@ -282,6 +278,7 @@ impl Host {
                 Effect::Unshow(at) => self.draw_slot(at, None, &before),
                 Effect::Arm(at) => self.arm_surfaces(at),
                 Effect::Cancel(layer) => self.overlay_cancel(menu_tab, layer),
+                Effect::Unmount(layer) => self.unmounted(layer),
                 Effect::Hide(Layer {
                     kind: Kind::Notice, ..
                 }) => self.notice_shown(false),
@@ -291,11 +288,7 @@ impl Host {
                 // the store's overlays are drawn from their phase (settle_layers), the find bar
                 // and a dialog for the visible tab only (render_surfaces); the keys still follow
                 // `settle-focus` as each *-open changes
-                Effect::Mount(_)
-                | Effect::Unmount(_)
-                | Effect::Focus(..)
-                | Effect::Hide(_)
-                | Effect::Reveal(_) => {}
+                Effect::Mount(_) | Effect::Focus(..) | Effect::Hide(_) | Effect::Reveal(_) => {}
             }
         }
         fx
@@ -415,6 +408,7 @@ impl Host {
             window.set_page_ghost_on(open(Kind::PageGhost));
             window.set_drop_mark_on(open(Kind::DropMark));
             window.set_autoscroll_on(open(Kind::Autoscroll));
+            self.ext_drawn_in(w, &window);
             let bits = mounted(&window.get_mounted());
             // a pane's bubble is drawn from its pane's report until the fade over (`status_drawn`);
             // the other pane layers have no exit
@@ -453,9 +447,23 @@ impl Host {
 
     /// The owner of a window's store overlay closed it (a pick, a dismissal, an empty list).
     pub(super) fn overlay_closed(&mut self, kind: Kind) {
+        self.window_closed(self.w.id, kind);
+    }
+
+    /// The owner of window `w`'s store overlay `kind` closed it (an app-wide content, the
+    /// extensions panel or an agent's sheet, closes in the window holding it).
+    pub(super) fn window_closed(&mut self, w: WindowId, kind: Kind) {
         if let Some(window) = self.w.window.upgrade() {
-            let (w, layer) = (self.w.id, Layer::new(kind, None));
+            let layer = Layer::new(kind, None);
             self.act(&window, Action::Close { w, layer });
+        }
+    }
+
+    /// `Unmount`: a store overlay is gone, its content with it (the one place content goes).
+    fn unmounted(&mut self, layer: Layer) {
+        match layer.kind {
+            Kind::Extensions | Kind::ExtensionSheet => self.ext_unmounted(layer.kind),
+            _ => {}
         }
     }
 
@@ -656,8 +664,8 @@ impl Host {
                 });
             }
             (Kind::Downloads | Kind::Spaces, _) => {}
-            (Kind::Extensions, _) => self.extensions_dismissed(),
-            (Kind::ExtensionSheet, _) => self.extension_prompt_answered(false),
+            (Kind::Extensions, _) => self.panel_cancelled(),
+            (Kind::ExtensionSheet, _) => self.prompt_cancelled(),
             (Kind::Menu, _) => {
                 if let Some(tab) = shown {
                     self.apply_menu(tab, MenuEvent::Dismiss);

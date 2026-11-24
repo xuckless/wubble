@@ -149,12 +149,11 @@ fn the_surface_lock_holds() {
     SURFACE_LOCK.ratchet(&violations());
 }
 
-/// Escape is the overlays' rule (`overlay::Esc`), never a handler of the shell's: the region
-/// picker's is gone, and what remains in the baseline is the extensions popover's, which
-/// leaves with its own surface moving into the store.
+/// Escape is the overlays' rule (`overlay::Esc`), never a handler of the shell's: none is left
+/// (the region picker's and the extensions popover's went with their surfaces into the store).
 #[test]
 fn the_escape_handlers_left_are_named() {
-    let named = ["components/extensions-popover.slint"];
+    let named: [&str; 0] = [];
     for (rel, text) in ui_files()
         .into_iter()
         .filter(|(rel, _)| !rel.starts_with("kit/"))

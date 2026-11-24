@@ -15,7 +15,7 @@ import { AExtensionRow } from "../kit/overlay/a/a-extension-row.slint";
 // the downloads popover. Derived from the kit (docs/fidelity/wubble-only.md, derived-review.md
 // "Extensions popover"): the Popover (kit/overlay/a/a-popover.slint) growing from its anchor,
 // rows (kit/overlay/a/a-extension-row.slint) entering on the Overlap stagger. `pressed(id)`,
-// `manage()` and `dismissed()` are intents; the host acts and closes it.
+// `manage()` and `dismissed()` (a press outside) are intents; the host acts and closes it.
 export component ExtensionsPopover inherits Rectangle {
     in property <bool> open;
     // The panel's top left, in this element's coordinates.
@@ -38,16 +38,10 @@ export component ExtensionsPopover inherits Rectangle {
         }
     }
 
+    // the keys come here as it opens; Escape is the overlays' rule (the host's), not this file's
     keys := FocusScope {
         width: 0px;
         height: 0px;
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.dismissed();
-                return accept;
-            }
-            return reject;
-        }
     }
 
     public function take-focus() {

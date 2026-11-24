@@ -218,6 +218,18 @@ impl Ui {
         self.entries.get(&(home(w, layer), layer.kind)).copied()
     }
 
+    /// The windows holding a window overlay of `kind` (open or leaving): where an app-wide
+    /// content (the extensions panel, the install prompt, an agent's sheet) is drawn.
+    pub fn windows_with(&self, kind: Kind) -> Vec<(WindowId, Phase)> {
+        self.entries
+            .iter()
+            .filter_map(|(&(h, k), &p)| match h {
+                Home::Window(w) if k == kind => Some((w, p)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The entries window `w` can show: its own and every tab's.
     fn in_window(&self, w: WindowId) -> impl Iterator<Item = (Layer, Phase)> + '_ {
         self.entries

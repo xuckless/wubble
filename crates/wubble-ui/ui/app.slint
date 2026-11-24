@@ -644,8 +644,9 @@ export component AppWindow inherits Window {
     callback downloads-dismissed();
     // The sidebar footer's extensions button (shown once an extension is installed), its popover
     // (the enabled extensions' actions) and the open action's popup, which replaces the list;
-    // the host owns which is open (`wubble_core::extensions::shell::Panel`): `extensions-open`
-    // is the list, `extension-popup.open` the popup (once its page has a size).
+    // the store owns whether the panel is open (`overlay::Kind::Extensions`), the host what it
+    // shows (`extensions::shell::panel_drawn`): `extensions-open` is the list, `extension-popup.open`
+    // the popup (once its page has a size).
     in property <bool> has-extensions: false;
     in property <[ExtensionAction]> extension-actions;
     in property <bool> extensions-open: false;

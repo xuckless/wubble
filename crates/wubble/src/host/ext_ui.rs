@@ -15,12 +15,12 @@ use std::time::Duration;
 
 use slint::ComponentHandle;
 use wubble_core::extensions::shell::{
-    Clicked, POPUP_MAX, POPUP_TAB, Panel, PanelEffect, PanelEvent, Prompt, PromptEffect,
-    PromptEvent, options_url, panel_transition, prompt_text, prompt_transition, summary,
+    Clicked, POPUP_MAX, POPUP_TAB, Panel, PanelEffect, PanelEvent, PromptEffect, PromptEvent,
+    options_url, panel_drawn, panel_transition, prompt_text, prompt_transition, summary,
 };
-use wubble_core::extensions::{Event, ExtensionId, Installed, reaches, restart_needed};
+use wubble_core::extensions::{Event, Extension, ExtensionId, Installed, reaches, restart_needed};
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_core::space::{ContainerId, Side};
 use wubble_core::window::WindowId;
 use wubble_engine::app::ViewId;
@@ -86,11 +86,6 @@ impl SizePoll {
     }
 }
 
-/// The window that owns a panel or prompt: the one it opened in, until it closes.
-fn claim(owner: Option<WindowId>, open: bool, window: WindowId) -> Option<WindowId> {
-    open.then(|| owner.unwrap_or(window))
-}
-
 /// What the extension shell holds.
 pub(super) struct ExtUi {
     /// The installed list.
@@ -99,11 +94,12 @@ pub(super) struct ExtUi {
     at_start: Installed,
     /// wubble's unpacked copies of .crx extensions (`Profile::extensions_dir`).
     root: PathBuf,
-    panel: Panel,
-    prompt: Prompt,
-    /// The windows the panel and the prompt belong to: the others show nothing of them.
-    panel_owner: Option<WindowId>,
-    prompt_owner: Option<WindowId>,
+    /// The footer panel's and the install prompt's content: one each for the app, drawn in the
+    /// window holding its overlay in the store (`Kind::Extensions`, `Kind::ExtensionSheet`), which
+    /// alone says whether it is open. Set by an admitted open, cleared by its `Unmount`
+    /// ([`Host::ext_unmounted`]) once no window holds it.
+    panel: Option<Panel>,
+    prompt: Option<Extension>,
     /// The open popup's view.
     popup: Option<ViewId>,
     /// The question to the popup's page the next answer is for.
@@ -122,10 +118,8 @@ impl ExtUi {
             at_start: list.clone(),
             list,
             root: PathBuf::new(),
-            panel: Panel::Closed,
-            prompt: Prompt::Closed,
-            panel_owner: None,
-            prompt_owner: None,
+            panel: None,
+            prompt: None,
             popup: None,
             size_poll: SizePoll::default(),
             timer: slint::Timer::default(),
@@ -137,7 +131,7 @@ impl ExtUi {
     /// The popup's pane is on screen: its view is open and its page has a size.
     fn popup_size(&self) -> Option<(u32, u32)> {
         match self.panel {
-            Panel::Popup { size, .. } if self.popup.is_some() => size,
+            Some(Panel::Popup { size, .. }) if self.popup.is_some() => size,
             _ => None,
         }
     }
@@ -212,7 +206,14 @@ impl Host {
         }
         match crate::extensions::read(&path, &self.ext_ui.root) {
             Ok(ext) => {
-                // its unpacked copy, if any, is the next start's sweep
+                // its unpacked copy, if any, is the next start's sweep; one prompt for the app:
+                // another window's moves here (its words are replaced anyway)
+                if let Some(w) = self
+                    .ext_holder(Kind::ExtensionSheet)
+                    .filter(|&w| w != self.w.id)
+                {
+                    self.window_closed(w, Kind::ExtensionSheet);
+                }
                 if self.overlay_open(Kind::ExtensionSheet, None) {
                     self.prompt_event(PromptEvent::Ask(ext));
                 } else {
@@ -239,17 +240,38 @@ impl Host {
         });
     }
 
+    /// The prompt's event, on its content while its sheet is open (else on none).
     fn prompt_event(&mut self, event: PromptEvent) {
+        let holder = self.ext_holder(Kind::ExtensionSheet);
+        let live = holder.and(self.ext_ui.prompt.clone());
+        self.prompt_step(holder, live, event);
+    }
+
+    /// A rule closed the sheet (`Cancel`): its content, still there until its `Unmount`, answers
+    /// as cancelled; the store has closed it already.
+    pub(super) fn prompt_cancelled(&mut self) {
+        let live = self.ext_ui.prompt.clone();
+        self.prompt_step(None, live, PromptEvent::Cancel);
+    }
+
+    /// The prompt's machine on `live`: a content back is written in place, none closes the sheet
+    /// in `holder` (its owner's close; `None`: the store closed it).
+    fn prompt_step(
+        &mut self,
+        holder: Option<WindowId>,
+        live: Option<Extension>,
+        event: PromptEvent,
+    ) {
         if matches!(event, PromptEvent::Ask(_)) {
             self.ext_ui.prompt_serial = self.ext_ui.prompt_serial.wrapping_add(1);
         }
-        let (prompt, effects) = prompt_transition(std::mem::take(&mut self.ext_ui.prompt), event);
-        self.ext_ui.prompt_owner = claim(
-            self.ext_ui.prompt_owner,
-            prompt != Prompt::Closed,
-            self.w.id,
-        );
-        self.ext_ui.prompt = prompt;
+        let was = live.is_some();
+        let (prompt, effects) = prompt_transition(live, event);
+        match (prompt, holder) {
+            (Some(prompt), Some(_)) => self.ext_ui.prompt = Some(prompt),
+            (None, Some(w)) if was => self.window_closed(w, Kind::ExtensionSheet),
+            _ => {}
+        }
         for effect in effects {
             match effect {
                 PromptEffect::Install(ext) => self.extension_change(Event::Install(ext)),
@@ -321,10 +343,16 @@ impl Host {
         if !self.engine.ext_apis() {
             return;
         }
-        if self.ext_ui.panel == Panel::Closed && !self.overlay_open(Kind::Extensions, None) {
+        if self.panel_here() {
+            self.panel_event(PanelEvent::Dismiss);
             return;
         }
-        self.panel_event(PanelEvent::Toggle);
+        // one panel for the app: another window's closes there and opens here
+        self.panel_event(PanelEvent::Dismiss);
+        if self.overlay_open(Kind::Extensions, None) {
+            self.ext_ui.panel = Some(Panel::List);
+        }
+        self.render_extensions();
     }
 
     /// A press on an extension's row: its action runs on the visible tab, in a private window
@@ -363,16 +391,39 @@ impl Host {
         self.panel_event(PanelEvent::Dismiss);
     }
 
+    /// The panel's event, on its content while it is open (else on none).
     pub(super) fn panel_event(&mut self, event: PanelEvent) {
-        let (panel, effects) = panel_transition(std::mem::take(&mut self.ext_ui.panel), event);
-        self.ext_ui.panel_owner = claim(self.ext_ui.panel_owner, panel != Panel::Closed, self.w.id);
-        self.ext_ui.panel = panel;
+        let holder = self.ext_holder(Kind::Extensions);
+        let live = holder.and(self.ext_ui.panel.clone());
+        self.panel_step(holder, live, event);
+    }
+
+    /// A rule closed the panel (`Cancel`: Escape, a tab switch, another overlay, its window gone):
+    /// its content, still there until its `Unmount`, is dismissed (the popup's view closes); the
+    /// store has closed it already.
+    pub(super) fn panel_cancelled(&mut self) {
+        let live = self.ext_ui.panel.clone();
+        self.panel_step(None, live, PanelEvent::Dismiss);
+    }
+
+    /// The panel's machine on `live`: a content back is written in place, none closes the panel
+    /// in `holder` (its owner's close; `None`: the store closed it).
+    fn panel_step(&mut self, holder: Option<WindowId>, live: Option<Panel>, event: PanelEvent) {
+        let was = live.is_some();
+        let (panel, effects) = panel_transition(live, event);
+        match (panel, holder) {
+            (Some(panel), Some(_)) => self.ext_ui.panel = Some(panel),
+            (None, Some(w)) if was => self.window_closed(w, Kind::Extensions),
+            _ => {}
+        }
         for effect in effects {
             match effect {
                 PanelEffect::OpenPopup { url, .. } => {
                     if !self.open_popup(&url) {
                         self.extension_failed("its popup could not open");
-                        self.ext_ui.panel = Panel::Closed;
+                        if let Some(w) = holder {
+                            self.window_closed(w, Kind::Extensions);
+                        }
                     }
                 }
                 PanelEffect::ClosePopup => self.close_popup(),
@@ -383,7 +434,7 @@ impl Host {
 
     /// The action of an extension changed (badge, title, icon, popup): the popover is redrawn.
     pub(super) fn ext_action_changed(&mut self) {
-        if self.ext_ui.panel == Panel::List {
+        if self.ext_ui.panel == Some(Panel::List) {
             self.render_extensions();
         }
     }
@@ -477,19 +528,56 @@ impl Host {
             .flatten()
     }
 
-    /// The install prompt is open (an overlay).
-    pub(super) fn ext_ui_prompt_open(&self) -> bool {
-        self.ext_ui.prompt != Prompt::Closed && self.ext_ui.prompt_owner == Some(self.w.id)
+    /// The window whose store holds `kind` open (the extensions panel, the install prompt: one
+    /// content for the app, drawn there).
+    fn ext_holder(&self, kind: Kind) -> Option<WindowId> {
+        self.ui
+            .windows_with(kind)
+            .into_iter()
+            .find(|&(_, p)| p == Phase::Open)
+            .map(|(w, _)| w)
     }
 
-    /// The footer popover or an action's popup is open (an overlay).
-    pub(super) fn ext_ui_panel_open(&self) -> bool {
-        self.ext_ui.panel != Panel::Closed && self.panel_here()
-    }
-
-    /// The panel is this window's.
+    /// The panel is open in this window.
     fn panel_here(&self) -> bool {
-        self.ext_ui.panel_owner == Some(self.w.id)
+        self.ui.phase(self.w.id, Layer::new(Kind::Extensions, None)) == Some(Phase::Open)
+    }
+
+    /// `Unmount` of an extensions overlay: its content goes once no window holds it (a panel
+    /// that moved to another window keeps the new one's).
+    pub(super) fn ext_unmounted(&mut self, kind: Kind) {
+        if !self.ui.windows_with(kind).is_empty() {
+            return;
+        }
+        match kind {
+            Kind::Extensions => self.ext_ui.panel = None,
+            Kind::ExtensionSheet => self.ext_ui.prompt = None,
+            _ => {}
+        }
+    }
+
+    /// What window `w` draws of the extensions' overlays by the store's phase there: the
+    /// popover for the list only (never behind the popup that replaced it), and no sheet or
+    /// popup card where neither is open. The one writer of `extensions-open`; the sheet's and
+    /// the card's content (and their `open: true`) are [`Host::render_extensions_in`]'s.
+    pub(super) fn ext_drawn_in(&self, w: WindowId, window: &AppWindow) {
+        let open = |kind| self.ui.phase(w, Layer::new(kind, None)) == Some(Phase::Open);
+        let (list, card) = panel_drawn(open(Kind::Extensions), self.ext_ui.panel.as_ref());
+        window.set_extensions_open(list);
+        let prompt = window.get_extension_prompt();
+        if prompt.open && !open(Kind::ExtensionSheet) {
+            window.set_extension_prompt(ExtensionPrompt {
+                open: false,
+                ..prompt
+            });
+        }
+        let popup = window.get_extension_popup();
+        if popup.open && !(card && self.ext_ui.popup.is_some()) {
+            window.set_extension_popup(ExtensionPopup {
+                open: false,
+                ..popup
+            });
+        }
     }
 
     /// `view` is the open popup's.
@@ -587,7 +675,8 @@ impl Host {
         }
         match overlay {
             Overlay::ExtensionsPopover if self.overlay_open(Kind::Extensions, None) => {
-                self.panel_event(PanelEvent::Toggle);
+                self.ext_ui.panel = Some(Panel::List);
+                self.render_extensions();
             }
             Overlay::ExtensionPrompt if self.overlay_open(Kind::ExtensionSheet, None) => {
                 self.prompt_event(PromptEvent::Ask(gallery_asked()));
@@ -635,19 +724,17 @@ impl Host {
             window.set_settings_extensions(m)
         });
         window.set_settings_extensions_restart(restart);
-        let list_open = self.ext_ui.panel == Panel::List && self.panel_here();
-        // the extensions machine owns this openness (`Kind::Extensions` has no store phase)
-        window.set_extensions_open(list_open);
-        if list_open {
+        self.ext_drawn_in(self.w.id, window);
+        if window.get_extensions_open() {
             let actions = self.extension_actions();
             crate::bind::sync(window.get_extension_actions(), actions, |m| {
                 window.set_extension_actions(m)
             });
         }
-        let asking = match &self.ext_ui.prompt {
-            Prompt::Asking(ext) if self.ext_ui.prompt_owner == Some(self.w.id) => Some(ext),
-            _ => None,
-        };
+        let sheet = Layer::new(Kind::ExtensionSheet, None);
+        let asking = (self.ui.phase(self.w.id, sheet) == Some(Phase::Open))
+            .then_some(self.ext_ui.prompt.as_ref())
+            .flatten();
         window.set_extension_prompt(match asking {
             Some(ext) => {
                 let (title, message) = prompt_text(ext);
@@ -922,15 +1009,6 @@ mod tests {
         poll.asked(Some(EvalId(1)));
         assert!(poll.answers(EvalId(1)));
         assert!(poll.due());
-    }
-
-    #[test]
-    fn a_panel_belongs_to_the_window_it_opened_in_until_it_closes() {
-        let (a, b) = (WindowId(1), WindowId(2));
-        assert_eq!(claim(None, true, a), Some(a));
-        assert_eq!(claim(Some(a), true, b), Some(a));
-        assert_eq!(claim(Some(a), false, b), None);
-        assert_eq!(claim(None, false, a), None);
     }
 
     #[test]

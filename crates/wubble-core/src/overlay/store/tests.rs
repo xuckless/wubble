@@ -391,9 +391,17 @@ fn window_entries_are_per_window() {
             Effect::Focus(W2, KeyOwner::Layer(win(Spaces)))
         ]
     );
+    assert_eq!(
+        ui.windows_with(Spaces),
+        [(W1, Phase::Open), (W2, Phase::Open)]
+    );
     let (ui, fx) = reduce(ui, &two, Action::WindowGone(W2));
     assert_eq!(fx, [Cancel(win(Spaces)), Unmount(win(Spaces))]);
     assert_eq!(ui.phase(W1, win(Spaces)), Some(Phase::Open));
+    // a window that closed its own holds it leaving; no tab's entry is a window's
+    let (ui, _) = reduce(ui, &two, close(win(Spaces)));
+    assert_eq!(ui.windows_with(Spaces), [(W1, Phase::Leaving)]);
+    assert!(ui.windows_with(Find).is_empty());
     // one notice per window: window 2's leaves window 1's alone
     let (ui, _) = reduce(ui, &two, open(on(Notice, A)));
     let (_, fx) = reduce(
