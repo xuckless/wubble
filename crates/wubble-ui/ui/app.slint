@@ -803,6 +803,7 @@ export component AppWindow inherits Window {
     callback video-command(string, float);
     // the strip's save button, its bottom left (window px): the media downloader's entry
     callback video-save(length, length);
+    callback video-quality(length, length);
     callback video-hovered(bool);
     // The Boost editor (wubble_core::boost).
     in property <BoostView> boost;
@@ -1404,6 +1405,9 @@ export component AppWindow inherits Window {
                     }
                     save(x, y) => {
                         root.video-save(x, y);
+                    }
+                    quality(x, y) => {
+                        root.video-quality(x, y);
                     }
                     hovered(over) => {
                         root.video-hovered(over);

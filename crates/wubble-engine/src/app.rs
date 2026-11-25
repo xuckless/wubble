@@ -996,8 +996,8 @@ impl Engine {
             requests: RequestMode::default(),
             page_events: PageQueue::default(),
             content_filter: config.content_filter,
-            response_observer: config.response_observer,
-            profiles: Profiles::new(config.cache_dir),
+            response_observer: config.response_observer.clone(),
+            profiles: Profiles::new(config.cache_dir, config.response_observer),
             ext: ExtApi::find(),
         };
         engine.apply(Event::Initialised);

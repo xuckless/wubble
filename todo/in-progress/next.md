@@ -154,13 +154,13 @@ TODO.md review findings: "Video strip button reads 'Save video'; a second click 
 What to build: (1) Core (wubble-core/src/video.rs): make `Save` carry the job's state for this tab's video: Idle, Saving{fraction}, Saved, Failed. Derive it from the downloads entry the media job owns, which has one owner, the downloads list. The click maps to a pure effect: Idle → start the downloader; Saving → open the downloads popover at that row, never a second job; Saved → show in folder or open the menu; Failed → retry. Unit tests over the states. (2) Label: the button's accessible label and tooltip read from that state ("Save video", "Saving video, 40%", "Saved, show in folder", "Save failed, retry"), and the glyph shows progress with the kit's progress part. Settle the wording with the owner's decision on wording if one exists; otherwise use these and flag them. (3) video-controls.slint binds the new fields only (no new drawing outside kit parts). All platforms.
 
 ## D. Video downloader: wider and harder (owner: "more sites and formats, quality and codec choice, and a way to detect subtitle files too")
-- [ ] More sites and formats: embedded players (iframes, YouTube and Vimeo embeds), service-worker-served media, multi-period DASH, audio-only
-- [ ] Quality and codec choice: the best quality this machine plays by default, a quality menu, audio and video merged
-- [ ] Subtitles: detect subtitle tracks and files (WebVTT, SRT, TTML, HLS/DASH subtitle renditions) and offer them with the video
+- [~] More sites and formats: embedded players (iframes, YouTube and Vimeo embeds), service-worker-served media, multi-period DASH, audio-only (integrated on `next/all`: loopback probes save iframe, `sw`, `dash-periods` (16 s, the ad period left out, joined by the rebuilt bundled ffmpeg) and audio; the YouTube embeds need `media.youtube` and a live check; Vimeo embeds not written)
+- [x] Quality and codec choice: the best quality this machine plays by default, a quality menu, audio and video merged (integrated on `next/all`; unit tests, probes)
+- [x] Subtitles: detect subtitle tracks and files (WebVTT, SRT, TTML, HLS/DASH subtitle renditions) and offer them with the video (integrated on `next/all`; probes save `<track>`, SRT, HLS and DASH subtitles beside the video; TTML and YouTube captions by unit tests only)
 
 ## Media downloader: multi-period DASH and codec-aware default quality (`media-dash-periods-codec`)
 
-Key: `media-dash-periods-codec` · engine patch: no · state: not written.
+Key: `media-dash-periods-codec` · engine patch: no · state: [x] integrated on `next/all` (unit tests; `dash-periods` probe joined with the bundled ffmpeg rebuilt with `concat`).
 
 TODO.md: "Media downloader: a DASH manifest of several periods is refused ('Not supported'); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)". In wubble-core/src/media/dash.rs, `let [period] = mpd.periods.as_slice() else { … "a manifest with several periods" }` refuses multi-period manifests. In wubble-core/src/media/select.rs, `choose` takes the first choice of the wanted height.
 
@@ -168,7 +168,7 @@ What to build: (1) dash.rs: for several periods, match representations across pe
 
 ## Media detection for service-worker answers and embedded YouTube (`media-detect-sw-iframe`)
 
-Key: `media-detect-sw-iframe` · engine patch: no · state: not written.
+Key: `media-detect-sw-iframe` · engine patch: no · state: [~] integrated on `next/all` (the `sw` probe saves the worker's clip, after a fix: welding change 69's handler cancelled every service worker fetch; the embedded YouTube lookup unchecked live).
 
 TODO.md review findings: "a video a service worker answers is not seen by the detection (the worker's own fetch has no tab; `--smoke media=probe` on fixtures `sw`): the save control says nothing was found" and "an embedded YouTube player (an iframe of youtube.com) has no lookup, since the lookup keys on the tab's own address". The response hook (host/media.rs, on CEF's IO thread) attributes responses by browser, and a service worker's fetch has none. The YouTube lookup (`media_youtube_page`) runs only for the tab's committed URL (youtube::video_id).
 
@@ -219,7 +219,7 @@ Build:
 - [ ] `$csp` filters: main-frame responses the blocker names get the CSP through DevTools `Fetch` (CEF cannot change response headers)
 - [ ] Picture-in-picture and the video frame rows for a video inside a subframe
 - [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
-- [ ] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH
+- [~] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH (the build script's stamp includes the configuration, so packaging rebuilds it; built and checked on Linux for `next/all`; the Mac's build on the Mac)
 - [ ] macOS Keychain prompts (owner, 2026-11-25: twice on a first install, again on every test build). Found on the Mac: the release's signature requirement is team and bundle id (`identifier "dev.wubble.browser" ... OU = "2MGLZ5685D"`), so signed updates keep their grant; an ad hoc build's is its cdhash, so every rebuild asks. Two items, so two prompts: `wubble`/`vault-wubble` (the vault key) and `Chromium Safe Storage`/`Chromium` (CEF's cookie and password key, named for Chromium, so shared with any Chromium-branded app on the machine).
   - [ ] A `--profile DIR` run can be throwaway (honour the `.wubble-smoke-profile` marker or a flag), so the harness and test apps use Chromium's mock keychain and a test vault
   - [ ] One prompt, not two: the vault's key kept in wubble's own item next to the cookie key, or derived from one item

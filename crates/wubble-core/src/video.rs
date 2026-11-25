@@ -1167,6 +1167,7 @@ mod tests {
                 url: format!("https://a.test/{i}.mp4"),
                 kind: crate::media::detect::Kind::File,
                 title: None,
+                note: None,
                 found: f.clone(),
             })
             .collect()

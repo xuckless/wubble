@@ -829,6 +829,79 @@ fn url_host(url: &str) -> &str {
     rest.split(['/', ':', '?', '#']).next().unwrap_or_default()
 }
 
+/// wubble change 36: one response's headers to `observer` (69: with the
+/// request's initiator).
+fn report_response(
+    observer: &ResponseObserver,
+    browser_id: i32,
+    initiator: &str,
+    request: Option<&mut cef::Request>,
+    response: Option<&mut cef::Response>,
+) {
+    let (Some(request), Some(response)) = (request, response) else {
+        return;
+    };
+    let header = |name: &str| cef_string(response.header_by_name(Some(&cef::CefString::from(name))));
+    // wubble change: CEF's enum raw type is i32 on Windows, u32 elsewhere.
+    #[allow(clippy::unnecessary_cast)]
+    let resource_type = request.resource_type().get_raw() as u32;
+    let info = ResponseInfo::from_headers(
+        cef_string(request.url()),
+        browser_id,
+        initiator.to_owned(),
+        resource_type,
+        response.status(),
+        &cef_string(response.mime_type()),
+        header,
+    );
+    observer.seen(&info);
+}
+
+cef::wrap_resource_request_handler! {
+    struct WeldWorkerResponses {
+        observer: ResponseObserver,
+        initiator: String,
+    }
+
+    impl ResourceRequestHandler {
+        // wubble change 69: the request goes on unchanged. Not the trait's
+        // default: cef-rs's `ReturnValue::default()` is `RV_CANCEL`, which
+        // failed every service worker fetch.
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut cef::Request>,
+            _callback: Option<&mut cef::Callback>,
+        ) -> cef::ReturnValue {
+            cef::ReturnValue::CONTINUE
+        }
+
+        // wubble change 69: a browserless request's response (a service
+        // worker's fetch), reported like a browser's; the request is never
+        // changed.
+        fn on_resource_response(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            response: Option<&mut cef::Response>,
+        ) -> ::std::os::raw::c_int {
+            report_response(&self.observer, 0, &self.initiator, request, response);
+            0
+        }
+    }
+}
+
+/// wubble change 69: the handler a request context gives its browserless
+/// requests, which only reports their responses.
+pub(crate) fn worker_responses(
+    observer: ResponseObserver,
+    initiator: Option<&cef::CefString>,
+) -> cef::ResourceRequestHandler {
+    WeldWorkerResponses::new(observer, opt_string(initiator))
+}
+
 /// wubble change: whether `host` is `site` or one of its subdomains.
 fn in_site(host: &str, site: &str) -> bool {
     let (host, site) = (host.to_ascii_lowercase(), site.to_ascii_lowercase());
@@ -936,23 +1009,10 @@ cef::wrap_resource_request_handler! {
             request: Option<&mut cef::Request>,
             response: Option<&mut cef::Response>,
         ) -> ::std::os::raw::c_int {
-            let (Some(observer), Some(request), Some(response)) = (&self.observer, request, response)
-            else {
-                return 0;
-            };
-            let header = |name: &str| cef_string(response.header_by_name(Some(&cef::CefString::from(name))));
-            // wubble change: CEF's enum raw type is i32 on Windows, u32 elsewhere.
-            #[allow(clippy::unnecessary_cast)]
-            let resource_type = request.resource_type().get_raw() as u32;
-            let info = ResponseInfo::from_headers(
-                cef_string(request.url()),
-                browser.map_or(0, |b| b.identifier()),
-                resource_type,
-                response.status(),
-                &cef_string(response.mime_type()),
-                header,
-            );
-            observer.seen(&info);
+            if let Some(observer) = &self.observer {
+                let browser_id = browser.map_or(0, |b| b.identifier());
+                report_response(observer, browser_id, &self.initiator, request, response);
+            }
             0
         }
 

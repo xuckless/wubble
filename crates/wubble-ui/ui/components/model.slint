@@ -954,6 +954,9 @@ export struct VideoView {
     save-fraction: float,
     // its accessible label (wubble_core::video::Save::label)
     save-label: string,
+    // the downloader offers more than one way to save the page (qualities, codecs, subtitles):
+    // the strip has a button for its menu, whatever "ask each time" says
+    qualities: bool,
     marks: [VideoMark],
 }
 

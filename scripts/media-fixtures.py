@@ -8,7 +8,8 @@
     scripts/media-fixtures.py serve DIR PORT   # 127.0.0.1 only; each request is one line in DIR/server.log
 
 Pages (`/NAME.html`): plain redirect query nolen cookie cookie-slow cookie-hls cookie-hls-pair reset iframe mse hls-ts hls-fmp4 hls-aes hls-drm
-hls-live hls-fail hls-audio hls-media dash-timeline dash-list dash-file dash-mse audio.
+hls-live hls-fail hls-audio hls-media dash-timeline dash-list dash-file dash-mse audio sw yt-embed
+yt-nocookie subs subs-srt hls-subs dash-periods dash-subs dash-audio.
 Nothing here is committed output: DIR is a scratch folder. Loopback only, no outside request.
 """
 import http.server
@@ -86,6 +87,36 @@ def make(out):
         ff(*V, *A, *H264, *AAC, "-shortest", "-map", "0:v", "-map", "1:a", "-f", "dash",
            "-seg_duration", "2", "-adaptation_sets", "id=0,streams=v id=1,streams=a", *extra,
            f"{name}/manifest.mpd")
+    # subtitles: a sidecar WebVTT and SRT, and an HLS rendition of two WebVTT segments
+    vtt = "WEBVTT\n\n00:00.500 --> 00:03.000\nFirst line\n\n00:03.500 --> 00:07.000\nSecond line\n"
+    open("en.vtt", "w").write(vtt)
+    open("en.srt", "w").write("1\n00:00:00,500 --> 00:00:03,000\nFirst line\n\n2\n00:00:03,500 --> 00:00:07,000\nSecond line\n")
+    os.makedirs("hls-ts/subs", exist_ok=True)
+    open("hls-ts/subs/s0.vtt", "w").write("WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n00:00.500 --> 00:03.000\nFirst line\n")
+    open("hls-ts/subs/s1.vtt", "w").write("WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n00:04.000 --> 00:07.000\nSecond line\n")
+    open("hls-ts/subs/en.m3u8", "w").write("#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-PLAYLIST-TYPE:VOD\n"
+                                         "#EXTINF:4,\ns0.vtt\n#EXTINF:4,\ns1.vtt\n#EXT-X-ENDLIST\n")
+    master = open("hls-ts/master.m3u8").read()
+    sub = '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",DEFAULT=YES,URI="subs/en.m3u8"\n'
+    master = master.replace("#EXTM3U\n", "#EXTM3U\n" + sub, 1).replace('AUDIO="aud"', 'AUDIO="aud",SUBTITLES="subs"')
+    open("hls-ts/master-subs.m3u8", "w").write(master)
+    # DASH: a pre-roll "ad" period (the 320x180 rendition, other ids) and the programme in two
+    # periods, reusing the timeline fixture's segments; a text set; an audio-only manifest
+    mpd = open("dash-timeline/manifest.mpd").read()
+    period = re.search(r"<Period.*?</Period>", mpd, re.S).group(0)
+    body = re.sub(r'(<Period)[^>]*>', r'\1>', period)
+    prog = body.replace("<Period>", '<Period id="p{n}" duration="PT4S">').replace('media="', 'media="../dash-timeline/').replace('initialization="', 'initialization="../dash-timeline/')
+    ad = prog.replace('id="0"', 'id="ad0"').replace('id="1"', 'id="ad1"').replace('height="360"', 'height="180"').replace("mp4a.40.2", "mp4a.40.5")
+    head = mpd[: mpd.index("<Period")]
+    os.makedirs("dash-periods", exist_ok=True)
+    open("dash-periods/manifest.mpd", "w").write(
+        head + ad.replace("{n}", "ad").replace("PT4S", "PT2S") + prog.replace("{n}", "1") + prog.replace("{n}", "2") + "</MPD>\n")
+    text = ('<AdaptationSet contentType="text" mimeType="text/vtt" lang="en"><Label>English</Label>'
+            '<Representation id="t" bandwidth="1"><BaseURL>../en.vtt</BaseURL></Representation></AdaptationSet>')
+    os.makedirs("dash-subs", exist_ok=True)
+    open("dash-subs/manifest.mpd", "w").write(mpd.replace("</Period>", text + "</Period>").replace('media="', 'media="../dash-timeline/').replace('initialization="', 'initialization="../dash-timeline/'))
+    os.makedirs("dash-audio", exist_ok=True)
+    ff(*A, *AAC, "-f", "dash", "-seg_duration", "2", "dash-audio/manifest.mpd")
 
 
 PAGES = {
@@ -127,8 +158,24 @@ for _n in ("dash-timeline", "dash-list", "dash-file"):
 # a service worker answers /sw/clip.mp4 itself, from the clip: the page's video request is served
 # by the worker, not the network (does detection still see it?)
 PAGES["sw"] = """<video id=v autoplay muted loop controls width=480></video><script>
-navigator.serviceWorker.register('/sw.js').then(()=>navigator.serviceWorker.ready).then(()=>
-  fetch('/sw/clip.mp4').then(()=>{v.src='/sw/clip.mp4'})).catch(e=>note('sw '+e))</script>"""
+navigator.serviceWorker.register('/sw.js').then(()=>navigator.serviceWorker.ready)
+  // ready is the worker active, not yet in control of this page (its clients.claim()): wait for it
+  .then(()=>navigator.serviceWorker.controller||new Promise(r=>navigator.serviceWorker.addEventListener('controllerchange',r,{once:true})))
+  .then(()=>fetch('/sw/clip.mp4').then(()=>{v.src='/sw/clip.mp4'})).catch(e=>note('sw '+e))</script>"""
+# embedded YouTube players (the lookup needs `media.youtube` on; without it the menu says so)
+PAGES["yt-embed"] = '<iframe src="https://www.youtube.com/embed/aqz-KE-bpKQ" width=560 height=315 style="border:0"></iframe>'
+PAGES["yt-nocookie"] = '<iframe src="https://www.youtube-nocookie.com/embed/aqz-KE-bpKQ" width=560 height=315 style="border:0"></iframe>'
+# subtitles: a <track> (listed with its language before it is shown), a sidecar SRT the page
+# fetches, an HLS master with a subtitle rendition
+PAGES["subs"] = ('<video src="/f/clip.mp4" autoplay muted loop controls width=480>'
+                 '<track kind="subtitles" src="/f/en.vtt" srclang="en" label="English"></video>')
+PAGES["subs-srt"] = '<video src="/f/clip.mp4" autoplay muted loop controls width=480></video><script>fetch("/f/en.srt")</script>'
+PAGES["hls-subs"] = '<video src="/f/hls-ts/master-subs.m3u8" autoplay muted loop controls width=480></video>'
+for _n in ("dash-periods", "dash-subs", "dash-audio"):
+    PAGES[_n] = (
+        '<video src="/f/clip.mp4" autoplay muted loop controls width=480></video>'
+        f"<script>fetch('/f/{_n}/manifest.mpd');</script>"
+    )
 PAGES["shadow"] = """<div id=h></div><script>
 h.attachShadow({mode:'open'}).innerHTML='<video src="/f/clip.mp4" autoplay muted loop controls width=480></video>'</script>"""
 PAGES["cached"] = '<video src="/cache/clip.mp4" autoplay muted loop controls width=480></video>'
@@ -196,7 +243,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     mime = {".mp4": "video/mp4", ".m4s": "video/iso.segment", ".webm": "video/webm", ".mp3": "audio/mpeg",
             ".m3u8": "application/vnd.apple.mpegurl", ".mpd": "application/dash+xml", ".ts": "video/mp2t",
-            ".key": "application/octet-stream", ".bin": "application/octet-stream", ".html": "text/html"}
+            ".key": "application/octet-stream", ".bin": "application/octet-stream", ".html": "text/html",
+            ".vtt": "text/vtt", ".srt": "application/x-subrip"}
 
     def file(self, rel, ranges=True, length=True, mime=None, slow=False, reset_at=None, cache=None):
         path = os.path.normpath(os.path.join(self.root, rel))

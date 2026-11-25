@@ -764,6 +764,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
                     self.save_media(tab, item, choice)
                 }
+                MenuEffect::Run(MenuCommand::SaveSubtitle { item, index }) => {
+                    self.save_subtitle(tab, item, index)
+                }
                 MenuEffect::Run(
                     MenuCommand::Engine(_)
                     | MenuCommand::Separator

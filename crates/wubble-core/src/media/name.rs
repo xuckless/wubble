@@ -74,6 +74,25 @@ pub fn media_file_name(title: &str, note: &str, container: Container) -> String 
     sanitize_file_name(&name)
 }
 
+/// A subtitle file beside the video: the video's file name without its extension (`stem`),
+/// the language when it is a plain code (`en`, `pt-BR`; anything else is left out), and the
+/// subtitles' extension: `Title (720p).en.vtt`, which players pick up beside `Title (720p).mp4`.
+pub fn subtitle_file_name(stem: &str, lang: Option<&str>, container: Container) -> String {
+    let stem = if stem.trim().is_empty() {
+        "video"
+    } else {
+        stem.trim()
+    };
+    let lang = lang.map(str::trim).filter(|l| {
+        (1..=16).contains(&l.len()) && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    let name = match lang {
+        Some(lang) => format!("{stem}.{lang}.{}", container.ext()),
+        None => format!("{stem}.{}", container.ext()),
+    };
+    sanitize_file_name(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,6 +123,33 @@ mod tests {
         assert_eq!(url_title("https://a.test/v/a+b.mp4"), "a+b");
         assert_eq!(url_title("https://a.test/dl?id=5"), "dl");
         assert_eq!(url_title("https://a.test/"), "");
+    }
+
+    #[test]
+    fn subtitles_take_the_videos_name_and_their_language() {
+        let cases = [
+            (
+                "Clip (720p)",
+                Some("en"),
+                Container::Vtt,
+                "Clip (720p).en.vtt",
+            ),
+            ("Clip", Some("pt-BR"), Container::Srt, "Clip.pt-BR.srt"),
+            ("Clip", None, Container::Ttml, "Clip.ttml"),
+            ("Clip", Some(" fr "), Container::Vtt, "Clip.fr.vtt"),
+            ("Clip", Some("English (auto)"), Container::Vtt, "Clip.vtt"),
+            ("Clip", Some("../x"), Container::Vtt, "Clip.vtt"),
+            ("Clip", Some(""), Container::Vtt, "Clip.vtt"),
+            ("  ", Some("en"), Container::Vtt, "video.en.vtt"),
+            ("A/B", Some("de"), Container::Vtt, "B.de.vtt"),
+        ];
+        for (stem, lang, container, want) in cases {
+            assert_eq!(
+                subtitle_file_name(stem, lang, container),
+                want,
+                "{stem} {lang:?}"
+            );
+        }
     }
 
     #[test]

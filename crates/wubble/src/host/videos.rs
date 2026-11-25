@@ -438,6 +438,28 @@ impl Host {
 
     fn media_snapshot(&mut self, tab: TabId, json: Value) {
         let now = now_ms() as u64;
+        // An embedded player's address (`kit.js` `bigFrame`): a YouTube embed is looked up as
+        // its watch page would be (behind `media.youtube`), before the frame's strip asks
+        // whether the downloader lists anything. The id is checked by `youtube::video_id`.
+        if let Some(src) = json
+            .pointer("/v/src")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 2048)
+        {
+            self.media_youtube_page(tab, src);
+        }
+        // The video's `<track>` subtitle files, which the hook sees only once they are shown.
+        let tracks = json.pointer("/v/tracks").and_then(Value::as_array);
+        for t in tracks.into_iter().flatten().take(16) {
+            let text = |key: &str| t.get(key).and_then(Value::as_str).unwrap_or_default();
+            let src = text("src");
+            if src.len() <= 2048 && src.starts_with("http") {
+                let lang = Some(text("lang").chars().take(16).collect::<String>())
+                    .filter(|l| !l.is_empty());
+                let label: String = text("label").chars().take(80).collect();
+                self.media_subtitle_track(tab, src, lang, label);
+            }
+        }
         // A frame's area is a strip only over what the downloader saw of the page.
         let video = json
             .get("v")
@@ -623,6 +645,13 @@ impl Host {
     pub(crate) fn video_save(&mut self, x: f32, y: f32) {
         if let Some(tab) = self.shown() {
             self.video_cmd(tab, VideoCmd::Save { x, y });
+        }
+    }
+
+    /// The strip's quality button, its bottom left at `x`, `y`: the downloader's menu, always.
+    pub(crate) fn video_quality(&mut self, x: f32, y: f32) {
+        if let Some(tab) = self.shown() {
+            self.media_menu(tab, x, y);
         }
     }
 
@@ -912,6 +941,7 @@ impl Host {
                             _ => -1.0,
                         },
                         save_label: save.label().into(),
+                        qualities: self.media_ways(tab) > 1,
                         marks,
                     }
                 })

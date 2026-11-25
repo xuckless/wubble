@@ -332,14 +332,21 @@ pub(crate) struct Profiles {
     /// The last value of each preference [`Self::set_pref`] was given: set on
     /// each context as it comes up, so a container opened later has them too.
     prefs: BTreeMap<&'static str, PrefValue>,
+    /// Sees each context's browserless responses (its service workers' fetches), tagged with
+    /// the container.
+    workers: Option<Arc<dyn crate::filter::ResponseObserver>>,
 }
 
 impl Profiles {
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub(crate) fn new(
+        root: PathBuf,
+        workers: Option<Arc<dyn crate::filter::ResponseObserver>>,
+    ) -> Self {
         Self {
             root,
             open: BTreeMap::new(),
             prefs: BTreeMap::new(),
+            workers,
         }
     }
 
@@ -380,7 +387,11 @@ impl Profiles {
             Storage::Disk => Some(container_dir(&self.root, container)),
             Storage::Memory => None,
         };
-        let profile = SharedProfile::new(runtime, dir)
+        let workers = self
+            .workers
+            .clone()
+            .map(|o| crate::filter::response_observer(o, Some(container)));
+        let profile = SharedProfile::new(runtime, dir, workers)
             .map_err(|e| EngineError::View(format!("container {}: {e}", container.0)))?;
         let mut runs = 0;
         while !profile.is_ready() {

@@ -951,6 +951,9 @@ pub struct ResponseInfo {
     pub content_disposition: String,
     /// `Accept-Ranges: bytes`.
     pub accepts_ranges: bool,
+    /// wubble change 69: the origin that started the request, as CEF names
+    /// it (a service worker's own origin for its fetches); may be empty.
+    pub initiator: String,
 }
 
 impl ResponseInfo {
@@ -959,6 +962,7 @@ impl ResponseInfo {
     pub(crate) fn from_headers(
         url: String,
         browser_id: i32,
+        initiator: String,
         resource_type: u32,
         status: i32,
         mime: &str,
@@ -968,6 +972,7 @@ impl ResponseInfo {
         Self {
             url,
             browser_id,
+            initiator,
             resource_type,
             status,
             mime,
@@ -2846,13 +2851,22 @@ mod request_vocabulary_tests {
             }
             .to_owned()
         };
-        let info = ResponseInfo::from_headers("https://v.test/a".into(), 3, 8, 206, "Video/MP4; codecs=avc1", headers);
+        let info = ResponseInfo::from_headers(
+            "https://v.test/a".into(),
+            3,
+            "https://v.test".into(),
+            8,
+            206,
+            "Video/MP4; codecs=avc1",
+            headers,
+        );
         assert_eq!(info.mime, "video/mp4");
         assert_eq!(info.content_length, Some(1234));
         assert_eq!(info.content_range, "bytes 0-99/5000");
         assert!(info.accepts_ranges);
         assert_eq!((info.browser_id, info.resource_type, info.status), (3, 8, 206));
-        let bare = ResponseInfo::from_headers(String::new(), 0, 0, 200, "", |_| "x".into());
+        assert_eq!(info.initiator, "https://v.test");
+        let bare = ResponseInfo::from_headers(String::new(), 0, String::new(), 0, 200, "", |_| "x".into());
         assert_eq!((bare.mime.as_str(), bare.content_length, bare.accepts_ranges), ("", None, false));
         let panics = ResponseObserver::new(|_| panic!("observer bug"));
         panics.seen(&bare);
