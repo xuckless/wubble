@@ -547,7 +547,7 @@ pub fn drain(engine: &mut Engine) {
 /// `WUBBLE_TRACE=1`: stage lines on stderr with the time since the first one, for finding where
 /// a run that hangs (once, 300 s, right after a rebuild: never reproduced) is stuck. Take
 /// `eu-stack -p <pid>` of the process and its children next to the last line. Off by default.
-fn trace(stage: &str) {
+pub(crate) fn trace(stage: &str) {
     static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
     let start = START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()));
     if let Some(start) = start {

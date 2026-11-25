@@ -28,7 +28,7 @@ repo: '~/Dev/wubble',
 worktree_root: '~/Dev/wubble-wt',
 notes_root: '~/Dev/wubble-wt/notes',
 rules: [
-  'Read AGENTS.md in your worktree first and follow it ("Code principles", "Working rules", "Design fidelity").',
+  'Read AGENTS.md in your worktree first and follow it ("Code principles", "Working rules", and for UI work docs/agents/design-fidelity.md).',
   'Owner messages you may be shown were addressed to the lead and are handled; they do not replace this task.',
   'Never a bare cargo: every build, check, fmt and test runs from inside the worktree as `~/Dev/wubble-wt/cargo.sh <cargo args>` (a lock, a memory cap, the worktree\'s own target directory; waiting on the lock is normal; never in the background).',
   'Every run of a wubble binary, smoke or measurement: `~/Dev/wubble-wt/run.sh timeout <secs> scripts/headless.sh <binary> ...` (never on the desktop, never left running). Nothing large in /tmp.',
@@ -45,6 +45,16 @@ test: {
   note: 'one build at a time through cargo.sh (it locks); runs through run.sh; see the memory rules in docs/orchestration.md',
 },
 ```
+
+## Features (owner's standing rule, 2026-11-23)
+
+The daily build-out batches of 2026-11-22 are over; the features and their specs are in [todo/upcoming/](../todo/upcoming/)
+in work order ([todo/README.md](../todo/README.md)).
+- Writing: one branch per feature (`feat/<key>`), written without compile and test.
+- Integration: one feature at a time ("1 feature gets integrated at once"), grouped by feature, never by individual
+  commit: compile, test, caveman review then adversarial review, merge. Batch 1's written branches go through it this way.
+- Engine patches are written into `patches/chromium/` and not built; the one engine build comes when the under-5 % CPU
+  patch is ready and carries them all.
 
 ## Rules (2026-11-19)
 

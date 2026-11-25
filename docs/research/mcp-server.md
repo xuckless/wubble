@@ -40,7 +40,7 @@ and an independent agent on another model (DuckDuckGo, Wikipedia, Excalidraw by 
 and tab handles (no hint whether a tab exists outside the session), a site outside the session's list, a stale ref,
 `fill_secret` with no secret bound. Not tested: a script or redirect getting past the http(s)-only rule.
 
-What they found, and the order to fix it in (owner, 2026-11-20; the open items are in TODO.md "MCP server"):
+What they found, and the order to fix it in (owner, 2026-11-20; the open items are in [todo/upcoming/10-mcp-server.md](../../todo/upcoming/10-mcp-server.md); the guardrails are shelved in [todo/shelved/agent-safety.md](../../todo/shelved/agent-safety.md)):
 
 1. **Bugs.** A `screenshot` cropped to a ref ignores the scroll position and does not scroll the element into view;
    `click` fails on some visible links; `evaluate` takes one expression only and returns `{}` for a promise.
@@ -82,7 +82,7 @@ connection still tears the session down: hand-off is explicit (decisions.md "Age
 an agent Space, which the owner clears with its dustbin in the Spaces popup (decisions.md "Agent Spaces"). A session's sites hold for every top-level navigation of its tabs (decisions.md "Agent sites hold for
 the tab"). Known limit: the sites say where a tab may be, not what its pages may fetch: a page on an allowed site
 still loads images, scripts and XHR from anywhere, as it would for the owner. Not done: network
-idle for in-page navigations; the wheel over a nested scroller (TODO.md).
+idle for in-page navigations; the wheel over a nested scroller (todo/upcoming/10-mcp-server.md).
 
 **A blind agent's first contact (2026-11-20).** An agent on another model, told only "wubble is running and has
 an MCP server", reached a working `tools/list` in six commands, and only by reading the process list: `--profile`
@@ -195,7 +195,7 @@ again, and the autofill and `fill_secret` below cover that page. [I] DevTools' `
 `setDOMStorageItem` read and write one origin's localStorage, but only through a page of each container (a live view
 in the owner's Space and one in the session's) and only for an origin named exactly, while a grant names site
 patterns, not origins; DevTools gives a page no list of the origins a container holds data for, so a faithful copy
-cannot know what to copy, and it is not built (TODO.md). Service workers, client certificates, HTTP auth
+cannot know what to copy, and it is not built (todo/upcoming/10-mcp-server.md). Service workers, client certificates, HTTP auth
 credentials, passkeys: not carried.
 
 **(b) Passwords: names bound to logins on the sheet.**
@@ -491,13 +491,13 @@ Chromium extensions are off until M6 [V decisions.md]).
 | Boundary | How the engine detects it | The prompt shows | Default | Pre-approve? |
 |---|---|---|---|---|
 | File upload | `on_file_dialog` (welding `DialogHandler`) [V] | origin, field label, file | the human picks; a file variable asks once per origin | File variables only |
-| Download, media download | `can_download`/`on_before_download` [V]; the media downloader's job | origin, name, size, type | built: refused in an agent-driven tab (logged to the session); asks: next (TODO.md) | Per origin |
-| Clipboard write | Wayland: the helper's `clipboard.js` bridge reports every page copy [V]; X11, macOS, Windows: Chromium writes itself [V clipboard.rs] | text (truncated), origin | not built: not isolated on any platform (the bridge cannot tell the agent's copy from the human's; TODO.md) | Yes |
+| Download, media download | `can_download`/`on_before_download` [V]; the media downloader's job | origin, name, size, type | built: refused in an agent-driven tab (logged to the session); asks: shelved (todo/shelved/agent-safety.md) | Per origin |
+| Clipboard write | Wayland: the helper's `clipboard.js` bridge reports every page copy [V]; X11, macOS, Windows: Chromium writes itself [V clipboard.rs] | text (truncated), origin | not built: not isolated on any platform (the bridge cannot tell the agent's copy from the human's; shelved: todo/shelved/agent-safety.md) | Yes |
 | Navigation outside the list | `on_before_browse` and the resource filter on main-frame requests, redirects included [V handlers.rs] | from, to, the link's name | blocks; asks if allowed | Add the site |
 | Popup / new window | `popup.rs` with the agent-gesture tag | target origin | as navigation | As navigation |
 | Secret fill outside its binding | the origin and kind checks above | refusal, no prompt | refused | No |
 | Payment Request | `PaymentRequest.show()` [?: whether CEF 156 offers it is unverified] | merchant, total | always asks, or off in agent containers | No |
-| Permission prompts | `on_show_permission_prompt` [V] | as today, labelled "during an agent session" | built: denied in an agent-driven tab, no prompt; the human answers: next (TODO.md) | No |
+| Permission prompts | `on_show_permission_prompt` [V] | as today, labelled "during an agent session" | built: denied in an agent-driven tab, no prompt; the human answers: shelved (todo/shelved/agent-safety.md) | No |
 | Leave-page dialog, JS prompt | welding `OnJSDialog`/`OnBeforeUnloadDialog` [V] | the page's text | agent may answer alerts and confirms | n/a |
 | Non-GET after an agent action (phase 3) | resource request handler, below | method, URL, body summary | per write mode | Per origin |
 

@@ -1,6 +1,6 @@
 # Locked widget kit: plan, lanes, comparison harness
 
-Status (2026-11-19): phases 0 to 3 are merged (see [TODO.md](../../TODO.md) "Design fidelity"). The capture and
+Status (2026-11-19): phases 0 to 3 are merged (see [todo/shelved/review.md](../../todo/shelved/review.md) "Design fidelity"). The capture and
 scoring harness (section 5, the gate in phase 4) was removed on 2026-11-19 (commit 187d7a4): review is by
 screenshots and the owner's eye. Harness passages below are historical. Pre-phase audits it cites
 (`inventory.md`, `map.md`) and run results were scratch notes and are not kept in the repo.
@@ -407,7 +407,7 @@ owner-signed exceptions, lock baseline empty, the console smoke loop green, owne
 
 ### Owner decisions (2026-11-19)
 
-Recorded as Decided rows in wubble's TODO.md ("Design fidelity" rows).
+Recorded as rows in [docs/decisions.md](../decisions.md) ("Design fidelity").
 
 1. Yes: 598f814 coloured-frost glass adopted wholesale (tokens and shader).
 2. Yes: menus, buttons and the checkbox take the touch kit's values, not Ultra Reactivate's.

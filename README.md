@@ -69,7 +69,7 @@ Tested on Fedora (GNOME, Wayland). Ubuntu 23.10 and later restrict the sandbox C
 
 <kbd>Ctrl</kbd>+<kbd>T</kbd> new tab · <kbd>Ctrl</kbd>+<kbd>L</kbd> address · <kbd>Ctrl</kbd>+<kbd>W</kbd> close · <kbd>Ctrl</kbd>+<kbd>F</kbd> find · <kbd>Ctrl</kbd>+<kbd>\\</kbd> split · <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Z</kbd> sidebar
 
-Coming: extensions, sync, Windows. The order is in [TODO.md](TODO.md).
+Coming: extensions. The order is in [TODO.md](TODO.md).
 
 ### The sidebar
 

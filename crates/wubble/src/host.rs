@@ -3785,6 +3785,7 @@ impl Host {
                 self.tab_drag_pointer(at.0, at.1, true);
                 self.drag_window_pointer(true);
                 self.drag_released_elsewhere();
+                self.drag_window_released();
             }
             WindowEvent::Focused(focused) => {
                 // before Slint sees it: the start page's capsule keeps the bar through it

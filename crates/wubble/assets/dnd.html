@@ -35,7 +35,7 @@ input, textarea { font: 16px monospace; }
 <script>
 const $ = (id) => document.getElementById(id);
 // What the page saw, for the smoke's checks.
-const seen = { neutral: 0, types: [], plain: '', custom: '', dragend: '', files: 0 };
+const seen = { neutral: 0, types: [], plain: '', custom: '', dragend: '', files: 0, after: 0 };
 const dpr = devicePixelRatio;
 // The picture: drawn here, so the page needs nothing fetched.
 {
@@ -69,7 +69,7 @@ const parity = {
     getSelection().removeAllRanges(); getSelection().addRange(r);
   },
   reset() {
-    seen.neutral = 0; seen.types = []; seen.plain = ''; seen.custom = ''; seen.dragend = ''; seen.files = 0;
+    seen.neutral = 0; seen.types = []; seen.plain = ''; seen.custom = ''; seen.dragend = ''; seen.files = 0; seen.after = 0;
     $('inp').value = ''; $('ta').value = ''; $('ce').textContent = '';
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
@@ -81,6 +81,8 @@ const has = (list, want) => want.every((w) => list.includes(w)) || `got ${JSON.s
 addEventListener('mousedown', (e) => { if (e.isTrusted && e.button === 0 && e.clientX >= 520) seen.neutral++; });
 // Every drag that started here ends with its drop effect.
 addEventListener('dragend', (e) => { seen.dragend = e.dataTransfer.dropEffect; });
+// Pointer moves the page saw once its drag ended (a drag still running takes them).
+addEventListener('mousemove', () => { if (seen.dragend) seen.after++; });
 $('drag').addEventListener('dragstart', (e) => {
   e.dataTransfer.setData('text/plain', 'payload');
   e.dataTransfer.setData('application/x-dnd', 'custom');
