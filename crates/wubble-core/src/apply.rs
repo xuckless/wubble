@@ -496,6 +496,25 @@ mod tests {
         }
     }
 
+    /// A profile seeded before start (the Mac hand checks) turns picture-in-picture on tab switch
+    /// on only with the row `pip.on_tab_switch` = `1`; start-up replays it as stored.
+    #[test]
+    fn picture_in_picture_on_tab_switch_reads_its_row() {
+        for (name, rows, on) in [
+            ("seeded on", &[("pip.on_tab_switch", "1")][..], true),
+            ("seeded off", &[("pip.on_tab_switch", "0")], false),
+            ("no row: the default", &[], false),
+            ("not a Bool's text: the default", &[("pip.on_tab_switch", "true")], false),
+            ("another key", &[("pip.auto", "1")], false),
+        ] {
+            assert_eq!(
+                effect_of("pip.on_tab_switch", &stored(rows)),
+                Some(Applied::PipOnTabSwitch(on)),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn media_settings_read_their_rows() {
         let m = MediaSettings::default();

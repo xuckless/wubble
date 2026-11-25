@@ -763,16 +763,25 @@ impl Host {
         if before == panes {
             return;
         }
+        let audible: Vec<TabId> = self.audible_tabs().collect();
         // Playing with sound the tab makes: not a muted or silent clip.
-        let playing = |t: TabId| {
-            self.videos.playing.get(&t).copied().unwrap_or(false)
-                && self
-                    .model
-                    .tabs
-                    .get(&t)
-                    .is_some_and(|t| t.busy.contains(wubble_core::busy::Reason::Audible))
-        };
-        for input in pip::switched(&before, &panes, self.videos.pip_auto, playing) {
+        let inputs = pip::switched(&before, &panes, self.videos.pip_auto, |t| {
+            audible.contains(&t) && self.videos.playing.get(&t) == Some(&true)
+        });
+        for input in inputs {
+            // Leaving a tab that plays sound says what decided its picture-in-picture: the
+            // setting, the page's last video snapshot (None: never answered) and the machine.
+            if let PipInput::TabSwitched { from, auto, .. } = input
+                && audible.contains(&from)
+            {
+                eprintln!(
+                    "wubble: pip: left tab {} playing sound: on tab switch {auto}, its video \
+                     aloud {:?}, {:?}",
+                    from.0,
+                    self.videos.playing.get(&from),
+                    self.videos.pip
+                );
+            }
             self.pip_event(input);
         }
     }
