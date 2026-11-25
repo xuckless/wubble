@@ -2,7 +2,9 @@
 //! paired with its best audio, each audio stream alone) and the one a default quality picks.
 //! Pairing follows yt-dlp's default `bestvideo+bestaudio` in spirit (yt-dlp, Unlicense): the
 //! audio of the video's HLS audio group, else of a container that joins with it (MP4 with
-//! M4A, WebM with WebM), the highest bitrate first.
+//! M4A, WebM with WebM), the highest bitrate first. At one height (or bit rate) the default
+//! takes the codec most players open ([`CODEC_ORDER`]): H.264 before VP9, AV1 and HEVC, AAC
+//! before Opus.
 
 use super::{Container, Track, Variant};
 use crate::download::format_bytes;
@@ -69,6 +71,50 @@ pub struct Choice {
     pub pair: bool,
     /// Sound without a picture.
     pub audio_only: bool,
+    /// The codec's place in [`CODEC_ORDER`] (the picture's, or the sound's for audio only):
+    /// lower is taken first at one height.
+    pub preference: u8,
+}
+
+/// The default's codec preference, most widely played first: H.264 opens in every player and
+/// editor; VP9 and AV1 in browsers and current players; HEVC and Dolby Vision only where the
+/// system licenses them. Sound: AAC, then Opus, then the rest. A `codecs` string naming none of
+/// these (or nothing: most unlabelled streams are H.264 and AAC) ranks [`UNLISTED_CODEC`].
+/// Matched on the first codec of the string, by prefix; a new codec is a row here, read by
+/// [`choose`] and by the pairing of video with audio.
+const CODEC_ORDER: [(&str, u8); 15] = [
+    ("avc1", 0),
+    ("avc3", 0),
+    ("vp09", 2),
+    ("vp9", 2),
+    ("vp8", 2),
+    ("av01", 3),
+    ("hvc1", 4),
+    ("hev1", 4),
+    ("dvh1", 5),
+    ("dvhe", 5),
+    ("mp4a", 0),
+    ("opus", 2),
+    ("vorbis", 3),
+    ("ac-3", 4),
+    ("ec-3", 4),
+];
+
+/// The rank of a codec [`CODEC_ORDER`] does not name: after H.264 and AAC, before the rest.
+const UNLISTED_CODEC: u8 = 1;
+
+/// A `codecs` string's place in [`CODEC_ORDER`].
+fn codec_rank(codecs: &str) -> u8 {
+    let first = codecs
+        .split(',')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    CODEC_ORDER
+        .iter()
+        .find(|(prefix, _)| first.starts_with(prefix))
+        .map_or(UNLISTED_CODEC, |(_, rank)| *rank)
 }
 
 fn joins(video: Container, audio: Container) -> bool {
@@ -80,7 +126,8 @@ fn joins(video: Container, audio: Container) -> bool {
     )
 }
 
-/// The best audio for `video`: its HLS group's, else a joinable container's, highest bitrate.
+/// The best audio for `video`: its HLS group's, else a joinable container's; the preferred codec,
+/// then the highest bitrate.
 fn audio_for(variants: &[Variant], video: &Variant) -> Option<usize> {
     let audio = variants
         .iter()
@@ -93,7 +140,12 @@ fn audio_for(variants: &[Variant], video: &Variant) -> Option<usize> {
             .collect(),
     };
     fits.into_iter()
-        .max_by_key(|(_, a)| a.bandwidth.unwrap_or(0))
+        .max_by_key(|(_, a)| {
+            (
+                std::cmp::Reverse(codec_rank(&a.codecs)),
+                a.bandwidth.unwrap_or(0),
+            )
+        })
         .map(|(i, _)| i)
 }
 
@@ -176,6 +228,7 @@ pub fn choices(variants: &[Variant]) -> Vec<Choice> {
                 bandwidth: v.bandwidth,
                 pair: matches!(selection, Selection::Pair { .. }),
                 audio_only: v.track == Track::Audio,
+                preference: codec_rank(&v.codecs),
             }
         })
         .collect();
@@ -247,21 +300,22 @@ const LADDER_BITS: [(u32, u64); 5] = [
 ];
 
 /// The choice `quality` picks: among choices with a picture, the tallest within the cap (the
-/// shortest above it when none fits), or the shortest. `can_join`: a muxer is there; without
-/// one a pair saves as two files, so a stream with its sound inside is taken when there is one.
-/// A manifest that names no heights is judged by its bit rates (the ladder above); a plain
-/// file, with neither, is the first choice.
+/// shortest above it when none fits), or the shortest; of that height, the preferred codec
+/// ([`CODEC_ORDER`]), then the first (the highest bit rate). `can_join`: a muxer is there;
+/// without one a pair saves as two files, so a stream with its sound inside is taken when there
+/// is one. A manifest that names no heights is judged by its bit rates (the ladder above); a
+/// plain file, with neither, is the first choice; only sound, the preferred codec.
 pub fn choose(choices: &[Choice], quality: Quality, can_join: bool) -> Option<usize> {
     let whole = choices.iter().any(|c| !c.pair && !c.audio_only);
     let usable = |c: &Choice| (can_join || !whole || !c.pair) && !c.audio_only;
     let pool: Vec<usize> = (0..choices.len())
         .filter(|&i| usable(&choices[i]))
         .collect();
-    // Only audio on offer: the first of them.
+    // Only audio on offer: the preferred codec, the first (highest bit rate) of it.
     let first = pool
         .first()
         .copied()
-        .or_else(|| (!choices.is_empty()).then_some(0))?;
+        .or_else(|| (0..choices.len()).min_by_key(|&i| choices[i].preference))?;
     let pictured: Vec<(usize, u32)> = pool
         .iter()
         .filter_map(|&i| Some((i, choices[i].height?)))
@@ -293,17 +347,23 @@ pub fn choose(choices: &[Choice], quality: Quality, can_join: bool) -> Option<us
             }
         };
     }
-    // `choices` is sorted tallest first, so the first match of a height is its best stream.
-    let tallest = |cap: u32| pictured.iter().find(|(_, h)| *h <= cap).map(|(i, _)| *i);
-    let shortest = || {
-        let min = pictured.iter().map(|(_, h)| *h).min()?;
-        pictured.iter().find(|(_, h)| *h == min).map(|(i, _)| *i)
+    // `choices` is sorted tallest first, then by bit rate: of one height, the preferred codec's
+    // first row is its best stream.
+    let at = |height: u32| {
+        pictured
+            .iter()
+            .filter(|(_, h)| *h == height)
+            .min_by_key(|(i, _)| choices[*i].preference)
+            .map(|(i, _)| *i)
     };
-    match quality {
-        Quality::Best => Some(pictured[0].0),
+    let tallest = |cap: u32| pictured.iter().map(|(_, h)| *h).find(|h| *h <= cap);
+    let shortest = || pictured.iter().map(|(_, h)| *h).min();
+    let height = match quality {
+        Quality::Best => Some(pictured[0].1),
         Quality::UpTo(cap) => tallest(cap).or_else(shortest),
         Quality::Smallest => shortest(),
-    }
+    };
+    at(height?)
 }
 
 #[cfg(test)]
@@ -476,6 +536,128 @@ mod tests {
         assert_ne!(labels[0], labels[1]);
         assert_eq!(codec_name("vp9"), Some("VP9"));
         assert_eq!(codec_name("mp4a.40.2"), None);
+    }
+
+    /// At one height the default takes H.264 over VP9, AV1 and HEVC, whatever their bit rates;
+    /// the menu's rows and labels stay as they were.
+    #[test]
+    fn the_default_prefers_the_codec_most_players_open() {
+        let video = |height, bits, codecs: &str| Variant {
+            container: Container::Mp4,
+            ..rated(Track::Video, Some(height), bits, codecs)
+        };
+        let audio = |bits, codecs: &str| Variant {
+            container: Container::M4a,
+            ..rated(Track::Audio, None, bits, codecs)
+        };
+        let muxed = |height, bits, codecs: &str| Variant {
+            container: Container::Mp4,
+            ..rated(Track::Muxed, Some(height), bits, codecs)
+        };
+        // (name, variants, quality, can_join, the codecs of the picked row's first part)
+        let cases: Vec<(&str, Vec<Variant>, Quality, bool, &str)> = vec![
+            (
+                "hevc above h264 at 1080p",
+                vec![
+                    video(1080, 6, "hvc1.2.4.L120"),
+                    video(1080, 5, "avc1.640028"),
+                    audio(1, "mp4a.40.2"),
+                ],
+                Quality::Best,
+                true,
+                "avc1.640028",
+            ),
+            (
+                "av1 and vp9 at 720p: vp9",
+                vec![
+                    video(720, 3, "av01.0.05M.08"),
+                    video(720, 2, "vp09.00.31.08"),
+                    audio(1, "mp4a.40.2"),
+                ],
+                Quality::UpTo(720),
+                true,
+                "vp09.00.31.08",
+            ),
+            (
+                "only hevc at the cap: hevc, not a shorter h264",
+                vec![
+                    video(1080, 6, "hvc1.1"),
+                    video(720, 3, "avc1.4d"),
+                    audio(1, "mp4a.40.2"),
+                ],
+                Quality::UpTo(1080),
+                true,
+                "hvc1.1",
+            ),
+            (
+                "smallest: the preferred codec of the shortest",
+                vec![
+                    video(360, 2, "av01.0"),
+                    video(360, 1, "avc1.42"),
+                    video(720, 3, "avc1.4d"),
+                    audio(1, "mp4a"),
+                ],
+                Quality::Smallest,
+                true,
+                "avc1.42",
+            ),
+            (
+                "unlabelled before hevc",
+                vec![muxed(720, 9, "hev1.1"), muxed(720, 1, "")],
+                Quality::Best,
+                true,
+                "",
+            ),
+            (
+                "no muxer: a muxed stream over a pair, whatever its codec",
+                vec![
+                    video(1080, 6, "avc1.64"),
+                    audio(1, "mp4a"),
+                    muxed(1080, 5, "hvc1.1"),
+                ],
+                Quality::Best,
+                false,
+                "hvc1.1",
+            ),
+        ];
+        for (name, list, quality, join, want) in cases {
+            let c = choices(&list);
+            let pick = choose(&c, quality, join).expect(name);
+            let first = c[pick].selection.parts()[0];
+            assert_eq!(list[first].codecs, want, "{name}");
+        }
+        // Audio: AAC over Opus for the pair and for sound alone, even at a higher Opus rate.
+        let list = vec![
+            video(720, 3, "avc1.4d"),
+            Variant {
+                container: Container::Mp4,
+                ..audio(160, "opus")
+            },
+            audio(128, "mp4a.40.2"),
+        ];
+        let c = choices(&list);
+        assert_eq!(c[0].selection, Selection::Pair { video: 0, audio: 2 });
+        let songs = choices(&[audio(160, "opus"), audio(96, "mp4a.40.2")]);
+        let pick = choose(&songs, Quality::Best, true).unwrap();
+        assert_eq!(songs[pick].selection, Selection::Single(1));
+        // The labels still name the codecs that tell rows apart.
+        let rows = choices(&[muxed(1080, 2, "hvc1.1"), muxed(1080, 1, "avc1.64")]);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "1080p \u{b7} HEVC \u{b7} MP4 \u{b7} 100 B",
+                "1080p \u{b7} H.264 \u{b7} MP4 \u{b7} 100 B"
+            ]
+        );
+        assert_eq!(
+            (
+                codec_rank("AVC1.64"),
+                codec_rank("weird"),
+                codec_rank("dvh1.05")
+            ),
+            (0, UNLISTED_CODEC, 5)
+        );
     }
 
     #[test]
