@@ -29,6 +29,12 @@ Each section ends `exit 0` with its `smoke:` lines (`frames=120`: `smoke: pixels
 while another is handled is the cue for a dispatch2 main-queue pump. `pgrep` prints nothing.
 `block_smoke` runs like `frame_smoke` (bundled with `--exe`, over plain ssh).
 
+## Hand-check harness
+
+`scripts/mac-checks/run.py /path/to/wubble.app`: the page layer's hand-check list driven on the Mac's
+screen (pixels, trace, per-process CPU and GPU, flame graphs); from a session on the Mac, as the
+owner: [scripts/mac-checks/README.md](../scripts/mac-checks/README.md).
+
 ## Job runner
 
 When the owner has started `~/wubble-runner/run.sh` in a Terminal of their GUI session, a window
