@@ -1601,12 +1601,12 @@ impl Host {
 
     /// The sheet's own answer: Allow or Deny (a click on Deny), with its window choice.
     pub(crate) fn agent_sheet_answered(&mut self, allow: bool, headless: bool) {
-        self.agent_answer(allow, headless, false);
+        self.agent_sheet_answer(allow, headless, false);
     }
 
     /// The sheet answers the session it shows (`held`: the sheet a rule just closed, Escape's
     /// Deny).
-    pub(super) fn agent_answer(&mut self, allow: bool, headless: bool, held: bool) {
+    pub(super) fn agent_sheet_answer(&mut self, allow: bool, headless: bool, held: bool) {
         let Some((_, id)) = self.agent_shown(held) else {
             return;
         };

@@ -757,7 +757,7 @@ impl Host {
             (Kind::Dialog, Some(tab)) => self.dialog_cancelled(tab),
             (Kind::BookmarkSheet, Some(tab)) => self.sheet_answer(tab, true, false, false, "", -1),
             (Kind::PrintSheet, _) => self.print_step(wubble_core::print::Event::Cancel, true),
-            (Kind::AgentSheet, _) => self.agent_answer(false, false, true),
+            (Kind::AgentSheet, _) => self.agent_sheet_answer(false, false, true),
             (Kind::Region, _) => self.shot_cancelled(),
             (Kind::Hints, Some(tab)) => {
                 self.hint_step(tab, wubble_core::hints::HintEvent::Cancel, true)
