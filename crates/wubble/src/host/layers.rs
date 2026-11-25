@@ -9,7 +9,8 @@ use slint::ComponentHandle;
 use std::collections::BTreeMap;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::overlay::{
-    self, Action, Cue, Effect, Env, Facts, Key, Kind, Layer, Phase, Scope, Stack, Surface,
+    self, Action, Cue, Effect, Env, Facts, Key, KeyOwner, Kind, Layer, Phase, Scope, Stack,
+    Surface,
 };
 
 use wubble_core::agent::SessionId;
@@ -19,7 +20,8 @@ use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_ui::{
-    AgentWidgets, AppWindow, CommandBarState, CommandPlacement, GlassLayer, Mounted, PeekCue,
+    AgentWidgets, AppWindow, CommandBarState, CommandPlacement, FocusOwner, GlassLayer, Mounted,
+    PeekCue,
     SidebarMode,
 };
 
@@ -184,6 +186,30 @@ fn mounted(m: &Mounted) -> [(Kind, bool); 25] {
     ]
 }
 
+/// Where the kit puts the keys for the store's key owner (app.slint `settle-focus`): the field
+/// of the overlay that holds them, the page (its web view or built-in page), or an overlay that
+/// takes them itself.
+fn focus_owner(owner: KeyOwner) -> FocusOwner {
+    let KeyOwner::Layer(l) = owner else {
+        return FocusOwner::Page;
+    };
+    match l.kind {
+        Kind::Menu => FocusOwner::Menu,
+        Kind::Downloads => FocusOwner::Downloads,
+        Kind::Extensions => FocusOwner::Extensions,
+        Kind::ExtensionSheet => FocusOwner::ExtensionSheet,
+        Kind::Spaces => FocusOwner::Spaces,
+        Kind::Dialog => FocusOwner::Dialog,
+        Kind::ErrorPanel => FocusOwner::Error,
+        Kind::BookmarkSheet => FocusOwner::BookmarkSheet,
+        Kind::PrintSheet => FocusOwner::PrintSheet,
+        Kind::AgentSheet => FocusOwner::AgentSheet,
+        Kind::CommandBar | Kind::Region => FocusOwner::Own,
+        // link hints read the keys the page is sent (the host routes them)
+        _ => FocusOwner::Page,
+    }
+}
+
 impl Host {
     /// Window `w`'s host: the current one or a parked one.
     pub(super) fn window_host(&self, w: WindowId) -> Option<&WindowHost> {
@@ -316,8 +342,8 @@ impl Host {
                     kind: Kind::Notice, ..
                 }) => self.notice_shown(true),
                 // the store's overlays are drawn from their phase (settle_layers), the find bar
-                // and a dialog for the visible tab only (render_surfaces); the keys still follow
-                // `settle-focus` as each *-open changes
+                // and a dialog for the visible tab only (render_surfaces); the keys follow its key
+                // owner, derived there after every step (a switch moves them with no `Focus`)
                 Effect::Focus(..) | Effect::Hide(_) | Effect::Reveal(_) => {}
             }
         }
@@ -436,6 +462,8 @@ impl Host {
             window.set_page_ghost_on(open(Kind::PageGhost));
             window.set_drop_mark_on(open(Kind::DropMark));
             window.set_autoscroll_on(open(Kind::Autoscroll));
+            // the keys go where the store says (a hidden tab's sheet holds none)
+            window.set_focus_owner(focus_owner(self.ui.key_owner(&self.env(), w)));
             self.ext_drawn_in(w, &window);
             // a window's menu closed by a rule acting in another window (a dialog asked there):
             // its kit closes here too (the content, while it shows, is `render_surfaces`')

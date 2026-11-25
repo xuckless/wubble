@@ -129,6 +129,24 @@ export struct CommandResult {
     icon: image,
 }
 
+// Who holds the keys, by the host's surface store (`wubble_core::overlay::Ui::key_owner`): the
+// overlay whose field takes them, the page (its web view or built-in page), or an overlay that
+// takes them itself (the command bar's input, the region picker).
+export enum FocusOwner {
+    page,
+    menu,
+    downloads,
+    extensions,
+    extension-sheet,
+    spaces,
+    dialog,
+    error,
+    bookmark-sheet,
+    print-sheet,
+    agent-sheet,
+    own,
+}
+
 // The command bar's life (mirrors wubble_core::chrome::CommandBar; the driver writes it).
 export enum CommandBarState {
     closed,

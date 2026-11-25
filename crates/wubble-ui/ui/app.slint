@@ -15,7 +15,7 @@ import { PageHoleSource } from "kit/material/page-hole.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -68,7 +68,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
 
 export component AppWindow inherits Window {
     // A private window's title says so (Chrome's "(Incognito)" suffix).
@@ -790,42 +790,37 @@ export component AppWindow inherits Window {
         clip.text = "";
     }
 
-    // One overlay holds the keyboard at a time: the menu, else the downloads popover, else the
-    // dialog (or sign-in), else the error panel, else the page. The permission prompt never takes
-    // it: a key meant for the page must not answer it (keyjacking), as Chromium's bubble. The
-    // find bar takes it only when asked (Mod+F), and gives it back to the page when it closes.
-    property <bool> menu-open: root.menu.open;
-    property <bool> dialog-open: root.dialog.open;
-    property <bool> error-open: root.page-error.open;
-    property <bool> bookmark-open: root.bookmark-sheet-view.open;
-    property <bool> print-open: root.print-sheet-view.open;
-    property <bool> extension-prompt-open: root.extension-prompt.open;
-    property <bool> agent-sheet-open: root.agent-sheet-view.open;
+    // One holder of the keyboard at a time, the host's surface store's (`focus-owner`): an
+    // overlay's field, else the page. The permission prompt never takes it (a key meant for the
+    // page must not answer it: keyjacking, as Chromium's bubble); the find bar takes it only when
+    // asked (Mod+F), and gives it back to the page when it closes.
+    in property <FocusOwner> focus-owner: FocusOwner.page;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
-    property <bool> overlay-open: root.menu.open || root.downloads-open || root.extensions-open || root.extension-popup.open || root.extension-prompt.open || root.spaces-open || root.dialog.open || root.page-error.open || root.bookmark-open || root.print-open || root.agent-sheet-open;
     function settle-focus() {
         root.sidebar-focused = false;
-        if root.menu.open {
+        if root.focus-owner == FocusOwner.menu {
             menu-ui.take-focus();
-        } else if root.downloads-open {
+        } else if root.focus-owner == FocusOwner.downloads {
             downloads-ui.take-focus();
-        } else if root.extensions-open {
+        } else if root.focus-owner == FocusOwner.extensions {
             extensions-ui.take-focus();
-        } else if root.extension-prompt.open {
+        } else if root.focus-owner == FocusOwner.extension-sheet {
             extension-sheet.focus-sheet();
-        } else if root.spaces-open {
+        } else if root.focus-owner == FocusOwner.spaces {
             spaces-ui.take-focus();
-        } else if root.dialog.open {
+        } else if root.focus-owner == FocusOwner.dialog {
             sheet.focus-sheet();
-        } else if root.page-error.open {
+        } else if root.focus-owner == FocusOwner.error {
             error-ui.take-focus();
-        } else if bookmark-sheet.open {
+        } else if root.focus-owner == FocusOwner.bookmark-sheet {
             bookmark-sheet.focus-sheet();
-        } else if print-sheet.open {
+        } else if root.focus-owner == FocusOwner.print-sheet {
             print-sheet.focus-sheet();
-        } else if agent-sheet.open {
+        } else if root.focus-owner == FocusOwner.agent-sheet {
             agent-sheet.focus-sheet();
+        } else if root.focus-owner == FocusOwner.own {
+            // the command bar's input and the region picker take the keys themselves
         } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {
@@ -849,13 +844,7 @@ export component AppWindow inherits Window {
             web-focus.focus();
         }
     }
-    changed menu-open => {
-        root.settle-focus();
-    }
-    changed dialog-open => {
-        root.settle-focus();
-    }
-    changed error-open => {
+    changed focus-owner => {
         root.settle-focus();
     }
     changed page => {
@@ -865,40 +854,13 @@ export component AppWindow inherits Window {
         }
         root.settle-focus();
     }
-    changed bookmark-open => {
-        root.settle-focus();
-    }
-    changed print-open => {
-        root.settle-focus();
-    }
-    changed extension-prompt-open => {
-        root.settle-focus();
-    }
-    changed extensions-open => {
-        root.settle-focus();
-    }
-    changed agent-sheet-open => {
-        root.settle-focus();
-    }
-    changed downloads-open => {
-        root.settle-focus();
-    }
-    changed spaces-open => {
-        root.settle-focus();
-    }
-    // The screenshot overlay took the keys; closed, they go back.
-    changed shot-picking => {
-        if !root.shot-picking {
-            root.settle-focus();
-        }
-    }
     changed find-focus => {
-        if root.find.open && !root.overlay-open {
+        if root.find.open && root.focus-owner == FocusOwner.page {
             find-ui.take-focus();
         }
     }
     changed find-open => {
-        if !root.find-open && !root.overlay-open && bar.state == CommandBarState.closed {
+        if !root.find-open && root.focus-owner == FocusOwner.page && bar.state == CommandBarState.closed {
             root.settle-focus();
         }
     }
