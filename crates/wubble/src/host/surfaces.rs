@@ -51,6 +51,9 @@ pub(super) struct Drawn {
     permission: Option<PermissionPrompt>,
 }
 
+/// Chromium's ERR_BLOCKED_BY_CLIENT: a request the content filter cancelled.
+const BLOCKED_BY_CLIENT: i32 = -20;
+
 impl Host {
     pub(super) fn on_page_event(&mut self, window: &AppWindow, view: ViewId, event: PageEvent) {
         // Events of a view whose tab is already gone: welding answered its
@@ -211,11 +214,19 @@ impl Host {
             Routed::Zoomed => window.set_address_zoom(self.address_zoom()),
             Routed::LoadFailed { url, code } => {
                 let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
-                let event = ErrorEvent::LoadFailed {
-                    url,
-                    code,
-                    now_ms: wall_ms(),
-                    shown,
+                // a page the blocker stopped says so (ERR_BLOCKED_BY_CLIENT)
+                let browser = self.tab_view(tab).map(|v| v.browser_id());
+                let blocked = browser
+                    .filter(|_| code == BLOCKED_BY_CLIENT)
+                    .and_then(|b| self.blocking.document_block(b, &url));
+                let event = match blocked {
+                    Some(dangerous) => ErrorEvent::DocumentBlocked { url, dangerous },
+                    None => ErrorEvent::LoadFailed {
+                        url,
+                        code,
+                        now_ms: wall_ms(),
+                        shown,
+                    },
                 };
                 self.apply_error(tab, event);
             }
@@ -474,6 +485,10 @@ impl Host {
                 self.cert_exceptions.allow(host, *code);
                 continue;
             }
+            if let ErrorEffect::Unblock { host } = &effect {
+                self.blocking.allow_pages_for_session(host);
+                continue;
+            }
             let Some(view) = self.tab_view(tab) else {
                 continue;
             };
@@ -484,7 +499,7 @@ impl Host {
                 ErrorEffect::AnswerCert { request, proceed } => {
                     view.answer_certificate(request, proceed);
                 }
-                ErrorEffect::Allow { .. } => {}
+                ErrorEffect::Allow { .. } | ErrorEffect::Unblock { .. } => {}
             }
         }
     }
@@ -1092,7 +1107,7 @@ impl Host {
             return;
         };
         let event = match self.surfaces.get(&tab).map(|s| &s.error) {
-            Some(PageError::Cert { .. }) => ErrorEvent::GoBack {
+            Some(PageError::Cert { .. } | PageError::Blocked { .. }) => ErrorEvent::GoBack {
                 can_go_back: self.tab_view(tab).is_some_and(|v| v.nav().page.can_go_back),
             },
             _ => ErrorEvent::Reload,
