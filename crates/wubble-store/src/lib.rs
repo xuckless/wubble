@@ -54,6 +54,10 @@ pub use settings::{
 };
 
 pub use settings::InstalledExtensions;
+pub use settings::{
+    PrivacyAdMeasurement, PrivacyAdTopics, PrivacyCanMakePayment, PrivacyDoNotTrack,
+    PrivacyPreload, PrivacySiteSuggestedAds, PrivacyWebrtcIp,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

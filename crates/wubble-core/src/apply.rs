@@ -146,8 +146,11 @@ pub enum Applied {
         sites: ThemeTable,
         media: MediaPrefs,
     },
-    /// Chromium's minimum font size in CSS pixels (0: none), for the whole profile.
-    MinFontSize(u32),
+    /// One Chromium profile preference (`privacy::PREFS`), for every container's context.
+    ProfilePref {
+        name: &'static str,
+        value: crate::privacy::PrefValue,
+    },
     Reader(ReaderPrefs),
     ScreenshotOutput(ShotOutput),
     /// The link hints' letters (`hints::alphabet`).
@@ -231,6 +234,9 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
     if def.restart {
         return Some(Applied::RestartOnly);
     }
+    if let Some((name, value)) = crate::privacy::pref_of(key, stored) {
+        return Some(Applied::ProfilePref { name, value });
+    }
     let v = value_of(def, stored);
     Some(match key {
         k if k == s::SEARCH_ENGINE.key => Applied::SearchEngine(SearchEngine::from_id(v)),
@@ -296,7 +302,6 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
                 },
             }
         }
-        k if k == s::PAGES_MIN_FONT_SIZE.key => Applied::MinFontSize(count(def, stored)),
         k if [
             s::READER_DETECT.key,
             s::READER_SIZE.key,
@@ -869,7 +874,10 @@ mod tests {
         assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
         assert_eq!(
             effect_of("pages.min_font_size", &s),
-            Some(Applied::MinFontSize(12))
+            Some(Applied::ProfilePref {
+                name: "webkit.webprefs.minimum_font_size",
+                value: crate::privacy::PrefValue::Int(12),
+            })
         );
         let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
             panic!("no reader prefs")

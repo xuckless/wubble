@@ -933,32 +933,6 @@ impl View {
         self.producer.take_os_buffers_lost()
     }
 
-    /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
-    /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
-    /// set on this view's request context; Chromium pushes it to the profile's open pages.
-    /// `Err` when the view is not open yet or CEF refuses it.
-    pub fn set_minimum_font_size(&mut self, px: u32) -> Result<(), String> {
-        const PREF: &str = "webkit.webprefs.minimum_font_size";
-        let px = i32::try_from(px).map_err(|e| e.to_string())?;
-        let mut result = Err(format!("{PREF}: the view is not open"));
-        self.send(|host| {
-            result = (|| {
-                let context = host.request_context().ok_or("no request context")?;
-                let mut value = cef::value_create().ok_or("CEF made no value")?;
-                value.set_int(px);
-                // Not `CefString::default()`: that passes a null `error`, and CEF's C wrapper
-                // refuses the call outright when an out-parameter is null.
-                let mut error = cef::CefString::from("");
-                let name = cef::CefString::from(PREF);
-                if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
-                    return Err(format!("{PREF}: {error}"));
-                }
-                Ok(())
-            })();
-        });
-        result
-    }
-
     /// Chromium's sound content setting (`ContentSettingsType::SOUND`, what Chrome's "Mute
     /// site" writes) for each of `urls` (`wubble_core::sitesound::origins`) on this view's
     /// request context, its container's profile: blocked, or back to the default. Chrome's
@@ -1034,7 +1008,7 @@ impl View {
                     }
                     let mut value = cef::value_create().ok_or("CEF made no value")?;
                     value.set_bool(i32::from(on));
-                    // a non-null `error`, as in `set_minimum_font_size`
+                    // a non-null `error`, as in `storage::set_pref`
                     let mut error = cef::CefString::from("");
                     if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0
                     {

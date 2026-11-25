@@ -310,6 +310,14 @@ settings! {
     UpdateLastCheck: u32 = defs::UPDATE_LAST_CHECK;
     /// A CEF start switch (`--load-extension`): read before the engine starts.
     InstalledExtensions: Installed = defs::EXTENSIONS_INSTALLED;
+    /// The profile preferences (`wubble_core::privacy::PREFS`), read through the text table.
+    PrivacyDoNotTrack: bool = defs::PRIVACY_DO_NOT_TRACK;
+    PrivacyPreload: String = defs::PRIVACY_PRELOAD;
+    PrivacyCanMakePayment: bool = defs::PRIVACY_CAN_MAKE_PAYMENT;
+    PrivacyAdTopics: bool = defs::PRIVACY_AD_TOPICS;
+    PrivacySiteSuggestedAds: bool = defs::PRIVACY_SITE_SUGGESTED_ADS;
+    PrivacyAdMeasurement: bool = defs::PRIVACY_AD_MEASUREMENT;
+    PrivacyWebrtcIp: String = defs::PRIVACY_WEBRTC_IP;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

@@ -43,8 +43,6 @@ pub(super) struct Builtins {
     media: MediaPrefs,
     /// What each live view was last told (`pagetheme::sync`); absent: nothing yet.
     applied: BTreeMap<TabId, Shown>,
-    /// `settings::PAGES_MIN_FONT_SIZE`.
-    min_font: u32,
     /// The page-theme calls in flight, to report a refused one.
     theme_calls: BTreeSet<u64>,
     reader: BTreeMap<TabId, Reader>,
@@ -68,7 +66,6 @@ impl Default for Builtins {
             theme_sites: ThemeTable::new(),
             media: MediaPrefs::default(),
             applied: BTreeMap::new(),
-            min_font: 0,
             theme_calls: BTreeSet::new(),
             reader: BTreeMap::new(),
             reader_prefs: ReaderPrefs::default(),
@@ -127,25 +124,6 @@ impl Host {
         self.redraw_builtins();
     }
 
-    pub(super) fn set_min_font_size(&mut self, px: u32) {
-        self.builtins.min_font = px;
-        if let Some(tab) = self.views.keys().next().copied() {
-            self.sync_min_font(tab);
-        }
-    }
-
-    /// Tells Chromium the minimum font size through `tab`'s view. A preference of the one
-    /// request context every view shares, so one live view is enough: on a change, and when
-    /// the first view opens (none was there to take it before).
-    fn sync_min_font(&mut self, tab: TabId) {
-        let px = self.builtins.min_font;
-        if let Some(view) = self.tab_view(tab)
-            && let Err(e) = view.set_minimum_font_size(px)
-        {
-            eprintln!("wubble: minimum font size: {e}");
-        }
-    }
-
     pub(super) fn set_reader_prefs(&mut self, prefs: ReaderPrefs) {
         self.builtins.reader_prefs = prefs;
         let on: Vec<_> = self
@@ -182,9 +160,6 @@ impl Host {
     pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
         self.builtins.applied.remove(&tab);
         self.sync_page_theme(tab, Some(url));
-        if self.views.len() == 1 {
-            self.sync_min_font(tab);
-        }
         self.boosts_view_opened(tab);
     }
 

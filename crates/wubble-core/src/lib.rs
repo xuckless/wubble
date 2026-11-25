@@ -53,6 +53,7 @@ pub mod pip;
 pub mod popup;
 pub mod pressure;
 pub mod print;
+pub mod privacy;
 pub mod pump;
 pub mod reader;
 pub mod region;

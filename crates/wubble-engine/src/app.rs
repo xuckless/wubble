@@ -1144,6 +1144,27 @@ impl Engine {
         })
     }
 
+    /// Chromium profile preference `name` is `value` in every container's request context: the
+    /// open ones now, the rest as each comes up (`wubble_core::privacy::PREFS`). Chromium pushes
+    /// a change to the profile's open pages. A refusal is logged.
+    pub fn set_profile_pref(&mut self, name: &'static str, value: wubble_core::privacy::PrefValue) {
+        self.profiles.set_pref(name, value);
+    }
+
+    /// Chromium local-state (process-wide) preference `name` is `value`, through CEF's global
+    /// preference manager (`dns_over_https.*`). `Err` when CEF refuses it or is not running.
+    pub fn set_global_pref(
+        &self,
+        name: &str,
+        value: &wubble_core::privacy::PrefValue,
+    ) -> Result<(), String> {
+        if self.runtime.is_none() {
+            return Err(format!("{name}: CEF is not running"));
+        }
+        let prefs = cef::preference_manager_get_global().ok_or("CEF has no global preferences")?;
+        storage::set_pref(&prefs, name, value)
+    }
+
     /// `container` was deleted (its views are closing): its cookies go now,
     /// the rest of a [`Storage::Disk`] one's storage at the next start, before
     /// CEF opens it (its files may still be open now). A [`Storage::Memory`]

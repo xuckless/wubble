@@ -28,11 +28,12 @@ use std::time::Duration;
 use cef::rc::Rc;
 use cef::{
     CompletionCallback, CookieVisitor, ImplCompletionCallback, ImplCookieManager,
-    ImplCookieVisitor, ImplRequestContext, ImplSetCookieCallback, SetCookieCallback,
-    WrapCompletionCallback, WrapCookieVisitor, WrapSetCookieCallback,
+    ImplCookieVisitor, ImplPreferenceManager, ImplRequestContext, ImplSetCookieCallback, ImplValue,
+    SetCookieCallback, WrapCompletionCallback, WrapCookieVisitor, WrapSetCookieCallback,
 };
 use std::sync::{Arc, Mutex};
 use welding::{CefRuntime, SharedProfile};
+use wubble_core::privacy::PrefValue;
 use wubble_core::space::{ContainerId, Storage};
 
 use crate::app::EngineError;
@@ -294,12 +295,43 @@ pub(crate) fn copy_cookies(
     Some(cancel)
 }
 
-/// The open container contexts, each with the storage it was opened with.
-/// Owned by the engine; empty after [`Self::release`], which shutdown calls
-/// before `cef::shutdown`.
+/// Sets Chromium preference `name` to `value` on `prefs`: a request context (a container's
+/// profile prefs) or CEF's global manager (local state). `Err` when CEF refuses it: the
+/// preference is not registered in this build, is managed, or the value has the wrong type.
+pub(crate) fn set_pref(
+    prefs: &impl ImplPreferenceManager,
+    name: &str,
+    value: &PrefValue,
+) -> Result<(), String> {
+    let key = cef::CefString::from(name);
+    if prefs.can_set_preference(Some(&key)) == 0 {
+        return Err(format!("{name}: not settable"));
+    }
+    let mut cef_value = cef::value_create().ok_or("CEF made no value")?;
+    match value {
+        PrefValue::Bool(on) => cef_value.set_bool(i32::from(*on)),
+        PrefValue::Int(n) => cef_value.set_int(*n),
+        PrefValue::Str(text) => cef_value.set_string(Some(&cef::CefString::from(&**text))),
+    };
+    // Not `CefString::default()`: that passes a null `error`, and CEF's C wrapper refuses the
+    // call outright when an out-parameter is null.
+    let mut error = cef::CefString::from("");
+    if prefs.set_preference(Some(&key), Some(&mut cef_value), Some(&mut error)) == 0 {
+        return Err(format!("{name}: {error}"));
+    }
+    Ok(())
+}
+
+/// The open container contexts, each with the storage it was opened with,
+/// and the profile preferences every one of them is given. Owned by the
+/// engine; empty after [`Self::release`], which shutdown calls before
+/// `cef::shutdown`.
 pub(crate) struct Profiles {
     root: PathBuf,
     open: BTreeMap<ContainerId, (Storage, SharedProfile)>,
+    /// The last value of each preference [`Self::set_pref`] was given: set on
+    /// each context as it comes up, so a container opened later has them too.
+    prefs: BTreeMap<&'static str, PrefValue>,
 }
 
 impl Profiles {
@@ -307,7 +339,19 @@ impl Profiles {
         Self {
             root,
             open: BTreeMap::new(),
+            prefs: BTreeMap::new(),
         }
+    }
+
+    /// Preference `name` is `value` in every container: the open contexts now, the others as
+    /// they come up ([`Self::get`]). A refusal is logged per context.
+    pub(crate) fn set_pref(&mut self, name: &'static str, value: PrefValue) {
+        for (container, (_, profile)) in &self.open {
+            if let Err(e) = set_pref(&profile.request_context(), name, &value) {
+                eprintln!("wubble-engine: container {}: {e}", container.0);
+            }
+        }
+        self.prefs.insert(name, value);
     }
 
     /// `container`'s context with `storage`, created and brought up on first
@@ -349,6 +393,12 @@ impl Profiles {
             runtime.do_message_loop_work();
             std::thread::sleep(READY_NAP);
             runs += 1;
+        }
+        let context = profile.request_context();
+        for (name, value) in &self.prefs {
+            if let Err(e) = set_pref(&context, name, value) {
+                eprintln!("wubble-engine: container {}: {e}", container.0);
+            }
         }
         self.open.insert(container, (storage, profile.clone()));
         Ok(profile)

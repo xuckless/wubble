@@ -154,7 +154,7 @@ impl Host {
                 sites,
                 media,
             } => self.set_page_themes(default, sites, media),
-            Applied::MinFontSize(px) => self.set_min_font_size(px),
+            Applied::ProfilePref { name, value } => self.engine.set_profile_pref(name, value),
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::AskWhereToSave(on) => self.downloads.ask_where = on,

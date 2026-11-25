@@ -891,6 +891,75 @@ pub const EXTENSIONS_INSTALLED: SettingDef = SettingDef {
     restart: true,
 };
 
+/// Chrome's "Send a \"Do Not Track\" request with your browsing traffic" (`enable_do_not_track`,
+/// `privacy::PREFS`).
+pub const PRIVACY_DO_NOT_TRACK: SettingDef = SettingDef {
+    key: "privacy.do_not_track",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Send a Do Not Track request with your browsing",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Preload pages" (`net.network_prediction_options`): standard, Chrome's default
+/// (no request of wubble's own), or off.
+pub const PRIVACY_PRELOAD: SettingDef = SettingDef {
+    key: "privacy.preload",
+    kind: SettingKind::Choice(&["standard", "off"]),
+    default: "standard",
+    label: "Preload pages for faster browsing",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Allow sites to check if you have payment methods saved"
+/// (`payments.can_make_payment_enabled`).
+pub const PRIVACY_CAN_MAKE_PAYMENT: SettingDef = SettingDef {
+    key: "privacy.can_make_payment",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Allow sites to check if you have payment methods saved",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's Ad privacy: Ad topics (`privacy_sandbox.m1.topics_enabled`). Off: Chrome asks for
+/// consent first, and wubble never shows that consent.
+pub const PRIVACY_AD_TOPICS: SettingDef = SettingDef {
+    key: "privacy.ad_topics",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Ad topics: sites ask the browser for your interests",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Ad privacy: Site-suggested ads (`privacy_sandbox.m1.fledge_enabled`), off like the topics.
+pub const PRIVACY_SITE_SUGGESTED_ADS: SettingDef = SettingDef {
+    key: "privacy.site_suggested_ads",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Site-suggested ads: sites keep ad interests in the browser",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Ad privacy: Ad measurement (`privacy_sandbox.m1.ad_measurement_enabled`), off like the topics.
+pub const PRIVACY_AD_MEASUREMENT: SettingDef = SettingDef {
+    key: "privacy.ad_measurement",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Ad measurement: sites ask the browser how their ads did",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The WebRTC IP handling policy (`webrtc.ip_handling_policy`; Chrome has no row, Brave does):
+/// which local addresses a WebRTC connection may use and so show the site.
+pub const PRIVACY_WEBRTC_IP: SettingDef = SettingDef {
+    key: "privacy.webrtc_ip",
+    kind: SettingKind::Choice(&["default", "public-and-private", "public-only", "proxy-only"]),
+    default: "default",
+    label: "WebRTC addresses sites can see",
+    section: Section::Privacy,
+    restart: false,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -970,6 +1039,13 @@ pub const ALL: &[&SettingDef] = &[
     &UPDATE_CHECK_ON_OPEN,
     &UPDATE_LAST_CHECK,
     &EXTENSIONS_INSTALLED,
+    &PRIVACY_DO_NOT_TRACK,
+    &PRIVACY_PRELOAD,
+    &PRIVACY_CAN_MAKE_PAYMENT,
+    &PRIVACY_AD_TOPICS,
+    &PRIVACY_SITE_SUGGESTED_ADS,
+    &PRIVACY_AD_MEASUREMENT,
+    &PRIVACY_WEBRTC_IP,
 ];
 
 /// The definition of `key`, if it is a setting.
