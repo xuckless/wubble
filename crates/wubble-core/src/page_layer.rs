@@ -409,9 +409,12 @@ pub fn layer_unused(route: Route, needs: Needs, mode: Mode) -> bool {
     !route.on_layer() && Needs(needs.0 & PLACE.0).hold(mode) == Hold::Long
 }
 
-/// OS buffers per view: the one on the layer, one the compositor may still read, one the shell
-/// may still be sampling (`Entering`, `Leaving`), one to copy into.
-pub const POOL_SLOTS: usize = 4;
+/// OS buffers per view: the one on the layer (also the one the glass's snapshot and the shell's
+/// presenter read, by reference, each blit submitted at once), the one before it, two the
+/// compositor may still read (frames that come in a burst, several within one display frame: the
+/// M2 run's `pool_busy` with four), one to copy into. Each is the frame's size: 20 MB for a pane
+/// of 2732 x 1866 px.
+pub const POOL_SLOTS: usize = 5;
 
 /// The pool slot the next frame is copied into: the first one after `latest` (round robin, so
 /// the one used longest ago) that nobody holds (`in_use`) and is not `latest` (on the layer or
@@ -1358,6 +1361,25 @@ mod tests {
         ];
         for &(name, in_use, latest, slot) in rows {
             assert_eq!(pick_slot(in_use, latest), slot, "{name}");
+        }
+    }
+
+    #[test]
+    fn every_holder_at_once_leaves_the_next_frame_a_slot() {
+        // the slots held as a frame is copied; the latest is the one copied last
+        #[rustfmt::skip]
+        let rows: &[(&str, &[usize], usize)] = &[
+            ("the layer's frame and the one before", &[3, 2], 3),
+            ("a snapshot blitting the layer's frame", &[3, 2, 3], 3),
+            ("the compositor still on the one before that", &[3, 2, 1], 3),
+            ("a burst: the compositor holds two it was given", &[3, 2, 1, 0], 3),
+            ("a burst with a snapshot in flight", &[3, 2, 1, 0, 3], 3),
+            ("a frame not yet taken, the layer's two, the compositor's", &[4, 3, 2, 1], 4),
+        ];
+        for &(name, held, latest) in rows {
+            let in_use: Vec<bool> = (0..POOL_SLOTS).map(|i| held.contains(&i)).collect();
+            let slot = pick_slot(&in_use, Some(latest));
+            assert!(slot.is_some_and(|s| !held.contains(&s)), "{name}");
         }
     }
 
