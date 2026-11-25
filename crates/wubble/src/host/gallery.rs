@@ -184,15 +184,13 @@ impl Host {
         self.tip_dismiss();
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
-            // the store's overlays of the last scene close as their owners would close them
-            let w = self.w.id;
-            let layers = [Layer::new(Kind::Menu, None)].into_iter().chain(
-                [Kind::Permission, Kind::Dialog, Kind::Find, Kind::ErrorPanel]
-                    .map(|k| Layer::new(k, Some(tab))),
-            );
-            for layer in layers {
-                self.act(StoreAction::Close { w, layer });
-            }
+        }
+        // every overlay the store holds open here closes as its owner would close it: a scene is
+        // the store's actions from nothing (the machines with state of their own are reset below)
+        let w = self.w.id;
+        let open = self.ui.stack(&self.env(), w).layers;
+        for layer in open {
+            self.act(StoreAction::Close { w, layer });
         }
         // The bookmark and print sheets are the host's own state, not the tab's: closed too.
         self.bookmark_sheet_answered(false, false, "", -1);
@@ -436,6 +434,13 @@ impl Host {
             self.content_after(self.w.id, layer, Some(content), false);
         }
         self.render_surfaces(window);
+        // the autofill parts open through the store, as the machine's view opens them
+        if let Some(tab) = shown {
+            let parts = wubble_core::autofill::open_parts(&autofill);
+            for (kind, on) in wubble_core::autofill::PARTS.into_iter().zip(parts) {
+                self.layer_is(kind, tab, on);
+            }
+        }
         window.set_autofill(if autofill == View::default() {
             AutofillView::default()
         } else {
