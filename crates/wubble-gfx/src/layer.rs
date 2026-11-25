@@ -8,8 +8,8 @@
 //! fullscreen, the picture-in-picture window), so the shell's frame under it is never seen; under
 //! it in stage 2, where the shell clears a hole over the pane (`insertSublayer:below:`). Every
 //! change has its implicit animations off, on the main thread, in a `CATransaction` of its own;
-//! while the shell presents with the transaction (a layer of the window is visible) it joins the
-//! shell's instead, so a hide, a move and the shell's frame that matches them land together.
+//! while the shell presents with the transaction (a hide or a move must land with its frame) it
+//! joins the shell's instead, so the change and the shell's frame that matches it land together.
 
 use crate::import::{GfxError, NativeFrame};
 
@@ -22,8 +22,9 @@ pub trait PageLayer {
     /// Where the layer sits (`frame`: x, y, width, height in points), what of its buffer it
     /// shows (`contents`: the same in the buffer's unit square), the buffer's pixels per point
     /// and the corner radius in points. A placement the layer already has commits nothing (the
-    /// host places it at each frame, and at each render while the shell draws its hole).
-    fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64);
+    /// host places it at each frame, and at each render while the shell draws its hole). Whether
+    /// it moved.
+    fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64) -> bool;
 
     /// `frame`'s OS buffer onto the layer, shown. Fails for a frame copied without one.
     fn show(&mut self, frame: &NativeFrame) -> Result<(), GfxError>;
@@ -32,10 +33,10 @@ pub trait PageLayer {
     fn hide(&mut self);
 
     /// While `on`, the shell's drawable is shown with the Core Animation transaction that
-    /// carries this layer's changes (`presentsWithTransaction`), so a hide and the shell's frame
-    /// that replaces it land together. Read when the drawable is acquired: set before the render
-    /// that needs it, cleared after the hide's drawable went out (the next render's start). Setting
-    /// the value it has does nothing.
+    /// carries this layer's changes (`presentsWithTransaction`), so a hide or a move and the
+    /// shell's frame that matches it land together (`wubble_core::page_layer::transacts`: only
+    /// then; it makes the main thread wait for the shell's GPU work). Read when the drawable is
+    /// acquired: set before the render that needs it. Setting the value it has does nothing.
     fn present_in_transaction(&mut self, _on: bool) {}
 }
 
@@ -47,7 +48,9 @@ impl PageLayer for Unsupported {
         (0.0, true)
     }
 
-    fn place(&mut self, _frame: [f64; 4], _contents: [f64; 4], _scale: f64, _radius: f64) {}
+    fn place(&mut self, _frame: [f64; 4], _contents: [f64; 4], _scale: f64, _radius: f64) -> bool {
+        false
+    }
 
     fn show(&mut self, _frame: &NativeFrame) -> Result<(), GfxError> {
         Err(GfxError::Layer("this platform has no page layer".into()))
@@ -157,7 +160,7 @@ mod mac {
             )
         }
 
-        fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64) {
+        fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64) -> bool {
             let (frame, contents) = (rect(frame), rect(contents));
             let l = &self.layer;
             let same = l.frame() == frame
@@ -165,7 +168,7 @@ mod mac {
                 && l.contentsScale() == scale
                 && l.cornerRadius() == radius;
             if same {
-                return;
+                return false;
             }
             transaction(&self.metal, || {
                 self.layer.setFrame(frame);
@@ -174,6 +177,7 @@ mod mac {
                 self.layer.setCornerRadius(radius);
                 self.layer.setMasksToBounds(radius > 0.0);
             });
+            true
         }
 
         fn show(&mut self, frame: &NativeFrame) -> Result<(), GfxError> {

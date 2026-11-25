@@ -410,6 +410,7 @@ impl Host {
         let stretching = self.step_stretch(window, &rects, dt);
         let bowed = self.mask_panes(window, &rects);
         // what this render draws over a page on its layer, and whether it still may stay there
+        self.w.layers.render_began();
         self.layers_changed(window, false);
         self.render_panes_with(window, &rects);
         self.layers_drawn();

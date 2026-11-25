@@ -80,8 +80,8 @@ impl Route {
         }
     }
 
-    /// The layer is visible (the invariant): the shell's drawable must land with its changes
-    /// (`presentsWithTransaction` on macOS).
+    /// The layer is visible (the invariant): hiding it must land with a shell frame that
+    /// covers it ([`hide_at`]).
     pub fn on_layer(self) -> bool {
         matches!(self, Route::Layer { .. } | Route::Leaving { .. })
     }
@@ -398,6 +398,42 @@ fn frosted(
         snap
     };
     (Route::Layer { shown, snap }, effects)
+}
+
+/// When a pane's layer is hidden ([`Effect::Hide`]), from the route it had (`before`) and whether
+/// the hide comes in the present hook of a render presented with the Core Animation transaction
+/// (`transacted`: its drawable lands in the same commit as the hide).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HideAt {
+    /// Hidden, nothing on screen depends on it (it showed nothing, or the frame that covers it
+    /// lands with the hide).
+    Now,
+    /// The shell's last frame still has its hole: the layer stays under it, retired, until a
+    /// transacted present that draws no hole there.
+    Retire,
+    /// Visible with no hole (it was leaving, or it is over the shell): hidden at the next
+    /// transacted present of its window.
+    Due,
+}
+
+/// Where a hide goes (the table of [`HideAt`]).
+pub fn hide_at(before: Route, mode: Mode, transacted: bool) -> HideAt {
+    match (before.holed(mode), before.on_layer() && !transacted) {
+        (true, _) => HideAt::Retire,
+        (false, true) => HideAt::Due,
+        (false, false) => HideAt::Now,
+    }
+}
+
+/// Whether the shell's next render of the window presents with the Core Animation transaction
+/// (`presentsWithTransaction` on macOS), for one pane: only while a change of its layer must
+/// land with the shell's frame: it is leaving (its hide comes in a present), a hide is due, or it
+/// moved under its hole this render. A layer that only shows new frames, and a render that only
+/// redraws glass over it, present on their own, so the main thread (also CEF's) never waits in
+/// that commit for the shell's GPU work (docs/research/page-layer.md, "The frame rate on the
+/// layer"). The window's is any of its panes', or a retired layer.
+pub fn transacts(route: Route, hide_due: bool, moved: bool) -> bool {
+    matches!(route, Route::Leaving { .. }) || hide_due || moved
 }
 
 /// Whether a pane's layer has no use left: it is hidden (not [`Route::on_layer`]) and where the
@@ -1227,6 +1263,47 @@ mod tests {
         ];
         for &(route, on) in rows {
             assert_eq!(route.on_layer(), on, "{route:?}");
+        }
+    }
+
+    /// A hide never shows the desktop through a hole, nor the shell's old frame where the
+    /// layer was: it waits for a transacted present unless nothing shows it.
+    #[test]
+    fn page_layer_hide_at() {
+        use HideAt::{Due, Now, Retire};
+        use Mode::{Fullscreen, Window};
+        #[rustfmt::skip]
+        let rows: &[(Route, Mode, bool, HideAt)] = &[
+            // (before, mode, in a transacted present, where)
+            (Unsupported, Window, false, Now), (Composited, Window, false, Now),
+            (IN, Window, false, Now), (IN, Window, true, Now),
+            (ON5, Window, false, Retire), (ON5, Window, true, Retire),
+            (FOR5, Window, false, Due), (FOR5, Window, true, Now),
+            (ON5, Fullscreen, false, Due), (ON5, Fullscreen, true, Now),
+            (FOR5, Fullscreen, false, Due), (FOR5, Fullscreen, true, Now),
+            (Composited, Fullscreen, false, Now),
+        ];
+        for &(before, mode, transacted, at) in rows {
+            assert_eq!(hide_at(before, mode, transacted), at, "{before:?} {mode:?} {transacted}");
+        }
+    }
+
+    /// Steady frames on the layer and glass redrawn over it present on their own.
+    #[test]
+    fn page_layer_transacts_only_for_a_change() {
+        #[rustfmt::skip]
+        let rows: &[(&str, Route, bool, bool, bool)] = &[
+            // (name, route, hide due, moved, transacts)
+            ("frames on the layer", ON5, false, false, false),
+            ("moved under its hole", ON5, false, true, true),
+            ("leaving", FOR5, false, false, true),
+            ("a hide due", Composited, true, false, true),
+            ("the shell's path", Composited, false, false, false),
+            ("entering", IN, false, false, false),
+            ("no layer", Unsupported, false, false, false),
+        ];
+        for &(name, route, due, moved, on) in rows {
+            assert_eq!(transacts(route, due, moved), on, "{name}");
         }
     }
 

@@ -20,7 +20,9 @@ use std::time::Instant;
 
 use slint::ComponentHandle;
 use wubble_core::overlay::{self, Coverage};
-use wubble_core::page_layer::{self, Effect, Event, Hold, Mode, Need, Needs, Order, Owners, Route};
+use wubble_core::page_layer::{
+    self, Effect, Event, HideAt, Hold, Mode, Need, Needs, Order, Owners, Route,
+};
 use wubble_core::stretch::after_frame;
 use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
@@ -47,6 +49,10 @@ pub(crate) struct PageLayers {
     /// layer failed): still shown under the shell until the window's next present, which draws
     /// no hole there, then hidden with it and dropped (`Host::presenting`).
     retired: Vec<Box<dyn PageLayer>>,
+    /// What the shell's layer was last told (`presentsWithTransaction`), and what it was when the
+    /// render now running acquired its drawable (read at its start, `render_began`).
+    transacting: bool,
+    acquired: bool,
 }
 
 impl PageLayers {
@@ -55,10 +61,27 @@ impl PageLayers {
         self.panes.is_empty() && self.retired.is_empty()
     }
 
-    /// A layer of the window is visible (a retired one too): the shell presents with its
-    /// transaction.
-    fn on_layer(&self) -> bool {
-        !self.retired.is_empty() || self.panes.values().any(|p| p.route.on_layer())
+    /// The shell's next render presents with the Core Animation transaction exactly while a
+    /// retired layer waits or a pane's layer changes with it (`page_layer::transacts`); told to
+    /// every layer (they share the shell's), a retired one too.
+    fn transact(&mut self) {
+        let on = !self.retired.is_empty()
+            || self
+                .panes
+                .values()
+                .any(|p| page_layer::transacts(p.route, p.hide_due, p.moved));
+        self.transacting = on;
+        self.panes
+            .values_mut()
+            .map(|p| &mut p.layer)
+            .chain(self.retired.iter_mut())
+            .for_each(|layer| layer.present_in_transaction(on));
+    }
+
+    /// A render of the window begins (`panes_frame`): it acquired its drawable with the value
+    /// last told (nothing tells it between the acquire and the render's start).
+    pub(super) fn render_began(&mut self) {
+        self.acquired = self.transacting;
     }
 
     /// The shell draws `tab`'s pane as a hole (`Route::holed`): its layer under the shell shows
@@ -79,6 +102,12 @@ struct LayerPane {
     /// begins (`layers_drawn`), taken as it is presented; `None` for a render that began
     /// without it. The payload of `Event::Presenting`, nobody's state.
     drawn: Option<u64>,
+    /// A hide waits for the window's next transacted present (`HideAt::Due`); a new frame shown
+    /// cancels it.
+    hide_due: bool,
+    /// This render's start moved the layer under its hole (`place_layer`): the next render
+    /// presents with the transaction, so a move that goes on lands with the shell's frames.
+    moved: bool,
 }
 
 /// A frame taken for a pane, with the layout it was taken for and the size its view wants.
@@ -125,6 +154,8 @@ impl Host {
                         layer,
                         latest: None,
                         drawn: None,
+                        hide_due: false,
+                        moved: false,
                     };
                     self.w.layers.panes.insert(tab, pane);
                     self.run_layer(window, tab, Event::Capable(true), None, false)?;
@@ -234,7 +265,13 @@ impl Host {
             if let Err(e) = self.run_layer(window, tab, Event::Capable(false), None, false) {
                 eprintln!("wubble: page layer: {e}");
             }
-            self.w.layers.panes.remove(&tab);
+            // a layer whose hide waits for a transacted present waits retired
+            let layers = &mut self.w.layers;
+            if let Some(pane) = layers.panes.remove(&tab).filter(|p| p.hide_due) {
+                layers.retired.push(pane.layer);
+                layers.transact();
+                window.window().request_redraw();
+            }
         }
     }
 
@@ -264,14 +301,29 @@ impl Host {
                 }
             }
         }
-        // all hidden in this present's transaction (this render still presents with it: it was
-        // acquired so), only then the shell's layer told what the next render does; then dropped
-        let mut retired = std::mem::take(&mut self.w.layers.retired);
-        let on = self.w.layers.on_layer();
-        retired.iter_mut().for_each(|layer| layer.hide());
-        retired
+        // a render presented with the transaction (acquired so) takes the due hides and the retired
+        // layers in its commit; one that was not leaves them for the next, asked for here; then
+        // the shell's layer told what the next render does, and the hidden retired ones dropped
+        let layers = &mut self.w.layers;
+        let mut hidden = Vec::new();
+        if layers.acquired {
+            hidden = std::mem::take(&mut layers.retired);
+            hidden.iter_mut().for_each(|layer| layer.hide());
+            for pane in layers.panes.values_mut().filter(|p| p.hide_due) {
+                pane.hide_due = false;
+                pane.layer.hide();
+            }
+        }
+        let waiting = !layers.retired.is_empty() || layers.panes.values().any(|p| p.hide_due);
+        layers.transact();
+        let on = layers.transacting;
+        hidden
             .iter_mut()
             .for_each(|layer| layer.present_in_transaction(on));
+        drop(hidden);
+        if waiting {
+            window.request_redraw();
+        }
         self.enter(here);
     }
 
@@ -453,6 +505,7 @@ impl Host {
                             // the stretch follows a frame on the layer as it does the shell's
                             // (a refused one reaches the shell, which advances it then)
                             Ok(()) => {
+                                pane.hide_due = false;
                                 measure::count(Count::LayerShow);
                                 if let Some(f) = self.w.frames.get_mut(&tab) {
                                     f.view = after_frame(f.view, px(a.wanted), px(size)).0;
@@ -467,15 +520,18 @@ impl Host {
                         pane.latest = Some(a.frame);
                     }
                     Effect::Hide => {
+                        let transacted = presenting && self.w.layers.acquired;
                         if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
-                            if before.holed(mode) {
+                            match page_layer::hide_at(before, mode, transacted) {
                                 // the shell's last frame still has the hole over it: it stays
-                                // under the shell until the next present (`retired`)
-                                let none: Box<dyn PageLayer> = Box::new(Unsupported);
-                                let layer = std::mem::replace(&mut pane.layer, none);
-                                self.w.layers.retired.push(layer);
-                            } else {
-                                pane.layer.hide();
+                                // under the shell until a transacted present (`retired`)
+                                HideAt::Retire => {
+                                    let none: Box<dyn PageLayer> = Box::new(Unsupported);
+                                    let layer = std::mem::replace(&mut pane.layer, none);
+                                    self.w.layers.retired.push(layer);
+                                }
+                                HideAt::Due => pane.hide_due = true,
+                                HideAt::Now => pane.layer.hide(),
                             }
                             pane.latest = None;
                         }
@@ -576,24 +632,30 @@ impl Host {
                 next = Some(Event::Failed);
             }
         }
-        if !presenting {
-            let on = self.w.layers.on_layer();
-            for pane in self.w.layers.panes.values_mut() {
-                pane.layer.present_in_transaction(on);
+        // the pane may have moved without a frame (no resize holds it): its layer follows at
+        // the render's start, and the renders after it present with the transaction while it
+        // keeps moving (this one acquired its drawable before the move was known)
+        if changed {
+            let latest = self
+                .w
+                .layers
+                .panes
+                .get(&tab)
+                .and_then(|p| p.latest.as_ref())
+                .map(|f| f.size());
+            let moved = match latest.filter(|_| self.w.layers.holed(tab)) {
+                Some(size) => {
+                    let layout = self.pane_layout(window, tab);
+                    self.place_layer(window, tab, size, &layout)
+                }
+                None => false,
+            };
+            if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
+                pane.moved = moved;
             }
         }
-        // the pane may have moved without a frame (no resize holds it): its layer follows, in
-        // the transaction of the render that draws the hole there
-        let latest = self
-            .w
-            .layers
-            .panes
-            .get(&tab)
-            .and_then(|p| p.latest.as_ref())
-            .map(|f| f.size());
-        if let Some(size) = latest.filter(|_| changed && self.w.layers.holed(tab)) {
-            let layout = self.pane_layout(window, tab);
-            self.place_layer(window, tab, size, &layout);
+        if !presenting {
+            self.w.layers.transact();
         }
         // with `WUBBLE_TRACE`, a second's summary, from this frame path (never a timer of its
         // own: nothing happening, nothing printed): its counts (`measure`), the frames welding
@@ -639,7 +701,13 @@ impl Host {
     /// `size` that a pane laid out as `layout` shows, with the pane's corners (`pane_radius`: the
     /// generated `Radius.md` the kit's `SplitView` draws with; none in page fullscreen). Nothing
     /// for a tab without a pane.
-    fn place_layer(&mut self, window: &AppWindow, tab: TabId, size: FrameSize, layout: &Layout) {
+    fn place_layer(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        size: FrameSize,
+        layout: &Layout,
+    ) -> bool {
         let clip = frame_clip(size, layout);
         let (_, height) = content_size(window);
         let (cx, cy) = (window.get_content_x(), window.get_content_y());
@@ -647,7 +715,7 @@ impl Host {
         let scale = f64::from(window.window().scale_factor());
         let radius = f64::from(pane_radius(window));
         let (Some(r), Some(pane)) = (rect, self.w.layers.panes.get_mut(&tab)) else {
-            return;
+            return false;
         };
         let (root_h, flipped) = pane.layer.root();
         let pane_rect = page_layer::Rect {
@@ -661,7 +729,7 @@ impl Host {
         let p = page_layer::place(pane_rect, root_h, flipped, scale, buffer, shown);
         let (f, c) = (p.frame, p.contents);
         pane.layer
-            .place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius);
+            .place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius)
     }
 }
 
