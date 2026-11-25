@@ -99,6 +99,7 @@ use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, S
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::{FingerInput, InputEvent};
+use wubble_core::skia_cache;
 use wubble_core::window::{Geometry, WindowId, WindowKind, WindowState};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -538,6 +539,8 @@ pub struct Host {
     unshown: slint::Timer,
     /// Pages on a layer whose newest frame was dropped for a busy pool, to paint again.
     lost_frames: page_layer::LostFrames,
+    /// The shell's Skia caches (`wubble_core::skia_cache`): when they are cleaned.
+    skia_cache: wubble_core::skia_cache::Cache,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
     /// When each tab's page's clipboard read started, until it is answered; one past
@@ -778,6 +781,7 @@ impl Host {
             },
             unshown: slint::Timer::default(),
             lost_frames: Default::default(),
+            skia_cache: Default::default(),
             clipboard,
             clipboard_reads: Default::default(),
             archive_after: ArchiveAfter::Off,
@@ -2659,6 +2663,18 @@ impl Host {
         self.follow_desktop();
         self.devtools_tick();
         let pressure = self.read_pressure();
+        self.skia_cache(skia_cache::Event::Pressure(pressure));
+        self.skia_cache(skia_cache::Event::Tick(now));
+        // each window's cache bounded for the largest window (setting the same does nothing)
+        let px = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .map(|w| {
+                let size = w.handle.window().size();
+                u64::from(size.width) * u64::from(size.height)
+            })
+            .max()
+            .unwrap_or(0);
+        i_slint_renderer_skia::cache::set_limit(skia_cache::limit(px));
         let wall_ms = now_ms();
         self.dispatch(Command::Tick {
             now,
@@ -2675,6 +2691,20 @@ impl Host {
         self.gpu_check();
         self.look_tick();
         self.ax_tick();
+    }
+
+    /// The Skia caches' policy hears `event`; its cleanup runs on every window's cache.
+    pub(crate) fn skia_cache(&mut self, event: skia_cache::Event) {
+        use i_slint_renderer_skia::cache::{self, CacheCleanup};
+        let (state, cleanup) = skia_cache::next(self.skia_cache, event);
+        self.skia_cache = state;
+        match cleanup {
+            Some(skia_cache::Cleanup::Deferred(unused)) => {
+                cache::cleanup(CacheCleanup::Deferred(unused));
+            }
+            Some(skia_cache::Cleanup::PurgeAll) => cache::cleanup(CacheCleanup::PurgeAll),
+            None => {}
+        }
     }
 
     // ----- smokes
@@ -3622,6 +3652,10 @@ impl Host {
     /// would be suspended) and an agent's (screenshots) keep painting.
     fn occlusion(&mut self, hidden: bool) {
         self.w.hidden = hidden;
+        // every window hidden: the shell draws nothing, its caches go
+        if hidden && self.parked.values().all(|w| w.hidden) {
+            self.skia_cache(skia_cache::Event::Hidden);
+        }
         if hidden {
             for tab in self.shown_tabs() {
                 let audible = self

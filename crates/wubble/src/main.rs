@@ -524,7 +524,10 @@ fn install_shell_driver(
             // Queued: the render may run while the host is busy (snapshots). This window's
             // driver: each window paces the pages it shows.
             let _ = slint::invoke_from_event_loop(move || {
-                with_host_in(id, |host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+                with_host_in(id, |host| {
+                    host.pace(wubble_gfx::pacing::PaceEvent::Vsync);
+                    host.skia_cache(wubble_core::skia_cache::Event::Rendered(Instant::now()));
+                })
             });
         },
     )?;

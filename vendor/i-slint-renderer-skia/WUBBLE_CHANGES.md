@@ -4,7 +4,7 @@ Vendored from crates.io `i-slint-renderer-skia` 1.19.0 (repository slint-ui/slin
 `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`; wubble
 takes it under GPL-3.0-only. Copied unmodified: everything the published crate ships
 (`Cargo.toml` is the registry's normalised manifest). Added: `partial.rs`, `rustfmt.toml` and
-this file (and `presenting.rs`, change 2; `hole.rs`, change 3). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
+this file (and `presenting.rs`, change 2; `hole.rs`, change 3; `cache.rs`, change 4). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
 
 The copy is excluded from the wubble workspace, so `cargo clippy --workspace` does not lint it;
 `rustfmt.toml` sets `disable_all_formatting = true` to keep upstream formatting and a diff
@@ -74,3 +74,16 @@ Every change is marked `wubble change` in the source.
    - `lib.rs`: `pub mod hole`.
    wubble's kit draws it as `PageHole` (`crates/wubble-ui/ui/kit/material/page-hole.slint`); tested
    by wubble-ui's `partial_render` (its last rows: the hole and the window around it).
+
+4. **Skia's resource cache, bounded and cleaned up.** Upstream keeps Skia's default cache (256
+   MiB) and its wgpu surface has no way to free it; Chromium bounds its contexts' caches and
+   cleans them when idle, hidden or under pressure (`GrCacheController`, the idea only).
+   - `cache.rs` (new): every windowed wgpu 30 surface's `DirectContext` on the thread
+     (`register`); `set_limit` (`set_resource_cache_limit` on each, and on each made later),
+     `cleanup(CacheCleanup::Deferred(unused) | PurgeAll)` (`perform_deferred_cleanup`,
+     `purge_unlocked_resources`), `bytes` (`resource_cache_usage`). A context that is rendering
+     is skipped.
+   - `wgpu_30_surface.rs`: `gr_context` is an `Rc<RefCell<..>>`, registered in `new`.
+   - `lib.rs`: `pub mod cache` (with `wgpu-30`).
+   wubble's policy is `wubble_core::skia_cache` (when), run by the host's lifecycle tick, its
+   renders and its windows' occlusion. Not tested here (a GPU is needed).

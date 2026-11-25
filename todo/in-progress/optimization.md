@@ -10,7 +10,7 @@ Legend: `[ ]` open · `[~]` in progress. Loaded from [01-optimization.md](../upc
 - [~] 2. Ten idle tabs keep the main process at about 10 % ((a) written blind on sprint/perf, not compiled: `agent-ax-lazy-mirror` below; (b) is the owner's measurement): measured 2026-11-21 (measurements.md, "with stack samples"): it is the accessibility mirror, on for every tab of an agent session, applying updates from pages that animate while hidden (6.6 of the 8.8 % the main thread is busy); the benchmark drives all its tabs through a session. Two things follow: (a) agent sessions: do not mirror a tab that is hidden or that no call is reading (keep CEF's tree on, apply updates lazily at `read_page`, or turn the tree on per call), since every MCP user pays this in every phase (3 to 8 points); (b) measure ten idle tabs opened by hand, outside a session, to learn what a person's idle costs (the owner opens them, `sampler.sh` over ssh)
 - [~] Hidden tabs free their frame targets; the blur pyramid exists only while glass is open; revisit Skia's 256 MiB layer budget (written blind on sprint/perf, not compiled: `hidden-tabs-free-gpu` and `skia-cache-hygiene` below)
 - [ ] Frame rate by content (written, `pacing::ContentRate`): a page with small damage and no input for 300 ms paints at 60 Hz at most. Left: the shell's begin frames (macOS) are not capped, so a spinner there still paints at 120 Hz; a pop-up view takes its opener's ceiling; look at a small animation at 60 on the 300 Hz display by eye
-- [ ] Skia cache hygiene in Slint's renderer (Chromium's cache controller: a limit, deferred cleanup, free when idle) (M6)
+- [~] Skia cache hygiene in Slint's renderer (Chromium's cache controller: a limit, deferred cleanup, free when idle) (M6): written blind on sprint/perf, not compiled (`skia-cache-hygiene` below)
 
 ## Agent sessions: apply hidden tabs' accessibility updates lazily (`agent-ax-lazy-mirror`)
 
@@ -28,7 +28,7 @@ Chrome frees a hidden tab's compositor surfaces. wubble does not need the CEF pa
 
 ## Skia resource cache hygiene in the vendored renderer (`skia-cache-hygiene`)
 
-Key: `skia-cache-hygiene` · engine patch: no · state: not written.
+Key: `skia-cache-hygiene` · engine patch: no · state: [~] written blind on sprint/perf, not compiled: renderer change 4 (`cache.rs`: every window's `DirectContext` registered, `set_limit`, `cleanup(Deferred | PurgeAll)`, `bytes`); `wubble_core::skia_cache` (`next`: Rendered, Tick, Hidden, Pressure; `limit`: 16 bytes a physical pixel, 48 to 192 MiB); the host runs it from each render, the lifecycle tick and `occlusion` (every window hidden: not per window, the renderer's contexts are not tied to wubble's windows); `skia cache` MiB in the `--measure memory` report.
 Note: Also the old M6 line "Skia cache hygiene in Slint's renderer" above.
 
 Chromium runs a GrCacheController: a bounded resource cache, deferred cleanup of resources unused for a few seconds once idle, and a full purge when hidden or under memory pressure. wubble's Slint Skia renderer (vendor/i-slint-renderer-skia) keeps Skia's default cache (the 256 MiB budget named in TODO M6 and Optimization 4). It only exposes `free_gpu_resources` (lib.rs:713, a no-op on the wgpu surface at lib.rs:1382).

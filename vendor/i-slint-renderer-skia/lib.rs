@@ -44,6 +44,9 @@ pub mod partial;
 pub mod presenting;
 // wubble change (3): the page hole, see `hole.rs`.
 pub mod hole;
+// wubble change (4): Skia's resource cache, bounded and cleaned up, see `cache.rs`.
+#[cfg(feature = "wgpu-30")]
+pub mod cache;
 
 #[cfg(skia_backend_software)]
 pub mod software_surface;
