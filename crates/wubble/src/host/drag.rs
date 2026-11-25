@@ -155,10 +155,12 @@ impl Host {
     }
 
     /// Pointer input during a page drag goes to the drag, not to the page as mouse input;
-    /// false when no drag runs. The pointer is the window's (`Input::pointer`): the pane that
-    /// reported it may not be the source's (a rest on a tab row showed another tab).
+    /// false when no drag holds the pointer (none runs, or its drop waits for the page past
+    /// the button: the click after a drop is the page's, `PageDrag::takes_pointer`). The pointer
+    /// is the window's (`Input::pointer`): the pane that reported it may not be the source's (a
+    /// rest on a tab row showed another tab).
     pub(super) fn drag_pointer(&mut self, point: Point, released: bool) -> bool {
-        let Some(drag) = self.drag.page() else {
+        let Some(drag) = self.drag.page().filter(|d| d.takes_pointer()) else {
             return false;
         };
         let source = drag.source();
@@ -216,12 +218,7 @@ impl Host {
         let id = self.w.id;
         let _ = slint::invoke_from_event_loop(move || {
             crate::with_host_in(id, |host| {
-                let ends = match host.drag.page() {
-                    Some(PageDrag::Dragging(d)) => !d.dropping,
-                    Some(PageDrag::Outside { .. }) => true,
-                    None => false,
-                };
-                if ends {
+                if host.drag.page().is_some_and(PageDrag::takes_pointer) {
                     crate::trace("drag: the window's release ends it");
                     host.drag_pointer(Point { x: 0.0, y: 0.0 }, true);
                 }
@@ -433,6 +430,16 @@ impl Host {
                 if !self.aux().start_drag(self.w.id, &data, allowed) {
                     self.os_drag_ended(DragOps::NONE);
                 }
+            }
+            // Slint still holds the pressed pane's grab (it never saw the button come up): the
+            // pointer leaving the window lets it go (the pane hears a cancel, the page a capture
+            // lost), on the next turn, outside Slint's own dispatch.
+            E::LetGo => {
+                let _ = self.w.window.upgrade_in_event_loop(|window| {
+                    window
+                        .window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerExited);
+                });
             }
         }
     }

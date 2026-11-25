@@ -138,6 +138,14 @@ impl<P> PageDrag<P> {
             PageDrag::Outside { source } => *source,
         }
     }
+
+    /// Whether the window's pointer input is the drag's, not the page's: while the button is
+    /// held, and while the OS has the drag (its end comes from the OS or a button-up the window
+    /// still sees). A release over a page waiting for the page's answer is past the button: the
+    /// next click and every move are the page's again.
+    pub fn takes_pointer(&self) -> bool {
+        !matches!(self, PageDrag::Dragging(d) if d.dropping)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,6 +228,10 @@ pub enum Effect<P> {
     Mark(Option<Shell>),
     /// Hand the drag to the OS with what it carries.
     StartOs(P, DragOps),
+    /// The OS had the pointer when the drag ended: the window never saw the button come up, so
+    /// the shell lets go of the press that began the drag (the pressed pane would take the next
+    /// click as the rest of it).
+    LetGo,
 }
 
 /// What a drop of `text` (a link or text) on `at` does; the switcher takes none. A drag from
@@ -405,10 +417,11 @@ pub fn transition<P: Payload>(
         PageDrag::Dragging(d) => d,
         PageDrag::Outside { source } => {
             return match input {
-                Input::OsEnded(op) => (None, vec![E::End(op)]),
+                Input::OsEnded(op) => (None, vec![E::End(op), E::LetGo]),
                 // a button-up the window saw: the OS drag never took the pointer
-                Input::Cancelled | Input::Released { .. } => (None, vec![E::End(DragOps::NONE)]),
-                Input::Gone(t) if t == source => (None, vec![E::End(DragOps::NONE)]),
+                Input::Released { .. } => (None, vec![E::End(DragOps::NONE)]),
+                Input::Cancelled => (None, vec![E::End(DragOps::NONE), E::LetGo]),
+                Input::Gone(t) if t == source => (None, vec![E::End(DragOps::NONE), E::LetGo]),
                 // the OS has the pointer
                 _ => (Some(PageDrag::Outside { source }), vec![]),
             };
@@ -1002,14 +1015,50 @@ mod tests {
         let (s, fx) = step(s, Input::LeftWindow);
         assert!(fx.is_empty());
         let (_, fx) = transition(s.clone(), Input::OsEnded(DragOps::COPY));
-        assert_eq!(fx, [E::End(DragOps::COPY)]);
+        assert_eq!(fx, [E::End(DragOps::COPY), E::LetGo]);
         // a button-up the window sees: the OS drag never took the pointer
         let (s, fx) = transition(s, up(Over::Page(A)));
         assert!(s.is_none());
         assert_eq!(fx, [E::End(DragOps::NONE)]);
         let (s, fx) = transition(PageDrag::Outside { source: A }, Input::<Data>::Cancelled);
         assert!(s.is_none());
-        assert_eq!(fx, [E::End(DragOps::NONE)]);
+        assert_eq!(fx, [E::End(DragOps::NONE), E::LetGo]);
+    }
+
+    /// After a drop the first click acts: the pointer is the drag's only while the button is
+    /// held or the OS has the drag, and an end the window never saw the button for lets go of
+    /// the press that began it.
+    #[test]
+    fn the_click_after_a_drop_is_the_page_s() {
+        let dropping = step(started(link()), up(Over::Page(A))).0;
+        let outside = PageDrag::<Data>::Outside { source: A };
+        let rows: &[(&str, &PageDrag<Data>, bool)] = &[
+            ("the button held", &started(link()), true),
+            ("released over a page, its answer awaited", &dropping, false),
+            ("the OS has the drag", &outside, true),
+        ];
+        for (name, s, takes) in rows {
+            assert_eq!(s.takes_pointer(), *takes, "{name}");
+        }
+        let ends: &[(&str, Input<Data>, bool)] = &[
+            ("the OS drag dropped", Input::OsEnded(DragOps::COPY), true),
+            ("the OS drag cancelled", Input::OsEnded(DragOps::NONE), true),
+            ("focus lost", Input::Cancelled, true),
+            ("its page closed", Input::Gone(A), true),
+            ("a button-up the window saw", up(Over::Elsewhere), false),
+        ];
+        for (name, input, lets_go) in ends {
+            let (s, fx) = transition(outside.clone(), input.clone());
+            assert!(s.is_none(), "{name}");
+            assert_eq!(fx.contains(&E::LetGo), *lets_go, "{name}");
+        }
+        // an end the window saw the button for owes nothing
+        for input in [up(Over::Elsewhere), Input::Cancelled, Input::Gone(A)] {
+            let (_, fx) = transition(started(link()), input);
+            assert!(!fx.contains(&E::LetGo));
+        }
+        let (_, fx) = transition(dropping, Input::Tick { now: ms(600) });
+        assert!(!fx.contains(&E::LetGo));
     }
 
     #[test]
@@ -1048,7 +1097,7 @@ mod tests {
         assert_eq!(fx, [E::Leave { tab: TabId(3) }, E::End(DragOps::NONE)]);
         let (s, fx) = transition(PageDrag::Outside { source: A }, Input::<Data>::Gone(A));
         assert!(s.is_none());
-        assert_eq!(fx, [E::End(DragOps::NONE)]);
+        assert_eq!(fx, [E::End(DragOps::NONE), E::LetGo]);
     }
 
     #[test]
