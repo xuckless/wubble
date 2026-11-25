@@ -959,6 +959,16 @@ pub const PRIVACY_WEBRTC_IP: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// Chrome's Site settings > PDF documents, "Download PDFs" (`plugins.always_open_pdf_externally`):
+/// a PDF navigation becomes a download instead of opening in Chromium's viewer.
+pub const PDF_DOWNLOAD: SettingDef = SettingDef {
+    key: "pdf.download",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Download PDFs instead of opening them",
+    section: Section::Privacy,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -1046,6 +1056,7 @@ pub const ALL: &[&SettingDef] = &[
     &PRIVACY_SITE_SUGGESTED_ADS,
     &PRIVACY_AD_MEASUREMENT,
     &PRIVACY_WEBRTC_IP,
+    &PDF_DOWNLOAD,
 ];
 
 /// The definition of `key`, if it is a setting.
@@ -1177,6 +1188,16 @@ mod tests {
         }
         // A row of its own now that the Pip window exists.
         assert_eq!(PIP_ON_TAB_SWITCH.section, Section::General);
+    }
+
+    #[test]
+    fn pdfs_open_in_the_viewer_by_default() {
+        assert_eq!(find("pdf.download"), Some(&PDF_DOWNLOAD));
+        assert_eq!(PDF_DOWNLOAD.kind, SettingKind::Bool);
+        assert_eq!(PDF_DOWNLOAD.default, "0");
+        // Chrome keeps it under Privacy and security > Site settings
+        assert_eq!(PDF_DOWNLOAD.section, Section::Privacy);
+        assert!(!PDF_DOWNLOAD.restart);
     }
 
     #[test]

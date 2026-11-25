@@ -318,6 +318,7 @@ settings! {
     PrivacySiteSuggestedAds: bool = defs::PRIVACY_SITE_SUGGESTED_ADS;
     PrivacyAdMeasurement: bool = defs::PRIVACY_AD_MEASUREMENT;
     PrivacyWebrtcIp: String = defs::PRIVACY_WEBRTC_IP;
+    PdfDownload: bool = defs::PDF_DOWNLOAD;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

@@ -91,6 +91,11 @@ pub const PREFS: &[PrefRow] = &[
             PrefValue::Str(Cow::Borrowed("disable_non_proxied_udp")),
         ]),
     },
+    PrefRow {
+        setting: &s::PDF_DOWNLOAD,
+        pref: "plugins.always_open_pdf_externally",
+        mapping: Mapping::Bool,
+    },
 ];
 
 impl PrefRow {
@@ -173,6 +178,8 @@ mod tests {
                 "webrtc.ip_handling_policy",
                 PrefValue::Str("default".into()),
             ),
+            // Chrome's default: PDFs open in its viewer
+            ("plugins.always_open_pdf_externally", PrefValue::Bool(false)),
         ];
         for (pref, value) in want {
             let row = PREFS.iter().find(|r| r.pref == *pref).expect(pref);
@@ -215,6 +222,11 @@ mod tests {
                 "pages.min_font_size",
                 "99",
                 Some(("webkit.webprefs.minimum_font_size", PrefValue::Int(0))),
+            ),
+            (
+                "pdf.download",
+                "1",
+                Some(("plugins.always_open_pdf_externally", PrefValue::Bool(true))),
             ),
             ("search.engine", "google", None),
         ];

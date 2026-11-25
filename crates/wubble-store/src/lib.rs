@@ -55,7 +55,7 @@ pub use settings::{
 
 pub use settings::InstalledExtensions;
 pub use settings::{
-    PrivacyAdMeasurement, PrivacyAdTopics, PrivacyCanMakePayment, PrivacyDoNotTrack,
+    PdfDownload, PrivacyAdMeasurement, PrivacyAdTopics, PrivacyCanMakePayment, PrivacyDoNotTrack,
     PrivacyPreload, PrivacySiteSuggestedAds, PrivacyWebrtcIp,
 };
 
