@@ -658,6 +658,12 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenInPrivateWindow(url)) => {
                     self.dispatch(Command::NewPrivateWindow { url: Some(url) });
                 }
+                MenuEffect::Run(MenuCommand::PictureInPicture { x, y }) => {
+                    self.pip_event(wubble_core::pip::PipInput::RequestAt(tab, (x, y)));
+                }
+                MenuEffect::Run(MenuCommand::VideoFrame { x, y, output }) => {
+                    self.video_frame_at(tab, (x, y), output);
+                }
                 MenuEffect::Run(MenuCommand::OpenInGlance(url)) => {
                     let window = self.w.id;
                     self.dispatch(Command::OpenGlance {

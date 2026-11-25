@@ -83,6 +83,16 @@ pub enum Command {
     OpenInPrivateWindow(String),
     /// Open the URL in a peek over the page (`Command::OpenGlance`).
     OpenInGlance(String),
+    /// Pop the video at this point (physical px, view-relative) out into wubble's
+    /// picture-in-picture (`wubble_core::pip`).
+    PictureInPicture { x: i32, y: i32 },
+    /// The frame of the video at this point (physical px, view-relative) as a PNG, to the
+    /// clipboard or the downloads folder (`output`).
+    VideoFrame {
+        x: i32,
+        y: i32,
+        output: wubble_core::shot::ShotOutput,
+    },
     /// The OS's emoji and symbols picker over the focused field (macOS's Character Viewer,
     /// `orderFrontCharacterPalette:`).
     EmojiPalette,
@@ -265,8 +275,7 @@ impl Ctx<'_> {
     /// fragment names text of the page's own document, never a frame's (Chrome offers none
     /// there).
     fn highlight(&self) -> Option<String> {
-        let main = self.menu.frame_url.is_empty() || self.menu.frame_url == self.menu.page_url;
-        (self.selection() && main)
+        (self.selection() && self.main_frame())
             .then(|| highlight::link_to_highlight(&self.menu.page_url, &self.menu.selection_text))
             .flatten()
     }
@@ -295,6 +304,14 @@ impl Ctx<'_> {
             frame: self.menu.frame.clone(),
             source: self.menu.media_url.clone(),
         }
+    }
+    /// Clicked in the page's own document, not a frame's.
+    fn main_frame(&self) -> bool {
+        self.menu.frame_url.is_empty() || self.menu.frame_url == self.menu.page_url
+    }
+    /// A video in the page's own document: the kit (`kit.js`) reaches it at the point.
+    fn main_video(&self) -> bool {
+        self.video() && self.main_frame()
     }
     /// "Video" or "Audio", for the media entries' labels.
     fn kind(&self) -> &'static str {
@@ -398,8 +415,8 @@ macro_rules! row {
 /// `AppendImageItems`, `AppendMediaItems`, `AppendEditableItems`,
 /// `AppendCopyItem`, `AppendSearchProvider`, `AppendPageItems`,
 /// `AppendDeveloperItems`, and the frame rows of `AppendFrameItems`). Spelling suggestions go
-/// first and come from the request itself. Left out, with the reason in TODO.md:
-/// "Picture in Picture" (CEF's windowless views have no PiP window).
+/// first and come from the request itself. Picture in Picture is wubble's own
+/// (`wubble_core::pip`): CEF's windowless views have none of Chromium's.
 ///
 /// A group number only has to differ from its neighbours' (a divider goes where it changes):
 /// the spelling rows lead the table in groups 0 and 11 so "Add to Dictionary" sits under the
@@ -531,6 +548,12 @@ const ROWS: &[Row] = &[
         enabled: |c| c.media_has(M::CAN_TOGGLE_CONTROLS),
         command: |c| c.media_op(MediaOp::Controls),
     },
+    // Chromium's IDC_CONTENT_CONTEXT_PICTUREINPICTURE: wubble's own (the video fullscreen in its
+    // view, the view in a small window), on the video under the pointer
+    row!(3, "Picture in Picture", |c| c.main_video(), always, |c| {
+        let (x, y) = c.at();
+        Command::PictureInPicture { x, y }
+    }),
     Row {
         group: 4,
         label: |c| format!("Open {} in New Tab", c.kind()),
@@ -552,6 +575,30 @@ const ROWS: &[Row] = &[
         enabled: always,
         command: |c| Command::CopyText(c.menu.media_url.clone()),
     },
+    // Chromium M120's IDC_CONTENT_CONTEXT_COPYVIDEOFRAME and _SAVEVIDEOFRAMEAS: the frame on
+    // screen, the downloads folder for the saved one
+    row!(4, "Copy Video Frame", |c| c.main_video(), always, |c| {
+        let (x, y) = c.at();
+        Command::VideoFrame {
+            x,
+            y,
+            output: wubble_core::shot::ShotOutput::Clipboard,
+        }
+    }),
+    row!(
+        4,
+        "Save Video Frame As\u{2026}",
+        |c| c.main_video(),
+        always,
+        |c| {
+            let (x, y) = c.at();
+            Command::VideoFrame {
+                x,
+                y,
+                output: wubble_core::shot::ShotOutput::File,
+            }
+        }
+    ),
     // Chromium's IDC_CONTENT_CONTEXT_EMOJI, first of a field's rows (macOS's Character Viewer;
     // Windows, where Chrome also has it, is parked)
     row!(
@@ -2852,14 +2899,60 @@ mod tests {
                 "Play",
                 "Loop",
                 "Show Controls",
+                "Picture in Picture",
                 "-",
                 "Open Video in New Tab",
                 "Save Video As\u{2026}",
                 "Copy Video Address",
+                "Copy Video Frame",
+                "Save Video Frame As\u{2026}",
                 "-",
                 "Take Screenshot of Element",
                 "Inspect"
             ]
+        );
+        let command = |label: &str| e.iter().find(|e| e.label == label).map(|e| &e.command);
+        assert_eq!(
+            command("Picture in Picture"),
+            Some(&Command::PictureInPicture { x: 7, y: 9 })
+        );
+        use wubble_core::shot::ShotOutput;
+        assert_eq!(
+            command("Copy Video Frame"),
+            Some(&Command::VideoFrame {
+                x: 7,
+                y: 9,
+                output: ShotOutput::Clipboard
+            })
+        );
+        assert_eq!(
+            command("Save Video Frame As\u{2026}"),
+            Some(&Command::VideoFrame {
+                x: 7,
+                y: 9,
+                output: ShotOutput::File
+            })
+        );
+        // a video in a subframe: the kit cannot reach it at the view's point
+        let framed = ContextMenu {
+            frame_url: "https://b.test/player".into(),
+            ..video(MediaFlags::PAUSED)
+        };
+        let framed = entries(&framed, NavFlags::default());
+        assert!(
+            framed
+                .iter()
+                .all(|e| e.label != "Picture in Picture" && !e.label.contains("Frame"))
+        );
+        // audio has neither
+        let audio = ContextMenu {
+            media: MediaKind::Audio,
+            ..video(MediaFlags::PAUSED)
+        };
+        assert!(
+            entries(&audio, NavFlags::default())
+                .iter()
+                .all(|e| e.label != "Picture in Picture")
         );
         assert_eq!(
             e[0].command,
@@ -2873,7 +2966,7 @@ mod tests {
         );
         assert!(e[2].enabled);
         // Saving needs CAN_SAVE.
-        assert!(!e[5].enabled);
+        assert!(!e[6].enabled);
         let all =
             MediaFlags::HAS_AUDIO | MediaFlags::MUTED | MediaFlags::LOOP | MediaFlags::CONTROLS;
         let e = entries(&video(all), NavFlags::default());

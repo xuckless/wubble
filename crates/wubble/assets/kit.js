@@ -62,6 +62,13 @@
     return best;
   }
   k.primary = primary;
+  // The video under a point of the view (physical px, view-relative: the context menu's), else
+  // the main one.
+  function at(x, y) {
+    const e = Number.isFinite(x) && Number.isFinite(y)
+      ? document.elementFromPoint(x / devicePixelRatio, y / devicePixelRatio) : null;
+    return (e && e.closest("video")) || primary();
+  }
 
   // ----- jumps: the host's skip table
   let jumps = [];
@@ -188,9 +195,10 @@
     return true;
   };
 
-  // The frame on screen as PNG base64 (`null` for a cross-origin video the canvas may not read).
-  k.frame = function () {
-    const v = primary();
+  // The frame on screen as PNG base64 (`null` for a cross-origin video the canvas may not read):
+  // the main video's, or with a point the one under it.
+  k.frame = function (x, y) {
+    const v = at(x, y);
     if (!v || !v.videoWidth) return null;
     try {
       const c = document.createElement("canvas");
@@ -203,13 +211,15 @@
     }
   };
 
-  // Picture-in-picture: the main video alone, fullscreen in the tab's own view.
-  k.pip = function () {
-    const v = primary();
+  // Picture-in-picture: the main video alone, fullscreen in the tab's own view; `pipAt`, the
+  // one under a point (the context menu's).
+  function pipOf(v) {
     if (!v) return Promise.reject(new Error("no video"));
     if (v.disablePictureInPicture) return Promise.reject(new Error("the page disallows it"));
     return v.requestFullscreen().then(() => true);
-  };
+  }
+  k.pip = function () { return pipOf(primary()); };
+  k.pipAt = function (x, y) { return pipOf(at(x, y)); };
 
   // ----- Boosts
   let sheet = null;

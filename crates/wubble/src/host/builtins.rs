@@ -667,7 +667,7 @@ impl Host {
                     };
                     self.shot_event(tab, event);
                 }
-                ShotEffect::Save(png) => self.save_shot(tab, png, false),
+                ShotEffect::Save(png) => self.save_shot(tab, png, false, None),
                 ShotEffect::Toast(text) => {
                     if let Some(window) = self.w.window.upgrade() {
                         self.toast(&window, text);
@@ -680,8 +680,16 @@ impl Host {
     /// Hands the PNG to the saver thread: the file in the downloads folder, the clipboard, as
     /// the setting says. Its outcome comes back on the Slint thread as `Saved`. `frame`: a video
     /// frame from the video controls, not the screenshot machine's.
-    pub(super) fn save_shot(&mut self, tab: TabId, png: String, frame: bool) {
-        let output = self.builtins.output;
+    /// Saves a screenshot (`frame`: a video's frame) where `output` says, else where the
+    /// screenshot setting does.
+    pub(super) fn save_shot(
+        &mut self,
+        tab: TabId,
+        png: String,
+        frame: bool,
+        output: Option<ShotOutput>,
+    ) {
+        let output = output.unwrap_or(self.builtins.output);
         let title = self
             .model
             .tabs
@@ -804,6 +812,16 @@ impl Host {
         }
         let text = shot::saved_text(saved.file, saved.clipboard);
         if frame {
+            // a video frame written to the downloads folder is listed as a finished download
+            if let (Some(path), Some(true)) = (&path, saved.file) {
+                let page = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .map(|t| t.url.clone())
+                    .unwrap_or_default();
+                self.add_finished_download(&page, path, Some(tab));
+            }
             if let Some(window) = self.w.window.upgrade() {
                 self.toast(&window, text);
             }
