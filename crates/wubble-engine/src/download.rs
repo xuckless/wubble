@@ -54,6 +54,8 @@ pub enum DownloadInput {
     Progress {
         received: u64,
         total: Option<u64>,
+        /// Bytes per second now, when CEF says.
+        speed: Option<u64>,
     },
     Done {
         path: PathBuf,
@@ -134,14 +136,22 @@ pub fn transition(
                 received: r,
                 total: t,
             }),
-            In::Progress { received, total },
+            In::Progress {
+                received,
+                total,
+                speed,
+            },
         )
         | (
             Some(Paused {
                 received: r,
                 total: t,
             }),
-            In::Progress { received, total },
+            In::Progress {
+                received,
+                total,
+                speed,
+            },
         ) => {
             let next = match state {
                 Some(Paused { .. }) => Paused { received, total },
@@ -154,6 +164,7 @@ pub fn transition(
                     download: id,
                     received,
                     total,
+                    speed,
                 })]
             };
             (Some(next), effects)
@@ -174,7 +185,11 @@ pub fn transition(
                 received: r,
                 total: t,
             }),
-            In::Progress { received, total },
+            In::Progress {
+                received,
+                total,
+                speed,
+            },
         ) => {
             let mut effects = vec![Emit(PageEvent::DownloadResumed(id))];
             if (r, t) != (received, total) {
@@ -182,6 +197,7 @@ pub fn transition(
                     download: id,
                     received,
                     total,
+                    speed,
                 }));
             }
             (Some(Running { received, total }), effects)
@@ -287,6 +303,7 @@ mod tests {
         In::Progress {
             received,
             total: Some(100),
+            speed: Some(received * 10),
         }
     }
 
@@ -402,7 +419,8 @@ mod tests {
                 Emit(PageEvent::DownloadProgress {
                     download: ID,
                     received: 50,
-                    total: Some(100)
+                    total: Some(100),
+                    speed: Some(500)
                 })
             ]
         );

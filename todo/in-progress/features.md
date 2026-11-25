@@ -63,7 +63,7 @@ In Chrome, when a site's zoom differs from the default, a magnifier icon shows i
 
 ## Download speed and time remaining in rows (`download-speed-eta`)
 
-Key: `download-speed-eta` · engine patch: no · state: not written.
+Key: `download-speed-eta` · engine patch: no · state: [~] written blind on sprint/features, not compiled.
 
 Chrome's download rows read "2.1 MB/s · 12 MB of 100 MB, 40 secs left". wubble's DownloadEntry::detail (wubble-core/src/download.rs) shows only the amounts, because welding's DownloadProgress event (vendor/welding/src/handlers.rs on_download_updated) drops CefDownloadItem::current_speed.
 

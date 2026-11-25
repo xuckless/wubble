@@ -2370,11 +2370,13 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             id,
             bytes_received,
             total_bytes_expected,
+            bytes_per_second,
         } => one(Route::Download(
             DownloadId(id),
             DownloadInput::Progress {
                 received: bytes_received,
                 total: total_bytes_expected,
+                speed: bytes_per_second,
             },
         )),
         E::DownloadFinished {
@@ -3293,12 +3295,14 @@ mod tests {
                 id: 11,
                 bytes_received: 5,
                 total_bytes_expected: Some(9),
+                bytes_per_second: Some(3),
             }),
             Route::Download(
                 DownloadId(11),
                 DownloadInput::Progress {
                     received: 5,
-                    total: Some(9)
+                    total: Some(9),
+                    speed: Some(3)
                 }
             )
         );

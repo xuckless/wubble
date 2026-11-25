@@ -29,6 +29,7 @@ fn read(r: &turso::Row) -> Result<DownloadEntry> {
             .ok_or_else(|| Error::Corrupt(format!("download state {state:?}")))?,
         started_ms: r.get(8)?,
         container: ContainerId(narrow(r.get(9)?, "download container")?),
+        speed: None,
     })
 }
 
@@ -130,6 +131,7 @@ mod tests {
             state,
             started_ms: 1_000 + id,
             container: ContainerId::DEFAULT,
+            speed: None,
         }
     }
 

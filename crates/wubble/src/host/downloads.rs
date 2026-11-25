@@ -215,6 +215,7 @@ impl Host {
                     state: DownloadState::Running,
                     started_ms: now_ms(),
                     container,
+                    speed: None,
                 };
                 d.next_id += 1;
                 d.inflight
@@ -236,7 +237,15 @@ impl Host {
                 download,
                 received,
                 total,
-            } => self.engine_download(download, DownloadEvent::Progress { received, total }),
+                speed,
+            } => self.engine_download(
+                download,
+                DownloadEvent::Progress {
+                    received,
+                    total,
+                    speed,
+                },
+            ),
             PageEvent::DownloadPaused(download) => {
                 self.engine_download(download, DownloadEvent::Paused)
             }
@@ -545,6 +554,7 @@ impl Host {
             state: DownloadState::Running,
             started_ms: now_ms(),
             container,
+            speed: None,
         };
         d.next_id += 1;
         let (id, text) = (entry.id, format!("Downloading {}", entry.name));
@@ -576,6 +586,7 @@ impl Host {
             state: DownloadState::Complete,
             started_ms: now_ms(),
             container,
+            speed: None,
         };
         d.next_id += 1;
         self.push_entry(entry, side);
@@ -817,6 +828,7 @@ mod tests {
             state,
             started_ms: 0,
             container: ContainerId::DEFAULT,
+            speed: None,
         }
     }
 

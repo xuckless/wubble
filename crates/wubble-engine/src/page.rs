@@ -519,6 +519,8 @@ pub enum PageEvent {
         download: DownloadId,
         received: u64,
         total: Option<u64>,
+        /// Bytes per second now, when CEF says (`CefDownloadItem::GetCurrentSpeed`).
+        speed: Option<u64>,
     },
     DownloadPaused(DownloadId),
     DownloadResumed(DownloadId),
@@ -792,6 +794,7 @@ mod tests {
             download: DownloadId(download),
             received,
             total: None,
+            speed: None,
         }
     }
 

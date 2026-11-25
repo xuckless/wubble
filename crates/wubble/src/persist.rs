@@ -1461,6 +1461,7 @@ mod tests {
             state: download::DownloadState::Running,
             started_ms: 5,
             container: ContainerId::DEFAULT,
+            speed: None,
         };
         client.add_download(&running);
         let (hits_tx, hits_rx) = mpsc::channel();

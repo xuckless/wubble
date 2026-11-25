@@ -622,6 +622,12 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     pool's count and zeroes it. For wubble's page layer diagnostics (its per-second
     summary line). Linux and Windows unchanged.
 
+66. **A download's speed.** `surface.rs`: `NavigationEvent::DownloadProgress`
+    gains `bytes_per_second: Option<u64>`; `handlers.rs` (`on_download_updated`)
+    fills it from `CefDownloadItem::current_speed` (0 while stalled; none for a
+    negative value).
+    For wubble's download rows (speed and time left).
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

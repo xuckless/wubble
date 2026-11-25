@@ -1182,6 +1182,7 @@ mod tests {
             state,
             started_ms: 0,
             container: crate::space::ContainerId::DEFAULT,
+            speed: None,
         }
     }
 

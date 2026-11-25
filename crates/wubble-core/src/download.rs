@@ -175,6 +175,9 @@ pub enum DownloadEvent {
     Progress {
         received: u64,
         total: Option<u64>,
+        /// The engine's bytes per second now (CEF's `current_speed`, a media job's own
+        /// `rate`); `None`: no new measure, the row keeps its speed.
+        speed: Option<u64>,
     },
     Paused,
     Resumed,
@@ -258,21 +261,47 @@ pub struct DownloadEntry {
     pub started_ms: i64,
     /// The container whose cookies started this download.
     pub container: ContainerId,
+    /// Bytes per second, smoothed, while it runs (not stored: `None` once it stops running).
+    pub speed: Option<u64>,
 }
+
+/// The weight, in tenths, a speed report has in the row's speed: an exponential moving average,
+/// so the time left does not jitter from one report to the next.
+const SPEED_WEIGHT: u64 = 3;
 
 impl DownloadEntry {
     /// Runs `event` through [`transition`]; progress counts only while the
-    /// download is active, and a finished one counts every byte.
+    /// download is active, and a finished one counts every byte. The speed is kept only while
+    /// it runs.
     pub fn apply(self, event: DownloadEvent) -> (DownloadEntry, Vec<DownloadEffect>) {
         let progress = match (&event, self.state.is_active()) {
-            (DownloadEvent::Progress { received, total }, true) => Some((*received, *total)),
+            (
+                DownloadEvent::Progress {
+                    received,
+                    total,
+                    speed,
+                },
+                true,
+            ) => Some((*received, *total, *speed)),
             _ => None,
         };
         let (state, effects) = transition(self.state.clone(), event);
         let mut entry = DownloadEntry { state, ..self };
-        if let Some((received, total)) = progress {
+        if let Some((received, total, speed)) = progress {
             entry.received = received;
             entry.total = total.or(entry.total);
+            entry.speed = match (entry.speed, speed) {
+                (Some(was), Some(now)) => Some(
+                    was.saturating_mul(10 - SPEED_WEIGHT)
+                        .saturating_add(now.saturating_mul(SPEED_WEIGHT))
+                        / 10,
+                ),
+                (was, None) => was,
+                (None, now) => now,
+            };
+        }
+        if entry.state != DownloadState::Running {
+            entry.speed = None;
         }
         if entry.state == DownloadState::Complete {
             entry.total = Some(entry.total.unwrap_or(entry.received).max(entry.received));
@@ -299,7 +328,16 @@ impl DownloadEntry {
             None => format_bytes(self.received),
         };
         match &self.state {
-            DownloadState::Running => amount,
+            // Chromium's in-progress status: the speed, the amount, the time left
+            DownloadState::Running => match (self.speed.filter(|&s| s > 0), self.total) {
+                (Some(speed), Some(total)) => format!(
+                    "{}/s \u{b7} {amount}, {}",
+                    format_bytes(speed),
+                    remaining_text(total.saturating_sub(self.received) / speed)
+                ),
+                (Some(speed), None) => format!("{}/s \u{b7} {amount}", format_bytes(speed)),
+                (None, _) => amount,
+            },
             DownloadState::Paused => format!("Paused, {amount}"),
             DownloadState::Interrupted(e) => format!("Interrupted: {e}"),
             DownloadState::Complete => format_bytes(self.received),
@@ -356,6 +394,49 @@ pub fn lost_all(entries: Vec<DownloadEntry>) -> Vec<DownloadEntry> {
         .into_iter()
         .map(|e| e.apply(DownloadEvent::Lost).0)
         .collect()
+}
+
+/// The units of the time left, smallest first: one in seconds, the next unit's size (where a
+/// count rounds up into it), the singular and the plural (Chromium's `ui::TimeFormat` short
+/// remaining strings, `ui/base/l10n/time_format.cc` and `ui_strings.grd`
+/// `IDS_TIME_REMAINING_*`, BSD-3-Clause; behaviour and strings only).
+const REMAINING: &[(u64, u64, &str, &str)] = &[
+    (1, 60, "sec", "secs"),
+    (60, 3_600, "min", "mins"),
+    (3_600, 86_400, "hour", "hours"),
+    (86_400, u64::MAX, "day", "days"),
+];
+
+/// "40 secs left", "1 min left", "3 hours left": `secs` in the largest unit it fills, rounded
+/// to the nearest, as `TimeFormat::Simple(FORMAT_REMAINING, LENGTH_SHORT)` reads.
+pub fn remaining_text(secs: u64) -> String {
+    let &(unit, _, one, many) = REMAINING
+        .iter()
+        .find(|&&(unit, next, ..)| secs < next.saturating_sub(unit / 2))
+        .unwrap_or(&REMAINING[REMAINING.len() - 1]);
+    let n = secs.saturating_add(unit / 2) / unit;
+    format!("{n} {} left", if n == 1 { one } else { many })
+}
+
+/// A byte count at a time (wall clock ms): a media download's writer, sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sample {
+    pub received: u64,
+    pub at_ms: u64,
+}
+
+/// Samples closer than this give no rate: the writer's chunks arrive in bursts.
+pub const RATE_SPAN_MS: u64 = 1_000;
+
+/// Bytes per second from `from` to `to`; `None` before [`RATE_SPAN_MS`] passed or when the count
+/// went back (a restarted job).
+pub fn rate(from: Sample, to: Sample) -> Option<u64> {
+    let span = to
+        .at_ms
+        .checked_sub(from.at_ms)
+        .filter(|&s| s >= RATE_SPAN_MS)?;
+    let bytes = to.received.checked_sub(from.received)?;
+    Some(bytes.saturating_mul(1_000) / span)
 }
 
 /// "999 B", "1.5 KB", "12.3 MB", "4.0 GB" (decimal units, one decimal).
@@ -482,6 +563,7 @@ mod tests {
             Progress {
                 received: 5,
                 total: Some(10),
+                speed: None,
             },
             Paused,
             Resumed,
@@ -596,6 +678,7 @@ mod tests {
             state,
             started_ms: 0,
             container: ContainerId::DEFAULT,
+            speed: None,
         }
     }
 
@@ -627,6 +710,7 @@ mod tests {
         let (e, fx) = entry(DownloadState::Running).apply(DownloadEvent::Progress {
             received: 1_500_000,
             total: Some(3_000_000),
+            speed: None,
         });
         assert!(fx.is_empty());
         assert_eq!((e.received, e.total), (1_500_000, Some(3_000_000)));
@@ -641,8 +725,91 @@ mod tests {
         let (e, _) = e.apply(DownloadEvent::Progress {
             received: 1,
             total: None,
+            speed: None,
         });
         assert_eq!(e.received, 3_000_000);
+    }
+
+    #[test]
+    fn a_running_row_reads_its_speed_and_the_time_left() {
+        let go = |e: DownloadEntry, received, total, speed| {
+            e.apply(DownloadEvent::Progress {
+                received,
+                total,
+                speed,
+            })
+            .0
+        };
+        let e = go(
+            entry(DownloadState::Running),
+            12_000_000,
+            Some(100_000_000),
+            Some(2_100_000),
+        );
+        assert_eq!(e.speed, Some(2_100_000));
+        assert_eq!(
+            e.detail(),
+            "2.1 MB/s \u{b7} 12.0 MB of 100.0 MB, 41 secs left"
+        );
+        // smoothed: three tenths of the new report
+        let e = go(e, 13_000_000, Some(100_000_000), Some(1_100_000));
+        assert_eq!(e.speed, Some(1_800_000));
+        // no size: the speed and the amount; no speed: the amount alone
+        let unsized_ = go(entry(DownloadState::Running), 5_000, None, Some(1_000));
+        assert_eq!(unsized_.detail(), "1.0 KB/s \u{b7} 5.0 KB");
+        let still = go(entry(DownloadState::Running), 5_000, Some(10_000), Some(0));
+        assert_eq!(still.detail(), "5.0 KB of 10.0 KB");
+        let kept = go(e.clone(), 14_000_000, Some(100_000_000), None);
+        assert_eq!(
+            kept.speed,
+            Some(1_800_000),
+            "no new measure keeps the speed"
+        );
+        // leaving Running clears it; paused reads no speed
+        let (paused, _) = e.clone().apply(DownloadEvent::Pause);
+        assert_eq!(paused.speed, None);
+        assert_eq!(paused.detail(), "Paused, 13.0 MB of 100.0 MB");
+        let paused = go(paused, 13_500_000, Some(100_000_000), Some(5_000));
+        assert_eq!(paused.speed, None, "a paused download keeps no speed");
+        let (done, _) = e.apply(DownloadEvent::Finished);
+        assert_eq!(done.speed, None);
+    }
+
+    #[test]
+    fn the_time_left_reads_as_chromiums_short_remaining_strings() {
+        for (secs, want) in [
+            (0, "0 secs left"),
+            (1, "1 sec left"),
+            (40, "40 secs left"),
+            (59, "59 secs left"),
+            (60, "1 min left"),
+            (89, "1 min left"),
+            (90, "2 mins left"),
+            (3_569, "59 mins left"),
+            (3_570, "1 hour left"),
+            (7_200, "2 hours left"),
+            (84_599, "23 hours left"),
+            (84_600, "1 day left"),
+            (3 * 86_400, "3 days left"),
+            (u64::MAX, "213503982334601 days left"),
+        ] {
+            assert_eq!(remaining_text(secs), want, "{secs}");
+        }
+    }
+
+    #[test]
+    fn a_rate_needs_a_second_and_a_growing_count() {
+        let at = |received, at_ms| Sample { received, at_ms };
+        for (from, to, want) in [
+            (at(0, 0), at(2_000_000, 1_000), Some(2_000_000)),
+            (at(1_000, 10_000), at(4_000, 12_000), Some(1_500)),
+            (at(0, 0), at(5_000, 999), None),
+            (at(0, 5_000), at(5_000, 4_000), None),
+            (at(9_000, 0), at(1_000, 5_000), None),
+            (at(7, 0), at(7, 3_000), Some(0)),
+        ] {
+            assert_eq!(rate(from, to), want, "{from:?} {to:?}");
+        }
     }
 
     #[test]
@@ -650,6 +817,7 @@ mod tests {
         let (e, _) = entry(DownloadState::Running).apply(DownloadEvent::Progress {
             received: 42,
             total: None,
+            speed: None,
         });
         assert_eq!((e.fraction(), e.detail()), (None, "42 B".to_string()));
         let (e, _) = e.apply(DownloadEvent::Interrupted("Network error".into()));

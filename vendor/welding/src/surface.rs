@@ -2386,6 +2386,8 @@ pub enum NavigationEvent {
         id: DownloadId,
         bytes_received: u64,
         total_bytes_expected: Option<u64>,
+        /// wubble change: CEF's `current_speed`, when it reports one.
+        bytes_per_second: Option<u64>,
     },
     /// A download ended. `error` is `Some` when it failed, in which case the
     /// file may be partial or absent. Host-driven cancellation arrives as
