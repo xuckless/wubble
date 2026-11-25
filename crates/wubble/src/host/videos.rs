@@ -153,6 +153,8 @@ pub(super) struct Videos {
     /// Whether each tab's main video played at its last snapshot.
     playing: BTreeMap<TabId, bool>,
     last_visible: Option<TabId>,
+    /// The Main window's panes at the last change (`Model::window_panes`).
+    last_panes: Vec<TabId>,
     // SponsorBlock
     sponsor_on: bool,
     sponsor_asked: bool,
@@ -192,6 +194,7 @@ impl Default for Videos {
             collapsed: false,
             playing: BTreeMap::new(),
             last_visible: None,
+            last_panes: Vec::new(),
             sponsor_on: false,
             sponsor_asked: false,
             acts: ActTable::new(),
@@ -745,29 +748,32 @@ impl Host {
         self.redraw_video();
     }
 
-    /// After every change to the model: a tab switch is picture-in-picture's cue.
+    /// After every change to the model: a tab switch is picture-in-picture's cue, for every pane
+    /// of a split left (`pip::switched`).
     pub(super) fn media_after_change(&mut self) {
-        // the focused Main window's tab: the Pip window's own is no switch
-        let visible = self.model.window_tab(self.model.main_window());
-        let last = std::mem::replace(&mut self.videos.last_visible, visible);
-        if last == visible {
+        // the focused Main window's: the Pip window's own is no switch
+        let main = self.model.main_window();
+        let visible = self.model.window_tab(main);
+        if std::mem::replace(&mut self.videos.last_visible, visible) != visible {
+            self.videos.over_video = false;
+            self.videos.over_controls = false;
+        }
+        let panes = self.model.window_panes(main);
+        let before = std::mem::replace(&mut self.videos.last_panes, panes.clone());
+        if before == panes {
             return;
         }
-        self.videos.over_video = false;
-        self.videos.over_controls = false;
-        if let Some(from) = last {
-            // Playing with sound the tab makes: not a muted or silent clip.
-            let playing = self.videos.playing.get(&from).copied().unwrap_or(false)
-                && self.audible_tabs().any(|t| t == from);
-            let auto = self.videos.pip_auto;
-            self.pip_event(PipInput::TabSwitched {
-                from,
-                auto,
-                playing,
-            });
-        }
-        if let Some(to) = visible {
-            self.pip_event(PipInput::TabActivated(to));
+        // Playing with sound the tab makes: not a muted or silent clip.
+        let playing = |t: TabId| {
+            self.videos.playing.get(&t).copied().unwrap_or(false)
+                && self
+                    .model
+                    .tabs
+                    .get(&t)
+                    .is_some_and(|t| t.busy.contains(wubble_core::busy::Reason::Audible))
+        };
+        for input in pip::switched(&before, &panes, self.videos.pip_auto, playing) {
+            self.pip_event(input);
         }
     }
 

@@ -3366,7 +3366,7 @@ fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
 }
 
 #[test]
-fn a_split_pane_never_goes_to_pip_and_the_pip_tab_never_splits() {
+fn a_split_pane_on_screen_never_goes_to_pip_and_the_pip_tab_never_splits() {
     let (m, t) = with_tabs(3);
     let main = m.focused();
     let (m, _) = run(m, Command::SplitWith(t[1]));
@@ -3380,6 +3380,18 @@ fn a_split_pane_never_goes_to_pip_and_the_pip_tab_never_splits() {
         assert_eq!(m2, before);
     }
     assert!(m.can_pip(t[0]), "not in the split");
+    // The split left for another tab: each of its panes may go (a tab switch's auto
+    // picture-in-picture), and the split coming back with it out is a model that holds (the
+    // host returns it then).
+    let (m, _) = run(m, Command::ActivateTab(t[0]));
+    for pane in [t[1], t[2]] {
+        assert!(m.can_pip(pane), "{pane:?} of a split not shown");
+    }
+    let (m, _) = pip(m, t[1]);
+    assert_eq!(m.pip_tab(), Some(t[1]));
+    let (m, _) = run(m, Command::ActivateTab(t[2]));
+    assert_eq!(m.window_tabs(main), [t[2]], "the pane out is left out");
+    assert_eq!(m.pip_tab(), Some(t[1]));
     // The tab in picture-in-picture is not split with, nor split beside.
     let (m, t) = with_tabs(3);
     let (m, _) = pip(m, t[2]);

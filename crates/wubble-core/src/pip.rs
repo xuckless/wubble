@@ -38,7 +38,7 @@ pub enum PipInput {
     /// The overlay's button, or the action: pop `tab`'s video out (again: back in).
     Request(TabId),
     /// Whether the model opened the window `OpenWindow` asked for (it refuses a Little or Popup
-    /// window's tab, a peek, a split pane).
+    /// window's tab, a peek, a pane of a split on screen).
     WindowOpened(bool),
     /// The page's answer to going fullscreen (the error's text if it refused).
     Fullscreen(Result<(), String>),
@@ -74,6 +74,31 @@ pub enum PipEffect {
     /// `Command::ClosePip`.
     CloseWindow(TabId),
     Toast(&'static str),
+}
+
+/// A Main window's panes going from `before` to `after` (one tab, or a split's): each pane left
+/// is a switch away from it, in pane order (the machine takes the first whose video plays
+/// aloud: one window at a time), then each pane come to is a return. `playing`: the tab's video
+/// plays with sound.
+pub fn switched(
+    before: &[TabId],
+    after: &[TabId],
+    auto: bool,
+    playing: impl Fn(TabId) -> bool,
+) -> Vec<PipInput> {
+    let left = before
+        .iter()
+        .filter(|t| !after.contains(t))
+        .map(|&from| PipInput::TabSwitched {
+            from,
+            auto,
+            playing: playing(from),
+        });
+    let come = after
+        .iter()
+        .filter(|t| !before.contains(t))
+        .map(|&t| PipInput::TabActivated(t));
+    left.chain(come).collect()
 }
 
 pub fn transition(state: Pip, input: PipInput) -> (Pip, Vec<PipEffect>) {
@@ -259,6 +284,51 @@ mod tests {
             (Pip::Off, vec![ExitFullscreen(A), CloseWindow(A)])
         );
         assert_eq!(transition(on(), TabActivated(B)), (on(), vec![]));
+    }
+
+    /// The owner's case: a video playing in one pane of a three-pane split pops out when the
+    /// split is left for another tab, and goes back when the split comes back.
+    #[test]
+    fn leaving_a_split_pops_out_its_playing_pane() {
+        const C: TabId = TabId(3);
+        const D: TabId = TabId(4);
+        let run = |state: Pip, inputs: Vec<PipInput>| {
+            inputs.into_iter().fold((state, vec![]), |(s, mut fx), i| {
+                let (s, more) = transition(s, i);
+                fx.extend(more);
+                (s, fx)
+            })
+        };
+        let plays = |tab: TabId| move |t: TabId| t == tab;
+        /// (name, panes before, panes after, the tab that plays aloud, the state then, effects)
+        type Row = (&'static str, Vec<TabId>, Vec<TabId>, TabId, Pip, Vec<PipEffect>);
+        let rows: Vec<Row> = vec![
+            ("one page left", vec![A], vec![B], A, Pip::Entering { tab: A }, vec![OpenWindow(A)]),
+            ("the split's middle pane plays", vec![A, B, C], vec![D], B, Pip::Entering { tab: B }, vec![OpenWindow(B)]),
+            ("its last pane plays", vec![A, B, C], vec![D], C, Pip::Entering { tab: C }, vec![OpenWindow(C)]),
+            ("nothing plays", vec![A, B, C], vec![D], D, Pip::Off, vec![]),
+            ("a pane focused in the split is no switch", vec![A, B, C], vec![A, B, C], B, Pip::Off, vec![]),
+            ("a pane closed out of the split, another stays", vec![A, B, C], vec![A, C], C, Pip::Off, vec![]),
+        ];
+        for (name, before, after, playing, state, fx) in rows {
+            let inputs = switched(&before, &after, true, plays(playing));
+            assert_eq!(run(Pip::Off, inputs), (state, fx), "{name}");
+        }
+        // the setting off: nothing pops out
+        let inputs = switched(&[A, B, C], &[D], false, plays(B));
+        assert_eq!(run(Pip::Off, inputs), (Pip::Off, vec![]));
+        // the split back with its pane out: the pane returns
+        let inputs = switched(&[D], &[A, B, C], true, plays(B));
+        assert_eq!(
+            run(Pip::On { tab: B }, inputs),
+            (Pip::Off, vec![ExitFullscreen(B), CloseWindow(B)])
+        );
+        // two playing panes: the first goes, one window at a time
+        let inputs = switched(&[A, B, C], &[D], true, |t| t != D);
+        assert_eq!(
+            run(Pip::Off, inputs),
+            (Pip::Entering { tab: A }, vec![OpenWindow(A)])
+        );
     }
 
     #[test]
