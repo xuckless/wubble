@@ -3460,13 +3460,8 @@ fn check_holds_one_pip_window_of_a_placed_tab() {
     );
     two.next_window = 10;
     assert!(two.check().is_err(), "two Pip windows");
-    let mut split = m.clone();
-    split.spaces[0].split = Some(SplitGroup {
-        tabs: vec![t[0], t[1]],
-        stops: even(2),
-    });
-    let err = split.check().expect_err("a split pane");
-    assert!(err.contains("Pip window"), "{err}");
+    // (A split holding the Pip tab holds since the auto picture-in-picture from a split,
+    // decisions.md 2026-11-25: `a_split_pane_on_screen_never_goes_to_pip_...` runs it.)
     m.windows[0].shown = Shown::Pip(TabId(99));
     assert!(m.check().is_err(), "an unknown tab");
 }
