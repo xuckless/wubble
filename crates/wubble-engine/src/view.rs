@@ -954,6 +954,11 @@ impl View {
         self.send(|host| host.set_windowless_frame_rate(rate as i32));
     }
 
+    /// How lively the page's content is now (`--measure`'s calm frames).
+    pub fn content_rate(&self) -> ContentRate {
+        self.content
+    }
+
     /// Input or a frame: the page's frame rate follows what changes in it
     /// (`pacing::ContentRate`). CEF is told only when the rate changes.
     fn content(&mut self, event: ContentEvent) {

@@ -4001,6 +4001,13 @@ impl Host {
                     view.set_frame_rate(pacing::view_frame_rate(rate, shown));
                 }
             }
+            // the views of no tab (an extension's popup, the DevTools panel) follow too: they
+            // kept the rate they opened with
+            for id in [self.ext_ui.popup, self.devtools.view].into_iter().flatten() {
+                if let Some(view) = self.engine.view(id) {
+                    view.set_frame_rate(rate);
+                }
+            }
         }
     }
 

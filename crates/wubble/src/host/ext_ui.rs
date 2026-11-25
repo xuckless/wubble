@@ -105,7 +105,7 @@ pub(super) struct ExtUi {
     panel_owner: Option<WindowId>,
     prompt_owner: Option<WindowId>,
     /// The open popup's view.
-    popup: Option<ViewId>,
+    pub(super) popup: Option<ViewId>,
     /// The question to the popup's page the next answer is for.
     size_poll: SizePoll,
     timer: slint::Timer,
