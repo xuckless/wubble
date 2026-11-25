@@ -28,7 +28,7 @@ use crate::refresh::ListSpec;
 
 /// Changes whenever the way sources are turned into filters changes, so an
 /// older cache is rebuilt.
-const KEY_SCHEME: &str = "wubble-blocker sources 3\n";
+const KEY_SCHEME: &str = "wubble-blocker sources 4\n";
 
 /// Where a list's text is.
 #[derive(Clone, Debug)]

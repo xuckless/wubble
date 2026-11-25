@@ -11,6 +11,7 @@ mod blocker;
 pub mod catalog;
 mod decision;
 mod lists;
+mod popup;
 mod preparse;
 mod refresh;
 mod site;
