@@ -5,8 +5,8 @@ Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../REA
 One store for every shell surface ([docs/research/surface-store.md](../../docs/research/surface-store.md)). The owner
 calls it the "surface manager" in conversation; code and docs keep `wubble_core::overlay` and "surface store".
 
-## State (2026-11-23)
-- On `store/lane`, tested on Linux and macOS: the table, hover, page-attached and drag parts; of the overlays, downloads and Spaces.
+## State (2026-11-24)
+- Shipped in 0.6.2, tested on Linux and macOS: the table, hover, page-attached and drag parts; of the overlays, downloads and Spaces.
 - On `untested/store-step2`, written blind (never compiled): the other overlays; the writer's doubt list is in `docs/research/surface-store.md` on that branch.
 - Not written: the command bar and focus/key ownership through the store.
 - Still there: the `Env` bridge; the surface lock's baseline is 4; `pointer_at` has no host caller.

@@ -4,14 +4,15 @@ What is being worked on and researched now. The whole roadmap is [todo/](todo/RE
 are built, the one engine build). Decisions: [docs/decisions.md](docs/decisions.md) · numbers: [docs/measurements.md](docs/measurements.md).
 
 ## Working on
-- [~] Surface manager (the surface store): compile and test the blind overlays of `untested/store-step2`, then the command bar and focus/key ownership ([surface-manager.md](todo/in-progress/surface-manager.md))
-- [~] Layer: windowed: measured on the owner's M2 (10 to 12 % main on its layer, about 30 % while an overlay holds it); the overlay fix on `untested/page-layer-2`, then the hand-check list ([page-layer.md](todo/in-progress/page-layer.md))
-- [~] Merge the tested work and push `main` once green on Linux and macOS ([merge-main.md](todo/in-progress/merge-main.md))
+- [~] Surface manager (the surface store; its tested parts shipped in 0.6.2): compile and test the blind overlays of `untested/store-step2`, then the command bar and focus/key ownership through the store ([surface-manager.md](todo/in-progress/surface-manager.md))
+- [~] Page layer (window mode on by default on macOS since 0.6.2): the owner's hand-check list, the frame rate under glass; dropped video frames shelved ([page-layer.md](todo/in-progress/page-layer.md), [video-dropped-frames.md](todo/shelved/video-dropped-frames.md))
+- [~] `main` moves to the 0.6.2 release commit ([merge-main.md](todo/in-progress/merge-main.md))
+- Next optimization roads: zero-copy and CEF's begin frames, then the CEF patch (below; [01](todo/upcoming/01-optimization.md))
 - Open owner decisions: [decisions.md](todo/in-progress/decisions.md)
 
 ## Research
 - Zero-copy of CEF's IOSurface and CEF's own begin-frame source, the next CPU road (est. 6 to 10 %) ([01](todo/upcoming/01-optimization.md))
-- The CEF patch presenting the page through a CAContext id / `CALayerHost`: three experiments (`docs/research/page-layer.md` on `untested/page-layer-2`)
+- The CEF patch presenting the page through a CAContext id / `CALayerHost`: three experiments (`docs/research/page-layer.md`)
 - Whether the accessibility mirror costs 3 to 8 % of the main process (unverified)
 
 ## Upcoming, in order
