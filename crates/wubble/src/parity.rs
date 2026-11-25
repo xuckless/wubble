@@ -35,6 +35,9 @@ pub const MAX_SETUP_POLLS: u32 = 60;
 pub const RETRY_EVERY: u32 = 10;
 /// Runs of CEF work between two asks of the same check.
 pub const POLL_GAP: u32 = 6;
+/// [`HostOp::Drift`]'s moves and their pace: well under a page drag's dwell, for 2 s.
+pub const DRIFT_MOVES: u32 = 20;
+pub const DRIFT_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The parity page on the smoke's loopback server (`autofill_smoke::serve`): an
 /// `http://127.0.0.1` page is a secure context, as the async Clipboard API needs.
@@ -184,6 +187,10 @@ pub enum Spot {
     /// A point of the shown page where it is drawn now: during its entrance, shifted and
     /// scaled as the scene draws it (where a person sees it).
     Drawn(Point),
+    /// The sidebar's top, above its targets: shell that takes no drop.
+    SidebarTop,
+    /// Left of the window, at half its height.
+    Outside,
 }
 
 /// Which pointer button.
@@ -230,6 +237,12 @@ pub enum HostOp {
     DropTextFromApp(Spot, &'static str),
     /// The window as drawn, to `--shot-dir`'s `NN-<name>.png`.
     Shot(&'static str),
+    /// The left button let go as winit reports it, and no Slint event: a pane that lost the
+    /// pointer's grab never hears it.
+    WindowRelease,
+    /// The pointer moves on from the point with no button held, as a hand does after a
+    /// release: 10 px to the right every [`DRIFT_EVERY`], [`DRIFT_MOVES`] times.
+    Drift(Point),
     ZoomReset,
     /// The print sheet's Save / Print, as its button.
     AnswerPrint,
@@ -327,7 +340,7 @@ pub enum HostCheck {
     AutoscrollDown,
     /// The autoscroll arrow is drawn longer than at rest (stretch above 1.05).
     AutoscrollStretched,
-    /// A page drag runs (true) or none does (false).
+    /// A page drag runs or its ghost is drawn (true), or neither (false).
     Drag(bool),
     /// A page drag's ghost is drawn: with Chromium's image (true) or as the label (false).
     Ghost(bool),

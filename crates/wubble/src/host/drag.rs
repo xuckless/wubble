@@ -158,10 +158,14 @@ impl Host {
     /// false when no drag runs. The pointer is the window's (`Input::pointer`): the pane that
     /// reported it may not be the source's (a rest on a tab row showed another tab).
     pub(super) fn drag_pointer(&mut self, point: Point, released: bool) -> bool {
-        let Some(PageDrag::Dragging(d)) = self.drag.page() else {
-            return self.drag.page().is_some();
+        let Some(drag) = self.drag.page() else {
+            return false;
         };
-        let source = d.source;
+        let source = drag.source();
+        // the OS has the pointer: only a button-up the window still saw reaches the drag
+        if matches!(drag, PageDrag::Outside { .. }) && !released {
+            return true;
+        }
         let Some(window) = self.w.window.upgrade() else {
             return false;
         };
@@ -177,7 +181,10 @@ impl Host {
         let input = match (released, over) {
             (true, over) => {
                 self.input.buttons = Default::default();
-                pagedrag::Input::Released(over.unwrap_or(Over::Elsewhere))
+                pagedrag::Input::Released {
+                    over: over.unwrap_or(Over::Elsewhere),
+                    now: Instant::now(),
+                }
             }
             (false, Some(over)) => pagedrag::Input::Moved {
                 over,
@@ -200,6 +207,26 @@ impl Host {
             return;
         }
         self.drag_pointer(Point { x: 0.0, y: 0.0 }, released);
+    }
+
+    /// The window's own left release (winit), after Slint has handed it on: a page drag its pane
+    /// did not end (the pane lost the pointer's grab, or no pane holds it) ends here, so a
+    /// release always ends a drag. Runs on the next turn of the event loop.
+    pub(super) fn drag_window_released(&self) {
+        let id = self.w.id;
+        let _ = slint::invoke_from_event_loop(move || {
+            crate::with_host_in(id, |host| {
+                let ends = match host.drag.page() {
+                    Some(PageDrag::Dragging(d)) => !d.dropping,
+                    Some(PageDrag::Outside { .. }) => true,
+                    None => false,
+                };
+                if ends {
+                    crate::trace("drag: the window's release ends it");
+                    host.drag_pointer(Point { x: 0.0, y: 0.0 }, true);
+                }
+            })
+        });
     }
 
     /// Escape, or the window lost focus: a page drag ends with nothing dropped; false when no
@@ -242,7 +269,8 @@ impl Host {
     /// A left release seen by this window while another window's drag runs: it ends the drag as
     /// cancelled, so no ghost outlives the button.
     pub(super) fn drag_released_elsewhere(&mut self) {
-        if let Some(input) = drag::release_input(&self.drag, self.w.id == self.drag_window) {
+        let same = self.w.id == self.drag_window;
+        if let Some(input) = drag::release_input(&self.drag, same, Instant::now()) {
             self.run_drag(input);
         }
     }
@@ -271,19 +299,28 @@ impl Host {
             Input::Page(pagedrag::Input::Started { source, .. }) => Some(*source),
             _ => None,
         });
+        let (from, by) = (self.drag.name(), input.name());
         let (next, effects) = drag::transition(std::mem::take(&mut self.drag), input);
         self.drag = next;
+        if from != self.drag.name() {
+            crate::trace(&format!("drag: {from} -> {} on {by}", self.drag.name()));
+        }
         let source = self.drag_window;
-        let dwell = self.drag.tab().awaits_dwell()
-            || self.drag.page_dragging().is_some_and(|d| d.awaits_dwell());
-        if dwell {
-            self.drag_timer.start(
-                slint::TimerMode::SingleShot,
-                pagedrag::DWELL.max(tabdrag::SPACE_HOVER),
-                move || crate::with_host_in(source, Host::drag_tick),
-            );
-        } else {
-            self.drag_timer.stop();
+        // a page drag's rest ends at its due time, which no move pushes back
+        let wait = match self.drag.page_dragging() {
+            Some(d) => d
+                .due()
+                .map(|due| due.saturating_duration_since(Instant::now())),
+            None => (self.drag.tab().awaits_dwell())
+                .then_some(pagedrag::DWELL.max(tabdrag::SPACE_HOVER)),
+        };
+        match wait {
+            Some(wait) => self
+                .drag_timer
+                .start(slint::TimerMode::SingleShot, wait, move || {
+                    crate::with_host_in(source, Host::drag_tick)
+                }),
+            None => self.drag_timer.stop(),
         }
         for effect in effects {
             match effect {
