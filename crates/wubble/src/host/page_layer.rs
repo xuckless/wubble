@@ -543,15 +543,17 @@ impl Host {
                     }
                     Effect::Hide => {
                         if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
-                            if before.holed(mode) {
-                                // the shell's last frame still has the hole over it: it stays
-                                // under the shell until the next present (`retired`)
-                                let none: Box<dyn PageLayer> = Box::new(Unsupported);
-                                let layer = std::mem::replace(&mut pane.layer, none);
-                                self.w.layers.retired.push(layer);
-                            } else {
-                                pane.layer.hide();
-                            }
+                            pane.layer.hide();
+                            pane.latest = None;
+                        }
+                    }
+                    Effect::Retire => {
+                        if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
+                            // the shell's last present may still have its hole: it stays under
+                            // the shell until the next present (`retired`)
+                            let none: Box<dyn PageLayer> = Box::new(Unsupported);
+                            let layer = std::mem::replace(&mut pane.layer, none);
+                            self.w.layers.retired.push(layer);
                             pane.latest = None;
                         }
                     }
@@ -836,6 +838,7 @@ mod tests {
             Effect::Buffers(_) => "Effect::Buffers(",
             Effect::Show => "Effect::Show =>",
             Effect::Hide => "Effect::Hide =>",
+            Effect::Retire => "Effect::Retire =>",
             Effect::Present => "Effect::Present =>",
             Effect::PresentLatest => "Effect::PresentLatest =>",
             Effect::Redraw => "Effect::Redraw =>",
@@ -856,6 +859,7 @@ mod tests {
             Effect::Buffers(true),
             Effect::Show,
             Effect::Hide,
+            Effect::Retire,
             Effect::Present,
             Effect::PresentLatest,
             Effect::Redraw,

@@ -270,8 +270,12 @@ pub enum Effect {
     Buffers(bool),
     /// This frame onto the layer, shown; the host keeps it as the layer's latest.
     Show,
-    /// Hide the layer and drop its frame.
+    /// Hide the layer and drop its frame, now: the shell's last present drew no hole over it.
     Hide,
+    /// The layer goes with its frame, but stays under the shell until the window's next present,
+    /// whose render draws no hole for it, and is hidden with that present: the shell's last
+    /// present may still have its hole (`Layer`, and `Leaving` until the shell presents its frame).
+    Retire,
     /// This frame to the shell (today's path: presenter, damage, render).
     Present,
     /// The layer's latest frame to the shell, as `Present` does with a new one.
@@ -347,7 +351,7 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
 
         // the layer goes now: the window closes or the layer broke
         (Layer { .. }, Capable(false) | Failed) => {
-            (Unsupported, vec![Buffers(false), PresentLatest, Hide])
+            (Unsupported, vec![Buffers(false), PresentLatest, Retire])
         }
         (Layer { shown, .. }, Capable(true) | Changed) if held => {
             (Leaving { until: shown }, vec![PresentLatest])
@@ -376,7 +380,8 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
         // the pool could not take it: the shell has to
         (Layer { .. }, Frame { os: false, painted }) => (Leaving { until: painted }, vec![Present]),
 
-        (Leaving { .. }, Capable(false) | Failed) => (Unsupported, vec![Buffers(false), Hide]),
+        // the shell may not have presented its frame yet: the hole may still be on screen
+        (Leaving { .. }, Capable(false) | Failed) => (Unsupported, vec![Buffers(false), Retire]),
         // the needs are read again when the shell has drawn the page
         (Leaving { .. }, Capable(true) | Changed) => (route, vec![]),
         // a newer frame to the shell; the one it must draw before the layer goes stays
@@ -701,7 +706,7 @@ mod tests {
             ("entering: a render ignored", IN, false, BLANK, IN, &[]),
             ("entering: a failure gives the layer up", IN, false, Failed, Unsupported, &[Buffers(false)]),
             // Layer
-            ("layer: loses the layer", ON5, false, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            ("layer: loses the layer", ON5, false, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Retire]),
             ("layer: capable again, clear", ON5, false, Capable(true), ON5, &[]),
             ("layer: capable again, needed: its frame to the shell", ON5, true, Capable(true), FOR5, &[PresentLatest]),
             ("layer: still clear", ON5, false, Changed, ON5, &[]),
@@ -710,9 +715,9 @@ mod tests {
             ("layer: a frame while needed waits to be drawn", ON5, true, os(7), FOR7, &[Present]),
             ("layer: a frame the pool could not take", ON5, false, copied(7), FOR7, &[Present]),
             ("layer: a render of the chrome", ON5, false, drew(5), ON5, &[]),
-            ("layer: fails", ON5, false, Failed, Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            ("layer: fails", ON5, false, Failed, Unsupported, &[Buffers(false), PresentLatest, Retire]),
             // Leaving: hidden only once a render drew the frame given (or a newer one)
-            ("leaving: loses the layer", FOR5, false, Capable(false), Unsupported, &[Buffers(false), Hide]),
+            ("leaving: the tab goes before the shell presented its frame: retired, its hole may be on screen", FOR5, false, Capable(false), Unsupported, &[Buffers(false), Retire]),
             ("leaving: capable again", FOR5, false, Capable(true), FOR5, &[]),
             ("leaving: the needs clear (read once drawn)", FOR5, false, Changed, FOR5, &[]),
             ("leaving: still needed", FOR5, true, Changed, FOR5, &[]),
@@ -724,7 +729,7 @@ mod tests {
             ("leaving: drawn, still needed", FOR5, true, drew(5), Composited, &[Hide, Buffers(false)]),
             ("leaving: drawn, nothing needs the shell: the page paints for its return", FOR5, false, drew(5), IN, &[Hide, Repaint]),
             ("leaving: a newer one drawn", FOR5, false, drew(7), IN, &[Hide, Repaint]),
-            ("leaving: fails", FOR7, false, Failed, Unsupported, &[Buffers(false), Hide]),
+            ("leaving: fails", FOR7, false, Failed, Unsupported, &[Buffers(false), Retire]),
         ];
         for &(name, route, blocked, event, next, effects) in rows {
             assert_eq!(
@@ -768,8 +773,8 @@ mod tests {
             ("layer: a frame the pool could not take", ON5, copied(7), FOR7, &[Present]),
             ("layer: a render of the chrome", ON5, drew(5), ON5, &[]),
             ("layer: under glass, then held: off it", snapped(5, 5, T), Changed, FOR5, &[PresentLatest]),
-            ("layer: loses the layer", ON5, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
-            ("layer: fails", ON5, Failed, Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            ("layer: loses the layer", ON5, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Retire]),
+            ("layer: fails", ON5, Failed, Unsupported, &[Buffers(false), PresentLatest, Retire]),
             ("leaving: still held", FOR5, Changed, FOR5, &[]),
             ("leaving: capable again", FOR5, Capable(true), FOR5, &[]),
             ("leaving: a newer frame to the shell", FOR5, os(7), FOR5, &[Present]),
@@ -777,8 +782,8 @@ mod tests {
             ("leaving: an older frame drawn", FOR7, drew(5), FOR7, &[Redraw]),
             ("leaving: drawn: hidden, the buffers stay, the deadline set", FOR5, drew(5), HELD, &[Hide]),
             ("leaving: a newer one drawn", FOR5, drew(7), HELD, &[Hide]),
-            ("leaving: loses the layer", FOR5, Capable(false), Unsupported, &[Buffers(false), Hide]),
-            ("leaving: fails", FOR7, Failed, Unsupported, &[Buffers(false), Hide]),
+            ("leaving: the tab goes before the shell presented its frame: retired, its hole may be on screen", FOR5, Capable(false), Unsupported, &[Buffers(false), Retire]),
+            ("leaving: fails", FOR7, Failed, Unsupported, &[Buffers(false), Retire]),
         ];
         for &(name, route, event, next, effects) in rows {
             assert_eq!(
@@ -863,7 +868,7 @@ mod tests {
             ("the glass gone: the snapshot let go", snapped(5, 5, T), Hold::Free, T + 1, Changed, ON5, &[]),
             ("the glass gone, a frame", snapped(5, 5, T), Hold::Free, T + 1, os(6), Layer { shown: 6, snap: None }, &[Show]),
             ("the pool could not take a frame: to the shell", snapped(5, 5, T), Hold::Frost, T, copied(6), Leaving { until: 6 }, &[Present]),
-            ("the tab leaves under glass", snapped(5, 5, T), Hold::Frost, T, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
+            ("the tab leaves under glass", snapped(5, 5, T), Hold::Frost, T, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Retire]),
             ("entering under glass: stays for its frame", IN, Hold::Frost, T, Changed, IN, &[]),
             ("entering under glass: on the layer with a snapshot", IN, Hold::Frost, T, os(6), snapped(6, 6, T), &[Show, Snapshot]),
             ("composited under glass: the buffers asked for", Composited, Hold::Frost, T, Changed, IN, &[Buffers(true), Repaint]),
@@ -904,8 +909,6 @@ mod tests {
                 Frame { painted, .. } => Some(painted),
                 _ => None,
             };
-            // the window closed or the layer broke: it goes at once, drawn or not
-            let forced = matches!(event, Capable(false) | Failed);
             for effect in effects {
                 match effect {
                     Buffers(on) => self.buffers = *on,
@@ -916,11 +919,14 @@ mod tests {
                     }
                     Hide => {
                         assert!(
-                            forced || !self.visible || self.drew >= self.layer,
+                            !self.visible || self.drew >= self.layer,
                             "the layer hidden before the shell drew its frame"
                         );
                         self.visible = false;
                     }
+                    // the window closed or the layer broke: it goes, drawn or not, with the
+                    // next present (which draws no hole for it)
+                    Retire => self.visible = false,
                     Present => self.given = painted.max(self.given),
                     PresentLatest => self.given = self.layer.max(self.given),
                     Redraw | Repaint => {}
