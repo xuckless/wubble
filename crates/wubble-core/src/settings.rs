@@ -27,6 +27,9 @@ pub enum SettingKind {
     Map,
     /// Any one line of text (a folder path; empty for the default).
     Text,
+    /// Secure DNS: `automatic`, `off`, a provider's word or `custom:` and a template
+    /// (`secure_dns::SecureDns::parse`).
+    SecureDns,
 }
 
 impl SettingKind {
@@ -47,6 +50,7 @@ impl SettingKind {
                 serde_json::from_str::<std::collections::BTreeMap<String, u32>>(text).is_ok()
             }
             SettingKind::Text => !text.contains(['\n', '\r']),
+            SettingKind::SecureDns => crate::secure_dns::SecureDns::parse(text).is_ok(),
         }
     }
 }
@@ -969,6 +973,16 @@ pub const PDF_DOWNLOAD: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// Chrome's "Use secure DNS" (`secure_dns`): Chromium's default, automatic; a provider is only
+/// asked once the user picks it.
+pub const PRIVACY_SECURE_DNS: SettingDef = SettingDef {
+    key: "privacy.secure_dns",
+    kind: SettingKind::SecureDns,
+    default: "automatic",
+    label: "Use secure DNS",
+    section: Section::Privacy,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -1057,6 +1071,7 @@ pub const ALL: &[&SettingDef] = &[
     &PRIVACY_AD_MEASUREMENT,
     &PRIVACY_WEBRTC_IP,
     &PDF_DOWNLOAD,
+    &PRIVACY_SECURE_DNS,
 ];
 
 /// The definition of `key`, if it is a setting.
@@ -1244,6 +1259,17 @@ mod tests {
             (SettingKind::Text, "", true),
             (SettingKind::Text, "/home/x/Videos", true),
             (SettingKind::Text, "a\nb", false),
+            (SettingKind::SecureDns, "automatic", true),
+            (SettingKind::SecureDns, "off", true),
+            (SettingKind::SecureDns, "provider:quad9", true),
+            (SettingKind::SecureDns, "custom:", true),
+            (
+                SettingKind::SecureDns,
+                "custom:https://d.test/q{?dns}",
+                true,
+            ),
+            (SettingKind::SecureDns, "custom:http://d.test/q", false),
+            (SettingKind::SecureDns, "secure", false),
         ];
         for (kind, text, want) in cases {
             assert_eq!(kind.accepts(text), *want, "{kind:?} {text:?}");

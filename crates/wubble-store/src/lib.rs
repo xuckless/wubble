@@ -56,7 +56,7 @@ pub use settings::{
 pub use settings::InstalledExtensions;
 pub use settings::{
     PdfDownload, PrivacyAdMeasurement, PrivacyAdTopics, PrivacyCanMakePayment, PrivacyDoNotTrack,
-    PrivacyPreload, PrivacySiteSuggestedAds, PrivacyWebrtcIp,
+    PrivacyPreload, PrivacySecureDns, PrivacySiteSuggestedAds, PrivacyWebrtcIp,
 };
 
 #[derive(Debug, thiserror::Error)]

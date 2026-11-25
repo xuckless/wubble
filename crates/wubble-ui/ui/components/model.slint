@@ -579,6 +579,10 @@ export struct SettingItem {
     options: [MenuEntry],
     // what that Select reads while none is chosen
     placeholder: string,
+    // a choice whose word takes text of its own (secure DNS's custom template): the stored
+    // prefix before the text (empty: no field) and the text, edited in a field below the row
+    field-prefix: string,
+    field-text: string,
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).

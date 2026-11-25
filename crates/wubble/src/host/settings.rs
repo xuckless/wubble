@@ -155,6 +155,13 @@ impl Host {
                 media,
             } => self.set_page_themes(default, sites, media),
             Applied::ProfilePref { name, value } => self.engine.set_profile_pref(name, value),
+            Applied::GlobalPrefs(prefs) => {
+                for (name, value) in prefs {
+                    if let Err(e) = self.engine.set_global_pref(name, &value) {
+                        eprintln!("wubble: {e}");
+                    }
+                }
+            }
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
@@ -197,10 +204,20 @@ impl Host {
     }
 
     /// Writes one setting: refused unless `key` is a setting and `text` a value of it; then
-    /// stored, applied and shown.
+    /// stored, applied and shown. A refused secure DNS template says why on its row.
     pub(crate) fn write_setting(&mut self, key: &str, text: &str) -> bool {
         if !self.store.set_setting(key, text) {
+            if let Some(Err(note)) = (key == defs::PRIVACY_SECURE_DNS.key)
+                .then(|| wubble_core::secure_dns::SecureDns::parse(text))
+            {
+                self.answer(key, note);
+                self.render_settings();
+            }
             return false;
+        }
+        // a value taken clears the row's last refusal
+        if self.settings.answer.0 == key {
+            self.settings.answer.2 = "";
         }
         self.settings.stored.insert(key.to_owned(), text.to_owned());
         if let Some(applied) = apply::effect_of(key, &self.settings.stored) {
@@ -261,18 +278,19 @@ impl Host {
         let draft = pages::submission(entry);
         let text = pages::entry_text(key, &draft.cells);
         let put = apply::put_entry(key, &self.settings.stored, draft.replacing, &text);
-        let serial = self.settings.answer.1.wrapping_add(1);
-        self.settings.answer = (
-            key.to_owned(),
-            serial,
-            put.as_ref().err().map_or("", |r| r.note()),
-        );
+        self.answer(key, put.as_ref().err().map_or("", |r| r.note()));
         match put {
             Ok(text) => {
                 self.write_setting(key, &text);
             }
             Err(_) => self.render_settings(),
         }
+    }
+
+    /// The row `key` hears back: a new serial, and why its value was refused (empty: taken).
+    fn answer(&mut self, key: &str, note: &'static str) {
+        let serial = self.settings.answer.1.wrapping_add(1);
+        self.settings.answer = (key.to_owned(), serial, note);
     }
 
     /// The lists' state changed on the blocker's thread (a rebuild or an update ended).

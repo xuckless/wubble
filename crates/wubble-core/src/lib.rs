@@ -62,6 +62,7 @@ pub mod scope;
 pub mod scroller;
 pub mod seam;
 pub mod secret;
+pub mod secure_dns;
 pub mod session;
 pub mod settings;
 pub mod shot;

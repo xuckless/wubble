@@ -146,6 +146,9 @@ pub enum Applied {
         sites: ThemeTable,
         media: MediaPrefs,
     },
+    /// Chromium local-state preferences, process-wide, set in this order (secure DNS's
+    /// `dns_over_https.templates`, then its `.mode`).
+    GlobalPrefs(Vec<(&'static str, crate::privacy::PrefValue)>),
     /// One Chromium profile preference (`privacy::PREFS`), for every container's context.
     ProfilePref {
         name: &'static str,
@@ -353,6 +356,17 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
+        k if k == s::PRIVACY_SECURE_DNS.key => {
+            let (mode, templates) = crate::secure_dns::SecureDns::parse(v)
+                .unwrap_or(crate::secure_dns::SecureDns::Automatic)
+                .prefs();
+            use crate::privacy::PrefValue::Str;
+            // the templates first, so a "secure" mode never meets the old ones
+            Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ])
+        }
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
@@ -571,6 +585,36 @@ mod tests {
         assert_eq!(effect_of("no.such", &empty), None);
         // The seam owns the width while the app runs.
         assert_eq!(effect_of(settings::SIDEBAR_WIDTH.key, &empty), None);
+    }
+
+    #[test]
+    fn secure_dns_sets_chromiums_local_state() {
+        use crate::privacy::PrefValue::Str;
+        let dns = |text: &str| {
+            effect_of(
+                "privacy.secure_dns",
+                &stored(&[("privacy.secure_dns", text)]),
+            )
+        };
+        let want = |templates: &'static str, mode: &'static str| {
+            Some(Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ]))
+        };
+        assert_eq!(dns("automatic"), want("", "automatic"));
+        assert_eq!(dns("off"), want("", "off"));
+        assert_eq!(
+            dns("provider:google"),
+            want("https://dns.google/dns-query{?dns}", "secure")
+        );
+        assert_eq!(dns("custom:"), want("", "automatic"));
+        assert_eq!(
+            dns("custom:https://d.test/q"),
+            want("https://d.test/q", "secure")
+        );
+        // a refused value reads as the default
+        assert_eq!(dns("custom:http://d.test/q"), want("", "automatic"));
     }
 
     #[test]

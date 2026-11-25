@@ -319,6 +319,8 @@ settings! {
     PrivacyAdMeasurement: bool = defs::PRIVACY_AD_MEASUREMENT;
     PrivacyWebrtcIp: String = defs::PRIVACY_WEBRTC_IP;
     PdfDownload: bool = defs::PDF_DOWNLOAD;
+    /// `wubble_core::secure_dns::SecureDns`'s stored text.
+    PrivacySecureDns: String = defs::PRIVACY_SECURE_DNS;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

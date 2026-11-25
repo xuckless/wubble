@@ -746,6 +746,8 @@ pub fn control_for(kind: SettingKind) -> Control {
         SettingKind::List => Control::ListEditor,
         SettingKind::Map => Control::MapEditor,
         SettingKind::Text => Control::TextField,
+        // picked from a Select; custom shows its template's field (`wubble_ui::settings`)
+        SettingKind::SecureDns => Control::Segmented(&crate::secure_dns::WORDS),
     }
 }
 
@@ -1381,6 +1383,10 @@ mod tests {
             (SettingKind::List, Control::ListEditor),
             (SettingKind::Map, Control::MapEditor),
             (SettingKind::Text, Control::TextField),
+            (
+                SettingKind::SecureDns,
+                Control::Segmented(&crate::secure_dns::WORDS),
+            ),
         ];
         for (kind, want) in kinds {
             assert_eq!(control_for(kind), want, "{kind:?}");
