@@ -70,6 +70,7 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
     cargo run -p wubble-engine --example frame_smoke   # windowless zero-copy and colour check
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
+    mkdir -p DIR && touch DIR/.wubble-smoke-profile && cargo run -p wubble -- --profile DIR   # a throwaway profile for a harness: CEF's mock keychain (`use-mock-keychain` on macOS) and the vault's key in DIR/smoke-keyring, never the OS's secret store
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
     cargo run -p wubble -- --no-sandbox   # CEF without its sandbox, debugging only (warned at start)
 

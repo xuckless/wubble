@@ -600,8 +600,15 @@ fn browse(
     // The one instance, before anything starts: a staged update applies or a failing version
     // rolls back, by starting the other version in this process's place.
     updater::on_launch();
+    // a profile a harness marked throwaway never asks the OS's secret store (`is_smoke_profile`)
+    let kind = if is_smoke_profile(&profile.dir) {
+        ProfileKind::Throwaway
+    } else {
+        ProfileKind::User
+    };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
+        profile: kind,
         ..config
     });
     let downloads = profile::downloads_dir(downloads);
@@ -703,7 +710,8 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// `--smoke passwords`: the file its phases keep the vault key in, on the temporary profile.
+/// The file the vault key is kept in on a throwaway profile: `--smoke passwords`' phases, and a
+/// browser run with `--profile` on a marked one.
 const SMOKE_KEYRING: &str = "smoke-keyring";
 
 /// `--smoke passwords`: its four processes on one temporary profile (`passwords_smoke.rs`).
@@ -752,9 +760,15 @@ fn mark_smoke_profile(dir: &Path) -> std::io::Result<()> {
     std::fs::write(dir.join(SMOKE_PROFILE_MARKER), b"")
 }
 
+/// Whether `dir` is a throwaway profile: a smoke marked it (or a harness, for `--profile DIR`:
+/// CEF's mock keychain and the vault's key in a file there, never the OS's secret store).
+fn is_smoke_profile(dir: &Path) -> bool {
+    dir.join(SMOKE_PROFILE_MARKER).is_file()
+}
+
 /// Whether a phase run may use `dir`: only a profile its parent smoke marked.
 fn smoke_profile(dir: &Path) -> Result<(), String> {
-    if dir.join(SMOKE_PROFILE_MARKER).is_file() {
+    if is_smoke_profile(dir) {
         Ok(())
     } else {
         Err(format!(
@@ -1867,6 +1881,10 @@ fn run(
     // profile first, its vault key going into the fake keyring the store
     // thread then gets.
     let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
+        // a throwaway profile's key in a file there, as `--smoke passwords` keeps it
+        Mode::Browse { .. } if is_smoke_profile(profile) => Box::new(
+            wubble_vault::FileKeyRing::new(profile.join(SMOKE_KEYRING), false),
+        ),
         Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
         Mode::Pages | Mode::Gallery => {
             let keyring = wubble_vault::FakeKeyRing::default();
