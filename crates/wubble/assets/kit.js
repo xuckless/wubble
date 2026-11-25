@@ -158,6 +158,15 @@
         doc: performance.timeOrigin,
         // EME MediaKeys attached: protected media, which the downloader never touches.
         drm: !!v.mediaKeys,
+        // Its subtitle files (`<track>`), which load only when shown: the downloader lists them.
+        tracks: [...v.querySelectorAll("track")]
+          .filter((t) => (t.kind === "subtitles" || t.kind === "captions") && /^https?:/.test(t.src))
+          .slice(0, 16)
+          .map((t) => ({
+            src: String(t.src).slice(0, 2048),
+            lang: String(t.srclang || "").slice(0, 16),
+            label: String(t.label || "").slice(0, 80),
+          })),
       };
     } else if (window === window.top) {
       const f = bigFrame();

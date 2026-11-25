@@ -201,13 +201,15 @@ fn label(
     parts.join(" \u{b7} ")
 }
 
-/// Every way to save `variants`, tallest first (then highest bitrate, muxed before a pair).
+/// Every way to save `variants`' picture and sound, tallest first (then highest bitrate, muxed
+/// before a pair). Subtitles are offered apart ([`subtitles`]).
 pub fn choices(variants: &[Variant]) -> Vec<Choice> {
     let mut out: Vec<Choice> = variants
         .iter()
         .enumerate()
-        .map(|(i, v)| {
+        .filter_map(|(i, v)| {
             let (selection, size, note) = match v.track {
+                Track::Subtitle => return None,
                 Track::Video => match audio_for(variants, v) {
                     Some(a) => (
                         Selection::Pair { video: i, audio: a },
@@ -219,7 +221,7 @@ pub fn choices(variants: &[Variant]) -> Vec<Choice> {
                 Track::Audio => (Selection::Single(i), v.size, "audio only"),
                 Track::Muxed => (Selection::Single(i), v.size, ""),
             };
-            Choice {
+            Some(Choice {
                 label: label(v.height, v.bandwidth, v.container, size, note),
                 selection,
                 size,
@@ -229,7 +231,7 @@ pub fn choices(variants: &[Variant]) -> Vec<Choice> {
                 pair: matches!(selection, Selection::Pair { .. }),
                 audio_only: v.track == Track::Audio,
                 preference: codec_rank(&v.codecs),
-            }
+            })
         })
         .collect();
     let rank = |c: &Choice| {
@@ -286,6 +288,27 @@ fn tell_apart(rows: &mut [Choice], variants: &[Variant]) {
             }
         }
     }
+}
+
+/// The subtitles among `variants`, by index, with the menu's words for each: `Subtitles ·
+/// English · VTT` (the name the manifest gives, else its language code).
+pub fn subtitles(variants: &[Variant]) -> Vec<(usize, String)> {
+    variants
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.track == Track::Subtitle)
+        .map(|(i, v)| {
+            let name = Some(v.codecs.trim())
+                .filter(|n| !n.is_empty())
+                .or(v.lang.as_deref());
+            let words: Vec<String> = ["Subtitles".to_owned()]
+                .into_iter()
+                .chain(name.map(str::to_owned))
+                .chain([v.container.ext().to_uppercase()])
+                .collect();
+            (i, words.join(" \u{b7} "))
+        })
+        .collect()
 }
 
 /// Typical bit rate of an H.264 ladder rung by picture height, for a manifest that names no
@@ -382,6 +405,7 @@ mod tests {
             source: Source::HlsPlaylist(String::new()),
             group: None,
             headers: vec![],
+            lang: None,
         }
     }
 
@@ -658,6 +682,36 @@ mod tests {
             ),
             (0, UNLISTED_CODEC, 5)
         );
+    }
+
+    #[test]
+    fn subtitles_are_offered_apart_from_the_picture() {
+        let sub = |name: &str, lang: Option<&str>, container| Variant {
+            codecs: name.into(),
+            lang: lang.map(str::to_owned),
+            ..v(Track::Subtitle, container, None, 0)
+        };
+        let list = vec![
+            v(Track::Muxed, Container::Mp4, Some(720), 5),
+            sub("English", Some("en"), Container::Vtt),
+            sub("", Some("de"), Container::Ttml),
+            sub("", None, Container::Srt),
+        ];
+        let c = choices(&list);
+        assert_eq!(c.len(), 1);
+        assert_eq!(choose(&c, Quality::Best, true), Some(0));
+        assert_eq!(
+            subtitles(&list),
+            [
+                (1, "Subtitles \u{b7} English \u{b7} VTT".to_owned()),
+                (2, "Subtitles \u{b7} de \u{b7} TTML".to_owned()),
+                (3, "Subtitles \u{b7} SRT".to_owned()),
+            ]
+        );
+        // Only subtitles: nothing to choose as a video.
+        let only = choices(&list[1..]);
+        assert!(only.is_empty());
+        assert_eq!(choose(&only, Quality::Best, true), None);
     }
 
     #[test]

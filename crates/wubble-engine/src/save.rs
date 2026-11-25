@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use wubble_core::media::{Container, hls};
+use wubble_core::media::{Container, hls, subtitle};
 
 /// A job, as the host numbers them (its downloads-list entry id).
 pub type JobId = i64;
@@ -591,6 +591,16 @@ fn join_parts(join: &Join, parts: &[PathBuf], ffmpeg: Option<PathBuf>) -> Result
                 },
             }
         }
+        // WebVTT segments joined as they came: one header, the cues once.
+        [one] if join.container == Container::Vtt => {
+            let text =
+                std::fs::read(one).map_err(|e| format!("cannot read {}: {e}", one.display()))?;
+            let merged = subtitle::merge_webvtt(&String::from_utf8_lossy(&text));
+            std::fs::write(&join.output, merged)
+                .map_err(|e| format!("cannot save {}: {e}", join.output.display()))?;
+            let _ = std::fs::remove_file(one);
+            Ok((vec![join.output.clone()], None))
+        }
         [one] => rename(one, &join.output).map(|()| (vec![join.output.clone()], None)),
         [video, audio] => {
             let why = match ffmpeg {
@@ -1032,6 +1042,37 @@ mod tests {
                 "/t/o"
             ]
         );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn webvtt_segments_are_saved_as_one_file() {
+        let d = dir().join("vtt");
+        std::fs::create_dir_all(&d).unwrap();
+        let part = d.join("s.part0");
+        std::fs::write(
+            &part,
+            "WEBVTT\n\n00:00.000 --> 00:01.000\nA\n\nWEBVTT\n\n00:01.000 --> 00:02.000\nB\n",
+        )
+        .unwrap();
+        let join = Join {
+            job: 1,
+            parts: vec![part.clone()],
+            output: d.join("T.en.vtt"),
+            container: Container::Vtt,
+            fallback: vec![],
+            remux: false,
+            periods: vec![],
+        };
+        assert_eq!(
+            run_join(&join, &[], None).unwrap(),
+            (vec![join.output.clone()], None)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&join.output).unwrap(),
+            "WEBVTT\n\n00:00.000 --> 00:01.000\nA\n\n00:01.000 --> 00:02.000\nB\n"
+        );
+        assert!(!part.exists());
         let _ = std::fs::remove_dir_all(d);
     }
 

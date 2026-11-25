@@ -19,6 +19,12 @@
 //! marks where one begins). A period nothing matches (a pre-roll ad) is left out and the menu says
 //! so; a representation that misses a period others match is not offered.
 //!
+//! Subtitles: a text `AdaptationSet` of WebVTT or TTML files (`text/vtt`,
+//! `application/ttml+xml`) is a [`Track::Subtitle`] variant with the set's `@lang` and `Label`;
+//! subtitles inside fragmented MP4 (`application/mp4`, `stpp`/`wvtt`) are not files and are left
+//! out, and so are subtitles of a programme in several periods (each period's file starts its
+//! cues at zero again).
+//!
 //! Any `ContentProtection` (Widevine, PlayReady, ClearKey or the bare `mp4protection` CENC
 //! signal) marks the representation [`Refusal::Protected`]: EME streams are never fetched.
 
@@ -93,7 +99,11 @@ pub fn variants(text: &str, base: &str) -> Result<Resolution, Refusal> {
     let out: Vec<Variant> = main_reps
         .iter()
         .zip(&chains)
-        .filter(|(_, chain)| chain.iter().zip(&content).all(|(m, c)| m.is_some() || !c))
+        .filter(|((_, v), chain)| {
+            let spans = chain.iter().zip(&content).all(|(m, c)| m.is_some() || !c);
+            let periods = content.iter().filter(|c| **c).count();
+            spans && (v.track != Track::Subtitle || periods == 1)
+        })
         .map(|((_, v), chain)| {
             let mut segments = Vec::new();
             let mut starts = Vec::new();
@@ -192,13 +202,18 @@ fn period_reps(
                 .as_deref()
                 .or(set.mimeType.as_deref())
                 .unwrap_or_default();
-            let container = match Container::of_mime(mime) {
-                Some(Container::M4a) if track != Track::Audio => Container::Mp4,
-                Some(Container::Mp4) if track == Track::Audio => Container::M4a,
-                Some(c) => c,
-                None if track == Track::Audio => Container::M4a,
-                None => Container::Mp4,
+            let container = match (track, Container::of_mime(mime)) {
+                (Track::Subtitle, Some(c)) if c.is_subtitle() => c,
+                // Subtitles in fragmented MP4, or of a type not known: no file to save.
+                (Track::Subtitle, _) => continue,
+                (Track::Audio, Some(Container::Mp4) | None) => Container::M4a,
+                (Track::Audio, Some(c)) => c,
+                (_, Some(Container::M4a) | None) => Container::Mp4,
+                (_, Some(c)) => c,
             };
+            let lang = rep.lang.clone().or_else(|| set.lang.clone());
+            // A subtitle's name: the set's label, else its language.
+            let name = set.Label.first().map(|l| l.content.trim().to_owned());
             let variant = Variant {
                 track,
                 container,
@@ -207,11 +222,14 @@ fn period_reps(
                     .or(set.height)
                     .and_then(|h| u32::try_from(h).ok()),
                 bandwidth: rep.bandwidth,
-                codecs: rep
-                    .codecs
-                    .clone()
-                    .or_else(|| set.codecs.clone())
-                    .unwrap_or_default(),
+                codecs: match track {
+                    Track::Subtitle => name.or_else(|| lang.clone()).unwrap_or_default(),
+                    _ => rep
+                        .codecs
+                        .clone()
+                        .or_else(|| set.codecs.clone())
+                        .unwrap_or_default(),
+                },
                 size: None,
                 source: Source::Planned(Plan {
                     segments,
@@ -220,6 +238,7 @@ fn period_reps(
                 }),
                 group: None,
                 headers: vec![],
+                lang,
             };
             out.push((rep.id.clone(), variant));
         }
@@ -275,6 +294,8 @@ fn track_of(set: &AdaptationSet, rep: &Representation) -> Option<Track> {
         "video" if has_audio && codecs.contains(',') => Some(Track::Muxed),
         "video" => Some(Track::Video),
         "audio" => Some(Track::Audio),
+        // `text/vtt`'s major type, `application/ttml+xml`'s, or a set that says so.
+        "text" | "application" => Some(Track::Subtitle),
         _ => None,
     }
 }
@@ -818,6 +839,46 @@ mod tests {
             ("duration=\"PT8S\"", &*sealed),
         ]);
         assert_eq!(variants(&text, BASE), Err(Refusal::Protected));
+    }
+
+    /// WebVTT and TTML text sets are subtitles with their language and label; subtitles in
+    /// fragmented MP4 are left out, and so are a programme's of several periods.
+    #[test]
+    fn text_sets_are_subtitles() {
+        let text = format!(
+            "{AV}<AdaptationSet contentType=\"text\" mimeType=\"text/vtt\" lang=\"en\"><Label>English</Label>\
+             <Representation id=\"s1\" bandwidth=\"1\"><BaseURL>subs/en.vtt</BaseURL></Representation></AdaptationSet>\
+             <AdaptationSet mimeType=\"application/ttml+xml\" lang=\"fr\">\
+             <Representation id=\"s2\" bandwidth=\"1\"><BaseURL>subs/fr.ttml</BaseURL></Representation></AdaptationSet>\
+             <AdaptationSet contentType=\"text\" mimeType=\"application/mp4\" lang=\"de\">\
+             <Representation id=\"s3\" bandwidth=\"1\" codecs=\"stpp\"><BaseURL>subs/de.mp4</BaseURL></Representation></AdaptationSet>"
+        );
+        let v = variants(&mpd(&text), BASE).unwrap().variants;
+        let subs: Vec<(Container, Option<&str>, &str)> = v
+            .iter()
+            .filter(|v| v.track == Track::Subtitle)
+            .map(|v| (v.container, v.lang.as_deref(), v.codecs.as_str()))
+            .collect();
+        assert_eq!(
+            subs,
+            [
+                (Container::Vtt, Some("en"), "English"),
+                (Container::Ttml, Some("fr"), "fr")
+            ]
+        );
+        let sub = v.iter().find(|v| v.track == Track::Subtitle).unwrap();
+        assert_eq!(urls(sub).0, ["subs/en.vtt"]);
+        // The audio stays M4A, the video MP4.
+        assert!(
+            v.iter()
+                .any(|v| v.track == Track::Audio && v.container == Container::M4a)
+        );
+        let track = "<AdaptationSet contentType=\"text\" mimeType=\"text/vtt\" lang=\"en\"><Representation id=\"s\" bandwidth=\"1\"><BaseURL>en.vtt</BaseURL></Representation></AdaptationSet>";
+        let one = format!("{}{track}", av("p", "v", 720, "avc1", "mp4a.40.2"));
+        let two = periods(&[("duration=\"PT5S\"", &*one), ("duration=\"PT5S\"", &*one)]);
+        let r = variants(&two, BASE).unwrap();
+        assert!(!r.variants.is_empty());
+        assert!(r.variants.iter().all(|v| v.track != Track::Subtitle));
     }
 
     #[test]

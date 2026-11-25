@@ -427,6 +427,18 @@ impl Host {
         {
             self.media_youtube_page(tab, src);
         }
+        // The video's `<track>` subtitle files, which the hook sees only once they are shown.
+        let tracks = json.pointer("/v/tracks").and_then(Value::as_array);
+        for t in tracks.into_iter().flatten().take(16) {
+            let text = |key: &str| t.get(key).and_then(Value::as_str).unwrap_or_default();
+            let src = text("src");
+            if src.len() <= 2048 && src.starts_with("http") {
+                let lang = Some(text("lang").chars().take(16).collect::<String>())
+                    .filter(|l| !l.is_empty());
+                let label: String = text("label").chars().take(80).collect();
+                self.media_subtitle_track(tab, src, lang, label);
+            }
+        }
         // A frame's area is a strip only over what the downloader saw of the page.
         let video = json
             .get("v")

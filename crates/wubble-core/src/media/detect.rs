@@ -1,14 +1,17 @@
 //! Which responses are media, and the list of what a tab's page offers. The response hook sees
 //! every response's headers ([`Response`]); [`classify`] keeps whole files (`video/*`,
-//! `audio/*`, or a media extension), HLS playlists and DASH manifests, and drops stream
-//! segments (`.ts`, `.m4s`, MPEG-TS and ISO segment MIME types), small files (ad pings, UI
-//! sounds: under the `media.min_bytes` floor), and failed answers. A ranged answer (206) counts
+//! `audio/*`, or a media extension), HLS playlists and DASH manifests, subtitle files (WebVTT,
+//! SRT, TTML, by type or extension; small, so under no floor), and drops stream segments (`.ts`,
+//! `.m4s`, MPEG-TS and ISO segment MIME types), small files (ad pings, UI sounds: under the
+//! `media.min_bytes` floor), and failed answers. A ranged answer (206) counts
 //! the whole file from its `Content-Range`. YouTube's own player traffic is skipped: it is
 //! SABR/UMP, not a file ([`super::youtube`] lists YouTube's formats instead).
 //!
 //! [`TabMedia`] is one tab's list, with one pure [`TabMedia::update`]: a seen candidate joins
-//! once (by URL without its fragment), up to [`MAX_ITEMS`]; a manifest is resolved once
-//! ([`MediaEffect::Resolve`]); a navigation to another page clears the list.
+//! once (by URL without its fragment), up to [`MAX_ITEMS`] (subtitle files up to
+//! [`MAX_SUBTITLE_FILES`] of them); a manifest is resolved once ([`MediaEffect::Resolve`]); a
+//! navigation to another page clears the list. A subtitle file beside a listed HLS subtitle
+//! rendition's playlist is one of its segments, not a file of its own.
 //!
 //! A service worker's own fetch has no tab: the page's request went to the worker, which
 //! answered it from a fetch of its own (or its cache). [`worker_tab`] credits such a response
@@ -20,6 +23,10 @@ use crate::tab::TabId;
 
 /// Most streams one tab lists.
 pub const MAX_ITEMS: usize = 32;
+
+/// Most subtitle files one tab lists (a player loading segmented WebVTT one by one, before the
+/// playlist that names them is read, must not fill the list).
+pub const MAX_SUBTITLE_FILES: usize = 8;
 
 /// A response, as the response hook reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +49,8 @@ pub enum Kind {
     Dash,
     /// A YouTube video, listed through the player API.
     YouTube,
+    /// A subtitle file (a `<track>` of the page's video, or one the hook saw).
+    Subtitle,
 }
 
 /// A response worth listing.
@@ -54,6 +63,10 @@ pub struct Candidate {
     pub container: Container,
     pub size: Option<u64>,
     pub ranges: bool,
+    /// [`Kind::Subtitle`]: the language code and the name the page gives (a `<track>`'s
+    /// `srclang` and `label`), when it does.
+    pub lang: Option<String>,
+    pub name: String,
 }
 
 const HLS_MIMES: [&str; 4] = [
@@ -65,7 +78,7 @@ const HLS_MIMES: [&str; 4] = [
 const DASH_MIMES: [&str; 1] = ["application/dash+xml"];
 /// Stream segments, never listed on their own.
 const SEGMENT_MIMES: [&str; 3] = ["video/mp2t", "video/iso.segment", "audio/iso.segment"];
-const SEGMENT_EXTS: [&str; 7] = ["ts", "m4s", "m4f", "cmfv", "cmfa", "aac", "vtt"];
+const SEGMENT_EXTS: [&str; 6] = ["ts", "m4s", "m4f", "cmfv", "cmfa", "aac"];
 
 /// The total size of a `Content-Range: bytes a-b/total` answer.
 pub fn range_total(content_range: &str) -> Option<u64> {
@@ -98,6 +111,8 @@ pub fn classify(r: &Response, min_bytes: u64) -> Option<Candidate> {
         container: Container::Other,
         size: None,
         ranges: false,
+        lang: None,
+        name: String::new(),
     };
     if HLS_MIMES.contains(&r.mime) || ext == "m3u8" {
         return Some(stream(Kind::Hls));
@@ -105,11 +120,19 @@ pub fn classify(r: &Response, min_bytes: u64) -> Option<Candidate> {
     if DASH_MIMES.contains(&r.mime) || ext == "mpd" {
         return Some(stream(Kind::Dash));
     }
+    let container = Container::of_mime(r.mime).or_else(|| Container::of_url(r.url));
+    if let Some(subtitles) = container.filter(|c| c.is_subtitle()) {
+        return Some(Candidate {
+            track: Track::Subtitle,
+            container: subtitles,
+            size: r.content_length,
+            ..stream(Kind::Subtitle)
+        });
+    }
     if SEGMENT_MIMES.contains(&r.mime) || SEGMENT_EXTS.contains(&ext.as_str()) {
         return None;
     }
     let by_mime = r.mime.starts_with("video/") || r.mime.starts_with("audio/");
-    let container = Container::of_mime(r.mime).or_else(|| Container::of_url(r.url));
     let by_ext = !r.mime.starts_with("text/") && Container::of_url(r.url).is_some();
     if !by_mime && !by_ext {
         return None;
@@ -133,6 +156,8 @@ pub fn classify(r: &Response, min_bytes: u64) -> Option<Candidate> {
         container: container.unwrap_or(Container::Other),
         size,
         ranges: r.status == 206 || r.accepts_ranges,
+        lang: None,
+        name: String::new(),
     })
 }
 
@@ -192,10 +217,21 @@ impl Detected {
         }
     }
 
-    /// The URL is a part of this stream: a segment or a playlist of it.
+    /// The URL is a part of this stream: a segment or a playlist of it. An HLS subtitle
+    /// rendition's segments are named only once its playlist is read: a subtitle file in the
+    /// playlist's folder counts as one of them.
     fn contains(&self, url: &str) -> bool {
+        let folder = |u: &str| {
+            let path = u.split(['?', '#']).next().unwrap_or_default();
+            path.rsplit_once('/').map(|(dir, _)| dir.to_owned())
+        };
+        let subtitle_file = Container::of_url(url).is_some_and(Container::is_subtitle);
         matches!(&self.found, Found::Ready(variants) if variants.iter().any(|v| match &v.source {
-            Source::File { url: u, .. } | Source::HlsPlaylist(u) => u == url,
+            Source::File { url: u, .. } => u == url,
+            Source::HlsPlaylist(u) => {
+                u == url
+                    || (v.track == Track::Subtitle && subtitle_file && folder(u) == folder(url))
+            }
             Source::Planned(plan) => plan.segments.iter().any(|s| s.url == url),
         }))
     }
@@ -284,20 +320,25 @@ impl TabMedia {
                 (self, vec![])
             }
             MediaEvent::Seen(c) => {
-                if self.items.len() >= MAX_ITEMS || self.knows(&c.url) {
+                let subtitles = self
+                    .items
+                    .iter()
+                    .filter(|i| i.kind == Kind::Subtitle)
+                    .count();
+                let full = self.items.len() >= MAX_ITEMS
+                    || (c.kind == Kind::Subtitle && subtitles >= MAX_SUBTITLE_FILES);
+                if full || self.knows(&c.url) {
                     return (self, vec![]);
                 }
                 let id = self.next_id;
                 self.next_id += 1;
                 let (found, effects) = match c.kind {
-                    Kind::File => (
-                        Found::Ready(vec![Variant::file(
-                            &c.url,
-                            c.track,
-                            c.container,
-                            c.size,
-                            c.ranges,
-                        )]),
+                    Kind::File | Kind::Subtitle => (
+                        Found::Ready(vec![Variant {
+                            codecs: c.name.clone(),
+                            lang: c.lang.clone(),
+                            ..Variant::file(&c.url, c.track, c.container, c.size, c.ranges)
+                        }]),
                         vec![],
                     ),
                     kind => (
@@ -411,6 +452,26 @@ mod tests {
                 None,
             ),
             (resp("https://a.test/x", "application/vnd.yt-ump"), None),
+            (
+                resp("https://a.test/s/en.vtt", "text/vtt"),
+                Some((Kind::Subtitle, Track::Subtitle, Container::Vtt)),
+            ),
+            (
+                resp("https://a.test/sub?id=1", "text/vtt"),
+                Some((Kind::Subtitle, Track::Subtitle, Container::Vtt)),
+            ),
+            (
+                resp("https://a.test/en.srt", "application/octet-stream"),
+                Some((Kind::Subtitle, Track::Subtitle, Container::Srt)),
+            ),
+            (
+                resp("https://a.test/cc", "application/ttml+xml"),
+                Some((Kind::Subtitle, Track::Subtitle, Container::Ttml)),
+            ),
+            (
+                resp("https://a.test/s/fileSequence3.webvtt", "text/plain"),
+                Some((Kind::Subtitle, Track::Subtitle, Container::Vtt)),
+            ),
             (resp("data:video/mp4;base64,AA", "video/mp4"), None),
         ];
         for (r, want) in cases {
@@ -470,6 +531,75 @@ mod tests {
         assert_eq!(worker_tab("https://a.test", home, &[]), None);
     }
 
+    /// Subtitle files are listed whatever their size; a subtitle rendition's segments fold into
+    /// the master that names its playlist, and a flood of files stops at the cap.
+    #[test]
+    fn subtitle_files_are_listed_and_kept_apart_from_segments() {
+        let tiny = Response {
+            content_length: Some(900),
+            ..resp("https://a.test/en.vtt", "text/vtt")
+        };
+        assert_eq!(
+            classify(&tiny, 65_536).map(|c| c.kind),
+            Some(Kind::Subtitle)
+        );
+        let sub = |url: &str| {
+            MediaEvent::Seen(Candidate {
+                url: url.into(),
+                kind: Kind::Subtitle,
+                track: Track::Subtitle,
+                container: Container::Vtt,
+                size: None,
+                ranges: false,
+                lang: Some("en".into()),
+                name: "English".into(),
+            })
+        };
+        let (m, fx) = TabMedia::default().update(sub("https://a.test/side/en.vtt"));
+        assert!(fx.is_empty());
+        let Found::Ready(v) = &m.items[0].found else {
+            panic!("not ready")
+        };
+        assert_eq!(
+            (v[0].track, v[0].lang.as_deref(), v[0].codecs.as_str()),
+            (Track::Subtitle, Some("en"), "English")
+        );
+        // A master with a subtitle rendition: its segments, seen before and after, fold in.
+        let (m, _) = m.update(seen("https://a.test/hls/master.m3u8", Kind::Hls));
+        let (m, _) = m.update(sub("https://a.test/hls/subs/seg0.vtt"));
+        let rendition = Variant {
+            source: Source::HlsPlaylist("https://a.test/hls/subs/en.m3u8?t=1".into()),
+            ..Variant::file("x", Track::Subtitle, Container::Vtt, None, false)
+        };
+        let (m, _) = m.update(MediaEvent::Resolved {
+            id: 1,
+            result: Ok(Resolution {
+                variants: vec![rendition],
+                title: None,
+                note: None,
+            }),
+        });
+        let (m, _) = m.update(sub("https://a.test/hls/subs/seg1.vtt"));
+        let (m, _) = m.update(sub("https://a.test/hls/other/seg1.vtt"));
+        let urls: Vec<&str> = m.items.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "https://a.test/side/en.vtt",
+                "https://a.test/hls/master.m3u8",
+                "https://a.test/hls/other/seg1.vtt"
+            ]
+        );
+        // The cap holds subtitle files back, not streams.
+        let mut m = TabMedia::default();
+        for i in 0..MAX_SUBTITLE_FILES + 3 {
+            m = m.update(sub(&format!("https://a.test/{i}.vtt"))).0;
+        }
+        assert_eq!(m.items.len(), MAX_SUBTITLE_FILES);
+        let (m, _) = m.update(seen("https://a.test/v.mp4", Kind::File));
+        assert_eq!(m.items.len(), MAX_SUBTITLE_FILES + 1);
+    }
+
     #[test]
     fn sizes_floors_and_ranges() {
         let small = Response {
@@ -514,6 +644,8 @@ mod tests {
             container: Container::Mp4,
             size: Some(9),
             ranges: false,
+            lang: None,
+            name: String::new(),
         })
     }
 
@@ -638,6 +770,8 @@ mod tests {
             container: Container::Mp4,
             size: None,
             ranges: false,
+            lang: None,
+            name: String::new(),
         });
         let (off, fx) = TabMedia::default().update(declined);
         assert!(fx.is_empty() && off.has_media());

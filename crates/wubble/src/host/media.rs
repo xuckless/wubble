@@ -209,6 +209,13 @@ impl Run {
     fn received(&self) -> u64 {
         self.fetched.values().sum()
     }
+
+    /// Subtitles saved beside a video, not a video: the strip's save button does not follow it.
+    fn is_subtitle(&self) -> bool {
+        self.tracks
+            .iter()
+            .all(|t| t.variant.track == Track::Subtitle)
+    }
 }
 
 /// The downloader's state, one owner.
@@ -308,6 +315,8 @@ impl Host {
             container: Container::Mp4,
             size: None,
             ranges: false,
+            lang: None,
+            name: String::new(),
         };
         let event = if self.media.settings.youtube {
             MediaEvent::Seen(candidate)
@@ -315,6 +324,33 @@ impl Host {
             MediaEvent::Declined(candidate)
         };
         self.media_update(tab, event);
+    }
+
+    /// A `<track>` of the page's video (the page kit's snapshot, on every poll; the list keeps it
+    /// once): a WebVTT file, listed with its language and label.
+    pub(super) fn media_subtitle_track(
+        &mut self,
+        tab: TabId,
+        src: &str,
+        lang: Option<String>,
+        label: String,
+    ) {
+        if !self.media.settings.enabled {
+            return;
+        }
+        let candidate = Candidate {
+            url: page_key(src).to_owned(),
+            kind: Kind::Subtitle,
+            track: Track::Subtitle,
+            container: Container::of_url(src)
+                .filter(|c| c.is_subtitle())
+                .unwrap_or(Container::Vtt),
+            size: None,
+            ranges: false,
+            lang,
+            name: label,
+        };
+        self.media_update(tab, MediaEvent::Seen(candidate));
     }
 
     /// The main frame of `tab` committed `url` (before `committed` moves on): another page
@@ -577,7 +613,12 @@ impl Host {
                                 let choices = select::choices(v);
                                 let labels: Vec<String> =
                                     choices.iter().map(|c| c.label.clone()).collect();
-                                say(format!("offered {:?} {} {labels:?}", i.kind, i.url));
+                                let subs: Vec<String> =
+                                    select::subtitles(v).into_iter().map(|(_, l)| l).collect();
+                                say(format!(
+                                    "offered {:?} {} {labels:?} subtitles {subs:?}",
+                                    i.kind, i.url
+                                ));
                             }
                             other => say(format!("listed {:?} {} {other:?}", i.kind, i.url)),
                         }
@@ -896,7 +937,9 @@ impl Host {
                         }),
                         Kind::Dash => dash::variants(&text, &url),
                         Kind::YouTube => youtube::parse_player(&text),
-                        Kind::File => Err(Refusal::Failed("not a manifest".into())),
+                        Kind::File | Kind::Subtitle => {
+                            Err(Refusal::Failed("not a manifest".into()))
+                        }
                     },
                 };
                 if let Err(e) = &result {
@@ -940,13 +983,18 @@ impl Host {
                     .map_err(Refusal::Failed)
                     .and_then(|()| hls::parse_media(&String::from_utf8_lossy(&body), &url));
                 match parsed {
-                    Ok(plan) => {
+                    Ok(mut plan) => {
                         if let Some(t) = self
                             .media
                             .runs
                             .get_mut(&job)
                             .and_then(|r| r.tracks.get_mut(track))
                         {
+                            // Subtitle segments may be named without an extension: the file
+                            // is the rendition's kind, not what the segment names guess.
+                            if t.variant.track == Track::Subtitle {
+                                plan.container = t.variant.container;
+                            }
                             t.plan = Some(plan);
                         }
                         self.media_plan_ready(job);
@@ -1115,14 +1163,14 @@ impl Host {
         }
     }
 
-    /// The downloads entry of the latest download started from the tab's page.
+    /// The downloads entry of the latest video download started from the tab's page.
     pub(super) fn media_latest(&self, tab: TabId) -> Option<i64> {
         let page = page_key(self.committed.get(&tab)?);
         self.media
             .runs
             .iter()
             .rev()
-            .find(|(_, r)| r.tab == tab && page_key(&r.page) == page)
+            .find(|(_, r)| r.tab == tab && page_key(&r.page) == page && !r.is_subtitle())
             .map(|(&id, _)| id)
     }
 
@@ -1178,6 +1226,83 @@ impl Host {
             chosen.container,
             if pair { None } else { chosen.size },
             &detected.url,
+            None,
+        );
+    }
+
+    /// A menu row chose to save the `index`-th variant of the tab's `item`, a subtitle track:
+    /// saved beside the latest video saved from the page, under its name (`Title (720p).en.vtt`
+    /// beside `Title (720p).mp4`), else under the name the default quality's video would take.
+    pub(super) fn save_subtitle(&mut self, tab: TabId, item: u32, index: usize) {
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
+        let Some(detected) = list.get(item) else {
+            return;
+        };
+        let Found::Ready(variants) = &detected.found else {
+            return;
+        };
+        let Some(variant) = variants
+            .get(index)
+            .filter(|v| v.track == Track::Subtitle)
+            .cloned()
+        else {
+            return;
+        };
+        let page = self.committed.get(&tab).cloned().unwrap_or_default();
+        let page_title = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(crate::shell::tab_title)
+            .unwrap_or_default();
+        let page_title = name::page_title(&page_title).to_owned();
+        let title = item_title(detected, &page_title);
+        let saved = self
+            .media_latest(tab)
+            .and_then(|id| self.media.runs.get(&id))
+            .and_then(|r| Some(r.output.file_stem()?.to_string_lossy().into_owned()));
+        let stem = saved.unwrap_or_else(|| {
+            // The first stream the default quality would save, as `save_media` would name it.
+            let can_join = wubble_engine::save::find_ffmpeg().is_some();
+            let default = list.items.iter().find_map(|i| {
+                let Found::Ready(v) = &i.found else {
+                    return None;
+                };
+                let choices = select::choices(v);
+                let pick = select::choose(&choices, self.media.settings.quality, can_join)?;
+                Some((i, choices[pick].height))
+            });
+            let (title, note) = match default {
+                Some((i, height)) => (
+                    item_title(i, &page_title),
+                    height.map(|h| format!("{h}p")).unwrap_or_default(),
+                ),
+                None => (title.clone(), String::new()),
+            };
+            let file = name::media_file_name(&title, &note, Container::Mp4);
+            Path::new(&file)
+                .file_stem()
+                .map_or(file.clone(), |s| s.to_string_lossy().into_owned())
+        });
+        let file_name = name::subtitle_file_name(&stem, variant.lang.as_deref(), variant.container);
+        let url = detected.url.clone();
+        let Some(container) = self.model.container_of(tab) else {
+            return;
+        };
+        let lang = variant.lang.clone().unwrap_or_default();
+        let kind = variant.container;
+        self.start_media(
+            tab,
+            container,
+            page,
+            title,
+            lang,
+            vec![variant],
+            kind,
+            None,
+            &url,
+            Some(file_name),
         );
     }
 
@@ -1211,6 +1336,8 @@ impl Host {
         .ok_or_else(|| format!("no free name for {file_name} in {}", dir.display()))
     }
 
+    /// A download of `variants` into the media folder, under `file_name` when given (subtitles
+    /// beside their video), else `Title (note).ext`.
     #[allow(clippy::too_many_arguments)]
     fn start_media(
         &mut self,
@@ -1223,8 +1350,11 @@ impl Host {
         container: Container,
         size: Option<u64>,
         url: &str,
+        file_name: Option<String>,
     ) {
-        let output = match self.media_path(&name::media_file_name(&title, &note, container)) {
+        let file_name =
+            file_name.unwrap_or_else(|| name::media_file_name(&title, &note, container));
+        let output = match self.media_path(&file_name) {
             Ok(output) => output,
             Err(why) => {
                 eprintln!("wubble: media: {why}");
@@ -1599,6 +1729,15 @@ impl Host {
             run.note.clone(),
             run.size,
         );
+        // Subtitles keep the name beside their video; a video is named again from its title.
+        let file_name = run
+            .is_subtitle()
+            .then(|| {
+                run.output
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .flatten();
         if let Err(why) = self.media_dir() {
             eprintln!("wubble: media: {why}");
             if let Some(window) = self.w.window.upgrade() {
@@ -1610,7 +1749,7 @@ impl Host {
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);
         self.start_media(
-            tab, container, page, title, note, variants, file, size, &url,
+            tab, container, page, title, note, variants, file, size, &url, file_name,
         );
     }
 }

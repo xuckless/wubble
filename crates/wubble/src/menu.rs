@@ -139,6 +139,9 @@ pub enum Command {
     /// Save a stream the page plays: the tab's detected `item`, its `choice`-th way to save
     /// (`wubble_core::media::select::choices`).
     SaveMedia { item: u32, choice: usize },
+    /// Save subtitles of a stream the page plays beside its video: the tab's detected `item`,
+    /// its `index`-th variant (`wubble_core::media::select::subtitles`).
+    SaveSubtitle { item: u32, index: usize },
     /// Show this site's pages in this theme (dark mode for pages).
     SetPageTheme(String, PageTheme),
     /// Capture the element at this point (physical px, view-relative).
@@ -1473,7 +1476,8 @@ pub struct MediaRow<'a> {
 }
 
 /// The media menu: per stream a title line, then a row per way to save it (or why it cannot be
-/// saved). Without a muxer (`can_join`) a row for separate video and audio says it is two files.
+/// saved), then a row per subtitle track. Without a muxer (`can_join`) a row for separate video
+/// and audio says it is two files.
 pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
     use wubble_core::media::detect::Found;
     let info = |label: String| Entry {
@@ -1534,6 +1538,21 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
                             command: Command::SaveMedia {
                                 item: row.item,
                                 choice,
+                            },
+                            enabled: true,
+                            icon: "download",
+                            shortcut: String::new(),
+                            danger: false,
+                        }),
+                );
+                out.extend(
+                    wubble_core::media::select::subtitles(variants)
+                        .into_iter()
+                        .map(|(index, label)| Entry {
+                            label: format!("Save {label}"),
+                            command: Command::SaveSubtitle {
+                                item: row.item,
+                                index,
                             },
                             enabled: true,
                             icon: "download",
@@ -1815,6 +1834,48 @@ mod tests {
         );
         assert!(entries[2].enabled && !entries[1].enabled && !entries[5].enabled);
         assert_eq!(entries[3].command, Command::Separator);
+    }
+
+    #[test]
+    fn subtitles_follow_the_ways_to_save_the_video() {
+        use wubble_core::media::detect::Found;
+        use wubble_core::media::{Container, Track, Variant};
+        let video = Variant::file(
+            "https://a.test/v.mp4",
+            Track::Muxed,
+            Container::Mp4,
+            None,
+            true,
+        );
+        let subs = Variant {
+            codecs: "English".into(),
+            ..Variant::file(
+                "https://a.test/en.vtt",
+                Track::Subtitle,
+                Container::Vtt,
+                None,
+                false,
+            )
+        };
+        let found = Found::Ready(vec![subs, video]);
+        let rows = [MediaRow {
+            item: 3,
+            title: "Clip",
+            note: None,
+            found: &found,
+        }];
+        let e = media_entries(&rows, true);
+        let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Clip",
+                "Save MP4",
+                "Save Subtitles \u{b7} English \u{b7} VTT"
+            ]
+        );
+        assert_eq!(e[1].command, Command::SaveMedia { item: 3, choice: 0 });
+        assert_eq!(e[2].command, Command::SaveSubtitle { item: 3, index: 0 });
     }
 
     #[test]

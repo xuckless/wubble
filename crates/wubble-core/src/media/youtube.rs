@@ -10,7 +10,9 @@
 //! Ported from yt-dlp (yt-dlp/yt-dlp, Unlicense: public domain, credited anyway):
 //! `yt_dlp/extractor/youtube/_base.py` `INNERTUBE_CLIENTS['android_vr']` (the client context,
 //! as data in [`CLIENT`]) and `_video.py` `_extract_formats_and_subtitles` (the
-//! `streamingData.formats` / `adaptiveFormats` fields read here). The request is wubble's own
+//! `streamingData.formats` / `adaptiveFormats` fields read here, and the caption tracks of
+//! `captions.playerCaptionsTracklistRenderer.captionTracks`, fetched as WebVTT with `fmt=vtt`
+//! as yt-dlp's `_get_subtitles` asks for them). The request is wubble's own
 //! network request, made only with the `media.youtube` setting on (off by default). When the
 //! answer no longer has the shape read here, the result is [`Refusal::SiteChanged`], which the
 //! menu shows; the rest of the downloader is unaffected.
@@ -220,7 +222,37 @@ pub fn parse_player(json: &str) -> Result<Resolution, Refusal> {
             },
             group: None,
             headers: fetch_headers(),
+            lang: None,
         });
+    }
+    // The caption tracks (uploaded and automatic), as WebVTT files beside the video.
+    let tracks = root
+        .pointer("/captions/playerCaptionsTracklistRenderer/captionTracks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !variants.is_empty() {
+        variants.extend(tracks.iter().filter_map(|t| {
+            let mut url = ::url::Url::parse(t.get("baseUrl")?.as_str()?).ok()?;
+            if url.host_str()? != "www.youtube.com" {
+                return None;
+            }
+            url.query_pairs_mut().append_pair("fmt", "vtt");
+            let name = t
+                .pointer("/name/simpleText")
+                .or_else(|| t.pointer("/name/runs/0/text"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(Variant {
+                codecs: name.to_owned(),
+                lang: t
+                    .get("languageCode")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                headers: fetch_headers(),
+                ..Variant::file(url.as_str(), Track::Subtitle, Container::Vtt, None, false)
+            })
+        }));
     }
     match (variants.is_empty(), protected, ciphered) {
         (false, ..) => Ok(Resolution {
@@ -251,15 +283,38 @@ mod tests {
           {"itag": 999, "url": "https://x.test/drm", "mimeType": "video/mp4", "drmFamilies": ["WIDEVINE"]},
           {"itag": 140, "url": "https://rr1.googlevideo.test/videoplayback?itag=140", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 130000, "contentLength": 3000}
         ]
-      }
+      },
+      "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [
+        {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en", "name": {"simpleText": "English"}, "languageCode": "en"},
+        {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=de&kind=asr", "name": {"runs": [{"text": "German (auto-generated)"}]}, "languageCode": "de"},
+        {"baseUrl": "https://evil.test/x", "languageCode": "fr"}
+      ]}}
     }"#;
 
     #[test]
     fn a_player_answer_lists_direct_formats() {
         let r = parse_player(PLAYER).unwrap();
         assert_eq!(r.title.as_deref(), Some("A Song"));
-        let v = &r.variants;
-        assert_eq!(v.len(), 3, "the ciphered and the DRM format are dropped");
+        let (v, subs) = r.variants.split_at(3);
+        assert!(
+            v.iter().all(|v| v.track != Track::Subtitle),
+            "the ciphered and the DRM format are dropped"
+        );
+        let subs: Vec<(&str, Option<&str>, Container)> = subs
+            .iter()
+            .map(|s| (s.codecs.as_str(), s.lang.as_deref(), s.container))
+            .collect();
+        assert_eq!(
+            subs,
+            [
+                ("English", Some("en"), Container::Vtt),
+                ("German (auto-generated)", Some("de"), Container::Vtt)
+            ]
+        );
+        assert!(matches!(
+            &r.variants[3].source,
+            Source::File { url, .. } if url.ends_with("lang=en&fmt=vtt")
+        ));
         assert_eq!(
             (v[0].track, v[0].height, v[0].size),
             (Track::Muxed, Some(360), Some(1000))
