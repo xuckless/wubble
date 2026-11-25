@@ -57,7 +57,7 @@ Online detection makes no request. On Linux, watch NetworkManager's or systemd-n
 
 ## Zoom indicator and zoom controls like Chrome's omnibox zoom bubble (`zoom-indicator`)
 
-Key: `zoom-indicator` · engine patch: no · state: not written.
+Key: `zoom-indicator` · engine patch: no · state: [~] written blind on sprint/features, not compiled.
 
 In Chrome, when a site's zoom differs from the default, a magnifier icon shows in the address bar. Clicking it opens a bubble with the percentage, −, + and Reset. The app menu has a Zoom row (−, percent, +, fullscreen), and Settings > Appearance > Page zoom lists the per-site levels. wubble has per-site zoom (`wubble_core::zoom::ZoomTable`, `SITE_ZOOM`/`ZOOM_DEFAULT` settings, host `user_zoomed` in crates/wubble/src/host/surfaces.rs), a brief toast after Ctrl +/-/0 (components/toast.slint), and a site-zoom list in settings (`settings-site-zoom`). Nothing persistent shows that a page is zoomed, and there is no pointer path to zoom. To build: a `zoomed` percent property for the visible tab (from `PageEvent::ZoomChanged` against the default), shown as a small kit chip in the address pill (a derived kit piece composing existing kit parts, on the derived-review sheet) only when it is not the default. The chip opens a popover with −, the percent, + and Reset, which perform `Action::ZoomOut`/`ZoomIn`/`ZoomReset`. Add a Zoom row to the page menu (`window_page_entries` or the page's own menu in crates/wubble/src/menu.rs). The popover closes on Esc and on outside click as the other popovers do. A pure fn in wubble-core decides whether the chip shows (percent, default), with tests.
 

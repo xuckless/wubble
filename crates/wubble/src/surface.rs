@@ -322,6 +322,8 @@ pub enum Routed {
         url: String,
         code: i32,
     },
+    /// The page's zoom changed: the address pill's chip follows.
+    Zoomed,
     /// The page's load failed (the error panel's `ErrorEvent::LoadFailed`, timed by the host).
     LoadFailed {
         url: String,
@@ -413,8 +415,8 @@ pub fn route(event: PageEvent) -> Routed {
             done,
         }),
         // The host reads the zoom back when the user zooms; the view's own
-        // reports (a load, an address change) are not the user's.
-        PageEvent::ZoomChanged { .. } => Routed::Ignore,
+        // reports (a load, an address change) are not the user's, only the zoom chip's.
+        PageEvent::ZoomChanged { .. } => Routed::Zoomed,
         PageEvent::Clipboard { frame, request } => Routed::Clipboard { frame, request },
         PageEvent::WheelZoom { zoom_in } => Routed::WheelZoom { zoom_in },
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
@@ -825,7 +827,7 @@ mod tests {
         );
         assert_eq!(
             route(PageEvent::ZoomChanged { percent: 110 }),
-            Routed::Ignore
+            Routed::Zoomed
         );
         assert_eq!(
             route(PageEvent::FullscreenChanged(true)),

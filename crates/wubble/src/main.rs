@@ -1701,6 +1701,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         })
     });
     window.on_address_bookmark_requested(move || with_host_in(win, Host::bookmark_page));
+    window.on_address_zoom_requested(move |x, y| {
+        with_host_in(win, |host| host.zoom_popover(x, y))
+    });
     window.on_command_field_context(move |x, y| {
         with_host_in(win, |host| host.address_context(menu::AddressField::Bar, x, y))
     });

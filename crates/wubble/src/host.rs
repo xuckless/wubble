@@ -600,6 +600,8 @@ pub struct Host {
     glance_enabled: bool,
     /// The pill shows whole URLs (`settings::UI_FULL_URLS`).
     full_urls: bool,
+    /// Where the zoom chip last opened its popover (window, logical): a step reopens it there.
+    zoom_at: Option<(f32, f32)>,
     /// The extensions' shell: the list, the footer popover, the popup, the install prompt
     /// (`host/ext_ui.rs`).
     ext_ui: ext_ui::ExtUi,
@@ -822,6 +824,7 @@ impl Host {
             look: look::Look::new(),
             glance_enabled: true,
             full_urls: false,
+            zoom_at: None,
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
             ui: Default::default(),
@@ -1369,6 +1372,7 @@ impl Host {
             nav.as_ref().map(|n| &n.0),
             nav.as_ref().is_some_and(|n| n.1),
         );
+        window.set_address_zoom(self.address_zoom());
         self.render_pages();
         self.render_extensions_in(&window);
     }

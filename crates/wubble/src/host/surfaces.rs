@@ -123,6 +123,7 @@ impl Host {
                         ..NavFlags::default()
                     });
                 let nav = NavFlags {
+                    zoomed: self.zoomed(tab),
                     search: self.search_engine.map(|e| e.info().name),
                     image: self.search_engine.and_then(|e| e.info().image),
                     private: self.model.side_of_tab(tab) == Side::Private,
@@ -207,6 +208,7 @@ impl Host {
             Routed::Auth(e) => self.apply_auth(tab, e),
             Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
+            Routed::Zoomed => window.set_address_zoom(self.address_zoom()),
             Routed::LoadFailed { url, code } => {
                 let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
                 let event = ErrorEvent::LoadFailed {
@@ -668,6 +670,13 @@ impl Host {
                 MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
                 MenuEffect::Run(MenuCommand::ToggleMuteSite(t)) => self.toggle_mute_site(t),
                 MenuEffect::Run(MenuCommand::FieldEdit(edit)) => self.field_edit(edit),
+                MenuEffect::Run(MenuCommand::ZoomStep(action)) => {
+                    self.perform(action);
+                    // the popover again, on the new percent, where the chip opened it
+                    if let Some((x, y)) = self.zoom_at {
+                        self.zoom_popover(x, y);
+                    }
+                }
                 MenuEffect::Run(MenuCommand::PasteAndGo(field, text)) => {
                     self.paste_and_go(field, &text);
                 }
@@ -1136,6 +1145,20 @@ impl Host {
     /// a load, the shell's corrections) are never stored, nor is a private
     /// window's zoom: it is kept in memory over the stored levels
     /// (`write_site`), as Chrome's off-the-record zoom map is.
+    /// `tab`'s zoom while it is not the user's default (`zoom::indicator`).
+    pub(super) fn zoomed(&mut self, tab: TabId) -> Option<u32> {
+        let default = self.zoom_default;
+        let percent = self.tab_view(tab)?.zoom_percent();
+        zoom::indicator(percent, default)
+    }
+
+    /// The address pill's zoom chip: the shown tab's zoom when it is not the default, else 0.
+    pub(super) fn address_zoom(&mut self) -> i32 {
+        self.shown()
+            .and_then(|tab| self.zoomed(tab))
+            .map_or(0, |p| i32::try_from(p).unwrap_or(i32::MAX))
+    }
+
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
         if let Some(page) = self.model.tabs.get(&tab).map(|t| t.url.clone()) {
             self.write_site(tab, SiteChange::Zoom { page, percent });

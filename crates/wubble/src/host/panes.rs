@@ -1134,6 +1134,21 @@ impl Host {
         self.sidebar_menu(entries, x, y);
     }
 
+    /// The zoom chip's click at `x, y` (window, logical): its popover, the percent with −, +
+    /// and Reset (`menu::zoom_entries`); a step reopens it there (`MenuCommand::ZoomStep`).
+    pub fn zoom_popover(&mut self, x: f32, y: f32) {
+        let Some(tab) = self.shown() else {
+            return;
+        };
+        let default = self.zoom_default;
+        let Some(percent) = self.tab_view(tab).map(|v| v.zoom_percent()) else {
+            return;
+        };
+        self.zoom_at = Some((x, y));
+        let entries = menu::zoom_entries(percent, default, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
     /// The shell's menu at `x, y` (window, logical), on the focused page.
     fn sidebar_menu(&mut self, entries: Vec<menu::Entry>, x: f32, y: f32) {
         self.hover_dismiss();

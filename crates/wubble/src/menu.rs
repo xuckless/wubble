@@ -161,6 +161,9 @@ pub enum Command {
     PasteAndGo(AddressField, String),
     /// Turn Always Show Full URLs on or off (`settings::UI_FULL_URLS`).
     SetFullUrls(bool),
+    /// A zoom row of the zoom chip's popover: the action, then the popover again on the new
+    /// percent (Chrome's zoom bubble stays while its buttons are pressed).
+    ZoomStep(Action),
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -192,6 +195,9 @@ pub struct NavFlags {
     /// The page is a private window's: "Open Link in Private Window" is not offered there
     /// (Chrome's incognito window has no "Open link in incognito window").
     pub private: bool,
+    /// The page's zoom while it is not the default (`zoom::indicator`): the page menu offers
+    /// to reset it.
+    pub zoomed: Option<u32>,
 }
 
 /// The context a row's predicates read.
@@ -596,6 +602,14 @@ const ROWS: &[Row] = &[
     row!(9, "Print\u{2026}", |c| c.page(), always, |_| {
         Command::Perform(Action::Print)
     }),
+    // wubble: the zoom chip's Reset, where Chrome's app menu has its Zoom row
+    Row {
+        group: 9,
+        label: |c| format!("Reset Zoom ({}%)", c.nav.zoomed.unwrap_or_default()),
+        show: |c| c.page() && c.nav.zoomed.is_some(),
+        enabled: always,
+        command: |_| Command::Perform(Action::ZoomReset),
+    },
     row!(10, "View Page Source", |c| c.page(), always, |_| {
         Command::Perform(Action::ViewSource)
     }),
@@ -865,6 +879,33 @@ pub fn reload_entries(devtools: bool, keymap: &Keymap) -> Vec<Entry> {
         danger: false,
     })
     .collect()
+}
+
+/// The zoom chip's popover for a page at `percent` (Chrome's omnibox zoom bubble,
+/// `chrome/browser/ui/views/location_bar/zoom_bubble_view.cc`, BSD-3-Clause; rows only): the
+/// percent, then −, + and Reset to the user's `default`, each with its key.
+pub fn zoom_entries(percent: u32, default: u32, keymap: &Keymap) -> Vec<Entry> {
+    let row = |label: String, action| Entry {
+        label,
+        command: Command::ZoomStep(action),
+        enabled: true,
+        icon: "",
+        shortcut: key_text(keymap, action),
+        danger: false,
+    };
+    vec![
+        Entry {
+            label: format!("Zoom {percent}%"),
+            command: Command::Info,
+            enabled: false,
+            icon: "",
+            shortcut: String::new(),
+            danger: false,
+        },
+        row("Zoom Out".into(), Action::ZoomOut),
+        row("Zoom In".into(), Action::ZoomIn),
+        row(format!("Reset to {default}%"), Action::ZoomReset),
+    ]
 }
 
 /// The address field's menu (`FIELD_ROWS`), each row's shortcut from the keymap.
@@ -1978,6 +2019,32 @@ mod tests {
             assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
             assert_eq!(e[2].command, Command::Dismiss);
         }
+    }
+
+    #[test]
+    fn the_zoom_popover_names_the_percent_and_steps() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        let e = zoom_entries(125, 100, &km);
+        assert_eq!(
+            labels(&e),
+            ["Zoom 125%", "Zoom Out", "Zoom In", "Reset to 100%"]
+        );
+        assert!(!e[0].enabled);
+        assert_eq!(e[2].command, Command::ZoomStep(Action::ZoomIn));
+        assert_eq!(e[3].command, Command::ZoomStep(Action::ZoomReset));
+        // the page menu offers the reset only while the page is zoomed
+        let zoomed = NavFlags {
+            zoomed: Some(125),
+            ..NavFlags::default()
+        };
+        let reset = |nav| {
+            entries(&page(), nav)
+                .into_iter()
+                .find(|e| e.command == Command::Perform(Action::ZoomReset))
+                .map(|e| e.label)
+        };
+        assert_eq!(reset(zoomed), Some("Reset Zoom (125%)".into()));
+        assert_eq!(reset(NavFlags::default()), None);
     }
 
     #[test]
