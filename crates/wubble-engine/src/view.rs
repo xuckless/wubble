@@ -309,6 +309,31 @@ pub struct View {
 struct Popups {
     on: Arc<std::sync::atomic::AtomicBool>,
     pending: Arc<std::sync::Mutex<HashMap<i32, Pending>>>,
+    /// The page's last click, shared with the navigation guard (read on CEF's UI thread).
+    clicks: Arc<std::sync::Mutex<LastClick>>,
+}
+
+/// The page's last pointer press as its content script measured it
+/// (`wubble_core::click_guard`), and the navigations the guard held for it.
+#[derive(Default)]
+struct LastClick {
+    pressed: Option<Pressed>,
+    /// Each held navigation's URL and the frame whose overlay led to it, until reported.
+    held: Vec<(String, String)>,
+}
+
+struct Pressed {
+    click: wubble_core::click_guard::Click,
+    /// The frame it landed in, and the page's URL then.
+    frame: String,
+    page: String,
+    at: std::time::Instant,
+}
+
+impl Pressed {
+    fn age_ms(&self) -> u64 {
+        u64::try_from(self.at.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 /// A pop-up CEF is creating: its navigation rule and pop-up switch, and its opener's layout
@@ -379,8 +404,11 @@ impl View {
         };
         let rule: NavigationRule = Arc::default();
         let popups = Popups::default();
-        let mut surface =
-            surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &popups));
+        let mut surface = surface_config(
+            &hooks,
+            guard(&rule, &popups),
+            popup_factory(&hooks, &rule, &popups),
+        );
         surface.initial_url = config.url;
         surface.profile = Some(profile);
         let mut producer = new_producer(runtime, surface, &config.gpu)?;
@@ -458,6 +486,32 @@ impl View {
         self.popups
             .on
             .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The page's last pointer press (`wubble_core::click_guard`) and how long ago it was, ms.
+    pub fn last_click(&self) -> Option<(wubble_core::click_guard::Click, u64)> {
+        let last = self.popups.clicks.lock().unwrap_or_else(|e| e.into_inner());
+        last.pressed.as_ref().map(|p| (p.click.clone(), p.age_ms()))
+    }
+
+    /// The window or download the last press led to was held: its frame removes the invisible
+    /// overlay it landed on (if it still is one), so the next click reaches the page; the
+    /// press is forgotten.
+    pub fn remove_click_overlay(&mut self) {
+        let pressed = self
+            .popups
+            .clicks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pressed
+            .take();
+        if let Some(p) = pressed {
+            self.send_frame_message(
+                &p.frame,
+                FrameChannel::Cosmetic,
+                &crate::cosmetic::unclick_text(),
+            );
+        }
     }
 
     /// The pop-up browsers this view's page opened since the last call, as views, with what
@@ -1276,6 +1330,24 @@ impl View {
                     self.sync_history();
                 }
             }
+            Route::Page(PageEvent::NavigationRefused { url, redirect }) => {
+                let held = {
+                    let mut last = self.popups.clicks.lock().unwrap_or_else(|e| e.into_inner());
+                    let at = last.held.iter().position(|(u, _)| *u == url);
+                    at.map(|i| last.held.remove(i).1)
+                };
+                match held {
+                    Some(frame) => {
+                        self.send_frame_message(
+                            &frame,
+                            FrameChannel::Cosmetic,
+                            &crate::cosmetic::unclick_text(),
+                        );
+                        self.events.push(WebEvent::OverlayNavigationHeld(url));
+                    }
+                    None => self.emit_page(PageEvent::NavigationRefused { url, redirect }, mode),
+                }
+            }
             Route::Page(event) => {
                 if let PageEvent::LoadFailed { url, code, text } = &event {
                     eprintln!(
@@ -1323,6 +1395,19 @@ impl View {
             self.nav.page.url.clone()
         };
         let reply = match Request::parse(body) {
+            Some(Request::Click(click)) => {
+                self.popups
+                    .clicks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pressed = Some(Pressed {
+                    click,
+                    frame: frame.id.clone(),
+                    page: self.nav.page.url.clone(),
+                    at: std::time::Instant::now(),
+                });
+                return;
+            }
             Some(Request::Hello) => {
                 let mut given = filter.frame_cosmetic(&top, &frame.url);
                 if let Some(script) = given.script.take() {
@@ -2511,11 +2596,25 @@ fn weld_modifiers(m: &Modifiers) -> welding::EventModifiers {
 }
 
 /// The navigation guard reading `rule`.
-fn guard(rule: &NavigationRule) -> welding::NavigationGuard {
+fn guard(rule: &NavigationRule, popups: &Popups) -> welding::NavigationGuard {
     let read = Arc::clone(rule);
+    let clicks = Arc::clone(&popups.clicks);
     welding::NavigationGuard::new(move |url| {
         let rule = read.read().unwrap_or_else(|e| e.into_inner());
-        rule.as_ref().is_none_or(|allows| allows(url))
+        if !rule.as_ref().is_none_or(|allows| allows(url)) {
+            return false;
+        }
+        // another site right after a press on an invisible overlay: held for the address
+        // pill (`View::drain_events` reports it), and the press forgotten, so the user's
+        // "open anyway" and the hops after it go through
+        let mut last = clicks.lock().unwrap_or_else(|e| e.into_inner());
+        let held = last.pressed.as_ref().is_some_and(|p| {
+            wubble_core::click_guard::navigated(Some(&p.click), p.age_ms(), &p.page, url)
+        });
+        if held && let Some(p) = last.pressed.take() {
+            last.held.push((url.to_owned(), p.frame));
+        }
+        !held
     })
 }
 
@@ -2570,7 +2669,11 @@ fn popup_factory(
             .clone();
         let rule: NavigationRule = Arc::new(std::sync::RwLock::new(inherited));
         let own = Popups::default();
-        let config = surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &own));
+        let config = surface_config(
+            &hooks,
+            guard(&rule, &own),
+            popup_factory(&hooks, &rule, &own),
+        );
         popups
             .pending
             .lock()

@@ -15,6 +15,7 @@ pub mod bow;
 pub mod busy;
 pub mod caret;
 pub mod chrome;
+pub mod click_guard;
 pub mod clipboard;
 pub mod closed;
 pub mod controls;

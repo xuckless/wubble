@@ -7,8 +7,17 @@
 //! "procedural":[filters],"generic":bool}`: stylesheet rules to add, procedural
 //! filters (adblock's JSON) for the page's executor, and whether to keep
 //! asking. The answer is data only; scriptlets travel by `run_script_in`.
+//!
+//! Each pointer press also reports what it landed on, `{"click":{...}}`
+//! (`wubble_core::click_guard::Click`); the engine may answer [`unclick_text`]
+//! to have the page remove the invisible overlay it landed on.
+
+use wubble_core::click_guard::{self, Click};
 
 use crate::filter::FrameCosmetic;
+
+/// Longest link a click report keeps; a longer one is dropped.
+pub const MAX_HREF_LEN: usize = 8192;
 
 /// Names per batch the engine reads; a longer batch is cut.
 pub const MAX_NAMES: usize = 512;
@@ -16,10 +25,12 @@ pub const MAX_NAMES: usize = 512;
 pub const MAX_NAME_LEN: usize = 128;
 
 /// One request from a frame's `cosmetic.js`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// The frame's context was created: send its rules.
     Hello,
+    /// The pointer went down on this.
+    Click(Click),
     /// Class names and ids the frame has not asked about.
     Names {
         classes: Vec<String>,
@@ -34,6 +45,22 @@ impl Request {
             return Some(Self::Hello);
         }
         let value: serde_json::Value = serde_json::from_str(body).ok()?;
+        if let Some(c) = value.get("click") {
+            let share = |key: &str| c.get(key)?.as_f64().map(|v| v.clamp(0.0, 1.0) as f32);
+            let flag = |key: &str| c.get(key).and_then(serde_json::Value::as_bool);
+            return Some(Self::Click(Click {
+                opacity: share("opacity")?,
+                cover: share("cover")?,
+                painted: flag("painted")?,
+                control: flag("control")?,
+                href: c
+                    .get("href")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|h| !h.is_empty() && h.len() <= MAX_HREF_LEN)
+                    .map(str::to_owned),
+                download: flag("download").unwrap_or(false),
+            }));
+        }
         let names = |key: &str| -> Option<Vec<String>> {
             let list = value.get(key)?.as_array()?;
             Some(
@@ -53,6 +80,18 @@ impl Request {
             |r| !matches!(r, Self::Names { classes, ids } if classes.is_empty() && ids.is_empty()),
         )
     }
+}
+
+/// The message that has the frame remove the invisible overlay its last press landed on, with
+/// [`Click::unseen`]'s numbers (the page measures again before removing anything).
+pub fn unclick_text() -> String {
+    serde_json::json!({
+        "unclick": {
+            "opacity": f64::from(click_guard::UNSEEN_OPACITY),
+            "cover": f64::from(click_guard::OVERLAY_COVER),
+        }
+    })
+    .to_string()
 }
 
 /// The answer to a [`Request`]: the frame's rules as JSON, scriptlets left out
@@ -111,6 +150,48 @@ mod tests {
             Some(names(&["a", "b"], &["x"]))
         );
         assert_eq!(Request::parse(r#"{"c":["a"]}"#), Some(names(&["a"], &[])));
+    }
+
+    #[test]
+    fn clicks_parse() {
+        let body = r#"{"click":{"opacity":0.5,"cover":1.2,"painted":false,"control":true,"href":"https://a.test/","download":true}}"#;
+        assert_eq!(
+            Request::parse(body),
+            Some(Request::Click(Click {
+                opacity: 0.5,
+                cover: 1.0,
+                painted: false,
+                control: true,
+                href: Some("https://a.test/".into()),
+                download: true,
+            }))
+        );
+        let plain = r#"{"click":{"opacity":1,"cover":0,"painted":true,"control":false,"href":null}}"#;
+        assert!(matches!(
+            Request::parse(plain),
+            Some(Request::Click(Click { href: None, download: false, .. }))
+        ));
+        let long = format!(
+            r#"{{"click":{{"opacity":1,"cover":0,"painted":true,"control":true,"href":"{}"}}}}"#,
+            "x".repeat(MAX_HREF_LEN + 1)
+        );
+        assert!(matches!(
+            Request::parse(&long),
+            Some(Request::Click(Click { href: None, .. }))
+        ));
+        // a click missing a measure is no click
+        assert_eq!(
+            Request::parse(r#"{"click":{"opacity":1,"painted":true,"control":true}}"#),
+            None
+        );
+        assert_eq!(Request::parse(r#"{"click":"x"}"#), None);
+    }
+
+    #[test]
+    fn unclick_carries_the_guard_s_numbers() {
+        let v: serde_json::Value = serde_json::from_str(&unclick_text()).unwrap();
+        assert_eq!(v["unclick"]["opacity"], f64::from(click_guard::UNSEEN_OPACITY));
+        assert_eq!(v["unclick"]["cover"], f64::from(click_guard::OVERLAY_COVER));
     }
 
     #[test]

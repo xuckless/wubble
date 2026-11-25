@@ -25,13 +25,20 @@ impl Host {
     /// A page's `window.open` or `target=_blank` that Chromium left to the host: what the
     /// policy table says (a tab, a Popup window, or held back for the address pill).
     pub(super) fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
-        self.place_opened(tab, request, None);
+        self.place_opened(tab, request, None, true);
     }
 
     /// Places what `tab`'s page opened: `view` is the browser Chromium created for it
     /// (`WebEvent::PopupOpened`), shown by the tab or window the table opens and closed when
-    /// nothing opens; without one the new tab gets a page of its own.
-    pub(super) fn place_opened(&mut self, tab: TabId, request: PopupRequest, view: Option<ViewId>) {
+    /// nothing opens; without one the new tab gets a page of its own. `judged`: the click
+    /// guard and the `$popup` lists have their say (not for the pill's "open anyway").
+    pub(super) fn place_opened(
+        &mut self,
+        tab: TabId,
+        request: PopupRequest,
+        view: Option<ViewId>,
+        judged: bool,
+    ) {
         use wubble_core::popup::{self, Outcome};
         // An agent session's page opens nothing off the web (wubble would load it as the
         // browser, which the page itself may not).
@@ -50,6 +57,7 @@ impl Host {
             .as_deref()
             .and_then(|o| self.site_view(tab).permissions().get(o, Permission::Popups));
         let glance = self.glance_enabled;
+        let abuse = judged && self.popup_abuse(tab, &request.url);
         let url = request.url.clone();
         // `left`/`top` are screen DIP; the window's position is physical.
         let scale = f64::from(self.w.handle.window().scale_factor());
@@ -59,7 +67,8 @@ impl Host {
                 (f64::from(y) * scale).round() as i32,
             )
         });
-        let command = match popup::decide(request.opened, request.gesture, remembered, glance) {
+        let outcome = popup::decide(request.opened, request.gesture, remembered, glance, abuse);
+        let command = match outcome {
             Outcome::Tab { foreground: true } => new_tab(url, Some(tab)),
             Outcome::Tab { foreground: false } => Command::BackgroundTab { url, opener: tab },
             // the page at its size, in a window that fits the display it opens on
@@ -90,15 +99,14 @@ impl Host {
                 },
                 None => new_tab(url, Some(tab)),
             },
-            Outcome::Blocked if view.is_none() => {
-                let held = self.held_popups.entry(tab).or_default();
-                if held.len() < super::MAX_HELD_POPUPS {
-                    held.push(request);
-                }
-                self.after_change();
+            // held for the address pill; a browser Chromium made for it closes (the pill's
+            // "open anyway" opens it as a fresh page, as Chromium's blocked pop-ups reopen)
+            Outcome::Blocked => {
+                self.drop_popup(view);
+                self.hold_popup(tab, request);
                 return;
             }
-            Outcome::Glance | Outcome::Blocked => {
+            Outcome::Glance => {
                 self.drop_popup(view);
                 return;
             }
@@ -108,6 +116,36 @@ impl Host {
         // the command opened no tab for it
         let unused = self.adopting.take().map(|(_, v)| v);
         self.drop_popup(unused);
+    }
+
+    /// `request` waits in the address pill's blocked pop-ups.
+    pub(super) fn hold_popup(&mut self, tab: TabId, request: PopupRequest) {
+        let held = self.held_popups.entry(tab).or_default();
+        if held.len() < super::MAX_HELD_POPUPS {
+            held.push(request);
+        }
+        self.after_change();
+    }
+
+    /// Whether the click that opened `url` from `tab`'s page does not count
+    /// (`wubble_core::click_guard::opened`: an invisible overlay, or a link to another site),
+    /// or the filter lists refuse the window (`$popup`). An invisible overlay is asked to go,
+    /// so the user's next click reaches the page.
+    fn popup_abuse(&mut self, tab: TabId, url: &str) -> bool {
+        use wubble_core::click_guard::{self, Held};
+        let Some(page) = self.model.tabs.get(&tab).map(|t| t.url.clone()) else {
+            return false;
+        };
+        let click = self.tab_view(tab).and_then(|v| v.last_click());
+        let held = click
+            .as_ref()
+            .and_then(|(c, age)| click_guard::opened(Some(c), *age, &page, url));
+        if held == Some(Held::Unseen)
+            && let Some(view) = self.tab_view(tab)
+        {
+            view.remove_click_overlay();
+        }
+        held.is_some() || self.blocking.blocks_popup(url, &page)
     }
 
     /// A pop-up browser nothing shows: closed (its page's `window.open` handle sees it closed).

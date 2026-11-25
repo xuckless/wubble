@@ -1886,7 +1886,21 @@ impl Host {
                 self.dispatch(Command::TitleChanged { tab, title });
             }
             WebEvent::PopupRequested(request) => self.popup_requested(tab, request),
-            WebEvent::PopupOpened { request, view } => self.place_opened(tab, request, Some(view)),
+            WebEvent::PopupOpened { request, view } => {
+                self.place_opened(tab, request, Some(view), true)
+            }
+            // the page was sent to another site from an invisible overlay: held in the pill
+            // as the window it would have been
+            WebEvent::OverlayNavigationHeld(url) => self.hold_popup(
+                tab,
+                PopupRequest {
+                    url,
+                    gesture: true,
+                    opened: wubble_core::popup::Opened::ForegroundTab,
+                    size: None,
+                    position: None,
+                },
+            ),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1979,13 +1993,11 @@ impl Host {
     /// Opens what `tab`'s page asked for and the policy held back, as if it had been clicked.
     fn open_held_popups(&mut self, tab: TabId) {
         for request in self.held_popups.remove(&tab).unwrap_or_default() {
-            self.popup_requested(
-                tab,
-                PopupRequest {
-                    gesture: true,
-                    ..request
-                },
-            );
+            let request = PopupRequest {
+                gesture: true,
+                ..request
+            };
+            self.place_opened(tab, request, None, false);
         }
         self.after_change();
     }

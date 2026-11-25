@@ -538,6 +538,13 @@ impl Blocking {
         made
     }
 
+    /// Whether the filter lists refuse the window the page at `opener` opens at `url`
+    /// (`$popup`, `$popunder`); never where shields are off.
+    pub fn blocks_popup(&self, url: &str, opener: &str) -> bool {
+        self.current()
+            .blocks_popup(url, opener, self.shields_for(opener))
+    }
+
     /// Distinct URLs blocked in a view since its last main-frame request.
     pub fn blocked(&self, browser_id: i32) -> u32 {
         self.counts().get(&browser_id).map_or(0, PageBlocks::count)
