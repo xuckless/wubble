@@ -607,6 +607,13 @@ impl Host {
         }
     }
 
+    /// The strip's quality button, its bottom left at `x`, `y`: the downloader's menu, always.
+    pub(crate) fn video_quality(&mut self, x: f32, y: f32) {
+        if let Some(tab) = self.shown() {
+            self.media_menu(tab, x, y);
+        }
+    }
+
     fn video_cmd(&mut self, tab: TabId, cmd: VideoCmd) {
         let can_save = self.video_save_state(tab).offered();
         self.video_event(
@@ -893,6 +900,7 @@ impl Host {
                             _ => -1.0,
                         },
                         save_label: save.label().into(),
+                        qualities: self.media_ways(tab) > 1,
                         marks,
                     }
                 })

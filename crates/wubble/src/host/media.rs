@@ -1075,9 +1075,6 @@ impl Host {
     /// the tab's streams at `x`, `y` (window px), or (ask-each-time off) the default quality of
     /// its first saveable stream at once.
     pub(super) fn media_entry(&mut self, tab: TabId, x: f32, y: f32) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         // A video with MediaKeys is protected whatever the page's other streams are: the menu
         // says so and offers nothing.
         let protected = self.video_is_protected(tab);
@@ -1105,6 +1102,33 @@ impl Host {
                 return;
             }
         }
+        self.media_menu(tab, x, y);
+    }
+
+    /// How many ways to save the tab's page the menu offers (every stream's choices and
+    /// subtitles); none for protected media.
+    pub(super) fn media_ways(&self, tab: TabId) -> usize {
+        if self.video_is_protected(tab) {
+            return 0;
+        }
+        self.media_items(tab)
+            .iter()
+            .map(|i| match &i.found {
+                Found::Ready(v) => select::choices(v).len() + select::subtitles(v).len(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// The downloader's menu of the tab's streams at `x`, `y` (window px): every way to save
+    /// each, or why it cannot be saved.
+    pub(super) fn media_menu(&mut self, tab: TabId, x: f32, y: f32) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let protected = self.video_is_protected(tab);
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
         let page_title = self
             .model
             .tabs
