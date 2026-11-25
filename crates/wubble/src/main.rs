@@ -1461,6 +1461,12 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     window.on_command_result_closed(move |index| {
         with_host_in(win, |host| host.bar_result_closed(index))
     });
+    let weak = window.as_weak();
+    window.on_command_inline_accepted(move |text| {
+        if let Some(window) = weak.upgrade() {
+            with_host_in(win, |host| host.bar_inline_accepted(&window, &text));
+        }
+    });
     window.on_tab_hovered(move |id, on, y| with_host_in(win, |host| host.tab_hovered(id, on, y)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
     window.on_sidebar_context(move |x, y| with_host_in(win, |host| host.sidebar_context(x, y)));

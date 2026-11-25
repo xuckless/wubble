@@ -7,7 +7,9 @@
 // `wb-pop-out` .176 s (to .95, clear, blurred 4): the kit CommandPanel. Under the head the
 // kit CommandList (command-list.slint); Up / Down move its selection, Enter picks it. The
 // placeholder follows the mode. wubble's tab search (`CommandMode.tabs`) scrolls its list and
-// reports a row's close (`result-closed`) without closing the bar.
+// reports a row's close (`result-closed`) without closing the bar; Shift+Delete on a history row
+// reports it the same way (the host forgets the page). The head shows the host's inline
+// completion (`inline`).
 // Its life is wubble_core::chrome::CommandBar, run by the host: `state`, `mode` and `origin` are
 // its outputs; this file only shows them and reports what the user did.
 
@@ -15,7 +17,7 @@ import { BrowserCss } from "../gen/css.slint";
 import { Calm } from "../motion/calm.slint";
 import { CommandHead } from "command-head.slint";
 import { CommandPanel, CommandList } from "command-list.slint";
-import { BeamShape, CommandBarState, CommandMode, CommandResult, FieldEdit, Origin, GlassKeys, GlassOver } from "../../components/model.slint";
+import { BeamShape, CommandBarState, CommandInline, CommandKind, CommandMode, CommandResult, FieldEdit, Origin, GlassKeys, GlassOver } from "../../components/model.slint";
 import { BorderBeam } from "../../components/border-beam.slint";
 
 export component CommandBar inherits Rectangle {
@@ -36,6 +38,10 @@ export component CommandBar inherits Rectangle {
     callback result-chosen(int);
     // wubble: tab search closed a row's tab (its button, Shift+Delete); the bar stays
     callback result-closed(int);
+    // the field's completion was accepted (Right or End): the completed text
+    callback inline-accepted(string);
+    // the field's inline completion (the host's)
+    in property <CommandInline> inline <=> head.inline;
     // Escape or the scrim: the bar closes
     callback dismissed();
     // the keys went back after the bar closed (it held them)
@@ -159,7 +165,16 @@ export component CommandBar inherits Rectangle {
                     list.step(d);
                 }
                 removed => {
-                    list.close-current();
+                    // a history row is forgotten (Chromium's Shift+Delete on a suggestion)
+                    if (list.count > 0 && root.results[list.current].kind == CommandKind.history) {
+                        root.close-row(list.current);
+                    } else {
+                        list.close-current();
+                    }
+                }
+                inline-accepted(text) => {
+                    list.selected = 0;
+                    root.inline-accepted(text);
                 }
                 context(x, y) => {
                     root.field-context(x, y);

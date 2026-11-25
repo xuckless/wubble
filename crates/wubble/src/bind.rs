@@ -235,3 +235,20 @@ pub fn render_bar(
         window.set_command_results(m)
     });
 }
+
+/// The field's inline completion (`CommandHead.inline`): the typed text, the suffix shown
+/// selected after it ("" for none) and that selection's UTF-8 offsets. `serial` is the query's
+/// generation: the field re-applies a completion once per query.
+pub fn render_inline(window: &AppWindow, typed: &str, suffix: &str, serial: u64) {
+    let offset = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+    let view = wubble_ui::CommandInline {
+        base: typed.into(),
+        suffix: suffix.into(),
+        from: offset(typed.len()),
+        to: offset(typed.len() + suffix.len()),
+        serial: (serial & 0x7fff_ffff) as i32,
+    };
+    if window.get_command_inline() != view {
+        window.set_command_inline(view);
+    }
+}

@@ -5,6 +5,9 @@
 // wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape, and
 // wubble's Shift+Delete (Delete in an empty field) to remove the selected row; Shift+Insert
 // pastes, and a right click asks for the host's address menu (its rows run `edit`).
+// wubble (Chrome's omnibox, behaviour only): the inline completion (`inline`, the host's) is
+// written after the typed text and selected; Right or End accepts it, typing over or deleting it
+// drops it (the TextInput's own edit). Tab / Shift+Tab step like Down / Up.
 
 import { BrowserCss } from "../gen/css.slint";
 import { Tsx } from "../gen/tokens.slint";
@@ -12,7 +15,7 @@ import { Role } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
 import { KitText } from "../text.slint";
 import { Icon, Glyph } from "../controls/icon.slint";
-import { FieldEdit } from "../../components/model.slint";
+import { CommandInline, FieldEdit } from "../../components/model.slint";
 
 export component CommandHead inherits Rectangle {
     in-out property <string> text <=> input.text;
@@ -28,6 +31,22 @@ export component CommandHead inherits Rectangle {
     callback removed();
     // wubble: a right click in the field at x, y (window coordinates)
     callback context(length, length);
+    // wubble: Right or End over the completion: the completed text is the query now
+    callback inline-accepted(string);
+    // wubble: the field's inline completion (the host's, bar.rs `bar_inline`)
+    in property <CommandInline> inline;
+    // the suffix the field shows now ("" for none): set only here, from `inline`
+    property <string> shown-inline;
+    property <bool> inline-shown: root.shown-inline != "" && input.text == root.inline.base + root.shown-inline;
+    changed inline => {
+        // only while the field still holds what the host completed: the typed text, or it with
+        // the completion shown before; nothing to do with no completion now or before
+        if (root.inline.suffix != "" || root.shown-inline != "") && (input.text == root.inline.base || input.text == root.inline.base + root.shown-inline) {
+            root.shown-inline = root.inline.suffix;
+            input.text = root.inline.base + root.inline.suffix;
+            input.set-selection-offsets(root.inline.from, root.inline.to);
+        }
+    }
     // the selection, as byte offsets into `text`, start first (equal: none)
     out property <int> selection-start: min(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
     out property <int> selection-end: max(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
@@ -52,6 +71,8 @@ export component CommandHead inherits Rectangle {
         input.focus();
     }
     public function take-focus() {
+        // a fresh field: a completion left from the last time is not shown
+        root.shown-inline = "";
         input.focus();
         input.select-all();
     }
@@ -97,6 +118,8 @@ export component CommandHead inherits Rectangle {
                 selection-foreground-color: Shell.selection-ink;
                 single-line: true;
                 edited => {
+                    // typing over the completion or deleting it replaced it
+                    root.shown-inline = "";
                     root.edited(self.text);
                 }
                 accepted => {
@@ -109,6 +132,20 @@ export component CommandHead inherits Rectangle {
                     }
                     if (event.text == Key.DownArrow) {
                         root.step(1);
+                        return accept;
+                    }
+                    if (event.text == Key.Backtab || (event.text == Key.Tab && event.modifiers.shift)) {
+                        root.step(-1);
+                        return accept;
+                    }
+                    if (event.text == Key.Tab) {
+                        root.step(1);
+                        return accept;
+                    }
+                    if (root.inline-shown && !event.modifiers.shift && (event.text == Key.RightArrow || event.text == Key.End)) {
+                        input.set-selection-offsets(root.inline.to, root.inline.to);
+                        root.shown-inline = "";
+                        root.inline-accepted(self.text);
                         return accept;
                     }
                     if (event.text == Key.Escape) {

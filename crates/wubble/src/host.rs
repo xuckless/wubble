@@ -292,6 +292,9 @@ struct Bar {
     closed: Vec<omnibox::SearchClosed>,
     /// Opened by Ctrl+E: every query is a search (`omnibox::as_search`).
     search: bool,
+    /// No inline completion for `query`: its edit only deleted text, a completion was just
+    /// accepted, or the field is the start page's capsule, which cannot show one.
+    prevent_inline: bool,
 }
 
 /// What a windowed run is for, as far as the host cares.
@@ -706,6 +709,7 @@ impl Host {
                 generation: 0,
                 closed: vec![],
                 search: false,
+                prevent_inline: true,
             },
             focus_view: None,
             key_pane: None,
@@ -2206,14 +2210,26 @@ impl Host {
 
     /// Tab search's close button or Shift+Delete on row `index`: its tab closes (onto the
     /// recently-closed list, which is listed again) and the bar stays open on the rows left.
+    /// Elsewhere Shift+Delete on a history row forgets it (`history_deleted`, as the history
+    /// page's delete) and the rows are ranked again without it.
     pub fn bar_result_closed(&mut self, index: i32) {
+        let row = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.bar.rows.get(i));
         if self.bar.mode != BarMode::Tabs {
+            let Some(url) = row.and_then(bar::removable_url).map(str::to_owned) else {
+                return;
+            };
+            self.history_deleted(&url);
+            self.bar.history.retain(|h| h.url != url);
+            // a reply already on its way still holds the row
+            self.bar.generation += 1;
+            if let Some(window) = self.w.window.upgrade() {
+                self.render_bar(&window);
+            }
             return;
         }
-        let tab = usize::try_from(index)
-            .ok()
-            .and_then(|i| self.bar.rows.get(i))
-            .and_then(BarRow::icon_tab);
+        let tab = row.and_then(BarRow::icon_tab);
         let Some(tab) = tab else {
             return;
         };
@@ -2239,12 +2255,28 @@ impl Host {
         self.bar.search = false;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
+        // the same text again: nothing was typed, so nothing completes inline (Chrome on focus)
+        self.bar.query = query.clone();
         self.bar_query(window, &query);
     }
 
     /// Renders the rows for `query` at once from what is at hand, and asks
     /// the store for its history hits, which re-render when they arrive.
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
+        let prevent = omnibox::just_deleted(&self.bar.query, query);
+        self.bar_edited(window, query, prevent);
+    }
+
+    /// Right or End over the field's completion: the completed text is the query now, and it
+    /// does not complete again until the next typed character.
+    pub fn bar_inline_accepted(&mut self, window: &AppWindow, text: &str) {
+        self.bar_edited(window, text, true);
+    }
+
+    fn bar_edited(&mut self, window: &AppWindow, query: &str, prevent_inline: bool) {
+        self.bar.prevent_inline = prevent_inline
+            || self.bar.search
+            || window.get_command_placement() == wubble_ui::CommandPlacement::InPage;
         self.bar.query = if self.bar.search {
             omnibox::as_search(query)
         } else {
@@ -2329,7 +2361,9 @@ impl Host {
             keymap: &self.keymap,
             suggestions: &self.bar.suggestions,
             now_ms: now_ms(),
+            prevent_inline: self.bar.prevent_inline,
         };
+        let inline = bar::bar_inline(&inputs, &self.bar.query);
         self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
         crate::bind::render_bar(
             window,
@@ -2338,6 +2372,8 @@ impl Host {
             &self.favicons,
             false,
         );
+        let suffix = inline.as_ref().map_or("", |m| m.suffix.as_str());
+        crate::bind::render_inline(window, &self.bar.query, suffix, self.bar.generation);
     }
 
     /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.

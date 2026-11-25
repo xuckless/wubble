@@ -92,6 +92,9 @@ pub struct BarInputs<'a> {
     /// Live engine suggestions, already fetched (`suggest_fx`).
     pub suggestions: &'a [String],
     pub now_ms: i64,
+    /// No inline completion: the edit only deleted text, a completion was just accepted, or the
+    /// field cannot show one (`omnibox::Candidates::prevent_inline`).
+    pub prevent_inline: bool,
 }
 
 /// What choosing a row does.
@@ -224,6 +227,7 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
         history: inputs.history,
         bookmarks: inputs.bookmarks,
         suggestions: inputs.suggestions,
+        prevent_inline: inputs.prevent_inline,
     };
     // Before the choice the engine only names the search rows, which are
     // replaced below.
@@ -248,6 +252,23 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
     rows.splice(at..at, engine_rows());
     rows.truncate(MAX_ROWS);
     rows
+}
+
+/// The inline completion the field shows for `query`, the same one `bar_rows` puts first.
+pub fn bar_inline(inputs: &BarInputs, query: &str) -> Option<omnibox::InlineMatch> {
+    if inputs.prevent_inline {
+        return None;
+    }
+    omnibox::inline_match(query, inputs.history, inputs.bookmarks)
+}
+
+/// The URL Shift+Delete forgets on `row`: a history row's (Chrome deletes only what history can
+/// forget), `None` for any other row.
+pub fn removable_url(row: &BarRow) -> Option<&str> {
+    match (&row.target, row.kind) {
+        (RowTarget::Omni(Target::Url(u)), CommandKind::History) => Some(u),
+        _ => None,
+    }
 }
 
 /// What choosing `target` in a bar opened in `mode` does, with the keys Enter was pressed with
@@ -374,6 +395,7 @@ mod tests {
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                prevent_inline: false,
             },
             query,
         )
@@ -505,6 +527,7 @@ mod tests {
                 keymap: &keymap,
                 suggestions: &["cats and dogs".into()],
                 now_ms: 0,
+                prevent_inline: false,
             },
             "cats",
         );
@@ -531,6 +554,7 @@ mod tests {
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                prevent_inline: false,
             },
             "docs",
         );
@@ -557,6 +581,7 @@ mod tests {
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                prevent_inline: false,
             },
             "rust",
         );

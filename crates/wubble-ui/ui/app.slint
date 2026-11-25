@@ -21,7 +21,7 @@ import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
 import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
-import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, Mounted } from "components/model.slint";
+import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, Mounted, CommandInline } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
@@ -68,7 +68,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
+export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind, CommandInline }
 
 export component AppWindow inherits Window {
     // A private window's title says so (Chrome's "(Incognito)" suffix).
@@ -438,8 +438,13 @@ export component AppWindow inherits Window {
     in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
     callback command-result-chosen(int);
-    // tab search closed the tab of a row; the bar stays open on the new rows
+    // tab search closed the tab of a row, or Shift+Delete forgot a history row; the bar stays
+    // open on the new rows
     callback command-result-closed(int);
+    // Right or End over the field's inline completion: the completed text
+    callback command-inline-accepted <=> bar.inline-accepted;
+    // the field's inline completion (the host's, bind.rs `render_inline`)
+    in property <CommandInline> command-inline <=> bar.inline;
     // the address menu (the host's): a right click in the bar's field or on the pill, and its
     // rows' edits of the field
     callback command-field-context <=> bar.field-context;

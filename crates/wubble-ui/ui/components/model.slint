@@ -135,6 +135,17 @@ export struct CommandResult {
     closable: bool,
 }
 
+// The command field's inline completion (wubble: Chrome's omnibox inline autocomplete; the host
+// writes it, bind.rs `render_inline`): what was typed, the suffix shown selected after it ("" for
+// none), that selection's UTF-8 offsets, and the query's serial (one apply per query).
+export struct CommandInline {
+    base: string,
+    suffix: string,
+    from: int,
+    to: int,
+    serial: int,
+}
+
 // Who holds the keys, by the host's surface store (`wubble_core::overlay::Ui::key_owner`): the
 // overlay whose field takes them, the page (its web view or built-in page), or an overlay that
 // takes them itself (the command bar's input, the region picker).
