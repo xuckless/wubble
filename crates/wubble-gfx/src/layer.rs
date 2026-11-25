@@ -415,11 +415,12 @@ mod wayland {
             self.queue.borrow().handle()
         }
 
-        /// What arrived for the layers (buffer releases), read without blocking.
+        /// What arrived for the layers (buffer releases), without blocking: the display's other
+        /// readers (winit's loop, the clipboard's and wubble's Wayland threads) read the socket
+        /// and queue the layers' events here. Reading it from here too waits, in
+        /// `wl_display_read_events`, for every reader that has prepared one, and those sit in
+        /// `poll` until the compositor sends something: with the main thread waiting, it never did.
         fn read(&self) {
-            if let Some(guard) = self.conn.prepare_read() {
-                let _ = guard.read();
-            }
             let (Ok(mut queue), Ok(mut heard)) =
                 (self.queue.try_borrow_mut(), self.heard.try_borrow_mut())
             else {
