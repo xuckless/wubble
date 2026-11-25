@@ -164,12 +164,14 @@ use wubble_core::window::{WindowId, WindowKind};
 /// window.
 static PACING: std::sync::OnceLock<Pacing> = std::sync::OnceLock::new();
 
-/// This run's pacing: the command line's, else the platform's.
+/// This run's pacing: the command line's, else the platform's for where this run's pages are
+/// drawn (on their own layer under the shell, or by it): read once the page layer mode is set.
 pub fn pacing() -> Pacing {
+    let layered = page_layer().row().order == wubble_core::page_layer::Order::Below;
     PACING
         .get()
         .copied()
-        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
+        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS, layered))
 }
 
 /// This run's page layer mode: the command line's `--page-layer`, else the run's own default
@@ -1918,7 +1920,6 @@ fn run(
         mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
-        begin_frames: pacing() == Pacing::Shell,
     };
     let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);

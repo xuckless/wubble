@@ -329,8 +329,6 @@ pub struct Checks {
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
-    /// Views paint on external begin frames from [`Host::pace`].
-    pub begin_frames: bool,
 }
 
 /// The last frame shown in a pane: the image, the part of it to show, and what the pane shows
@@ -653,7 +651,9 @@ impl Host {
         let mut engine = engine;
         let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
         engine.set_request_mode(RequestMode::AskHost);
-        let begin_frames = checks.begin_frames;
+        // views paint on external begin frames from `Host::pace` (read here: the run's page
+        // layer mode, which picks it, is known once the store loaded)
+        let begin_frames = crate::pacing() == Pacing::Shell;
         let videos = match checks.sponsor_endpoint.clone() {
             Some(endpoint) => {
                 videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
