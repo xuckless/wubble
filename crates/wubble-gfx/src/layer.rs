@@ -7,9 +7,13 @@
 //! layer): over it in stage 1, shown only while the page is the window's whole content (page
 //! fullscreen, the picture-in-picture window), so the shell's frame under it is never seen; under
 //! it in stage 2, where the shell clears a hole over the pane (`insertSublayer:below:`). Every
-//! change has its implicit animations off, on the main thread, in a `CATransaction` of its own;
-//! while the shell presents with the transaction (a hide or a move must land with its frame) it
-//! joins the shell's instead, so the change and the shell's frame that matches it land together.
+//! change has its implicit animations off, on the main thread, in a `CATransaction` of its own,
+//! committed and flushed at once; inside a render whose drawable is presented with the
+//! transaction (a hide or a move must land with its frame, [`PageLayer::join_transaction`]) it
+//! joins that transaction instead, so the change and the shell's frame that matches it land
+//! together. Never by `presentsWithTransaction` alone: that says what the next render does, and
+//! a change between renders joined to it would wait, unflushed, while later drawables presented
+//! on their own show the hole without it.
 
 use crate::import::{GfxError, NativeFrame};
 
@@ -38,6 +42,12 @@ pub trait PageLayer {
     /// then; it makes the main thread wait for the shell's GPU work). Read when the drawable is
     /// acquired: set before the render that needs it. Setting the value it has does nothing.
     fn present_in_transaction(&mut self, _on: bool) {}
+
+    /// While `on`, this layer's changes join the Core Animation transaction the render now
+    /// running presents its drawable with (the render acquired it with
+    /// [`Self::present_in_transaction`] on); else each commits on its own at once. Told at a
+    /// render's start and after its present.
+    fn join_transaction(&mut self, _on: bool) {}
 }
 
 /// No layer: every frame goes through the shell.
@@ -81,10 +91,12 @@ mod mac {
     }
 
     /// `change` with the implicit animations off (a moved layer or new contents would otherwise
-    /// animate for a quarter second): in the transaction the shell's drawable is presented with
-    /// while `metal` presents with one (it lands with the shell's frame), else in one of its own.
-    fn transaction(metal: &CAMetalLayer, change: impl FnOnce()) {
-        if metal.presentsWithTransaction() {
+    /// animate for a quarter second): in the transaction the running render's drawable is
+    /// presented with while it `join`s one (it lands with the shell's frame), else in one of its
+    /// own, flushed: an implicit transaction already open in this run-loop turn would otherwise
+    /// hold the nested commit until the turn ends, which a busy main thread delays.
+    fn transaction(join: bool, change: impl FnOnce()) {
+        if join {
             CATransaction::setDisableActions(true);
             change();
             return;
@@ -93,6 +105,7 @@ mod mac {
         CATransaction::setDisableActions(true);
         change();
         CATransaction::commit();
+        CATransaction::flush();
     }
 
     /// A plain `CALayer` over or under the shell's `CAMetalLayer`, its contents the page's
@@ -102,6 +115,8 @@ mod mac {
         root: Retained<CALayer>,
         /// The shell's layer (wgpu's): its `presentsWithTransaction` is set from here.
         metal: Retained<CAMetalLayer>,
+        /// Changes join the running render's transaction (`join_transaction`).
+        join: bool,
         /// The buffer on the layer and the one before it: the compositor may still show that
         /// one until the transaction that replaced it lands, so neither is copied into again
         /// (welding's pool counts a live buffer as in use).
@@ -131,7 +146,7 @@ mod mac {
                 .find_map(|layer| layer.downcast::<CAMetalLayer>().ok())
                 .ok_or_else(|| fail("the window's view has no CAMetalLayer"))?;
             let layer = CALayer::new();
-            transaction(&metal, || {
+            transaction(false, || {
                 layer.setHidden(true);
                 layer.setOpaque(true);
                 // SAFETY: Core Animation's own constant.
@@ -147,6 +162,7 @@ mod mac {
                 layer,
                 root,
                 metal,
+                join: false,
                 shown: [None, None],
             })
         }
@@ -170,7 +186,7 @@ mod mac {
             if same {
                 return false;
             }
-            transaction(&self.metal, || {
+            transaction(self.join, || {
                 self.layer.setFrame(frame);
                 self.layer.setContentsRect(contents);
                 self.layer.setContentsScale(scale);
@@ -187,7 +203,7 @@ mod mac {
             // SAFETY: an IOSurfaceRef is an Objective-C object (toll-free bridged with
             // `IOSurface`), which `contents` takes and retains; `buffer` keeps it alive here.
             let surface: &AnyObject = unsafe { buffer.io_surface().cast::<AnyObject>().as_ref() };
-            transaction(&self.metal, || {
+            transaction(self.join, || {
                 // SAFETY: an IOSurface is one of the kinds of `contents` Core Animation draws.
                 unsafe { self.layer.setContents(Some(surface)) };
                 self.layer.setHidden(false);
@@ -203,9 +219,9 @@ mod mac {
                 // SAFETY: no contents is always valid.
                 unsafe { self.layer.setContents(None) };
             };
-            // while the shell's drawable is presented with the current transaction, the layer
-            // goes in the same commit as the frame that shows the page instead
-            transaction(&self.metal, hide);
+            // in a render presented with the transaction, the layer goes in the same commit as
+            // the frame that shows the page instead
+            transaction(self.join, hide);
             self.shown = [None, None];
         }
 
@@ -214,11 +230,15 @@ mod mac {
                 self.metal.setPresentsWithTransaction(on);
             }
         }
+
+        fn join_transaction(&mut self, on: bool) {
+            self.join = on;
+        }
     }
 
     impl Drop for CaLayer {
         fn drop(&mut self) {
-            transaction(&self.metal, || self.layer.removeFromSuperlayer());
+            transaction(self.join, || self.layer.removeFromSuperlayer());
         }
     }
 }

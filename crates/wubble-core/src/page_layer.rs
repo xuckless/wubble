@@ -129,10 +129,15 @@ pub enum Need {
     /// Glass over the page blurs it (`overlay::covers` is [`Coverage::Glass`]): a snapshot of the
     /// page will do.
     Frosted,
+    /// The pane moved under its hole at the start of a render whose drawable is presented on its
+    /// own, not with the Core Animation transaction ([`transacts`] was off as it was acquired):
+    /// its layer cannot move in the same frame as the hole, so the shell draws the page for that
+    /// render, over the layer left where the shell's last frame has the hole.
+    Moved,
 }
 
 /// How many [`Need`]s there are (a [`ModeRow`] has a hold for each).
-pub const NEEDS: usize = Need::Frosted as usize + 1;
+pub const NEEDS: usize = Need::Moved as usize + 1;
 
 impl Need {
     /// Every need, in bit order.
@@ -144,6 +149,7 @@ impl Need {
         Need::Sampled,
         Need::Unplaced,
         Need::Frosted,
+        Need::Moved,
     ];
 }
 
@@ -200,6 +206,7 @@ impl Needs {
             .covered(o.coverage)
             .with(Need::Resizing, !o.view_live)
             .with(Need::Pixels, o.pixels)
+            .with(Need::Moved, o.moved_alone)
     }
 
     /// The needs of where the page is: the window's whole content (`whole`) or a pane among the
@@ -240,6 +247,9 @@ pub struct Owners {
     pub view_live: bool,
     /// A shot, a pixel check or a snapshot wants the page's pixels in the shell's textures.
     pub pixels: bool,
+    /// The pane moved under its hole at the start of a render presented on its own
+    /// ([`Need::Moved`]).
+    pub moved_alone: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -448,8 +458,14 @@ pub fn hide_at(before: Route, mode: Mode, transacted: bool) -> HideAt {
 /// redraws glass over it, present on their own, so the main thread (also CEF's) never waits in
 /// that commit for the shell's GPU work (docs/research/page-layer.md, "The frame rate on the
 /// layer"). The window's is any of its panes', or a retired layer.
+///
+/// `moved`: the pane's place changed at the start of the last render. Counted while the page is
+/// on its layer or on its way there (a frame may put it there mid-move), so every render of a
+/// move after its first lands the layer with its hole; the first was acquired before the move
+/// was known, and holds the page on the shell for it ([`Need::Moved`]).
 pub fn transacts(route: Route, hide_due: bool, moved: bool) -> bool {
-    matches!(route, Route::Leaving { .. }) || hide_due || moved
+    let near = matches!(route, Route::Entering { .. } | Route::Layer { .. });
+    matches!(route, Route::Leaving { .. }) || hide_due || (moved && near)
 }
 
 /// Whether a pane's layer has no use left: it is hidden (not [`Route::on_layer`]) and where the
@@ -585,8 +601,8 @@ pub const MODES: &[ModeRow] = &[
     ModeRow { name: "fullscreen", mode: Mode::Fullscreen, order: Order::Above, holds: [Hold::Long; NEEDS] },
     // under the shell: its UI is drawn over the hole, its glass blurs a snapshot of the layer;
     // what needs the live page in the shell holds it briefly
-    //                                                         Windowed    Covered     Resizing     Pixels       Sampled      Unplaced    Frosted
-    ModeRow { name: "window", mode: Mode::Window, order: Order::Below, holds: [Hold::Free, Hold::Free, Hold::Brief, Hold::Brief, Hold::Brief, Hold::Long, Hold::Frost] },
+    //                                                         Windowed    Covered     Resizing     Pixels       Sampled      Unplaced    Frosted      Moved
+    ModeRow { name: "window", mode: Mode::Window, order: Order::Below, holds: [Hold::Free, Hold::Free, Hold::Brief, Hold::Brief, Hold::Brief, Hold::Long, Hold::Frost, Hold::Brief] },
 ];
 
 /// The mode `name` names.
@@ -1130,6 +1146,18 @@ mod tests {
                 &[(free, Capable(true)), (free, copied(1)), (free, os(2)), (free, drew(1))],
             ),
             (
+                "moved in a render presented alone, then back at the repaint's frame",
+                16,
+                &[
+                    (free, Capable(true)),
+                    (free, os(1)),
+                    (brief, Changed),
+                    (free, drew(1)),
+                    (free, Changed),
+                    (free, os(2)),
+                ],
+            ),
+            (
                 "a resize that holds for more than a second lets the buffers go",
                 300,
                 &[
@@ -1190,6 +1218,7 @@ mod tests {
             coverage: Coverage::None,
             view_live: true,
             pixels: false,
+            moved_alone: false,
         };
         let only = |n: &[Need]| n.iter().fold(Needs::NONE, |s, &n| s.with(n, true));
         #[rustfmt::skip]
@@ -1203,8 +1232,9 @@ mod tests {
             ("the picture-in-picture window", Owners { page_fullscreen: false, pip_window: true, ..clear }, Needs::NONE),
             ("a pane among the chrome", Owners { page_fullscreen: false, ..clear }, only(&[Windowed])),
             ("a shot pending", Owners { pixels: true, ..clear }, only(&[Pixels])),
-            ("everything", Owners { page_fullscreen: false, pip_window: false, placed: false, coverage: Coverage::Pixels, view_live: false, pixels: true },
-                only(&[Windowed, Covered, Resizing, Pixels, Sampled, Unplaced])),
+            ("moved in a render presented alone", Owners { moved_alone: true, ..clear }, only(&[Moved])),
+            ("everything", Owners { page_fullscreen: false, pip_window: false, placed: false, coverage: Coverage::Pixels, view_live: false, pixels: true, moved_alone: true },
+                only(&[Windowed, Covered, Resizing, Pixels, Sampled, Unplaced, Moved])),
         ];
         for &(name, owners, want) in rows {
             assert_eq!(Needs::from_owners(&owners), want, "{name}");
@@ -1241,6 +1271,8 @@ mod tests {
             ("glass over a resizing page", only(&[Covered, Frosted, Resizing]), Long, Brief),
             ("a resize", only(&[Resizing]), Long, Brief),
             ("a shot", only(&[Pixels]), Long, Brief),
+            ("moved under its hole in a render presented alone", only(&[Moved]), Long, Brief),
+            ("moved alone under glass: the shell draws it", only(&[Covered, Frosted, Moved]), Long, Brief),
             ("no pane of its own", only(&[Windowed, Unplaced]), Long, Long),
             ("the strongest wins", only(&[Covered, Resizing, Unplaced]), Long, Long),
             ("a windowed pane under glass", only(&[Windowed, Covered, Frosted]), Long, Frost),
@@ -1322,6 +1354,11 @@ mod tests {
             // (name, route, hide due, moved, transacts)
             ("frames on the layer", ON5, false, false, false),
             ("moved under its hole", ON5, false, true, true),
+            ("moving under glass", snapped(5, 5, T), false, true, true),
+            ("moving on its way to the layer (a frame may put it there)", IN, false, true, true),
+            ("moving on the shell's path: nothing to land", Composited, false, true, false),
+            ("moving with no layer", Unsupported, false, true, false),
+            ("moving while leaving", FOR5, false, true, true),
             ("leaving", FOR5, false, false, true),
             ("a hide due", Composited, true, false, true),
             ("the shell's path", Composited, false, false, false),
