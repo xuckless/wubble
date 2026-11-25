@@ -10,8 +10,10 @@
 //! `ffmpeg` copies both streams into one file without re-encoding: the one bundled beside the
 //! executable (`wubble-ffmpeg`, a build of only the demuxers, muxers and parsers a stream copy
 //! needs: `scripts/release/build-ffmpeg.sh`), else one on the `PATH` (or a usual install
-//! folder). HLS MPEG-TS is remuxed to MP4 the same way. When joining cannot be done the tracks
-//! are kept as they came (two files, or the `.ts`) and the event says why.
+//! folder). HLS MPEG-TS is remuxed to MP4 the same way. A track of several DASH periods (each
+//! with its own init segment: one fragmented MP4 holds one) is first cut at the periods and put
+//! back together by ffmpeg's concat demuxer, still without re-encoding. When joining cannot be
+//! done the tracks are kept as they came (two files, or the `.ts`) and the event says why.
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
@@ -84,6 +86,9 @@ pub struct Join {
     pub fallback: Vec<PathBuf>,
     /// One MPEG-TS part (HLS) to remux into `output` (an MP4), not rename.
     pub remux: bool,
+    /// Per part, the segments where a later DASH period begins (`Plan::periods`): the part is
+    /// cut there and concatenated before anything else.
+    pub periods: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,8 +242,24 @@ impl Files {
                 result.err().and_then(|e| failed(job, e))
             }
             WriteCmd::Join(join) => {
+                // The byte offsets of the period starts: where the segment before each ended.
+                let cuts: Vec<Vec<u64>> = join
+                    .periods
+                    .iter()
+                    .enumerate()
+                    .map(|(track, starts)| {
+                        let ends = self
+                            .tracks
+                            .get(&(join.job, track))
+                            .map_or(&[][..], |t| t.ends.as_slice());
+                        starts
+                            .iter()
+                            .filter_map(|&s| ends.get(s.checked_sub(1)?).copied())
+                            .collect()
+                    })
+                    .collect();
                 self.tracks.retain(|(j, _), _| *j != join.job);
-                let (result, note) = match run_join(&join, find_ffmpeg()) {
+                let (result, note) = match run_join(&join, &cuts, find_ffmpeg()) {
                     Ok((files, note)) => (Ok(files), note),
                     Err(e) => (Err(e), None),
                 };
@@ -409,6 +430,82 @@ pub fn remux_args(input: &Path, output: &Path) -> Vec<OsString> {
     args
 }
 
+/// The arguments to concatenate the files `list` names (ffmpeg's concat demuxer) into `output`
+/// as `format`, copying the streams.
+pub fn concat_args(list: &Path, output: &Path, format: &str) -> Vec<OsString> {
+    let mut args = ffmpeg_base();
+    for a in ["-f", "concat", "-safe", "0", "-i"] {
+        args.push(a.into());
+    }
+    args.push(list.into());
+    for a in ["-map", "0", "-c", "copy", "-f", format] {
+        args.push(a.into());
+    }
+    args.push(output.into());
+    args
+}
+
+/// A concat demuxer list of `files` (`file '...'` lines, a quote written `'\''`).
+fn concat_list(files: &[PathBuf]) -> String {
+    files
+        .iter()
+        .map(|f| {
+            let path = f.to_string_lossy().replace('\'', "'\\''");
+            format!("file '{path}'\n")
+        })
+        .collect()
+}
+
+/// `part` cut at the byte offsets `cuts` (each period with its own init segment) and the pieces
+/// concatenated into `<part>.periods` by ffmpeg; the pieces and the list are removed after.
+fn join_periods(
+    part: &Path,
+    cuts: &[u64],
+    ffmpeg: &Path,
+    container: Container,
+) -> Result<PathBuf, String> {
+    let with = |suffix: &str| {
+        let mut name = part.file_name().unwrap_or_default().to_os_string();
+        name.push(suffix);
+        part.with_file_name(name)
+    };
+    let data = std::fs::read(part).map_err(|e| format!("cannot read {}: {e}", part.display()))?;
+    let bounds: Vec<usize> = std::iter::once(0)
+        .chain(cuts.iter().map(|&c| (c as usize).min(data.len())))
+        .chain(std::iter::once(data.len()))
+        .collect();
+    let pieces: Vec<PathBuf> = (0..bounds.len() - 1)
+        .map(|i| with(&format!(".p{i}")))
+        .collect();
+    let list = with(".list");
+    let output = with(".periods");
+    let result = (|| {
+        for (piece, w) in pieces.iter().zip(bounds.windows(2)) {
+            std::fs::write(piece, &data[w[0]..w[1].max(w[0])]).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&list, concat_list(&pieces)).map_err(|e| e.to_string())?;
+        let format = if container == Container::Webm {
+            "webm"
+        } else {
+            "mp4"
+        };
+        run_ffmpeg(ffmpeg, &concat_args(&list, &output, format))
+    })();
+    for f in pieces.iter().chain([&list]) {
+        let _ = std::fs::remove_file(f);
+    }
+    match result {
+        Ok(()) => {
+            let _ = std::fs::remove_file(part);
+            Ok(output)
+        }
+        Err(why) => {
+            let _ = std::fs::remove_file(&output);
+            Err(why)
+        }
+    }
+}
+
 fn ffmpeg_base() -> Vec<OsString> {
     ["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
         .into_iter()
@@ -439,8 +536,39 @@ fn rename(from: &Path, to: &Path) -> Result<(), String> {
 /// The saved files and, when they are not what was asked for, what to tell the user.
 type Joined = (Vec<PathBuf>, Option<String>);
 
-fn run_join(join: &Join, ffmpeg: Option<PathBuf>) -> Result<Joined, String> {
-    match join.parts.as_slice() {
+fn run_join(join: &Join, cuts: &[Vec<u64>], ffmpeg: Option<PathBuf>) -> Result<Joined, String> {
+    // A track of several periods becomes one file first; one that cannot be kept as it came.
+    let mut parts = join.parts.clone();
+    let mut kept_whole = None;
+    for (part, cuts) in parts.iter_mut().zip(cuts) {
+        if cuts.is_empty() {
+            continue;
+        }
+        let why = match &ffmpeg {
+            None => "no ffmpeg".to_owned(),
+            Some(ffmpeg) => match join_periods(part, cuts, ffmpeg, join.container) {
+                Ok(joined) => {
+                    *part = joined;
+                    continue;
+                }
+                Err(why) => why,
+            },
+        };
+        kept_whole = Some(format!(
+            "could not join the stream's periods ({why}): saved as one file, which may stop after the first"
+        ));
+    }
+    let (files, note) = join_parts(join, &parts, ffmpeg)?;
+    let note = match (note, kept_whole) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
+    };
+    Ok((files, note))
+}
+
+/// The tracks (`parts`, each one file now) joined into the saved file.
+fn join_parts(join: &Join, parts: &[PathBuf], ffmpeg: Option<PathBuf>) -> Result<Joined, String> {
+    match parts {
         [one] if join.remux => {
             let kept = |why: String| -> Result<Joined, String> {
                 let _ = std::fs::remove_file(&join.output);
@@ -484,7 +612,7 @@ fn run_join(join: &Join, ffmpeg: Option<PathBuf>) -> Result<Joined, String> {
                     }
                 }
             };
-            for (part, to) in join.parts.iter().zip(&join.fallback) {
+            for (part, to) in parts.iter().zip(&join.fallback) {
                 rename(part, to)?;
             }
             Ok((
@@ -589,6 +717,7 @@ mod tests {
                     container: Container::Mp4,
                     fallback: vec![],
                     remux: false,
+                    periods: vec![],
                 }),
             ],
         );
@@ -807,41 +936,102 @@ mod tests {
                 container: Container::Mp4,
                 fallback: fallback.iter().map(|p| path(p)).collect(),
                 remux,
+                periods: vec![],
             }
         };
         let (ok, bad) = (fake_ffmpeg(&d, true), fake_ffmpeg(&d, false));
         // A pair joined: one file, no note, the parts gone.
         let pair = join(false, &["v0", "a0"], &["v.mp4", "a.m4a"]);
-        let (files, note) = run_join(&pair, Some(ok.clone())).unwrap();
+        let (files, note) = run_join(&pair, &[], Some(ok.clone())).unwrap();
         assert_eq!((files, note), (vec![pair.output.clone()], None));
         assert!(!d.join("v0").exists());
         // A pair that ffmpeg refuses: two files, and the reason.
         let pair = join(false, &["v1", "a1"], &["v1.mp4", "a1.m4a"]);
-        let (files, note) = run_join(&pair, Some(bad.clone())).unwrap();
+        let (files, note) = run_join(&pair, &[], Some(bad.clone())).unwrap();
         assert_eq!(files, pair.fallback);
         let note = note.unwrap();
         assert!(note.contains("Invalid data found") && note.ends_with("saved as two files"));
         assert!(!pair.output.exists());
         // No ffmpeg at all.
         let pair = join(false, &["v2", "a2"], &["v2.mp4", "a2.m4a"]);
-        let (files, note) = run_join(&pair, None).unwrap();
+        let (files, note) = run_join(&pair, &[], None).unwrap();
         assert_eq!(files, pair.fallback);
         assert!(note.unwrap().starts_with("no ffmpeg"));
         // One TS remuxed; refused, it stays a `.ts` with the reason; with no ffmpeg, silently.
         let one = join(true, &["s0"], &["s0.ts"]);
         assert_eq!(
-            run_join(&one, Some(ok)).unwrap(),
+            run_join(&one, &[], Some(ok)).unwrap(),
             (vec![one.output.clone()], None)
         );
         let one = join(true, &["s1"], &["s1.ts"]);
-        let (files, note) = run_join(&one, Some(bad)).unwrap();
+        let (files, note) = run_join(&one, &[], Some(bad)).unwrap();
         assert_eq!(files, one.fallback);
         assert!(
             note.unwrap()
                 .starts_with("could not convert to MP4 (Invalid")
         );
         let one = join(true, &["s2"], &["s2.ts"]);
-        assert_eq!(run_join(&one, None).unwrap(), (one.fallback.clone(), None));
+        assert_eq!(
+            run_join(&one, &[], None).unwrap(),
+            (one.fallback.clone(), None)
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A track of two DASH periods: cut where the second's init begins, concatenated by
+    /// ffmpeg; when ffmpeg refuses, kept whole with the reason.
+    #[cfg(unix)]
+    #[test]
+    fn periods_are_cut_and_concatenated() {
+        let d = dir().join("periods");
+        std::fs::create_dir_all(&d).unwrap();
+        let (ok, bad) = (fake_ffmpeg(&d, true), fake_ffmpeg(&d, false));
+        let one = |name: &str| {
+            std::fs::write(d.join(name), b"INIT1seg1INIT2seg2").unwrap();
+            Join {
+                job: 1,
+                parts: vec![d.join(name)],
+                output: d.join(format!("{name}.mp4")),
+                container: Container::Mp4,
+                fallback: vec![],
+                remux: false,
+                periods: vec![vec![2]],
+            }
+        };
+        let join = one("t0");
+        let (files, note) = run_join(&join, &[vec![9]], Some(ok)).unwrap();
+        assert_eq!((files, note), (vec![join.output.clone()], None));
+        assert_eq!(std::fs::read(&join.output).unwrap(), b"joined\n");
+        let left: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with("t0") && n != "t0.mp4")
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        let join = one("t1");
+        let (files, note) = run_join(&join, &[vec![9]], Some(bad)).unwrap();
+        assert_eq!(files, vec![join.output.clone()]);
+        assert!(
+            note.unwrap()
+                .starts_with("could not join the stream's periods (Invalid")
+        );
+        assert_eq!(std::fs::read(&join.output).unwrap(), b"INIT1seg1INIT2seg2");
+        let join = one("t2");
+        let (_, note) = run_join(&join, &[vec![9]], None).unwrap();
+        assert!(note.unwrap().contains("(no ffmpeg)"));
+        assert_eq!(
+            concat_list(&[PathBuf::from("/t/a.p0"), PathBuf::from("/t/it's.p1")]),
+            "file '/t/a.p0'\nfile '/t/it'\\''s.p1'\n"
+        );
+        let args = concat_args(Path::new("/t/l"), Path::new("/t/o"), "mp4");
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            &args[5..],
+            [
+                "-f", "concat", "-safe", "0", "-i", "/t/l", "-map", "0", "-c", "copy", "-f", "mp4",
+                "/t/o"
+            ]
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 

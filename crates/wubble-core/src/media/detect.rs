@@ -148,6 +148,8 @@ pub struct Detected {
     pub kind: Kind,
     /// The stream's own title, when its source names one.
     pub title: Option<String>,
+    /// What the menu says of it besides its rows ([`Resolution::note`]).
+    pub note: Option<String>,
     pub found: Found,
 }
 
@@ -223,6 +225,7 @@ impl TabMedia {
                     Ok(r) => {
                         let item = &mut self.items[at];
                         item.title = r.title;
+                        item.note = r.note;
                         item.found = Found::Ready(r.variants);
                         // The player loads a master's variant and rendition playlists while
                         // the master resolves: they are listed until now, as streams of
@@ -246,6 +249,7 @@ impl TabMedia {
                     url: c.url,
                     kind: c.kind,
                     title: None,
+                    note: None,
                     found: Found::Refused(Refusal::LookupOff),
                 });
                 (self, vec![])
@@ -281,6 +285,7 @@ impl TabMedia {
                     url: c.url,
                     kind: c.kind,
                     title: None,
+                    note: None,
                     found,
                 });
                 (self, effects)
@@ -452,6 +457,7 @@ mod tests {
         let plan = super::super::Plan {
             segments: vec![super::super::Segment::whole("https://a.test/s1.mp4")],
             container: Container::Ts,
+            periods: vec![],
         };
         let variant = Variant {
             source: Source::Planned(plan),
@@ -460,6 +466,7 @@ mod tests {
         let resolved = Resolution {
             variants: vec![variant],
             title: Some("T".into()),
+            note: None,
         };
         let (m, _) = m.update(MediaEvent::Resolved {
             id: 1,
@@ -503,6 +510,7 @@ mod tests {
                     playlist("https://a.test/audio.m3u8", Track::Audio),
                 ],
                 title: None,
+                note: None,
             }),
         });
         let urls: Vec<&str> = m.items.iter().map(|i| i.url.as_str()).collect();

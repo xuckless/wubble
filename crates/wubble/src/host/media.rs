@@ -849,11 +849,9 @@ impl Host {
                         Kind::Hls => hls::variants(&text, &url).map(|variants| Resolution {
                             variants,
                             title: None,
+                            note: None,
                         }),
-                        Kind::Dash => dash::variants(&text, &url).map(|variants| Resolution {
-                            variants,
-                            title: None,
-                        }),
+                        Kind::Dash => dash::variants(&text, &url),
                         Kind::YouTube => youtube::parse_player(&text),
                         Kind::File => Err(Refusal::Failed("not a manifest".into())),
                     },
@@ -1033,6 +1031,7 @@ impl Host {
             vec![MediaRow {
                 item: 0,
                 title: &page_title,
+                note: None,
                 found: &protected_found,
             }]
         } else {
@@ -1043,6 +1042,7 @@ impl Host {
                 .map(|(i, title)| MediaRow {
                     item: i.id,
                     title,
+                    note: i.note.as_deref(),
                     found: &i.found,
                 })
                 .collect()
@@ -1408,6 +1408,11 @@ impl Host {
                     .map(|t| t.plan.as_ref().map_or(t.variant.container, |p| p.container))?;
                 let (title, note) = (run.title.clone(), run.note.clone());
                 let parts: Vec<PathBuf> = run.tracks.iter().map(|t| t.part.clone()).collect();
+                let periods: Vec<Vec<usize>> = run
+                    .tracks
+                    .iter()
+                    .map(|t| t.plan.as_ref().map_or_else(Vec::new, |p| p.periods.clone()))
+                    .collect();
                 let containers: Vec<Container> = run
                     .tracks
                     .iter()
@@ -1457,6 +1462,7 @@ impl Host {
                     container,
                     fallback,
                     remux,
+                    periods,
                 }));
                 None
             }
@@ -1619,6 +1625,7 @@ mod tests {
             url: "https://a.test/v/clip.mp4".into(),
             kind: Kind::File,
             title: title.map(str::to_owned),
+            note: None,
             found: Found::Resolving,
         };
         assert_eq!(item_title(&item(Some("Own")), "Page"), "Own");

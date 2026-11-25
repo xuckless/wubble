@@ -145,6 +145,10 @@ impl Segment {
 pub struct Plan {
     pub segments: Vec<Segment>,
     pub container: Container,
+    /// Where each later period of a multi-period DASH stream begins (an index into `segments`,
+    /// at that period's own init segment): the joined file is cut there and concatenated, since
+    /// one fragmented MP4 holds one init. Empty for one period.
+    pub periods: Vec<usize>,
 }
 
 /// Bytes per ranged fetch of a single file (its segments).
@@ -174,6 +178,7 @@ impl Source {
             Source::File { url, size, ranges } => Some(Plan {
                 segments: file_segments(url, *size, *ranges),
                 container,
+                periods: vec![],
             }),
             Source::HlsPlaylist(_) => None,
             Source::Planned(plan) => Some(plan.clone()),
@@ -266,7 +271,7 @@ pub enum Refusal {
     Protected,
     /// A live stream (no end): recording is not supported.
     Live,
-    /// A manifest shape this version does not take (multi-period DASH, ...).
+    /// A manifest shape this version does not take (DASH periods that do not line up, ...).
     Unsupported(String),
     /// The site's answer no longer has the shape the parser knows.
     SiteChanged(String),
@@ -297,6 +302,9 @@ pub struct Resolution {
     pub variants: Vec<Variant>,
     /// The stream's own title (a site's player data), over the page title.
     pub title: Option<String>,
+    /// What the menu says of the stream besides its rows (a DASH manifest's ad periods left
+    /// out).
+    pub note: Option<String>,
 }
 
 #[cfg(test)]

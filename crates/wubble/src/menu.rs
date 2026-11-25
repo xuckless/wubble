@@ -1467,6 +1467,8 @@ pub fn caret_entries() -> Vec<Entry> {
 pub struct MediaRow<'a> {
     pub item: u32,
     pub title: &'a str,
+    /// A line under the title (`Detected::note`: a manifest's ad periods left out).
+    pub note: Option<&'a str>,
     pub found: &'a wubble_core::media::detect::Found,
 }
 
@@ -1502,6 +1504,7 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
             });
         }
         out.push(info(row.title.to_owned()));
+        out.extend(row.note.map(|note| info(note.to_owned())));
         match row.found {
             Found::Resolving => out.push(info("Reading the stream\u{2026}".into())),
             Found::Refused(refusal) => {
@@ -1774,16 +1777,19 @@ mod tests {
             MediaRow {
                 item: 4,
                 title: "Clip",
+                note: Some("ad periods left out"),
                 found: &ready,
             },
             MediaRow {
                 item: 5,
                 title: "Film",
+                note: None,
                 found: &protected,
             },
             MediaRow {
                 item: 6,
                 title: "Show",
+                note: None,
                 found: &resolving,
             },
         ];
@@ -1793,6 +1799,7 @@ mod tests {
             labels,
             [
                 "Clip",
+                "ad periods left out",
                 "Save MP4 \u{b7} 2.0 KB",
                 "",
                 "Film",
@@ -1803,11 +1810,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            entries[1].command,
+            entries[2].command,
             Command::SaveMedia { item: 4, choice: 0 }
         );
-        assert!(entries[1].enabled && !entries[4].enabled);
-        assert_eq!(entries[2].command, Command::Separator);
+        assert!(entries[2].enabled && !entries[1].enabled && !entries[5].enabled);
+        assert_eq!(entries[3].command, Command::Separator);
     }
 
     #[test]
@@ -1820,11 +1827,13 @@ mod tests {
             MediaRow {
                 item: 0,
                 title: "A",
+                note: None,
                 found: &off,
             },
             MediaRow {
                 item: 1,
                 title: "B",
+                note: None,
                 found: &failed,
             },
         ];
@@ -1868,6 +1877,7 @@ mod tests {
         let rows = [MediaRow {
             item: 0,
             title: "Clip",
+            note: None,
             found: &found,
         }];
         let label = |join| media_entries(&rows, join)[1].label.clone();

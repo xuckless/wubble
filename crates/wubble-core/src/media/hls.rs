@@ -274,6 +274,7 @@ fn media(m: &MediaPlaylist, base: &str) -> Result<Plan, Refusal> {
     Ok(Plan {
         segments,
         container,
+        periods: vec![],
     })
 }
 

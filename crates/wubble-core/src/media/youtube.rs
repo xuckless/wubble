@@ -217,7 +217,11 @@ pub fn parse_player(json: &str) -> Result<Resolution, Refusal> {
         });
     }
     match (variants.is_empty(), protected, ciphered) {
-        (false, ..) => Ok(Resolution { variants, title }),
+        (false, ..) => Ok(Resolution {
+            variants,
+            title,
+            note: None,
+        }),
         (true, p, _) if p > 0 => Err(Refusal::Protected),
         (true, _, c) if c > 0 => Err(changed("every format needs a signature")),
         _ => Err(changed("no usable formats")),
