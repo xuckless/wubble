@@ -7,3 +7,4 @@
 /.cef-cache
 /target-run
 /qa-report
+__pycache__/

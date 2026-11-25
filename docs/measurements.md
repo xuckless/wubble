@@ -618,3 +618,19 @@ After the settle (owner, 2026-11-21: 2 s without input, then 2 s to a stop), the
 
 At rest the scene draws nothing; the 2 renders a second left are the search capsule's blinking caret (Slint's
 `TextInput`, the start page's focused field), 17 items in 1.8 % of the window each.
+
+## wubble against Firefox, Linux (harness written 2026-11-25, not run yet)
+
+How to: build a release wubble, then from the repo
+
+    ~/Dev/wubble/.local/bin/run.sh timeout 900 scripts/headless.sh \
+      python3 scripts/bench/linux-vs-firefox.py --wubble target/release/wubble [--seconds 20] [--rounds 1]
+
+(`run.sh` first: the lock and memory cap; `headless.sh` inside it: the invisible display, whose mutter the
+harness drives input through). Each state (idle on a still page, the 1080p60 video, the video under the find bar
+and under the command bar, wheel scrolling of a long page, typing into a textarea) runs in a fresh launch and
+profile of each browser, Firefox with telemetry and updates off. `results.md` gives per state wubble / Firefox
+(median and p90 tree CPU, CPU per process group, PSS, GPU, package power where readable) and a verdict; the
+owner's goal is wubble better in every state. Results stay in `.local/bench/<time>/`; copy the table here
+with the load average.
+

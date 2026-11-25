@@ -212,7 +212,7 @@ Build:
 - No network lookups: Safe Browsing stays out.
 
 ## F. Linux measurement against Firefox (owner: "make sure the performance is better than at least Firefox")
-- [ ] The Mac harness's states on Linux (idle, a still page, video, video under glass, scrolling, typing: CPU per process, memory, GPU, energy where Linux exposes it), the same run in Firefox, a comparison table; wubble must beat Firefox in every state
+- [~] The Mac harness's states on Linux (idle, a still page, video, video under glass, scrolling, typing: CPU per process, memory, GPU, energy where Linux exposes it), the same run in Firefox, a comparison table; wubble must beat Firefox in every state · the bench is `scripts/bench/linux-vs-firefox.py` (merged into `next/all`); its first run loses to Firefox on video, scroll and animation (section H)
 
 ## G. Leftovers from the sprint and this round (owner, 2026-11-25)
 - [ ] macOS: the search region from the system's region setting (`NSLocale`), not `LANG` (a GUI app has none; today it falls back to Google, Bing, Yahoo)
@@ -228,5 +228,5 @@ Build:
 ## H. Linux performance and reach (owner, 2026-11-25, after the first Linux-vs-Firefox run: wubble loses 1.5x on video, 2-3x on scroll and animation)
 - [~] A Linux page layer: Chromium's frame as its own Wayland subsurface below the shell, no copy and no shell draw per page frame. Feasibility research first (`docs/research/linux-page-layer.md` on `research/linux-layer`), then a one-day experiment, then the build
 - [ ] Linux releases built in an older container (for example Ubuntu 22.04, glibc 2.35), not on Fedora 44 (today's release needs glibc 2.43, so only 2026 distros run it)
-- [ ] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merge with the next round
+- [x] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merged into `next/all`
 - [ ] A locked store falls back to defaults for the whole session, silently (Mac harness, 2026-11-25: a quick relaunch while the previous run still held `wubble.db` started with every setting at its default and no saved session). Wait and retry the lock for a few seconds at start, and if it stays locked, say so in a notice instead of only stderr; find what still holds the file after quit

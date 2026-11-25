@@ -10,6 +10,8 @@ this server; meanwhile the browser's process tree is sampled every second (CPU t
 """
 import http.server, json, os, shutil, socketserver, subprocess, sys, tempfile, threading, time
 
+from common import memory, tree
+
 if len(sys.argv) < 5:
     sys.exit(__doc__)
 SUITES, LOGDIR = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
@@ -101,42 +103,8 @@ p = subprocess.Popen(cmd, env=env, stdout=log, stderr=log, start_new_session=Tru
 TICK = os.sysconf("SC_CLK_TCK")
 
 
-def tree(root):
-    kids = {}
-    for pid in filter(str.isdigit, os.listdir("/proc")):
-        try:
-            with open(f"/proc/{pid}/stat") as f:
-                rest = f.read().rsplit(")", 1)[1].split()
-            kids.setdefault(int(rest[1]), []).append((int(pid), int(rest[11]) + int(rest[12])))
-        except OSError:
-            pass
-    out, todo = {}, [root]
-    while todo:
-        q = todo.pop()
-        for pid, ticks in kids.get(q, []):
-            out[pid] = ticks
-            todo.append(pid)
-    try:
-        with open(f"/proc/{root}/stat") as f:
-            rest = f.read().rsplit(")", 1)[1].split()
-        out[root] = int(rest[11]) + int(rest[12])
-    except OSError:
-        pass
-    return out
-
-
 def pss(pids):
-    total = 0
-    for pid in pids:
-        try:
-            with open(f"/proc/{pid}/smaps_rollup") as f:
-                for line in f:
-                    if line.startswith("Pss:"):
-                        total += int(line.split()[1])
-                        break
-        except OSError:
-            pass
-    return total
+    return sum(memory(p)[1] for p in pids)
 
 
 seen, peak, n = {}, 0, 0
