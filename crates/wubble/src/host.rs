@@ -1294,7 +1294,7 @@ impl Host {
         self.layers_gone(&window, |_, t| !kept.contains(&t));
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
-        window::free_slots(&mut self.w.slots, &kept);
+        self.w.release_slots(|t| !kept.contains(&t));
         if self.w.frames.len() != before {
             self.set_page_cursor(&window, Cursor::Default);
             for tab in self.shown_tabs() {

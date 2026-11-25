@@ -298,6 +298,23 @@ pub(crate) struct Target {
     pub(crate) image: slint::Image,
 }
 
+/// Targets alive in every ring (the presenters', the edge masks', the orbs'; `--measure`'s
+/// `gpu_targets`), so a run that
+/// opens and closes tabs can tell a cache from a leak. A texture the shell still shows outlives
+/// its ring until Slint lets the image go.
+static LIVE_TARGETS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The frame targets alive now ([`LIVE_TARGETS`]).
+pub fn live_targets() -> usize {
+    LIVE_TARGETS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Drop for Ring {
+    fn drop(&mut self) {
+        LIVE_TARGETS.fetch_sub(RING_LEN, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct Ring {
     pub(crate) size: FrameSize,
     targets: [Target; RING_LEN],
@@ -333,9 +350,11 @@ impl Ring {
                 image,
             })
         };
+        let targets = [target()?, target()?];
+        LIVE_TARGETS.fetch_add(RING_LEN, std::sync::atomic::Ordering::Relaxed);
         Ok(Self {
             size,
-            targets: [target()?, target()?],
+            targets,
             next: 0,
         })
     }
@@ -477,6 +496,13 @@ impl FramePresenter {
             None,
         );
         Ok(target.image.clone())
+    }
+
+    /// Lets the ring's targets go (its pane went: a split closed, the peek or DevTools closed);
+    /// the next frame makes a new ring, as after a resize.
+    pub fn release(&mut self) {
+        self.ring = None;
+        self.generation = None;
     }
 
     /// The RGBA pixel at (`x`, `y`) (physical, clamped to the frame) of the

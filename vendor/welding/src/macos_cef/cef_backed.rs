@@ -131,6 +131,10 @@ cef::wrap_render_handler! {
             // its own element rather than compositing it into the view, so it
             // lands here with PET_POPUP and goes to a separate slot.
             let is_popup = type_ == cef::PaintElementType::POPUP;
+            // wubble change (67): a hidden view's frame is not copied (nothing would take it)
+            if !is_popup && self.handler.frame_slot.lock().unwrap().is_hidden() {
+                return;
+            }
             // wubble change: stamped for `CopiedFrame::arrived`.
             let arrived = std::time::Instant::now();
             let Some(info) = info else { return };

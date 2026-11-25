@@ -234,11 +234,7 @@ impl Host {
         }
         for w in std::iter::once(&mut self.w).chain(self.parked.values_mut()) {
             w.frames.remove(&PANEL_TAB);
-            w.slots.iter_mut().for_each(|s| {
-                if *s == Some(PANEL_TAB) {
-                    *s = None;
-                }
-            });
+            w.release_slots(|t| t == PANEL_TAB);
         }
     }
 

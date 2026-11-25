@@ -319,6 +319,12 @@ pub fn sample(
                 memreport::mib(reserved)
             );
         }
+        // the frame rings alive: a cache stays level over open-close runs, a leak climbs
+        let _ = writeln!(
+            r.report,
+            "gpu_targets {}",
+            wubble_gfx::import::live_targets()
+        );
         if let Some(line) = crate::alloc_count::line() {
             let _ = writeln!(r.report, "{line}");
         }

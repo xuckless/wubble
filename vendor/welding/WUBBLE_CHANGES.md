@@ -629,6 +629,14 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (`invalidate`) a refresh later, so the layer is not left a frame behind when a burst's
     last frame was the one dropped. Linux and Windows unchanged.
 
+67. **A hidden view keeps no frame (Linux, macOS).** `native_frame/mod.rs`:
+    `PendingFrameSlot::set_hidden`/`is_hidden`; hiding drops the frame waiting there.
+    `linux_cef`/`macos_cef` `set_visible` sets it before `was_hidden`; their
+    `on_accelerated_paint` returns before the copy for a hidden view's own frames (a
+    popup's still go). A hidden tab no longer holds a full-size copied texture until it
+    is shown; showing it asks CEF for a frame as before. For wubble's
+    `hidden-tabs-free-gpu`. Windows unchanged.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
