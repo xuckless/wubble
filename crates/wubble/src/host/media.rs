@@ -34,12 +34,27 @@ use crate::menu::MediaRow;
 /// Largest manifest, key or player answer read into memory.
 const MAX_TEXT: usize = 4 << 20;
 
+/// Most candidates waiting for the host's next pump (a page that floods the hook loses the rest).
+const MAX_QUEUED: usize = 256;
+
+/// Whose response a candidate was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Seen {
+    /// A view's, by its browser id.
+    Browser(i32),
+    /// A service worker's own fetch: its container and the origin that made it.
+    Worker {
+        container: ContainerId,
+        origin: String,
+    },
+}
+
 /// The response hook's half, on CEF's IO thread: classifies and queues; the host drains it.
 #[derive(Debug, Default)]
 pub struct MediaObserver {
     enabled: AtomicBool,
     min_bytes: AtomicU64,
-    seen: Mutex<Vec<(i32, Candidate)>>,
+    seen: Mutex<Vec<(Seen, Candidate)>>,
     trace: bool,
 }
 
@@ -60,16 +75,24 @@ impl MediaObserver {
         self.min_bytes.store(settings.min_bytes, Ordering::Relaxed);
     }
 
-    fn take(&self) -> Vec<(i32, Candidate)> {
+    fn take(&self) -> Vec<(Seen, Candidate)> {
         std::mem::take(&mut *self.seen.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
 impl ResponseObserver for MediaObserver {
     fn seen(&self, r: &ResponseInfo<'_>) {
-        if !self.enabled.load(Ordering::Relaxed) || r.browser_id == 0 {
+        if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
+        let from = match (r.browser_id, r.worker_container) {
+            (0, Some(container)) if !r.initiator.is_empty() => Seen::Worker {
+                container,
+                origin: r.initiator.to_owned(),
+            },
+            (0, _) => return,
+            (id, _) => Seen::Browser(id),
+        };
         let response = detect::Response {
             url: r.url,
             mime: r.mime,
@@ -81,15 +104,15 @@ impl ResponseObserver for MediaObserver {
         if self.trace {
             // `--smoke media=probe` with `WUBBLE_PROBE_TRACE=1`: every response the hook sees.
             println!(
-                "probe: response {} {} {:?} {} range={:?} accepts={}",
+                "probe: response {} {} {:?} {} range={:?} accepts={} from={from:?}",
                 r.status, r.mime, r.content_length, r.url, r.content_range, r.accepts_ranges
             );
         }
         if let Some(c) = detect::classify(&response, self.min_bytes.load(Ordering::Relaxed)) {
-            self.seen
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push((r.browser_id, c));
+            let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+            if seen.len() < MAX_QUEUED {
+                seen.push((from, c));
+            }
         }
     }
 }
@@ -402,16 +425,35 @@ impl Host {
     /// Runs on every pump with CEF work, and when the writer reports: the hook's candidates,
     /// the fetches' bytes and ends, the writer's results.
     pub(crate) fn media_pump(&mut self) {
-        for (browser_id, candidate) in self.media.observer.take() {
-            let tab = self
-                .views
-                .iter()
-                .find(|&(_, &v)| {
-                    self.engine
-                        .view(v)
-                        .is_some_and(|view| view.browser_id() == browser_id)
-                })
-                .map(|(&t, _)| t);
+        for (from, candidate) in self.media.observer.take() {
+            let tab = match from {
+                Seen::Browser(browser_id) => self
+                    .views
+                    .iter()
+                    .find(|&(_, &v)| {
+                        self.engine
+                            .view(v)
+                            .is_some_and(|view| view.browser_id() == browser_id)
+                    })
+                    .map(|(&t, _)| t),
+                Seen::Worker { container, origin } => {
+                    // The tabs with a page: each one's container, page and last use.
+                    let live: Vec<detect::LiveTab> = self
+                        .views
+                        .keys()
+                        .filter_map(|t| {
+                            let m = self.model.tabs.get(t)?;
+                            Some(detect::LiveTab {
+                                tab: *t,
+                                container: m.container,
+                                url: self.committed.get(t).unwrap_or(&m.url),
+                                last_active_ms: m.last_active_ms,
+                            })
+                        })
+                        .collect();
+                    detect::worker_tab(&origin, container, &live)
+                }
+            };
             if let Some(tab) = tab {
                 self.media_update(tab, MediaEvent::Seen(candidate));
             }

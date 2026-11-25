@@ -9,8 +9,14 @@
 //! [`TabMedia`] is one tab's list, with one pure [`TabMedia::update`]: a seen candidate joins
 //! once (by URL without its fragment), up to [`MAX_ITEMS`]; a manifest is resolved once
 //! ([`MediaEffect::Resolve`]); a navigation to another page clears the list.
+//!
+//! A service worker's own fetch has no tab: the page's request went to the worker, which
+//! answered it from a fetch of its own (or its cache). [`worker_tab`] credits such a response
+//! to a tab of the worker's container showing a page of the worker's origin.
 
 use super::{Container, Refusal, Resolution, Source, Track, Variant};
+use crate::space::ContainerId;
+use crate::tab::TabId;
 
 /// Most streams one tab lists.
 pub const MAX_ITEMS: usize = 32;
@@ -128,6 +134,29 @@ pub fn classify(r: &Response, min_bytes: u64) -> Option<Candidate> {
         size,
         ranges: r.status == 206 || r.accepts_ranges,
     })
+}
+
+/// A tab with a page, as [`worker_tab`] weighs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiveTab<'a> {
+    pub tab: TabId,
+    pub container: ContainerId,
+    /// The page it shows (its committed address).
+    pub url: &'a str,
+    pub last_active_ms: i64,
+}
+
+/// The tab a service worker's response is for: of the worker's `container`, the tabs whose
+/// page has the worker's origin (`initiator`, the origin that made the fetch), the one used
+/// last. `None` when no tab shows that site (a worker running for a page since closed).
+pub fn worker_tab(initiator: &str, container: ContainerId, tabs: &[LiveTab]) -> Option<TabId> {
+    let origin = crate::site::origin_of(initiator)?;
+    tabs.iter()
+        .filter(|t| {
+            t.container == container && crate::site::origin_of(t.url).as_ref() == Some(&origin)
+        })
+        .max_by_key(|t| t.last_active_ms)
+        .map(|t| t.tab)
 }
 
 /// What is known of a listed stream.
@@ -387,6 +416,58 @@ mod tests {
         for (r, want) in cases {
             assert_eq!(kind(r), want, "{}", r.url);
         }
+    }
+
+    #[test]
+    fn a_service_workers_response_goes_to_its_sites_tab() {
+        let (home, work) = (ContainerId(0), ContainerId(1));
+        let tab = |id, container, url, last_active_ms| LiveTab {
+            tab: TabId(id),
+            container,
+            url,
+            last_active_ms,
+        };
+        let tabs = [
+            tab(1, home, "https://a.test/watch/1", 10),
+            tab(2, home, "https://a.test/other", 30),
+            tab(3, work, "https://a.test/watch/9", 50),
+            tab(4, home, "https://b.test/", 90),
+            tab(5, home, "https://a.test:8443/x", 99),
+            tab(6, home, "about:blank", 100),
+        ];
+        let cases = [
+            (
+                "the newest of the site's tabs",
+                "https://a.test",
+                home,
+                Some(2),
+            ),
+            ("another container's own", "https://a.test", work, Some(3)),
+            (
+                "a trailing slash and case",
+                "HTTPS://A.TEST/",
+                home,
+                Some(2),
+            ),
+            (
+                "another port is another origin",
+                "https://a.test:8443",
+                home,
+                Some(5),
+            ),
+            ("no tab of the site", "https://c.test", home, None),
+            ("no tab of the container", "https://b.test", work, None),
+            ("an opaque initiator", "null", home, None),
+            ("no initiator", "", home, None),
+        ];
+        for (name, initiator, container, want) in cases {
+            assert_eq!(
+                worker_tab(initiator, container, &tabs),
+                want.map(TabId),
+                "{name}"
+            );
+        }
+        assert_eq!(worker_tab("https://a.test", home, &[]), None);
     }
 
     #[test]

@@ -192,7 +192,7 @@ impl MacosCefProducer {
         #[cfg(feature = "cef-runtime")]
         {
             let ready = Arc::new(AtomicBool::new(false));
-            let mut handler = RequestContextReadyHandler::new(ready.clone());
+            let mut handler = RequestContextReadyHandler::new(ready.clone(), None);
             let context =
                 crate::profile::create_with_handler(runtime, &config.surface, Some(&mut handler))?;
             return Ok(PreparedMacosCefProfile { context, ready });

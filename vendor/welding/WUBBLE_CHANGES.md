@@ -643,6 +643,16 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     negative value).
     For wubble's download rows (speed and time left).
 
+69. **Service workers' responses, and every response's initiator.** `surface.rs`:
+    `ResponseInfo` gains `initiator` (the request's initiating origin, as CEF names it).
+    `profile.rs`: `SharedProfile::new` takes `workers: Option<ResponseObserver>`; the
+    context's `RequestContextReadyHandler` answers `GetResourceRequestHandler` for a request
+    with no browser (a service worker's own fetch, which no client's request handler sees)
+    with `handlers.rs` `WeldWorkerResponses`, which reports the response with browser id 0
+    and changes nothing. `report_response` is the one body both handlers share. A browser's
+    requests are untouched (CEF asks the context only when the client returned none). For
+    wubble's media detection of service-worker answers (`media-detect-sw-iframe`).
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

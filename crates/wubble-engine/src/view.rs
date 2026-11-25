@@ -371,7 +371,7 @@ impl View {
             layout,
             pacing: (config.frame_rate, config.begin_frames),
             request_filter: filter.clone().map(crate::filter::request_filter),
-            response_observer: observer.map(crate::filter::response_observer),
+            response_observer: observer.map(|o| crate::filter::response_observer(o, None)),
         };
         let rule: NavigationRule = Arc::default();
         let popups = Popups::default();
