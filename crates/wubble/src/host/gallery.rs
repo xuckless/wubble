@@ -185,21 +185,23 @@ impl Host {
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
         }
-        // every overlay the store holds open here closes as its owner would close it: a scene is
-        // the store's actions from nothing (the machines with state of their own are reset below)
+        // The bookmark and print sheets close through their owners first, which draw them
+        // closed (a store close alone leaves their views open).
+        self.bookmark_sheet_answered(false, false, "", -1);
+        self.print_event(wubble_core::print::Event::Cancel);
+        // every other overlay the store holds open here closes as its owner would close it: a
+        // scene is the store's actions from nothing (the machines with state of their own are
+        // reset below)
         let w = self.w.id;
         let open = self.ui.stack(&self.env(), w).layers;
         for layer in open {
             self.act(StoreAction::Close { w, layer });
         }
-        // The bookmark and print sheets are the host's own state, not the tab's: closed too.
-        self.bookmark_sheet_answered(false, false, "", -1);
         // A waiting notice goes; a new one replaces it by itself (hiding it in the same turn as
         // showing one races the toast's two serials).
         if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
             self.toast_hide();
         }
-        self.print_event(wubble_core::print::Event::Cancel);
         // an agent session of the last scene ends (its sheet, its Space)
         self.agents_stop();
         self.gallery_sound(scene.overlay);
