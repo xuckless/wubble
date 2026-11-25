@@ -172,10 +172,11 @@ pub fn pacing() -> Pacing {
         .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
 }
 
-/// The command line's `--page-layer`. Set once, before any window.
+/// This run's page layer mode: the command line's `--page-layer`, else the run's own default
+/// (`run`). Set once, before any window.
 static PAGE_LAYER: std::sync::OnceLock<wubble_core::page_layer::Mode> = std::sync::OnceLock::new();
 
-/// This run's page layer mode (off unless the command line said otherwise).
+/// This run's page layer mode (off until it is set).
 pub fn page_layer() -> wubble_core::page_layer::Mode {
     PAGE_LAYER.get().copied().unwrap_or_default()
 }
@@ -191,7 +192,9 @@ fn main() -> ExitCode {
             if let Some(pacing) = flags.pacing {
                 let _ = PACING.set(pacing);
             }
-            let _ = PAGE_LAYER.set(flags.page_layer);
+            if let Some(mode) = flags.page_layer {
+                let _ = PAGE_LAYER.set(mode);
+            }
             command
         }
         Err(e) => e.exit(),
@@ -2147,6 +2150,14 @@ fn run(
     let loaded = loaded.unwrap_or_else(|e| {
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
+    });
+    // without `--page-layer` (set already, kept): the browser's is its platform's unless Settings
+    // turned it off; every smoke and measurement keeps the shell's path
+    let browsing = matches!(&*mode, Mode::Browse { .. }) && loaded.settings.page_layer();
+    let _ = PAGE_LAYER.set(if browsing {
+        wubble_core::page_layer::platform_mode(std::env::consts::OS)
+    } else {
+        wubble_core::page_layer::Mode::Off
     });
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.

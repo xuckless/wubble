@@ -342,6 +342,17 @@ pub const GLASS_QUALITY: SettingDef = SettingDef {
     section: Section::Performance,
     restart: false,
 };
+/// Pages on their own OS layer, in the platform's mode (`page_layer::PLATFORM_MODES`: macOS
+/// `window`, nothing elsewhere); off, every page goes through the shell. Read at start;
+/// `--page-layer` overrides it.
+pub const PAGE_LAYER: SettingDef = SettingDef {
+    key: "page.layer",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Show pages on their own layer (macOS)",
+    section: Section::Performance,
+    restart: true,
+};
 /// The wgpu glass scene; off, the panels draw their own Slint glass on the plain ground. The
 /// renderer is chosen before the window exists, so it changes at the next start.
 pub const GLASS_SCENE: SettingDef = SettingDef {
@@ -889,6 +900,7 @@ pub const ALL: &[&SettingDef] = &[
     &ROUTING_RULES,
     &GLASS_QUALITY,
     &GLASS_SCENE,
+    &PAGE_LAYER,
     &MEMORY_BACK_FORWARD_CACHE,
     &MEMORY_MAX_DECODED_IMAGE_MB,
     &PROCESS_SITE_ISOLATION,

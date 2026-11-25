@@ -487,7 +487,7 @@ pub fn place(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Mode {
-    /// None (the default): today's path everywhere.
+    /// None: the shell's path everywhere (the default off macOS, [`PLATFORM_MODES`]).
     #[default]
     Off,
     /// A page in fullscreen and the picture-in-picture window, over the shell (stage 1, macOS).
@@ -540,6 +540,20 @@ pub const MODES: &[ModeRow] = &[
 /// The mode `name` names.
 pub fn mode(name: &str) -> Option<Mode> {
     MODES.iter().find(|r| r.name == name).map(|r| r.mode)
+}
+
+/// The mode the browser starts in on each platform (`std::env::consts::OS`) without
+/// `--page-layer`, unless Settings turned it off (`settings::PAGE_LAYER`): macOS `window` from
+/// 0.6.2 (decisions.md); [`Mode::Off`] for a platform the table does not name (none other has a
+/// layer). Smokes and measurements start off unless they ask.
+pub const PLATFORM_MODES: &[(&str, Mode)] = &[("macos", Mode::Window)];
+
+/// The browser's mode on platform `os` ([`PLATFORM_MODES`]).
+pub fn platform_mode(os: &str) -> Mode {
+    PLATFORM_MODES
+        .iter()
+        .find_map(|&(name, mode)| (name == os).then_some(mode))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1432,6 +1446,16 @@ mod tests {
         assert_eq!(mode("window"), Some(Mode::Window));
         assert_eq!(mode("on"), None);
         assert_eq!(Mode::default(), Mode::Off);
+        #[rustfmt::skip]
+        let platforms = [
+            ("macos: under the shell", "macos", Mode::Window),
+            ("linux: no layer", "linux", Mode::Off),
+            ("windows: no layer", "windows", Mode::Off),
+            ("one the table does not name", "freebsd", Mode::Off),
+        ];
+        for (name, os, want) in platforms {
+            assert_eq!(platform_mode(os), want, "{name}");
+        }
         // each row at its mode's index (`Mode::row` reads it so)
         for (i, row) in MODES.iter().enumerate() {
             assert_eq!(row.mode as usize, i, "{}", row.name);

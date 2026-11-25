@@ -83,11 +83,13 @@ struct Cli {
     #[arg(long)]
     no_begin_frames: bool,
     /// Which pages show on their own OS layer instead of through the shell
-    /// (`wubble_core::page_layer::MODES`): `off` (none, the default), `fullscreen` (a page in
-    /// fullscreen and the picture-in-picture window, over the shell) or `window` (every pane,
-    /// under the shell, through a hole it draws). macOS only, elsewhere the same as off.
-    #[arg(long, value_name = "MODE", value_parser = parse_page_layer, default_value = "off")]
-    page_layer: PageLayerMode,
+    /// (`wubble_core::page_layer::MODES`): `off` (none), `fullscreen` (a page in fullscreen and
+    /// the picture-in-picture window, over the shell) or `window` (every pane, under the shell,
+    /// through a hole it draws). macOS only, elsewhere the same as off. Without it the browser
+    /// takes its platform's mode (`page_layer::PLATFORM_MODES`, unless Settings turned it off),
+    /// smokes and measurements `off`.
+    #[arg(long, value_name = "MODE", value_parser = parse_page_layer)]
+    page_layer: Option<PageLayerMode>,
     /// `--measure load`: what the engine hooks requests with (default: as shipped).
     #[arg(long, value_name = "VARIANT", value_enum, requires = "measure")]
     load_variant: Option<Variant>,
@@ -643,8 +645,8 @@ pub struct ShotArgs {
 pub struct RunFlags {
     /// The pacing `--begin-frames` or `--no-begin-frames` asks for, if either.
     pub pacing: Option<Pacing>,
-    /// `--page-layer`.
-    pub page_layer: PageLayerMode,
+    /// `--page-layer`, if given.
+    pub page_layer: Option<PageLayerMode>,
 }
 
 /// [`parse`], the shot options and the run's flags.
@@ -1202,19 +1204,19 @@ mod tests {
                 .map(|(.., flags)| flags)
         };
         let layer = |mode| RunFlags {
-            page_layer: mode,
+            page_layer: Some(mode),
             ..RunFlags::default()
         };
         #[rustfmt::skip]
         let rows: &[(&str, &[&str], Option<RunFlags>)] = &[
-            ("page_layer_defaults_off", &[], Some(layer(PageLayerMode::Off))),
+            ("none given: the run's default", &[], Some(RunFlags::default())),
             ("off", &["--page-layer", "off"], Some(layer(PageLayerMode::Off))),
             ("fullscreen", &["--page-layer=fullscreen"], Some(layer(PageLayerMode::Fullscreen))),
             ("window", &["--page-layer", "window"], Some(layer(PageLayerMode::Window))),
             ("on is not yet a mode", &["--page-layer", "on"], None),
             ("an unknown mode", &["--page-layer", "x"], None),
             ("with the pacing", &["--begin-frames", "--page-layer", "fullscreen", "--smoke", "page"],
-                Some(RunFlags { pacing: Some(Pacing::Shell), page_layer: PageLayerMode::Fullscreen })),
+                Some(RunFlags { pacing: Some(Pacing::Shell), page_layer: Some(PageLayerMode::Fullscreen) })),
         ];
         for &(name, args, want) in rows {
             assert_eq!(flags(args), want, "{name}");

@@ -217,6 +217,11 @@ impl Settings {
     pub fn glass_scene(&self) -> bool {
         apply::value_of(&wubble_core::settings::GLASS_SCENE, &self.stored) == "1"
     }
+
+    /// Whether pages may go to their own layer (`settings::PAGE_LAYER`, read before the window).
+    pub fn page_layer(&self) -> bool {
+        apply::value_of(&wubble_core::settings::PAGE_LAYER, &self.stored) == "1"
+    }
 }
 
 /// Download entries read at start (newest first).

@@ -43,7 +43,7 @@ pub use settings::{
     HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MediaAskEachTime, MediaConcurrency,
     MediaEnabled, MediaKeys, MediaMinBytes, MediaQuality, MediaSaveDir, MediaYoutube,
     MemoryBackForwardCache, MemoryMaxDecodedImageMb, MiddleClickAutoscroll, OverlayScrollbars,
-    PageThemeDefault, PageThemeSites, PagesContrast, PagesMinFontSize, PagesMotion,
+    PageLayerOn, PageThemeDefault, PageThemeSites, PagesContrast, PagesMinFontSize, PagesMotion,
     PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ProcessRendererLimit,
     ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
     ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
