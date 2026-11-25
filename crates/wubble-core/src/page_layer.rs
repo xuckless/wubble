@@ -1531,11 +1531,11 @@ mod tests {
     fn the_shell_paces_its_own_presents_only_with_a_layer_on_linux() {
         #[rustfmt::skip]
         let rows = [
-            ("linux with a layer: Mailbox, paced by the shell", "linux", true, Present::Paced),
-            ("linux without one: vsync", "linux", false, Present::Vsync),
-            ("macos with a layer: vsync (its transaction)", "macos", true, Present::Vsync),
-            ("macos without one", "macos", false, Present::Vsync),
-            ("a platform the table does not name", "freebsd", true, Present::Vsync),
+            ("linux with a layer: Mailbox, paced by the shell", "linux", true, super::Present::Paced),
+            ("linux without one: vsync", "linux", false, super::Present::Vsync),
+            ("macos with a layer: vsync (its transaction)", "macos", true, super::Present::Vsync),
+            ("macos without one", "macos", false, super::Present::Vsync),
+            ("a platform the table does not name", "freebsd", true, super::Present::Vsync),
         ];
         for (name, os, layers, want) in rows {
             assert_eq!(shell_present(os, layers), want, "{name}");
