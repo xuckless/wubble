@@ -302,12 +302,12 @@ pub enum VideoInput {
     },
     /// The pointer moved (or left).
     Pointer { over: Over },
-    /// A control was used, the pointer `over`. `can_save`: the save button is offered
-    /// ([`Save::offered`]).
+    /// A control was used, the pointer `over`. `save`: the save button's state now
+    /// ([`Save::of`]), which decides what pressing it does.
     Command {
         cmd: VideoCmd,
         over: Over,
-        can_save: bool,
+        save: Save,
     },
     /// The store's slot hid the controls: the menu closes with them.
     Hidden,
@@ -338,6 +338,16 @@ pub enum VideoEffect {
     /// The media downloader's entry for the page (its menu, or the default quality at once),
     /// anchored at this window point.
     Save {
+        x: f32,
+        y: f32,
+    },
+    /// The downloads popover, where the running save shows.
+    ShowDownloads,
+    /// The latest saved file in the system's file manager.
+    RevealSaved,
+    /// The failed save again: the downloads list's retry (a resume where it can), or the
+    /// downloader's entry anchored at this point for a stream it cannot restart.
+    RetrySave {
         x: f32,
         y: f32,
     },
@@ -460,11 +470,7 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 rate_set,
                 mut ui,
             },
-            VideoInput::Command {
-                cmd,
-                over,
-                can_save,
-            },
+            VideoInput::Command { cmd, over, save },
         ) => {
             let mut effects = vec![];
             match cmd {
@@ -525,8 +531,14 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 VideoCmd::SeekBy(_) => {}
                 VideoCmd::Pip => effects.push(VideoEffect::Pip),
                 VideoCmd::Frame => effects.push(VideoEffect::Frame),
-                VideoCmd::Save { x, y } if can_save => effects.push(VideoEffect::Save { x, y }),
-                VideoCmd::Save { .. } => {}
+                // the button does what its state says: start, watch, find, try again
+                VideoCmd::Save { x, y } => effects.extend(match save {
+                    Save::Absent => None,
+                    Save::Offered => Some(VideoEffect::Save { x, y }),
+                    Save::Saving(_) => Some(VideoEffect::ShowDownloads),
+                    Save::Saved => Some(VideoEffect::RevealSaved),
+                    Save::Failed => Some(VideoEffect::RetrySave { x, y }),
+                }),
             }
             // A control used shows the controls for a while (a key, the smoke, with nothing
             // shown); the menu opening holds them, closing it starts the clock again; a
@@ -608,15 +620,15 @@ impl Save {
         self != Save::Absent
     }
 
-    /// The button's accessible label (the downloader's word is "save": its pill's "Save media",
-    /// its setting "Save videos to").
+    /// The button's accessible label and tooltip, which says what a press does (the
+    /// downloader's word is "save": its pill's "Save media", its setting "Save videos to").
     pub fn label(self) -> String {
         match self {
             Save::Absent | Save::Offered => "Save video".into(),
             Save::Saving(None) => "Saving video".into(),
             Save::Saving(Some(f)) => format!("Saving video, {:.0}%", f * 100.0),
-            Save::Saved => "Video saved".into(),
-            Save::Failed => "Saving failed, save the video again".into(),
+            Save::Saved => "Saved, show in folder".into(),
+            Save::Failed => "Save failed, retry".into(),
         }
     }
 }
@@ -745,20 +757,12 @@ mod tests {
     }
 
     fn cmd(r: Run, cmd: VideoCmd, now: u64) -> (Run, Vec<VideoEffect>) {
-        cmd_save(r, cmd, false, now)
+        cmd_save(r, cmd, Save::Absent, now)
     }
 
-    fn cmd_save(r: Run, cmd: VideoCmd, can_save: bool, now: u64) -> (Run, Vec<VideoEffect>) {
+    fn cmd_save(r: Run, cmd: VideoCmd, save: Save, now: u64) -> (Run, Vec<VideoEffect>) {
         let over = r.over;
-        step(
-            r,
-            VideoInput::Command {
-                cmd,
-                over,
-                can_save,
-            },
-            now,
-        )
+        step(r, VideoInput::Command { cmd, over, save }, now)
     }
 
     fn point(mut r: Run, over: Over, now: u64) -> (Run, Vec<VideoEffect>) {
@@ -1015,7 +1019,7 @@ mod tests {
             VideoInput::Command {
                 cmd: VideoCmd::Mute,
                 over: Over::Strip,
-                can_save: true,
+                save: Save::Offered,
             },
         ] {
             let (next, e) = transition(s.s.clone(), input);
@@ -1112,21 +1116,29 @@ mod tests {
         assert_eq!(e[0], VideoEffect::Frame);
         let (s, e) = cmd(s, VideoCmd::Pip, 6);
         assert_eq!(e[0], VideoEffect::Pip);
-        // Save only while the button is offered; it neither pauses, seeks nor folds the strip.
+        // The save button does what its state says; it neither pauses, seeks nor folds the
+        // strip.
         let save = VideoCmd::Save { x: 3.0, y: 4.0 };
         let held = VideoEffect::Hold(Cue::ShowFor(LEAVE_MS));
         let (s, e) = cmd(s, save, 7);
-        assert_eq!(e, vec![held.clone(), VideoEffect::Redraw]);
+        assert_eq!(e, vec![held.clone(), VideoEffect::Redraw], "no button");
         let before = s.clone();
-        let (s, e) = cmd_save(s, save, true, 8);
-        assert_eq!(
-            e,
-            vec![
-                VideoEffect::Save { x: 3.0, y: 4.0 },
-                held.clone(),
-                VideoEffect::Redraw
-            ]
-        );
+        let mut s = s;
+        for (state, want) in [
+            (Save::Offered, VideoEffect::Save { x: 3.0, y: 4.0 }),
+            (Save::Saving(Some(0.4)), VideoEffect::ShowDownloads),
+            (Save::Saving(None), VideoEffect::ShowDownloads),
+            (Save::Saved, VideoEffect::RevealSaved),
+            (Save::Failed, VideoEffect::RetrySave { x: 3.0, y: 4.0 }),
+        ] {
+            let (next, e) = cmd_save(s, save, state, 8);
+            assert_eq!(
+                e,
+                vec![want, held.clone(), VideoEffect::Redraw],
+                "{state:?}"
+            );
+            s = next;
+        }
         assert_eq!(s.s.video(), before.s.video());
         assert!(s.shown() && !s.collapsed());
         // A live stream cannot be sought.
@@ -1255,7 +1267,8 @@ mod tests {
         assert_eq!(Save::Offered.label(), "Save video");
         assert_eq!(Save::Saving(Some(0.33)).label(), "Saving video, 33%");
         assert_eq!(Save::Saving(None).label(), "Saving video");
-        assert_eq!(Save::Saved.label(), "Video saved");
+        assert_eq!(Save::Saved.label(), "Saved, show in folder");
+        assert_eq!(Save::Failed.label(), "Save failed, retry");
     }
 
     #[test]

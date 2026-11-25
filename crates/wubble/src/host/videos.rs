@@ -22,7 +22,7 @@ use wubble_core::video::{
 use wubble_core::window::WindowKind;
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
-use wubble_ui::{AppWindow, VideoMark, VideoSave, VideoView};
+use wubble_ui::{AppWindow, DownloadAction, VideoMark, VideoSave, VideoView};
 
 use super::boost::KIT_REF;
 use super::{Host, now_ms};
@@ -551,6 +551,31 @@ impl Host {
                 VideoEffect::Frame => self.video_frame(tab, FrameAsk::Strip),
                 VideoEffect::Pip => self.pip_event(PipInput::Request(tab)),
                 VideoEffect::Save { x, y } => self.media_entry(tab, x, y),
+                // opened, never toggled shut: the button shows the save, it does not hide it
+                VideoEffect::ShowDownloads => {
+                    if self.overlay_open(Kind::Downloads, None)
+                        && let Some(window) = self.w.window.upgrade()
+                    {
+                        self.render_surfaces(&window);
+                    }
+                }
+                VideoEffect::RevealSaved => {
+                    if let Some(id) = self.media_latest(tab) {
+                        self.download_action(id, DownloadAction::Reveal);
+                    }
+                }
+                // a stream's entry is not restarted from the list (`DownloadEffect::StartAgain`
+                // asks for the page, which is this one): the downloader's entry again
+                VideoEffect::RetrySave { x, y } => {
+                    let latest = self.media_latest(tab);
+                    let stream = latest
+                        .and_then(|id| self.downloads.get(id))
+                        .is_some_and(|e| super::media::is_stream_entry(&e.url));
+                    match latest {
+                        Some(id) if !stream => self.download_action(id, DownloadAction::Retry),
+                        _ => self.media_entry(tab, x, y),
+                    }
+                }
                 VideoEffect::Redraw => {
                     if self.shown() == Some(tab) {
                         self.redraw_video();
@@ -600,13 +625,13 @@ impl Host {
     }
 
     fn video_cmd(&mut self, tab: TabId, cmd: VideoCmd) {
-        let can_save = self.video_save_state(tab).offered();
+        let save = self.video_save_state(tab);
         self.video_event(
             tab,
             VideoInput::Command {
                 cmd,
                 over: self.video_over(),
-                can_save,
+                save,
             },
         );
     }
