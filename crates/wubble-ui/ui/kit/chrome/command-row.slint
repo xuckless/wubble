@@ -8,7 +8,8 @@
 // (derived: docs/fidelity/derived-review.md); the favicon when the result has one, else the
 // kind's glyph. Tab search's open-tab rows end in the list row's close action (RowAction,
 // pages/list-row.slint: `.wb-tab-x`'s reveal on the row's hover or selection), and a recently
-// closed tab wears the clock glyph (derived: docs/fidelity/derived-review.md).
+// closed tab wears the clock glyph (derived: docs/fidelity/derived-review.md),
+// and an answer row the duplicate glyph (derived as well).
 
 import { BrowserCss } from "../gen/css.slint";
 import { Motion, Tsx } from "../gen/tokens.slint";
@@ -58,6 +59,10 @@ export component CommandRow inherits Rectangle {
         }
         if (kind == CommandKind.closed-tab) {
             return Glyph.clock;
+        }
+        // an answer row copies its result: the design's duplicate glyph (no calculator glyph)
+        if (kind == CommandKind.answer) {
+            return Glyph.duplicate;
         }
         return Glyph.code;
     }

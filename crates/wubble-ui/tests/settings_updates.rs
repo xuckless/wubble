@@ -53,7 +53,9 @@ fn updates(on: bool, can_check: bool, ready: bool, inert: bool) -> UpdatesView {
 fn the_updates_and_about_groups_do_what_they_say() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
-    app.window().set_size(LogicalSize::new(1360.0, 9000.0));
+    // tall enough for the whole page (the built-in search engines' list among it): the queries
+    // see only what is on screen
+    app.window().set_size(LogicalSize::new(1360.0, 14000.0));
     let _wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
     app.set_page(InternalPageKind::Settings);
     app.set_settings_rows(ModelRc::from(Rc::new(VecModel::from(setting_items(

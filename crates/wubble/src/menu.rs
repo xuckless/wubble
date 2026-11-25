@@ -81,6 +81,21 @@ pub enum Command {
     FrameScript { frame: String, script: &'static str },
     /// Open the URL in a new private window (`Command::NewPrivateWindow`).
     OpenInPrivateWindow(String),
+    /// Open the URL in a peek over the page (`Command::OpenGlance`).
+    OpenInGlance(String),
+    /// Pop the video at this point (physical px, view-relative) out into wubble's
+    /// picture-in-picture (`wubble_core::pip`).
+    PictureInPicture { x: i32, y: i32 },
+    /// The frame of the video at this point (physical px, view-relative) as a PNG, to the
+    /// clipboard or the downloads folder (`output`).
+    VideoFrame {
+        x: i32,
+        y: i32,
+        output: wubble_core::shot::ShotOutput,
+    },
+    /// The OS's emoji and symbols picker over the focused field (macOS's Character Viewer,
+    /// `orderFrontCharacterPalette:`).
+    EmojiPalette,
     /// Put the text on the clipboard.
     CopyText(String),
     /// Download the URL with the page's cookies, asking where to save it.
@@ -139,6 +154,9 @@ pub enum Command {
     /// Save a stream the page plays: the tab's detected `item`, its `choice`-th way to save
     /// (`wubble_core::media::select::choices`).
     SaveMedia { item: u32, choice: usize },
+    /// Save subtitles of a stream the page plays beside its video: the tab's detected `item`,
+    /// its `index`-th variant (`wubble_core::media::select::subtitles`).
+    SaveSubtitle { item: u32, index: usize },
     /// Show this site's pages in this theme (dark mode for pages).
     SetPageTheme(String, PageTheme),
     /// Capture the element at this point (physical px, view-relative).
@@ -185,13 +203,14 @@ pub struct Entry {
 
 /// What the menu needs besides the click: the page's navigation (from the
 /// view's `NavState`) and the search engine's name, if one is chosen.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
-    pub search: Option<&'static str>,
-    /// The chosen engine's search by image URL (`omnibox::EngineInfo::image`).
-    pub image: Option<&'static str>,
+    /// The default engine's name (a built-in's or the user's own).
+    pub search: Option<String>,
+    /// The default engine's search by image URL (`search::EngineRef::image`).
+    pub image: Option<String>,
     /// The page is a private window's: "Open Link in Private Window" is not offered there
     /// (Chrome's incognito window has no "Open link in incognito window").
     pub private: bool,
@@ -241,6 +260,18 @@ impl Ctx<'_> {
             .then(|| wubble_core::url::view_source(&self.menu.frame_url))
             .flatten()
     }
+    /// The selection is one web address (Chromium's "Go to <url>", which replaces the search
+    /// row): the URL it names.
+    fn selected_url(&self) -> Option<String> {
+        match omnibox::classify(&self.menu.selection_text) {
+            omnibox::Intent::Url(url)
+                if url.starts_with("http://") || url.starts_with("https://") =>
+            {
+                Some(url)
+            }
+            _ => None,
+        }
+    }
     fn misspelled(&self) -> bool {
         self.menu.editable && !self.menu.misspelled_word.is_empty()
     }
@@ -248,8 +279,7 @@ impl Ctx<'_> {
     /// fragment names text of the page's own document, never a frame's (Chrome offers none
     /// there).
     fn highlight(&self) -> Option<String> {
-        let main = self.menu.frame_url.is_empty() || self.menu.frame_url == self.menu.page_url;
-        (self.selection() && main)
+        (self.selection() && self.main_frame())
             .then(|| highlight::link_to_highlight(&self.menu.page_url, &self.menu.selection_text))
             .flatten()
     }
@@ -278,6 +308,14 @@ impl Ctx<'_> {
             frame: self.menu.frame.clone(),
             source: self.menu.media_url.clone(),
         }
+    }
+    /// Clicked in the page's own document, not a frame's.
+    fn main_frame(&self) -> bool {
+        self.menu.frame_url.is_empty() || self.menu.frame_url == self.menu.page_url
+    }
+    /// A video in the page's own document: the kit (`kit.js`) reaches it at the point.
+    fn main_video(&self) -> bool {
+        self.video() && self.main_frame()
     }
     /// "Video" or "Audio", for the media entries' labels.
     fn kind(&self) -> &'static str {
@@ -354,6 +392,9 @@ struct Row {
     command: fn(&Ctx) -> Command,
 }
 
+/// The rows only macOS has (the Character Viewer, Writing Direction).
+const MAC: bool = cfg!(target_os = "macos");
+
 const fn always(_: &Ctx) -> bool {
     true
 }
@@ -378,8 +419,8 @@ macro_rules! row {
 /// `AppendImageItems`, `AppendMediaItems`, `AppendEditableItems`,
 /// `AppendCopyItem`, `AppendSearchProvider`, `AppendPageItems`,
 /// `AppendDeveloperItems`, and the frame rows of `AppendFrameItems`). Spelling suggestions go
-/// first and come from the request itself. Left out, with the reason in TODO.md:
-/// "Picture in Picture" (CEF's windowless views have no PiP window).
+/// first and come from the request itself. Picture in Picture is wubble's own
+/// (`wubble_core::pip`): CEF's windowless views have none of Chromium's.
 ///
 /// A group number only has to differ from its neighbours' (a divider goes where it changes):
 /// the spelling rows lead the table in groups 0 and 11 so "Add to Dictionary" sits under the
@@ -410,6 +451,16 @@ const ROWS: &[Row] = &[
         always,
         |c| { Command::OpenInPrivateWindow(c.menu.link_url.clone()) }
     ),
+    // Chrome's "Open link in split view": a new tab beside the page
+    row!(1, "Open Link in Split View", |c| c.link(), always, |c| {
+        Command::Model(TabCommand(ModelCommand::OpenBeside {
+            url: c.menu.link_url.clone(),
+        }))
+    }),
+    // wubble's peek, where Arc and Zen offer theirs
+    row!(1, "Open Link in a Peek", |c| c.link(), always, |c| {
+        Command::OpenInGlance(c.menu.link_url.clone())
+    }),
     row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
         Command::SaveAs(c.menu.link_url.clone())
     }),
@@ -435,12 +486,17 @@ const ROWS: &[Row] = &[
     }),
     Row {
         group: 2,
-        label: |c| format!("Search {} for Image", c.nav.search.unwrap_or_default()),
+        label: |c| {
+            format!(
+                "Search {} for Image",
+                c.nav.search.as_deref().unwrap_or_default()
+            )
+        },
         show: |c| c.image_search(),
         enabled: always,
         command: |c| {
             Command::OpenInNewTab(omnibox::fill(
-                c.nav.image.unwrap_or_default(),
+                c.nav.image.as_deref().unwrap_or_default(),
                 &c.menu.media_url,
             ))
         },
@@ -501,6 +557,12 @@ const ROWS: &[Row] = &[
         enabled: |c| c.media_has(M::CAN_TOGGLE_CONTROLS),
         command: |c| c.media_op(MediaOp::Controls),
     },
+    // Chromium's IDC_CONTENT_CONTEXT_PICTUREINPICTURE: wubble's own (the video fullscreen in its
+    // view, the view in a small window), on the video under the pointer
+    row!(3, "Picture in Picture", |c| c.main_video(), always, |c| {
+        let (x, y) = c.at();
+        Command::PictureInPicture { x, y }
+    }),
     Row {
         group: 4,
         label: |c| format!("Open {} in New Tab", c.kind()),
@@ -522,6 +584,39 @@ const ROWS: &[Row] = &[
         enabled: always,
         command: |c| Command::CopyText(c.menu.media_url.clone()),
     },
+    // Chromium M120's IDC_CONTENT_CONTEXT_COPYVIDEOFRAME and _SAVEVIDEOFRAMEAS: the frame on
+    // screen, the downloads folder for the saved one
+    row!(4, "Copy Video Frame", |c| c.main_video(), always, |c| {
+        let (x, y) = c.at();
+        Command::VideoFrame {
+            x,
+            y,
+            output: wubble_core::shot::ShotOutput::Clipboard,
+        }
+    }),
+    row!(
+        4,
+        "Save Video Frame As\u{2026}",
+        |c| c.main_video(),
+        always,
+        |c| {
+            let (x, y) = c.at();
+            Command::VideoFrame {
+                x,
+                y,
+                output: wubble_core::shot::ShotOutput::File,
+            }
+        }
+    ),
+    // Chromium's IDC_CONTENT_CONTEXT_EMOJI, first of a field's rows (macOS's Character Viewer;
+    // Windows, where Chrome also has it, is parked)
+    row!(
+        12,
+        "Emoji & Symbols",
+        |c| c.editable() && MAC,
+        always,
+        |_| Command::EmojiPalette
+    ),
     row!(5, "Undo", |c| c.editable(), |c| c.edit(F::CAN_UNDO), |_| {
         Command::Engine(cef_id::UNDO)
     }),
@@ -573,10 +668,54 @@ const ROWS: &[Row] = &[
         |c| c.edit(F::CAN_SELECT_ALL),
         |_| { Command::Engine(cef_id::SELECT_ALL) }
     ),
+    // macOS's Writing Direction submenu (Chromium `AppendPlatformEditableItems`), as rows: the
+    // focused field's `dir`, as Chromium's `UpdateTextDirection` sets it
+    row!(
+        13,
+        "Writing Direction: Default",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && document.activeElement.removeAttribute('dir')",
+        }
+    ),
+    row!(
+        13,
+        "Writing Direction: Left to Right",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && (document.activeElement.dir = 'ltr')",
+        }
+    ),
+    row!(
+        13,
+        "Writing Direction: Right to Left",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && (document.activeElement.dir = 'rtl')",
+        }
+    ),
     Row {
         group: 7,
-        label: |c| search_label(c.nav.search, &c.menu.selection_text),
-        show: |c| !c.menu.selection_text.trim().is_empty(),
+        label: |c| {
+            format!(
+                "Go to {}",
+                short_text(&c.selected_url().unwrap_or_default())
+            )
+        },
+        show: |c| c.selected_url().is_some(),
+        enabled: always,
+        command: |c| Command::OpenInNewTab(c.selected_url().unwrap_or_default()),
+    },
+    Row {
+        group: 7,
+        label: |c| search_label(c.nav.search.as_deref(), &c.menu.selection_text),
+        show: |c| !c.menu.selection_text.trim().is_empty() && c.selected_url().is_none(),
         enabled: always,
         command: |c| Command::Search(c.menu.selection_text.clone()),
     },
@@ -1467,11 +1606,14 @@ pub fn caret_entries() -> Vec<Entry> {
 pub struct MediaRow<'a> {
     pub item: u32,
     pub title: &'a str,
+    /// A line under the title (`Detected::note`: a manifest's ad periods left out).
+    pub note: Option<&'a str>,
     pub found: &'a wubble_core::media::detect::Found,
 }
 
 /// The media menu: per stream a title line, then a row per way to save it (or why it cannot be
-/// saved). Without a muxer (`can_join`) a row for separate video and audio says it is two files.
+/// saved), then a row per subtitle track. Without a muxer (`can_join`) a row for separate video
+/// and audio says it is two files.
 pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
     use wubble_core::media::detect::Found;
     let info = |label: String| Entry {
@@ -1502,6 +1644,7 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
             });
         }
         out.push(info(row.title.to_owned()));
+        out.extend(row.note.map(|note| info(note.to_owned())));
         match row.found {
             Found::Resolving => out.push(info("Reading the stream\u{2026}".into())),
             Found::Refused(refusal) => {
@@ -1531,6 +1674,21 @@ pub fn media_entries(rows: &[MediaRow], can_join: bool) -> Vec<Entry> {
                             command: Command::SaveMedia {
                                 item: row.item,
                                 choice,
+                            },
+                            enabled: true,
+                            icon: "download",
+                            shortcut: String::new(),
+                            danger: false,
+                        }),
+                );
+                out.extend(
+                    wubble_core::media::select::subtitles(variants)
+                        .into_iter()
+                        .map(|(index, label)| Entry {
+                            label: format!("Save {label}"),
+                            command: Command::SaveSubtitle {
+                                item: row.item,
+                                index,
                             },
                             enabled: true,
                             icon: "download",
@@ -1774,16 +1932,19 @@ mod tests {
             MediaRow {
                 item: 4,
                 title: "Clip",
+                note: Some("ad periods left out"),
                 found: &ready,
             },
             MediaRow {
                 item: 5,
                 title: "Film",
+                note: None,
                 found: &protected,
             },
             MediaRow {
                 item: 6,
                 title: "Show",
+                note: None,
                 found: &resolving,
             },
         ];
@@ -1793,6 +1954,7 @@ mod tests {
             labels,
             [
                 "Clip",
+                "ad periods left out",
                 "Save MP4 \u{b7} 2.0 KB",
                 "",
                 "Film",
@@ -1803,11 +1965,53 @@ mod tests {
             ]
         );
         assert_eq!(
-            entries[1].command,
+            entries[2].command,
             Command::SaveMedia { item: 4, choice: 0 }
         );
-        assert!(entries[1].enabled && !entries[4].enabled);
-        assert_eq!(entries[2].command, Command::Separator);
+        assert!(entries[2].enabled && !entries[1].enabled && !entries[5].enabled);
+        assert_eq!(entries[3].command, Command::Separator);
+    }
+
+    #[test]
+    fn subtitles_follow_the_ways_to_save_the_video() {
+        use wubble_core::media::detect::Found;
+        use wubble_core::media::{Container, Track, Variant};
+        let video = Variant::file(
+            "https://a.test/v.mp4",
+            Track::Muxed,
+            Container::Mp4,
+            None,
+            true,
+        );
+        let subs = Variant {
+            codecs: "English".into(),
+            ..Variant::file(
+                "https://a.test/en.vtt",
+                Track::Subtitle,
+                Container::Vtt,
+                None,
+                false,
+            )
+        };
+        let found = Found::Ready(vec![subs, video]);
+        let rows = [MediaRow {
+            item: 3,
+            title: "Clip",
+            note: None,
+            found: &found,
+        }];
+        let e = media_entries(&rows, true);
+        let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Clip",
+                "Save MP4",
+                "Save Subtitles \u{b7} English \u{b7} VTT"
+            ]
+        );
+        assert_eq!(e[1].command, Command::SaveMedia { item: 3, choice: 0 });
+        assert_eq!(e[2].command, Command::SaveSubtitle { item: 3, index: 0 });
     }
 
     #[test]
@@ -1820,11 +2024,13 @@ mod tests {
             MediaRow {
                 item: 0,
                 title: "A",
+                note: None,
                 found: &off,
             },
             MediaRow {
                 item: 1,
                 title: "B",
+                note: None,
                 found: &failed,
             },
         ];
@@ -1868,6 +2074,7 @@ mod tests {
         let rows = [MediaRow {
             item: 0,
             title: "Clip",
+            note: None,
             found: &found,
         }];
         let label = |join| media_entries(&rows, join)[1].label.clone();
@@ -2263,6 +2470,8 @@ mod tests {
                 "Open Link in New Tab",
                 "Open Link in New Window",
                 "Open Link in Private Window",
+                "Open Link in Split View",
+                "Open Link in a Peek",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -2278,6 +2487,11 @@ mod tests {
                 "Open Link in Private Window",
                 Command::OpenInPrivateWindow(next()),
             ),
+            (
+                "Open Link in Split View",
+                Command::Model(TabCommand(ModelCommand::OpenBeside { url: next() })),
+            ),
+            ("Open Link in a Peek", Command::OpenInGlance(next())),
             ("Save Link As\u{2026}", Command::SaveAs(next())),
             ("Copy Link Address", Command::CopyText(next())),
             ("Take Screenshot of Element", Command::ShotElement((10, 20))),
@@ -2303,6 +2517,8 @@ mod tests {
                 "Open Link in New Tab",
                 "Open Link in New Window",
                 "Open Link in Private Window",
+                "Open Link in Split View",
+                "Open Link in a Peek",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -2355,7 +2571,7 @@ mod tests {
         };
         assert!(search(&e).is_some());
         let named = NavFlags {
-            search: Some("DuckDuckGo"),
+            search: Some("DuckDuckGo".into()),
             ..NavFlags::default()
         };
         let named = entries(&m, named);
@@ -2363,6 +2579,40 @@ mod tests {
             search(&named).map(|i| named[i].label.as_str()),
             Some("Search DuckDuckGo for \u{201c}hello\u{201d}")
         );
+    }
+
+    /// A field's whole menu: on macOS with Emoji & Symbols first and the writing directions
+    /// after Select All.
+    fn field_labels() -> Vec<&'static str> {
+        let mac = cfg!(target_os = "macos");
+        let emoji: &[&str] = if mac { &["Emoji & Symbols", "-"] } else { &[] };
+        let direction: &[&str] = if mac {
+            &[
+                "-",
+                "Writing Direction: Default",
+                "Writing Direction: Left to Right",
+                "Writing Direction: Right to Left",
+            ]
+        } else {
+            &[]
+        };
+        [
+            emoji,
+            &[
+                "Undo",
+                "Redo",
+                "-",
+                "Cut",
+                "Copy",
+                "Paste",
+                "Paste as Plain Text",
+                "Delete",
+                "Select All",
+            ],
+            direction,
+            &["-", "Inspect"],
+        ]
+        .concat()
     }
 
     #[test]
@@ -2384,22 +2634,7 @@ mod tests {
                 ..page()
             };
             let e = entries(&m, NavFlags::default());
-            assert_eq!(
-                labels(&e),
-                [
-                    "Undo",
-                    "Redo",
-                    "-",
-                    "Cut",
-                    "Copy",
-                    "Paste",
-                    "Paste as Plain Text",
-                    "Delete",
-                    "Select All",
-                    "-",
-                    "Inspect"
-                ]
-            );
+            assert_eq!(labels(&e), field_labels());
             let plain = e.iter().find(|e| e.label == "Paste as Plain Text").unwrap();
             assert_eq!(plain.enabled, bits & EditFlags::CAN_PASTE != 0);
             assert_eq!(plain.command, Command::PastePlain("f1".into()));
@@ -2430,7 +2665,10 @@ mod tests {
             misspelled_word: String::new(),
             ..m
         };
-        assert_eq!(labels(&entries(&m, NavFlags::default()))[0], "Undo");
+        assert_eq!(
+            labels(&entries(&m, NavFlags::default()))[0],
+            field_labels()[0]
+        );
     }
 
     /// Each row Chromium adds to a target, where it adds it: the whole menu's labels, dividers
@@ -2438,8 +2676,8 @@ mod tests {
     #[test]
     fn rows_follow_chromiums_groups() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let image = |url: &str| ContextMenu {
@@ -2470,19 +2708,7 @@ mod tests {
             "Copy Image",
             "Copy Image Address",
         ];
-        let field_rows = [
-            "Undo",
-            "Redo",
-            "-",
-            "Cut",
-            "Copy",
-            "Paste",
-            "Paste as Plain Text",
-            "Delete",
-            "Select All",
-            "-",
-            "Inspect",
-        ];
+        let field_rows = field_labels();
         let bare = [
             "Back",
             "Forward",
@@ -2494,11 +2720,15 @@ mod tests {
         ];
         let tail = ["Take Screenshot of Element", "Inspect"];
         let search = "Search Google for \u{201c}hello world\u{201d}";
-        let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 10] = [
+        let url_selection = ContextMenu {
+            selection_text: " https://b.test/x ".into(),
+            ..page()
+        };
+        let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 11] = [
             (
                 "image search on an engine that has one",
                 image("https://a.test/i.png"),
-                google,
+                google.clone(),
                 [&image_rows[..], &["Search Google for Image", "-"], &tail].concat(),
             ),
             (
@@ -2510,13 +2740,13 @@ mod tests {
             (
                 "none for an image that is not on the web",
                 image("data:image/png;base64,AA=="),
-                google,
+                google.clone(),
                 [&image_rows[..], &["-"], &tail].concat(),
             ),
             (
                 "suggestions, then the dictionary",
                 spelling(&["the", "tea"]),
-                google,
+                google.clone(),
                 [
                     &["the", "tea", "-", "Add to Dictionary", "-"][..],
                     &field_rows,
@@ -2526,7 +2756,7 @@ mod tests {
             (
                 "nothing to suggest",
                 spelling(&[]),
-                google,
+                google.clone(),
                 [
                     &["No Spelling Suggestions", "-", "Add to Dictionary", "-"][..],
                     &field_rows,
@@ -2536,7 +2766,7 @@ mod tests {
             (
                 "a frame's rows follow the page's source",
                 frame("https://b.test/f"),
-                google,
+                google.clone(),
                 [
                     &bare[..],
                     &[
@@ -2552,19 +2782,19 @@ mod tests {
             (
                 "the page's own frame has none",
                 frame("https://a.test/"),
-                google,
+                google.clone(),
                 [&bare[..], &["View Page Source"], &tail].concat(),
             ),
             (
                 "nor a frame with no address",
                 frame("about:srcdoc"),
-                google,
+                google.clone(),
                 [&bare[..], &["View Page Source"], &tail].concat(),
             ),
             (
                 "the highlight follows Copy",
                 selection("https://a.test/"),
-                google,
+                google.clone(),
                 [
                     &[
                         "Copy",
@@ -2581,8 +2811,25 @@ mod tests {
             (
                 "none on a page that has no fragments",
                 selection("wubble://start"),
-                google,
+                google.clone(),
                 [&["Copy", "-", search, "Print\u{2026}", "-"][..], &tail].concat(),
+            ),
+            (
+                "a selected address is gone to, not searched",
+                url_selection,
+                google.clone(),
+                [
+                    &[
+                        "Copy",
+                        "Copy Link to Highlight",
+                        "-",
+                        "Go to https://b.test/x",
+                        "Print\u{2026}",
+                        "-",
+                    ][..],
+                    &tail,
+                ]
+                .concat(),
             ),
         ];
         for (what, menu, nav, want) in cases {
@@ -2593,12 +2840,12 @@ mod tests {
     #[test]
     fn the_new_rows_run_what_chrome_runs() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let command = |menu: &ContextMenu, label: &str| {
-            entries(menu, google)
+            entries(menu, google.clone())
                 .into_iter()
                 .find(|e| e.label == label)
                 .unwrap_or_else(|| panic!("{label}"))
@@ -2622,7 +2869,7 @@ mod tests {
             command(&word, "Add to Dictionary"),
             Command::Engine(cef_id::ADD_TO_DICTIONARY)
         );
-        let none = entries(&word, google);
+        let none = entries(&word, google.clone());
         assert_eq!(none[0].command, Command::Info);
         assert!(!none[0].enabled);
         let selection = ContextMenu {
@@ -2639,7 +2886,7 @@ mod tests {
             ..selection.clone()
         };
         assert!(
-            entries(&in_frame, google)
+            entries(&in_frame, google.clone())
                 .iter()
                 .all(|e| e.label != "Copy Link to Highlight")
         );
@@ -2655,6 +2902,24 @@ mod tests {
         assert_eq!(
             command(&frame, "Open Frame in New Tab"),
             Command::OpenInNewTab("https://b.test/f".into())
+        );
+        let address = ContextMenu {
+            selection_text: "example.com/x".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&address, "Go to https://example.com/x"),
+            Command::OpenInNewTab("https://example.com/x".into())
+        );
+        // not a web address: searched
+        let script = ContextMenu {
+            selection_text: "javascript:alert(1)".into(),
+            ..page()
+        };
+        assert!(
+            entries(&script, google.clone())
+                .iter()
+                .all(|e| !e.label.starts_with("Go to"))
         );
         assert_eq!(
             command(&frame, "Reload Frame"),
@@ -2711,14 +2976,60 @@ mod tests {
                 "Play",
                 "Loop",
                 "Show Controls",
+                "Picture in Picture",
                 "-",
                 "Open Video in New Tab",
                 "Save Video As\u{2026}",
                 "Copy Video Address",
+                "Copy Video Frame",
+                "Save Video Frame As\u{2026}",
                 "-",
                 "Take Screenshot of Element",
                 "Inspect"
             ]
+        );
+        let command = |label: &str| e.iter().find(|e| e.label == label).map(|e| &e.command);
+        assert_eq!(
+            command("Picture in Picture"),
+            Some(&Command::PictureInPicture { x: 7, y: 9 })
+        );
+        use wubble_core::shot::ShotOutput;
+        assert_eq!(
+            command("Copy Video Frame"),
+            Some(&Command::VideoFrame {
+                x: 7,
+                y: 9,
+                output: ShotOutput::Clipboard
+            })
+        );
+        assert_eq!(
+            command("Save Video Frame As\u{2026}"),
+            Some(&Command::VideoFrame {
+                x: 7,
+                y: 9,
+                output: ShotOutput::File
+            })
+        );
+        // a video in a subframe: the kit cannot reach it at the view's point
+        let framed = ContextMenu {
+            frame_url: "https://b.test/player".into(),
+            ..video(MediaFlags::PAUSED)
+        };
+        let framed = entries(&framed, NavFlags::default());
+        assert!(
+            framed
+                .iter()
+                .all(|e| e.label != "Picture in Picture" && !e.label.contains("Video Frame"))
+        );
+        // audio has neither
+        let audio = ContextMenu {
+            media: MediaKind::Audio,
+            ..video(MediaFlags::PAUSED)
+        };
+        assert!(
+            entries(&audio, NavFlags::default())
+                .iter()
+                .all(|e| e.label != "Picture in Picture")
         );
         assert_eq!(
             e[0].command,
@@ -2732,7 +3043,7 @@ mod tests {
         );
         assert!(e[2].enabled);
         // Saving needs CAN_SAVE.
-        assert!(!e[5].enabled);
+        assert!(!e[6].enabled);
         let all =
             MediaFlags::HAS_AUDIO | MediaFlags::MUTED | MediaFlags::LOOP | MediaFlags::CONTROLS;
         let e = entries(&video(all), NavFlags::default());

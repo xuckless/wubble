@@ -149,8 +149,15 @@ pub struct Blocking {
     updating: AtomicBool,
     /// Cosmetic data per frame URL, cleared when the blocker is replaced.
     cosmetic: Mutex<HashMap<String, Arc<Cosmetic>>>,
+    /// The page each view last had blocked (its main-frame URL), for the blocked-page panel.
+    pages_blocked: Mutex<HashMap<i32, String>>,
+    /// Hosts whose pages the user let through on the blocked-page panel, for this run: their
+    /// documents are not filtered (the rest of their requests are).
+    pages_allowed: RwLock<SiteOverrides>,
     /// Called (on a worker thread) when the lists' state changed.
     changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// HTTPS-Upgrades: main-frame `http://` requests go to `https://` first.
+    pub https: crate::https::Upgrades,
 }
 
 impl Blocking {
@@ -168,7 +175,10 @@ impl Blocking {
             rebuilding: AtomicUsize::new(0),
             updating: AtomicBool::new(false),
             cosmetic: Mutex::new(HashMap::new()),
+            pages_blocked: Mutex::new(HashMap::new()),
+            pages_allowed: RwLock::new(SiteOverrides::default()),
             changed: Mutex::new(None),
+            https: crate::https::Upgrades::default(),
         })
     }
 
@@ -538,6 +548,33 @@ impl Blocking {
         made
     }
 
+    /// Whether the filter lists refuse the window the page at `opener` opens at `url`
+    /// (`$popup`, `$popunder`); never where shields are off.
+    pub fn blocks_popup(&self, url: &str, opener: &str) -> bool {
+        self.current()
+            .blocks_popup(url, opener, self.shields_for(opener))
+    }
+
+    /// Whether the view's page `url` was stopped by the blocker, and if so whether a malware
+    /// list did it (`Some(true)`: the "Dangerous site" panel).
+    pub fn document_block(&self, browser_id: i32, url: &str) -> Option<bool> {
+        let blocked = self
+            .pages_blocked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&browser_id)
+            .is_some_and(|u| u == url);
+        blocked.then(|| self.current().is_malware(url))
+    }
+
+    /// The panel's Proceed: `host`'s pages load for the rest of the run.
+    pub fn allow_pages_for_session(&self, host: &str) {
+        self.pages_allowed
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(host);
+    }
+
     /// Distinct URLs blocked in a view since its last main-frame request.
     pub fn blocked(&self, browser_id: i32) -> u32 {
         self.counts().get(&browser_id).map_or(0, PageBlocks::count)
@@ -557,6 +594,10 @@ impl Blocking {
     /// exceptions.
     pub fn keep_views(&self, live: &[i32], private: &[i32]) {
         self.counts().retain(|id, _| live.contains(id));
+        self.pages_blocked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|id, _| live.contains(id));
         self.private
             .write()
             .unwrap_or_else(PoisonError::into_inner)
@@ -795,8 +836,23 @@ impl ContentFilter for Blocking {
         if request.kind == RequestKind::Document {
             self.counts()
                 .insert(request.browser_id, PageBlocks::default());
+            // the upgrade first: its https request comes back through here to be judged
+            if let Some(action) = self.https.document(request.browser_id, request.url) {
+                return action;
+            }
         }
         if !is_web(request.url) {
+            return RequestAction::Allow;
+        }
+        let document = request.kind == RequestKind::Document;
+        if document
+            && self
+                .pages_allowed
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .shields_for(request.url)
+                == Shields::Off
+        {
             return RequestAction::Allow;
         }
         // A page without a web URL (a bundled or `file:` page) is judged by
@@ -835,6 +891,12 @@ impl ContentFilter for Blocking {
             }
             Decision::Block | Decision::Redirect { .. } => RequestAction::Block,
         };
+        if document && action == RequestAction::Block {
+            self.pages_blocked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(request.browser_id, request.url.to_owned());
+        }
         // Counted as blocked either way, as uBO and Brave count redirects:
         // the real resource was not loaded.
         self.counts()

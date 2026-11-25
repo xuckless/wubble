@@ -405,6 +405,9 @@ pub const DEFAULTS: &[Binding] = rows![
     "Alt+F", ALL, Action::LinkHints, Shell;
     "Mod+Alt+R", ALL, Action::ToggleReader, Shell;
     "Mod+Shift+S", ALL, Action::ScreenshotRegion, Shell;
+    // Chromium's Home chords (Cmd+Shift+H on macOS, Alt+Home elsewhere)
+    "Alt+Home", LW, Action::GoHome, Shell;
+    "Cmd+Shift+H", MAC, Action::GoHome, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;
     "Cmd+Q", MAC, Action::Quit, Shell;
@@ -1023,6 +1026,7 @@ mod tests {
             // Chrome binds none (the omnibox menu's row, the reload button's menu row)
             Action::PasteAndGo,
             Action::EmptyCacheHardReload,
+            Action::OpenLastSession,
             // its key, Mod+Z, is undo close tab's, which runs it whenever a field has the keys
             Action::Undo,
         ];

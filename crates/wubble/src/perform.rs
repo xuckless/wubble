@@ -94,6 +94,12 @@ pub enum Plan {
     Builtin(Builtin),
     /// End every agent session (`host/agent.rs`).
     StopAgents,
+    /// Load the home page (`wubble_core::startup::home_url`) in the visible tab, else in a new
+    /// one: the setting is the host's.
+    GoHome,
+    /// The last session's pages the start left out, back (`wubble_core::startup::Offer`).
+    OpenLastSession,
+    /// The quit keys or the command bar: quits, or warns first (`wubble_core::quit`).
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -264,6 +270,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::DockNarrower => Plan::DockNudge(-1),
         Action::ClearBrowsingData => builtin(Builtin::ClearData),
         Action::Quit => Plan::Quit,
+        Action::GoHome => Plan::GoHome,
+        Action::OpenLastSession => Plan::OpenLastSession,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::NewPrivateWindow => Plan::Model(Command::NewPrivateWindow { url: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),

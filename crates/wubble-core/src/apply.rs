@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 use crate::archive::ArchiveAfter;
-use crate::omnibox::SearchEngine;
 use crate::pagetheme::{Contrast, MediaPrefs, Motion, PageTheme, ThemeTable};
 use crate::reader::ReaderPrefs;
 use crate::routing::Rule;
 use crate::seam::SidebarMode;
+use crate::search::{EngineEntry, Engines};
 use crate::settings::{self, SettingDef};
 use crate::shot::ShotOutput;
 use crate::sleep::SleepPolicy;
@@ -109,8 +109,11 @@ impl Default for MediaSettings {
 /// A setting's live effect, for the host to execute.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Applied {
-    SearchEngine(Option<SearchEngine>),
+    /// The engines and the default (`search.engine`, `search.custom`, `search.discovered`).
+    SearchEngines(Engines),
     LiveSuggestions(bool),
+    /// Site searches are found on pages (`search.discover_sites`).
+    DiscoverSites(bool),
     SidebarMode(SidebarMode),
     BlockerEnabled(bool),
     BlockerExceptions(Vec<String>),
@@ -146,8 +149,19 @@ pub enum Applied {
         sites: ThemeTable,
         media: MediaPrefs,
     },
-    /// Chromium's minimum font size in CSS pixels (0: none), for the whole profile.
-    MinFontSize(u32),
+    /// HTTPS-Upgrades: the mode and the allowlist (`https`).
+    Https {
+        mode: crate::https::HttpsMode,
+        allowed: ZoomTable,
+    },
+    /// Chromium local-state preferences, process-wide, set in this order (secure DNS's
+    /// `dns_over_https.templates`, then its `.mode`).
+    GlobalPrefs(Vec<(&'static str, crate::privacy::PrefValue)>),
+    /// One Chromium profile preference (`privacy::PREFS`), for every container's context.
+    ProfilePref {
+        name: &'static str,
+        value: crate::privacy::PrefValue,
+    },
     Reader(ReaderPrefs),
     ScreenshotOutput(ShotOutput),
     /// The link hints' letters (`hints::alphabet`).
@@ -172,6 +186,8 @@ pub enum Applied {
     BoostsEnabled(bool),
     /// Every download asks where to save it (`settings::DOWNLOADS_ASK_WHERE`).
     AskWhereToSave(bool),
+    /// Where downloads go (`settings::DOWNLOADS_DIR`, trimmed); empty: the OS folder.
+    DownloadsDir(String),
     /// Calmer motion: the setting (the host combines it with the OS preference).
     ReduceMotion(crate::motion::Calm),
     /// Pages for screen readers: the setting (the host combines it with whether a screen reader
@@ -185,6 +201,10 @@ pub enum Applied {
     FullUrls(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
+    /// Read from the stored settings where it is used: the startup rows when the session
+    /// opens (the next start, which needs no restart note), Home and the quit warning when
+    /// pressed.
+    ReadWhenUsed,
     /// Whether wubble hosts its MCP server (`agent::hosting`), switched at once.
     McpHosting(bool),
 }
@@ -231,10 +251,23 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
     if def.restart {
         return Some(Applied::RestartOnly);
     }
+    if let Some((name, value)) = crate::privacy::pref_of(key, stored) {
+        return Some(Applied::ProfilePref { name, value });
+    }
     let v = value_of(def, stored);
     Some(match key {
-        k if k == s::SEARCH_ENGINE.key => Applied::SearchEngine(SearchEngine::from_id(v)),
+        k if [
+            s::SEARCH_ENGINE.key,
+            s::SEARCH_CUSTOM.key,
+            s::SEARCH_DISCOVERED.key,
+            s::SEARCH_REGION.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::SearchEngines(Engines::from_stored(stored))
+        }
         k if k == s::LIVE_SUGGESTIONS.key => Applied::LiveSuggestions(flag(def, stored)),
+        k if k == s::SEARCH_DISCOVER_SITES.key => Applied::DiscoverSites(flag(def, stored)),
         k if k == s::SIDEBAR_MODE.key => Applied::SidebarMode(SidebarMode::from_id(v)?),
         k if k == s::BLOCKER_ENABLED.key => Applied::BlockerEnabled(flag(def, stored)),
         k if k == s::BLOCKER_EXCEPTIONS.key => Applied::BlockerExceptions(list(def, stored)),
@@ -296,7 +329,6 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
                 },
             }
         }
-        k if k == s::PAGES_MIN_FONT_SIZE.key => Applied::MinFontSize(count(def, stored)),
         k if [
             s::READER_DETECT.key,
             s::READER_SIZE.key,
@@ -342,12 +374,40 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
+        k if k == s::DOWNLOADS_DIR.key => Applied::DownloadsDir(v.trim().to_owned()),
         k if k == s::REDUCE_MOTION.key => Applied::ReduceMotion(crate::motion::Calm::parse(v)),
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
+        k if [s::PRIVACY_HTTPS_MODE.key, s::PRIVACY_HTTPS_ALLOWED.key].contains(&k) => {
+            Applied::Https {
+                mode: crate::https::HttpsMode::from_word(value_of(&s::PRIVACY_HTTPS_MODE, stored))?,
+                allowed: map(&s::PRIVACY_HTTPS_ALLOWED, stored),
+            }
+        }
+        k if k == s::PRIVACY_SECURE_DNS.key => {
+            let (mode, templates) = crate::secure_dns::SecureDns::parse(v)
+                .unwrap_or(crate::secure_dns::SecureDns::Automatic)
+                .prefs();
+            use crate::privacy::PrefValue::Str;
+            // the templates first, so a "secure" mode never meets the old ones
+            Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ])
+        }
+        k if [
+            s::STARTUP_MODE.key,
+            s::STARTUP_PAGES.key,
+            s::HOME_URL.key,
+            s::QUIT_WARN.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::ReadWhenUsed
+        }
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
@@ -402,7 +462,11 @@ pub enum Refusal {
     NotASite,
     /// `blocker.custom_lists`: not an `https://` address (the only kind fetched).
     NotAnAddress,
+    /// `startup.pages`: not an address a tab can open (`startup::page_address`).
+    NotAPage,
     Duplicate,
+    /// `search.custom`: the engine does not check out (`search::check`).
+    Engine(crate::search::Problem),
 }
 
 impl Refusal {
@@ -413,7 +477,9 @@ impl Refusal {
             Refusal::NotARule => "Needs a site and a Space, a container or both",
             Refusal::NotASite => "Needs a site, such as example.com",
             Refusal::NotAnAddress => "Needs an address that starts with https://",
+            Refusal::NotAPage => "Needs an address, such as example.com",
             Refusal::Duplicate => "Already in the list",
+            Refusal::Engine(problem) => problem.note(),
         }
     }
 }
@@ -444,11 +510,37 @@ pub fn put_entry(
     {
         return Err(Refusal::NotAnAddress);
     }
+    // an engine is checked as a whole: its keyword against the built-ins' and the other
+    // engines of the list (not the one it replaces)
+    if [settings::SEARCH_CUSTOM.key, settings::SEARCH_DISCOVERED.key].contains(&key) {
+        let engine =
+            EngineEntry::parse(entry).ok_or(Refusal::Engine(crate::search::Problem::Incomplete))?;
+        let others: Vec<String> = items
+            .iter()
+            .filter(|i| Some(i.as_str()) != replacing)
+            .cloned()
+            .collect();
+        let engines = if key == settings::SEARCH_CUSTOM.key {
+            Engines::resolve("", &others, &[])
+        } else {
+            Engines::resolve("", &list(&settings::SEARCH_CUSTOM, stored), &others)
+        };
+        crate::search::check(&engine, |k| engines.knows_keyword(k)).map_err(Refusal::Engine)?;
+        let text = engine.text();
+        match replacing.and_then(|r| items.iter().position(|i| i == r)) {
+            Some(at) => items[at] = text,
+            None => items.push(text),
+        }
+        return Ok(serde_json::to_string(&items).expect("a list of strings serialises"));
+    }
     // a site is kept as its host, the way the matchers read a URL's: a scheme, a port or a path
     // typed with it would never match anything
     let site = settings::SITE_LISTS.contains(&key);
     let entry = if site {
         crate::routing::site_host(entry).ok_or(Refusal::NotASite)?
+    } else if key == settings::STARTUP_PAGES.key {
+        // kept as the address it loads, so a typed `example.com` opens and dedupes as the page
+        crate::startup::page_address(entry).ok_or(Refusal::NotAPage)?
     } else {
         entry.to_owned()
     };
@@ -569,6 +661,58 @@ mod tests {
     }
 
     #[test]
+    fn https_mode_and_allowlist_apply_together() {
+        use crate::https::HttpsMode;
+        let s = stored(&[
+            ("privacy.https_mode", "only"),
+            ("privacy.https_allowed", r#"{"0/a.test": 99}"#),
+        ]);
+        let want = Some(Applied::Https {
+            mode: HttpsMode::Only,
+            allowed: [("0/a.test".to_owned(), 99)].into(),
+        });
+        assert_eq!(effect_of("privacy.https_mode", &s), want);
+        assert_eq!(effect_of("privacy.https_allowed", &s), want);
+        assert_eq!(
+            effect_of("privacy.https_mode", &HashMap::new()),
+            Some(Applied::Https {
+                mode: HttpsMode::Upgrade,
+                allowed: ZoomTable::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn secure_dns_sets_chromiums_local_state() {
+        use crate::privacy::PrefValue::Str;
+        let dns = |text: &str| {
+            effect_of(
+                "privacy.secure_dns",
+                &stored(&[("privacy.secure_dns", text)]),
+            )
+        };
+        let want = |templates: &'static str, mode: &'static str| {
+            Some(Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ]))
+        };
+        assert_eq!(dns("automatic"), want("", "automatic"));
+        assert_eq!(dns("off"), want("", "off"));
+        assert_eq!(
+            dns("provider:google"),
+            want("https://dns.google/dns-query{?dns}", "secure")
+        );
+        assert_eq!(dns("custom:"), want("", "automatic"));
+        assert_eq!(
+            dns("custom:https://d.test/q"),
+            want("https://d.test/q", "secure")
+        );
+        // a refused value reads as the default
+        assert_eq!(dns("custom:http://d.test/q"), want("", "automatic"));
+    }
+
+    #[test]
     fn the_list_settings_apply_live_as_one_selection() {
         let s = stored(&[
             ("blocker.lists", r#"{"easylist":0}"#),
@@ -602,7 +746,11 @@ mod tests {
         ]);
         assert_eq!(
             effect_of("search.engine", &s),
-            Some(Applied::SearchEngine(Some(SearchEngine::DuckDuckGo)))
+            Some(Applied::SearchEngines(Engines::resolve(
+                "duckduckgo",
+                &[],
+                &[]
+            )))
         );
         assert_eq!(
             effect_of("blocker.enabled", &s),
@@ -622,7 +770,7 @@ mod tests {
         );
         assert_eq!(
             effect_of("search.engine", &HashMap::new()),
-            Some(Applied::SearchEngine(None))
+            Some(Applied::SearchEngines(Engines::resolve("", &[], &[])))
         );
     }
 
@@ -869,7 +1017,10 @@ mod tests {
         assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
         assert_eq!(
             effect_of("pages.min_font_size", &s),
-            Some(Applied::MinFontSize(12))
+            Some(Applied::ProfilePref {
+                name: "webkit.webprefs.minimum_font_size",
+                value: crate::privacy::PrefValue::Int(12),
+            })
         );
         let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
             panic!("no reader prefs")
@@ -939,5 +1090,52 @@ mod tests {
         assert!(!accepts("blocker.enabled", "yes"));
         assert!(!accepts("no.such", "1"));
         assert_eq!(default_of("zoom.default"), Some("100"));
+    }
+
+    #[test]
+    fn an_engine_entry_is_checked_whole() {
+        let key = "search.custom";
+        let s = stored(&[(key, r#"["Docs | d | https://d.test/?q=%s"]"#)]);
+        let refused = |entry: &str| put_entry(key, &s, None, entry).unwrap_err();
+        assert_eq!(
+            put_entry(key, &s, None, "Shop | s | https://s.test/?q={q}").unwrap(),
+            r#"["Docs | d | https://d.test/?q=%s","Shop | s | https://s.test/?q={q}"]"#
+        );
+        assert_eq!(
+            refused("Other | D | https://o.test/?q=%s"),
+            Refusal::Engine(crate::search::Problem::KeywordTaken)
+        );
+        assert_eq!(
+            refused("Mine | bing.com | https://o.test/?q=%s"),
+            Refusal::Engine(crate::search::Problem::KeywordTaken)
+        );
+        assert_eq!(
+            refused("Mine | m | https://o.test/"),
+            Refusal::Engine(crate::search::Problem::NoPlaceholder)
+        );
+        assert_eq!(
+            refused("no fields"),
+            Refusal::Engine(crate::search::Problem::Incomplete)
+        );
+        // an edit keeps its own keyword
+        assert_eq!(
+            put_entry(
+                key,
+                &s,
+                Some("Docs | d | https://d.test/?q=%s"),
+                "Docs | d | https://docs.test/?q=%s"
+            )
+            .unwrap(),
+            r#"["Docs | d | https://docs.test/?q=%s"]"#
+        );
+        let engines = effect_of(key, &s);
+        assert!(
+            matches!(&engines, Some(Applied::SearchEngines(e)) if e.by_id("custom:d").is_some()),
+            "{engines:?}"
+        );
+        assert_eq!(
+            effect_of("search.discover_sites", &HashMap::new()),
+            Some(Applied::DiscoverSites(false))
+        );
     }
 }

@@ -12,69 +12,12 @@
 use ::url::{Host, Url};
 
 use crate::action::{Action, PALETTE};
+use crate::answer::{self, AnswerKind};
+use crate::search::Engines;
 use crate::tab::TabId;
 use crate::url::percent_encode_into;
 
 // ---------------------------------------------------------------- engines
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
-
-/// One search engine as data. Templates contain exactly one `{q}`.
-#[derive(Debug, PartialEq, Eq)]
-pub struct EngineInfo {
-    pub engine: SearchEngine,
-    /// The text form stored in settings; never rename a shipped one.
-    pub id: &'static str,
-    pub name: &'static str,
-    pub search: &'static str,
-    /// OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
-    pub suggest: &'static str,
-    /// Search by image URL, for the page menu's "Search <engine> for Image"; `None` for an
-    /// engine with no public one.
-    pub image: Option<&'static str>,
-}
-
-pub const ENGINES: [EngineInfo; 2] = [
-    EngineInfo {
-        engine: SearchEngine::Google,
-        id: "google",
-        name: "Google",
-        search: "https://www.google.com/search?q={q}",
-        suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
-        // Google Lens by URL: `searchbyimage` was retired for it.
-        image: Some("https://lens.google.com/uploadbyurl?url={q}"),
-    },
-    EngineInfo {
-        engine: SearchEngine::DuckDuckGo,
-        id: "duckduckgo",
-        name: "DuckDuckGo",
-        search: "https://duckduckgo.com/?q={q}",
-        suggest: "https://duckduckgo.com/ac/?type=list&q={q}",
-        image: None,
-    },
-];
-
-impl SearchEngine {
-    pub fn info(self) -> &'static EngineInfo {
-        ENGINES
-            .iter()
-            .find(|e| e.engine == self)
-            .expect("every engine has a table row")
-    }
-
-    /// The stored text form, see [`EngineInfo::id`].
-    pub fn id(self) -> &'static str {
-        self.info().id
-    }
-
-    pub fn from_id(id: &str) -> Option<SearchEngine> {
-        ENGINES.iter().find(|e| e.id == id).map(|e| e.engine)
-    }
-}
 
 /// Substitutes the percent-encoded `query` for `{q}` in `template`.
 pub fn fill(template: &str, query: &str) -> String {
@@ -83,10 +26,6 @@ pub fn fill(template: &str, query: &str) -> String {
     percent_encode_into(query, &mut out);
     out.push_str(tail);
     out
-}
-
-pub fn suggest_url(engine: SearchEngine, query: &str) -> String {
-    fill(engine.info().suggest, query)
 }
 
 // --------------------------------------------------------------- classify
@@ -295,6 +234,9 @@ pub struct Candidates<'a> {
     pub bookmarks: &'a [Bookmark],
     /// Remote suggestions, already fetched; shown after local matches.
     pub suggestions: &'a [String],
+    /// No inline completion for this query: the edit deleted text ([`just_deleted`]), or the
+    /// field cannot show one.
+    pub prevent_inline: bool,
 }
 
 /// Declaration order is the tie-break order and mirrors Slint `CommandKind`.
@@ -307,6 +249,8 @@ pub enum Kind {
     Action,
     /// A recently closed tab (tab search only, `tab_search`).
     ClosedTab,
+    /// A calculator or unit conversion result, computed on the device (`answer`).
+    Answer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,12 +259,14 @@ pub enum Target {
     Url(String),
     Search(String),
     Action(Action),
-    /// An entry of the recently-closed list (tab search only): its URL and close time name it,
-    /// as they name it to the store and to `closed`.
+    /// An entry of the recently-closed list, by its store id (`closed::Listed::id`); `url` is
+    /// the page whose icon the row shows ("" for none).
     ClosedTab {
+        id: i64,
         url: String,
-        closed_at_ms: i64,
     },
+    /// Put this text on the clipboard (an answer row's result).
+    Copy(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,33 +282,68 @@ const TAB_BONUS: u32 = 500_000;
 const MAX_HISTORY_BONUS: u32 = TAB_BONUS - 1;
 const DAY_MS: i64 = 86_400_000;
 
-/// Ranks `cands` against `query`. The first row is the classified intent (a URL intent uses
-/// `Kind::Search` with `Target::Url`; the UI has no separate "go" kind), except that an action
-/// whose title the query's words name comes before a search intent. An empty query yields no
-/// rows.
+/// Ranks `cands` against `query`. The first row is the inline completion's page when there is
+/// one ([`inline_match`]: the field shows it, so Enter opens it), then the classified intent (a
+/// URL intent uses `Kind::Search` with `Target::Url`; the UI has no separate "go" kind), except
+/// that without a completion an action whose title the query's words name comes before a search
+/// intent. A local answer (`answer::answer`) to a searched query comes first when it is a
+/// calculation, second (under the intent) when it is a unit conversion. An empty query yields
+/// no rows.
+///
+/// A query that starts with an engine's keyword and a space (`wikipedia.org rust`) searches
+/// that engine, as Chrome's keyword mode: its rows are that engine's results page
+/// (`Target::Url`) for the rest of the query, and the suggestions are that engine's.
 pub fn rank(
     query: &str,
-    engine: SearchEngine,
+    engines: &Engines,
     cands: &Candidates,
     now_ms: i64,
     limit: usize,
 ) -> Vec<OmniResult> {
-    let intent = classify(query);
+    let inline = if cands.prevent_inline {
+        None
+    } else {
+        inline_match(query, cands.history, cands.bookmarks)
+    };
+    let keyword = engines.keyword_search(query);
+    let query = keyword.map_or(query, |(_, rest)| rest);
+    let intent = match keyword {
+        Some(_) => Intent::Search(query.trim().to_owned()),
+        None => classify(query),
+    };
+    let searched = |q: &str| match keyword {
+        Some((engine, _)) => Target::Url(engine.search_url(q)),
+        None => Target::Search(q.to_owned()),
+    };
+    let name = keyword
+        .map(|(engine, _)| engine.name.as_str())
+        .or(engines.default.as_ref().map(|e| e.name.as_str()))
+        .unwrap_or("the Web");
     let mut out = Vec::new();
+    if let Some(m) = &inline {
+        out.push(row(
+            Kind::Search,
+            &m.url,
+            "Open",
+            Target::Url(m.url.clone()),
+        ));
+    }
     match &intent {
+        Intent::Url(u) if inline.as_ref().is_some_and(|m| &m.url == u) => {}
         Intent::Url(u) => out.push(row(Kind::Search, u, "Open", Target::Url(u.clone()))),
         Intent::Search(q) if q.is_empty() => return out,
         Intent::Search(q) => out.push(row(
             Kind::Search,
             q,
-            &format!("Search {}", engine.info().name),
-            Target::Search(q.clone()),
+            &format!("Search {name}"),
+            searched(q.as_str()),
         )),
     }
     let terms = query_terms(query);
 
     let mut scored: Vec<(u32, OmniResult)> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
+    // the completed page is the first row already
+    let mut seen: Vec<&str> = inline.iter().map(|m| m.url.as_str()).collect();
     let sources = cands
         .tabs
         .iter()
@@ -419,21 +400,37 @@ pub fn rank(
         let lower = s.to_lowercase();
         if !shown.contains(&lower) {
             shown.push(lower);
-            scored.push((0, row(Kind::Search, s, "", Target::Search(s.clone()))));
+            scored.push((0, row(Kind::Search, s, "", searched(s.as_str()))));
         }
     }
     // Stable sort: ties keep input order, then kind order.
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.kind.cmp(&b.1.kind)));
     out.extend(scored.into_iter().map(|(_, r)| r));
     // An action named by the query's words runs on Enter: "new boost" is the action, not a web
-    // search (QA HIGH-07). A URL, or words naming no action, keep the intent row first.
-    if matches!(intent, Intent::Search(_))
+    // search (QA HIGH-07). A URL, or words naming no action, keep the intent row first, and so
+    // do a completion (Enter opens what the field shows) and a keyword search.
+    if inline.is_none()
+        && keyword.is_none()
+        && matches!(intent, Intent::Search(_))
         && let Some(i) = out
             .iter()
             .position(|r| r.kind == Kind::Action && names(&terms, &r.title))
     {
         let action = out.remove(i);
         out.insert(0, action);
+    }
+    if let Intent::Search(q) = &intent
+        && keyword.is_none()
+        && let Some(a) = answer::answer(q)
+    {
+        let at = match a.kind {
+            AnswerKind::Math => 0,
+            AnswerKind::Unit => 1.min(out.len()),
+        };
+        out.insert(
+            at,
+            row(Kind::Answer, &a.title, "Copy", Target::Copy(a.copy)),
+        );
     }
     out.truncate(limit);
     out
@@ -473,12 +470,14 @@ pub struct SearchTab {
     pub last_active_ms: i64,
 }
 
-/// A recently closed tab as tab search lists it (the store's list, newest first).
+/// A recently-closed entry as tab search lists it (the store's list, newest first): a tab, or a
+/// window, folder or Space by its title and first page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchClosed {
+    /// The store's id of the entry.
+    pub id: i64,
     pub title: String,
     pub url: String,
-    pub closed_at_ms: i64,
 }
 
 /// What the closed rows say beside their site (Chrome's Tab Search section title).
@@ -525,8 +524,8 @@ pub fn tab_search(
         };
         let class = match_class(&terms, site_text(&c.url), title, "");
         let target = Target::ClosedTab {
+            id: c.id,
             url: c.url.clone(),
-            closed_at_ms: c.closed_at_ms,
         };
         let subtitle = format!("{RECENTLY_CLOSED} \u{b7} {site}");
         (class, row(Kind::ClosedTab, title, &subtitle, target))
@@ -704,9 +703,177 @@ pub fn as_search(typed: &str) -> String {
     }
 }
 
+// ----------------------------------------------------------------- inline
+//
+// Inline autocomplete re-expresses the rules of Chromium's HistoryURLProvider
+// (`CanPromoteMatchForInlineAutocomplete`, `PromoteOrCreateShorterSuggestion`, the URL prefixes
+// of `url_prefix.cc`) and the deletion test of `OmniboxViewViews::OnAfterPossibleChange`
+// (components/omnibox/browser, chrome/browser/ui/views/omnibox; BSD-3-Clause; behaviour only,
+// no code copied).
+
+/// Typed visits a page with a path needs to complete inline; a bare host needs one
+/// (`CanPromoteMatchForInlineAutocomplete`: "n == 1 for host-only URLs and n == 2 for others").
+const INLINE_TYPED_DEEP: u32 = 2;
+/// Visits that let a never-typed page complete inline: a stand-in for HistoryQuickProvider's
+/// inline score bar, which only heavily visited pages reach.
+const INLINE_VISITS: u32 = 10;
+
+/// The completion the field shows after what was typed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineMatch {
+    /// The text added after the query, shown selected.
+    pub suffix: String,
+    /// The page Enter opens: the history row's own URL, or its host's root.
+    pub url: String,
+}
+
+/// The suffix the field completes `query` with (type `git`, get `hub.com/`), or `None`. Only
+/// a history page whose URL (with or without its scheme and `www.`) starts with the query and
+/// that was typed (once for a bare host, twice for a deeper page) or visited
+/// [`INLINE_VISITS`] times, or a bookmark, is offered. Never for a query with whitespace in it
+/// (a trailing space included), a forced search (`?`), or one the user just shortened: the
+/// caller passes that as [`Candidates::prevent_inline`] to [`rank`] ([`just_deleted`]).
+pub fn inline_completion(
+    query: &str,
+    history: &[HistoryEntry],
+    bookmarks: &[Bookmark],
+) -> Option<String> {
+    inline_match(query, history, bookmarks).map(|m| m.suffix)
+}
+
+/// [`inline_completion`] with the page it opens. A query that ends inside the host of a deeper
+/// page completes to that host's root (`git` gives `github.com/`, not `github.com/a/b`), as
+/// HistoryURLProvider promotes the shorter suggestion. Among several, typed pages win, then
+/// bare hosts, then more typed visits, more visits, the newest, the shortest; then input order.
+pub fn inline_match(
+    query: &str,
+    history: &[HistoryEntry],
+    bookmarks: &[Bookmark],
+) -> Option<InlineMatch> {
+    if query.is_empty() || query.starts_with('?') || query.contains(char::is_whitespace) {
+        return None;
+    }
+    let pages = history
+        .iter()
+        .map(|h| {
+            (
+                h.url.as_str(),
+                h.typed_count,
+                h.visit_count,
+                h.last_visit_ms,
+                false,
+            )
+        })
+        .chain(
+            bookmarks
+                .iter()
+                .map(|b| (b.url.as_str(), 0, 0, i64::MIN, true)),
+        );
+    // the order a page wins by: typed or bookmarked, a bare host, typed visits, visits, the
+    // newest, the shortest
+    type Rank = (bool, bool, u32, u32, i64, std::cmp::Reverse<usize>);
+    let mut best: Option<(Rank, InlineMatch)> = None;
+    for (url, typed, visits, last_visit, bookmarked) in pages {
+        let Some((m, host_only)) = complete_inline(query, url) else {
+            continue;
+        };
+        let qualifies = bookmarked
+            || visits >= INLINE_VISITS
+            || (typed >= 1 && (host_only || typed >= INLINE_TYPED_DEEP));
+        if !qualifies {
+            continue;
+        }
+        let key = (
+            typed > 0 || bookmarked,
+            host_only,
+            typed,
+            visits,
+            last_visit,
+            std::cmp::Reverse(m.suffix.len()),
+        );
+        if best.as_ref().is_none_or(|(k, _)| key > *k) {
+            best = Some((key, m));
+        }
+    }
+    best.map(|(_, m)| m)
+}
+
+/// `url` completing `query`: the match and whether it is a bare host. The query is matched,
+/// ASCII case-insensitively, against the URL, the URL without its scheme, and without its
+/// scheme and `www.` (Chromium's URL prefixes); http and https only.
+fn complete_inline(query: &str, url: &str) -> Option<(InlineMatch, bool)> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let host_end = scheme.len() + 3 + authority.len();
+    let path = &url[host_end..];
+    let bare_host = path.is_empty() || path == "/";
+    let after_scheme = scheme.len() + 3;
+    let after_www = after_scheme
+        + if rest
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case("www."))
+        {
+            4
+        } else {
+            0
+        };
+    let n = query.len();
+    for start in [0, after_scheme, after_www] {
+        let form = &url[start..];
+        if form.len() <= n || !form.is_char_boundary(n) || !form[..n].eq_ignore_ascii_case(query) {
+            continue;
+        }
+        let typed_end = start + n;
+        if typed_end <= host_end && !bare_host {
+            // The query ends inside the host: complete to its root.
+            let root = format!("{}/", &url[..host_end]);
+            let suffix = root[typed_end..].to_owned();
+            return Some((InlineMatch { suffix, url: root }, true));
+        }
+        let m = InlineMatch {
+            suffix: form[n..].to_owned(),
+            url: url.to_owned(),
+        };
+        return Some((m, bare_host));
+    }
+    None
+}
+
+/// Whether the edit from `before` to `after` only deleted text: `after` is `before` with one
+/// run cut out, or the same text (a selected completion was dropped). Chromium's
+/// `just_deleted_text`, from the texts alone: no inline completion follows such an edit.
+/// Typing over a selection, or replacing the whole text, is not a deletion.
+pub fn just_deleted(before: &str, after: &str) -> bool {
+    if after.len() > before.len() {
+        return false;
+    }
+    let mut head = before
+        .bytes()
+        .zip(after.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !after.is_char_boundary(head) {
+        head -= 1;
+    }
+    let tail = before[head..]
+        .bytes()
+        .rev()
+        .zip(after[head..].bytes().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    head + tail >= after.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engines::engine_info;
 
     fn url(s: &str) -> Intent {
         Intent::Url(s.into())
@@ -794,37 +961,52 @@ mod tests {
     }
 
     #[test]
-    fn engine_ids_round_trip_and_are_unique() {
-        for e in &ENGINES {
-            assert_eq!(SearchEngine::from_id(e.id), Some(e.engine));
-            assert_eq!(e.engine.id(), e.id);
-        }
-        assert_eq!(SearchEngine::from_id("google"), Some(SearchEngine::Google));
-        assert_eq!(SearchEngine::from_id("bing"), None);
-        assert_eq!(SearchEngine::from_id(""), None);
-    }
-
-    #[test]
-    fn engines_table() {
-        for e in &ENGINES {
-            assert_eq!(e.search.matches("{q}").count(), 1, "{}", e.name);
-            assert_eq!(e.suggest.matches("{q}").count(), 1, "{}", e.name);
-            if let Some(image) = e.image {
-                assert_eq!(image.matches("{q}").count(), 1, "{}", e.name);
-            }
-            assert_eq!(e.engine.info(), e);
-        }
+    fn fill_percent_encodes_the_query() {
         assert_eq!(
-            fill(SearchEngine::DuckDuckGo.info().search, "c++ & rust"),
+            fill(engine_info("duckduckgo").unwrap().search, "c++ & rust"),
             "https://duckduckgo.com/?q=c%2B%2B%20%26%20rust"
         );
         assert_eq!(
-            suggest_url(SearchEngine::Google, "ru"),
+            fill(engine_info("google").unwrap().suggest.unwrap(), "ru"),
             "https://suggestqueries.google.com/complete/search?client=firefox&q=ru"
         );
+    }
+
+    #[test]
+    fn a_keyword_searches_its_engine() {
+        let engines = Engines::resolve("duckduckgo", &[], &[]);
+        let r = rank(
+            "wikipedia.org rust lang",
+            &engines,
+            &Candidates::default(),
+            NOW,
+            50,
+        );
+        assert_eq!(r[0].title, "rust lang");
+        assert_eq!(r[0].subtitle, "Search Wikipedia");
         assert_eq!(
-            suggest_url(SearchEngine::DuckDuckGo, "ru"),
-            "https://duckduckgo.com/ac/?type=list&q=ru"
+            r[0].target,
+            Target::Url("https://en.wikipedia.org/wiki/Special:Search?search=rust%20lang".into())
+        );
+        // the keyword alone is an address; without a known keyword the default searches
+        let r = rank(
+            "nosuch.example rust",
+            &engines,
+            &Candidates::default(),
+            NOW,
+            50,
+        );
+        assert_eq!(r[0].target, Target::Search("nosuch.example rust".into()));
+        // suggestions in keyword mode are the keyword engine's results
+        let sugg = ["rust book".to_owned()];
+        let c = Candidates {
+            suggestions: &sugg,
+            ..Default::default()
+        };
+        let r = rank("bing.com rust", &engines, &c, NOW, 50);
+        assert_eq!(
+            r.last().unwrap().target,
+            Target::Url("https://www.bing.com/search?q=rust%20book".into())
         );
     }
 
@@ -847,7 +1029,7 @@ mod tests {
         }
     }
     fn run(q: &str, c: &Candidates) -> Vec<OmniResult> {
-        rank(q, SearchEngine::DuckDuckGo, c, NOW, 50)
+        rank(q, &Engines::resolve("duckduckgo", &[], &[]), c, NOW, 50)
     }
     fn titles(r: &[OmniResult]) -> Vec<&str> {
         r.iter().map(|r| r.title.as_str()).collect()
@@ -882,6 +1064,7 @@ mod tests {
             &Candidates {
                 tabs: &tabs,
                 history: &history,
+                prevent_inline: true,
                 ..Default::default()
             },
         );
@@ -1013,6 +1196,27 @@ mod tests {
     }
 
     #[test]
+    fn math_answers_lead_and_unit_answers_follow_the_search() {
+        let r = run("12*7+3", &Candidates::default());
+        assert_eq!(r[0].kind, Kind::Answer);
+        assert_eq!(r[0].target, Target::Copy("87".into()));
+        assert_eq!(r[1].target, Target::Search("12*7+3".into()));
+        let r = run("5 km in miles", &Candidates::default());
+        assert_eq!(r[0].target, Target::Search("5 km in miles".into()));
+        assert_eq!(r[1].kind, Kind::Answer);
+        assert_eq!(r[1].target, Target::Copy("3.10686 mi".into()));
+        // A bare number, a division by zero and a URL give no answer row.
+        for q in ["42", "1/0", "example.com"] {
+            assert!(
+                run(q, &Candidates::default())
+                    .iter()
+                    .all(|r| r.kind != Kind::Answer),
+                "{q}"
+            );
+        }
+    }
+
+    #[test]
     fn suggestions_come_last_and_skip_own_query() {
         let history = [hist("https://rust-lang.org/", "Rust", 1, 0, 0)];
         let sugg = ["rust".to_owned(), "rust book".to_owned()];
@@ -1042,6 +1246,109 @@ mod tests {
             urls,
             ["https://a.com/1", "https://a.com/2", "https://a.com/3"]
         );
-        assert_eq!(rank("same", SearchEngine::Google, &c, NOW, 2).len(), 2);
+        assert_eq!(
+            rank("same", &Engines::resolve("google", &[], &[]), &c, NOW, 2).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn inline_completion_rules() {
+        let history = [
+            hist("https://github.com/rust-lang/rust", "Rust", 3, 2, 0),
+            hist("https://www.example.com/", "Example", 1, 1, 0),
+            hist("https://once.org/deep/page", "Once", 1, 1, 0),
+            hist("https://busy.net/feed", "Busy", 12, 0, 0),
+            hist("https://never.dev/", "Never", 3, 0, 0),
+            hist("ftp://files.io/", "Files", 9, 9, 0),
+        ];
+        let bookmarks = [Bookmark {
+            url: "https://marked.app/x".into(),
+            title: "Marked".into(),
+        }];
+        let cases: [(&str, &str, Option<&str>); 16] = [
+            ("query ends in the host: its root", "git", Some("hub.com/")),
+            ("case-insensitive", "GIT", Some("hub.com/")),
+            ("with the scheme", "https://gi", Some("thub.com/")),
+            ("deeper typed twice", "github.com/rust", Some("-lang/rust")),
+            ("www. skipped", "exa", Some("mple.com/")),
+            ("www. typed", "www.ex", Some("ample.com/")),
+            ("deep page typed once", "once.org/d", None),
+            ("host of a deep page typed once", "onc", Some("e.org/")),
+            ("visited 10 times", "busy.net/f", Some("eed")),
+            ("visited, never typed", "nev", None),
+            ("not http(s)", "fil", None),
+            ("a bookmark", "marked.app/", Some("x")),
+            ("trailing space", "git ", None),
+            ("forced search", "?git", None),
+            (
+                "the whole url: nothing left",
+                "https://www.example.com/",
+                None,
+            ),
+            ("empty", "", None),
+        ];
+        for (name, query, want) in cases {
+            assert_eq!(
+                inline_completion(query, &history, &bookmarks).as_deref(),
+                want,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_completion_leads_rank_unless_prevented() {
+        let history = [hist("https://github.com/", "GitHub", 5, 3, 0)];
+        let c = Candidates {
+            history: &history,
+            ..Default::default()
+        };
+        let r = run("git", &c);
+        assert_eq!(r[0].target, Target::Url("https://github.com/".into()));
+        // the completed page is not listed twice
+        assert_eq!(r.len(), 2);
+        let r = run(
+            "git",
+            &Candidates {
+                prevent_inline: true,
+                ..c
+            },
+        );
+        assert_eq!(r[0].target, Target::Search("git".into()));
+    }
+
+    #[test]
+    fn just_deleted_cases() {
+        let cases = [
+            ("backspace at the end", "github", "githu", true),
+            ("delete in the middle", "github", "gihub", true),
+            ("selected completion dropped", "git", "git", true),
+            ("everything deleted", "git", "", true),
+            ("typed a letter", "git", "gith", false),
+            ("typed over a selection", "github", "gitx", false),
+            ("replaced the text", "abc", "xy", false),
+        ];
+        for (name, before, after, want) in cases {
+            assert_eq!(just_deleted(before, after), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn ctrl_enter_adds_www_and_com() {
+        let cases = [
+            ("bare name", "example", Some("https://www.example.com/")),
+            (
+                "with a path",
+                "example/a",
+                Some("https://www.example.com/a"),
+            ),
+            ("has a dot", "example.org", None),
+            ("two words", "two words", None),
+            ("empty", "", None),
+        ];
+        for (name, typed, want) in cases {
+            assert_eq!(with_desired_tld(typed).as_deref(), want, "{name}");
+        }
     }
 }

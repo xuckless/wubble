@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 
 use slint::ComponentHandle;
 use wubble_core::agent::log::Outcome;
+use wubble_core::click_guard::{self, Start};
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::model::Command;
+use wubble_core::site::Permission;
 use wubble_core::space::{ContainerId, Side};
 use wubble_core::tab::TabId;
 use wubble_core::window::{Closing, WindowId};
@@ -18,6 +20,7 @@ use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
 
 use super::{Host, now_ms};
+use crate::prompt::{Ask, PermissionEvent, PermissionRequest};
 
 /// A download the engine still runs, from its path being given until its
 /// entry ends.
@@ -40,6 +43,11 @@ pub(super) struct Downloads {
     /// Where files go; `None`: no downloads directory, every download is
     /// declined.
     dir: Option<PathBuf>,
+    /// What `dir` is without the setting (`settings::DOWNLOADS_DIR`): the command line's
+    /// folder or the OS one.
+    default_dir: Option<PathBuf>,
+    /// The command line (or a smoke) named the folder: the setting does not move it.
+    fixed: bool,
     /// Newest first.
     list: Vec<DownloadEntry>,
     next_id: i64,
@@ -59,16 +67,30 @@ pub(super) struct Downloads {
     save_as: Vec<(TabId, String)>,
     /// The downloads page's search filter (the popover stays unfiltered).
     query: String,
+    /// The sites (origins) that downloaded this run: their next download a click aimed at
+    /// goes ahead without asking (`click_guard::download`).
+    sites: BTreeSet<String>,
 }
 
 impl Downloads {
-    pub fn new(dir: Option<PathBuf>, list: Vec<DownloadEntry>) -> Self {
+    /// Downloads into `dir`; `fixed`: the command line named it, so the setting cannot move it.
+    pub fn new(dir: Option<PathBuf>, fixed: bool, list: Vec<DownloadEntry>) -> Self {
         let next_id = list.iter().map(|e| e.id).max().unwrap_or(0) + 1;
         Self {
+            default_dir: dir.clone(),
             dir,
+            fixed,
             list,
             next_id,
             ..Self::default()
+        }
+    }
+
+    /// The setting's folder (`settings::DOWNLOADS_DIR`; `None`: the default), unless the
+    /// command line named one.
+    pub(super) fn set_dir(&mut self, dir: Option<PathBuf>) {
+        if !self.fixed {
+            self.dir = dir.or_else(|| self.default_dir.clone());
         }
     }
 
@@ -159,7 +181,7 @@ impl Host {
                 url,
                 original_url,
                 suggested_name,
-                ..
+                total,
             } => {
                 // An agent-driven tab's download is refused (no airlock yet: TODO.md, MCP server).
                 if self.agent_drives(tab) {
@@ -173,14 +195,58 @@ impl Host {
                     return;
                 }
                 let save_as = self.downloads.take_save_as(tab, &url, &original_url);
-                if download::asks_where(self.downloads.ask_where, save_as) {
-                    return self.ask_download_path(window, tab, id, download, &suggested_name);
+                let page = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .map(|t| t.url.clone())
+                    .unwrap_or_default();
+                // what the browser itself started is the user's: Save As, and the page the tab
+                // shows saved as a file (the PDF viewer's Save); a smoke without dialogs never
+                // asks
+                let own_page = !page.is_empty() && (url == page || original_url == page);
+                if save_as || own_page || self.downloads.never_ask {
+                    return self.download_go(window, tab, id, download, &suggested_name, save_as);
                 }
-                let path = self.download_path(&suggested_name);
-                if path.is_none() {
-                    self.toast(window, "Cannot download: no downloads folder");
+                let origin = wubble_core::site::origin_of(&page);
+                // a private window's tab reads its own choices over the stored ones
+                let remembered = origin.as_deref().and_then(|o| {
+                    self.site_view(tab)
+                        .permissions()
+                        .get(o, Permission::Downloads)
+                });
+                let aimed = self
+                    .tab_view(tab)
+                    .and_then(|v| v.last_click())
+                    .is_some_and(|(click, age)| click_guard::aimed(Some(&click), age));
+                let before = origin
+                    .as_ref()
+                    .is_some_and(|o| self.downloads.sites.contains(o));
+                match click_guard::download(remembered, aimed, before) {
+                    Start::Go => {
+                        self.downloads.sites.extend(origin);
+                        self.download_go(window, tab, id, download, &suggested_name, false);
+                    }
+                    // never in silence: the user sees what was refused
+                    Start::Refuse => {
+                        let site = wubble_core::url::address_parts(&page).0.to_owned();
+                        self.toast(window, &format!("Blocked a download from {site}"));
+                        self.download_path_chosen(tab, id, download, None);
+                    }
+                    Start::Ask => {
+                        let request = PermissionRequest {
+                            origin: page,
+                            ask: Ask::Download {
+                                id,
+                                download,
+                                url,
+                                name: download::sanitize_file_name(&suggested_name),
+                                size: total,
+                            },
+                        };
+                        self.apply_permission(tab, PermissionEvent::Requested(request));
+                    }
                 }
-                self.download_path_chosen(tab, id, download, path);
             }
             PageEvent::DownloadStarted {
                 download,
@@ -267,6 +333,51 @@ impl Host {
                 }
             },
             _ => {}
+        }
+    }
+
+    /// A download that may go: to the downloads folder, or asked where (the settings, Save As).
+    fn download_go(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        suggested_name: &str,
+        save_as: bool,
+    ) {
+        if download::asks_where(self.downloads.ask_where, save_as) {
+            return self.ask_download_path(window, tab, id, download, suggested_name);
+        }
+        let path = self.download_path(suggested_name);
+        if path.is_none() {
+            self.toast(window, "Cannot download: no downloads folder");
+        }
+        self.download_path_chosen(tab, id, download, path);
+    }
+
+    /// The prompt's answer to "Allow <site> to download files?": the download goes ahead (and
+    /// the site's next aimed one needs no question this run), or is declined.
+    pub(super) fn download_answered(
+        &mut self,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        name: &str,
+        allow: bool,
+    ) {
+        let window = self.w.window.upgrade();
+        match (allow, window) {
+            (true, Some(window)) => {
+                let origin = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .and_then(|t| wubble_core::site::origin_of(&t.url));
+                self.downloads.sites.extend(origin);
+                self.download_go(&window, tab, id, download, name, false);
+            }
+            _ => self.download_path_chosen(tab, id, download, None),
         }
     }
 
@@ -834,7 +945,7 @@ mod tests {
 
     #[test]
     fn a_pdf_being_printed_keeps_its_name() {
-        let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), vec![]);
+        let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), false, vec![]);
         let first = d.unique_path("Page.pdf").unwrap();
         d.reserve(&first);
         let second = d.unique_path("Page.pdf").unwrap();
@@ -847,13 +958,30 @@ mod tests {
     fn ids_continue_after_the_loaded_ones() {
         let d = Downloads::new(
             None,
+            false,
             vec![
                 entry(7, DownloadState::Complete),
                 entry(3, DownloadState::Complete),
             ],
         );
         assert_eq!(d.next_id, 8);
-        assert_eq!(Downloads::new(None, vec![]).next_id, 1);
+        assert_eq!(Downloads::new(None, false, vec![]).next_id, 1);
+    }
+
+    #[test]
+    fn the_setting_moves_the_folder_unless_the_command_line_named_one() {
+        let mut d = Downloads::new(Some("/os/Downloads".into()), false, vec![]);
+        d.set_dir(Some("/chosen".into()));
+        assert_eq!(d.dir(), Some(Path::new("/chosen")));
+        d.set_dir(None);
+        assert_eq!(
+            d.dir(),
+            Some(Path::new("/os/Downloads")),
+            "back to the default"
+        );
+        let mut cli = Downloads::new(Some("/cli".into()), true, vec![]);
+        cli.set_dir(Some("/chosen".into()));
+        assert_eq!(cli.dir(), Some(Path::new("/cli")));
     }
 
     #[test]

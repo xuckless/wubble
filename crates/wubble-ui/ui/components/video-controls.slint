@@ -22,14 +22,16 @@ import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 // pages keep their own controls (YouTube's bar, `<video controls>`).
 // Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
 // frame, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
-// fraction); `save(x, y)` with the save button's bottom left, where the downloader's menu opens. The strip's right end has a collapse chevron, which tucks the strip into a tab on
+// fraction); `save(x, y)` with the save button's bottom left, where the downloader's menu opens;
+// `quality(x, y)` the same for the quality button (the downloader's menu of every quality,
+// codec and subtitle, even when the save button saves the default at once). The strip's right end has a collapse chevron, which tucks the strip into a tab on
 // the page's right edge (only a click on the tab opens it again: a hover shows the tab's own
 // hover look), and a close button (a click hides the strip until the next navigation, a
 // right-click hides it on this site). Shown, hidden and collapsed are wubble_core::video::Ui;
 // this file only reports the pointer and the clicks.
 export component VideoControls inherits Rectangle {
     // (element ids the tests and `--smoke video` find: root, strip, tab, collapse, close, play,
-    // bar, rate-button, loop, frame, mute, download, speed)
+    // bar, rate-button, loop, frame, mute, download, quality, speed)
     in property <VideoView> video;
     // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
     in property <[string]> rates;
@@ -39,6 +41,7 @@ export component VideoControls inherits Rectangle {
     in property <length> pointer-y;
     callback command(string, float);
     callback save(length, length);
+    callback quality(length, length);
     // The pointer is over the controls (they stay while it is).
     callback hovered(bool);
     // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
@@ -141,6 +144,13 @@ export component VideoControls inherits Rectangle {
                 label: root.video.save-label;
                 clicked(x, y) => {
                     root.save(x, y);
+                }
+            }
+            if root.built && root.video.save != VideoSave.absent && root.video.qualities: quality := IconButton {
+                icon-path: Glyph.settings;
+                label: "Quality and subtitles";
+                clicked => {
+                    root.quality(self.absolute-position.x, self.absolute-position.y + self.height);
                 }
             }
             if root.built: collapse := IconButton {

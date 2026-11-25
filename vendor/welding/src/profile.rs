@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cef::rc::Rc;
 use cef::{ImplRequestContextHandler, RequestContextHandler, WrapRequestContextHandler};
 
+use crate::surface::ResponseObserver;
 use crate::{WeldError, runtime::CefRuntime, surface::CefSurfaceConfig};
 
 // CEF invokes this on its UI thread only after a RequestContext can create
@@ -26,11 +27,37 @@ use crate::{WeldError, runtime::CefRuntime, surface::CefSurfaceConfig};
 // wubble change 46: moved here from `macos_cef` so every platform's shared
 // profile can wait for it.
 cef::wrap_request_context_handler! {
-    pub(crate) struct RequestContextReadyHandler { ready: Arc<AtomicBool> }
+    pub(crate) struct RequestContextReadyHandler {
+        ready: Arc<AtomicBool>,
+        // wubble change 69: sees the responses of requests without a browser.
+        workers: Option<ResponseObserver>,
+    }
 
     impl RequestContextHandler {
         fn on_request_context_initialized(&self, _request_context: Option<&mut cef::RequestContext>) {
             self.ready.store(true, Ordering::Release);
+        }
+
+        // wubble change 69: a request with no browser (a service worker's
+        // own fetch) never reaches a client's request handler, only the
+        // context's; its responses go to `workers`. A browser's requests are
+        // left to the client (CEF asks the context only when the client's
+        // handler returned none). Called on the IO thread.
+        fn resource_request_handler(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut cef::Request>,
+            _is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            request_initiator: Option<&cef::CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<cef::ResourceRequestHandler> {
+            if browser.is_some() {
+                return None;
+            }
+            let observer = self.workers.clone()?;
+            Some(crate::handlers::worker_responses(observer, request_initiator))
         }
     }
 }
@@ -61,13 +88,19 @@ impl std::fmt::Debug for SharedProfile {
 impl SharedProfile {
     /// A context on `user_data_dir` (absolute, inside the runtime's
     /// `cache_path`), session cookies persisted; `None` is in memory.
-    pub fn new(runtime: &CefRuntime, user_data_dir: Option<PathBuf>) -> Result<Self, WeldError> {
+    /// `workers` (wubble change 69) sees the responses of the context's
+    /// requests that have no browser: its service workers' fetches.
+    pub fn new(
+        runtime: &CefRuntime,
+        user_data_dir: Option<PathBuf>,
+        workers: Option<ResponseObserver>,
+    ) -> Result<Self, WeldError> {
         let config = CefSurfaceConfig {
             user_data_dir,
             ..CefSurfaceConfig::default()
         };
         let ready = Arc::new(AtomicBool::new(false));
-        let mut handler = RequestContextReadyHandler::new(ready.clone());
+        let mut handler = RequestContextReadyHandler::new(ready.clone(), workers);
         let context = create_with_handler(runtime, &config, Some(&mut handler))?;
         Ok(Self { context, ready })
     }

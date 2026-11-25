@@ -10,7 +10,9 @@
 //! Ported from yt-dlp (yt-dlp/yt-dlp, Unlicense: public domain, credited anyway):
 //! `yt_dlp/extractor/youtube/_base.py` `INNERTUBE_CLIENTS['android_vr']` (the client context,
 //! as data in [`CLIENT`]) and `_video.py` `_extract_formats_and_subtitles` (the
-//! `streamingData.formats` / `adaptiveFormats` fields read here). The request is wubble's own
+//! `streamingData.formats` / `adaptiveFormats` fields read here, and the caption tracks of
+//! `captions.playerCaptionsTracklistRenderer.captionTracks`, fetched as WebVTT with `fmt=vtt`
+//! as yt-dlp's `_get_subtitles` asks for them). The request is wubble's own
 //! network request, made only with the `media.youtube` setting on (off by default). When the
 //! answer no longer has the shape read here, the result is [`Refusal::SiteChanged`], which the
 //! menu shows; the rest of the downloader is unaffected.
@@ -49,7 +51,12 @@ pub const CLIENT: Client = Client {
 /// The player API's endpoint.
 pub const PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
-/// The video id of a watch, shorts, embed or youtu.be URL.
+/// Eleven-character path words of an embed that name no video: a playlist (`videoseries`) or a
+/// channel's live stream (`live_stream?channel=`), as yt-dlp's `_VALID_URL` leaves them out.
+const NOT_VIDEOS: [&str; 2] = ["videoseries", "live_stream"];
+
+/// The video id of a watch, shorts, live, embed (also `youtube-nocookie.com`, the privacy
+/// embed) or youtu.be URL.
 pub fn video_id(url: &str) -> Option<String> {
     let parsed = ::url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
@@ -58,14 +65,14 @@ pub fn video_id(url: &str) -> Option<String> {
         .or_else(|| host.strip_prefix("m."))
         .unwrap_or(&host);
     let id = match host {
-        "youtube.com" | "music.youtube.com" => {
+        "youtube.com" | "music.youtube.com" | "youtube-nocookie.com" => {
             let mut segments = parsed.path_segments()?;
             match segments.next()? {
                 "watch" => parsed
                     .query_pairs()
                     .find(|(k, _)| k == "v")
                     .map(|(_, v)| v.into_owned())?,
-                "shorts" | "embed" | "live" => segments.next()?.to_owned(),
+                "shorts" | "embed" | "live" | "v" | "e" => segments.next()?.to_owned(),
                 _ => return None,
             }
         }
@@ -73,6 +80,7 @@ pub fn video_id(url: &str) -> Option<String> {
         _ => return None,
     };
     let valid = id.len() == 11
+        && !NOT_VIDEOS.contains(&id.as_str())
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
@@ -214,10 +222,44 @@ pub fn parse_player(json: &str) -> Result<Resolution, Refusal> {
             },
             group: None,
             headers: fetch_headers(),
+            lang: None,
         });
     }
+    // The caption tracks (uploaded and automatic), as WebVTT files beside the video.
+    let tracks = root
+        .pointer("/captions/playerCaptionsTracklistRenderer/captionTracks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !variants.is_empty() {
+        variants.extend(tracks.iter().filter_map(|t| {
+            let mut url = ::url::Url::parse(t.get("baseUrl")?.as_str()?).ok()?;
+            if url.host_str()? != "www.youtube.com" {
+                return None;
+            }
+            url.query_pairs_mut().append_pair("fmt", "vtt");
+            let name = t
+                .pointer("/name/simpleText")
+                .or_else(|| t.pointer("/name/runs/0/text"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(Variant {
+                codecs: name.to_owned(),
+                lang: t
+                    .get("languageCode")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                headers: fetch_headers(),
+                ..Variant::file(url.as_str(), Track::Subtitle, Container::Vtt, None, false)
+            })
+        }));
+    }
     match (variants.is_empty(), protected, ciphered) {
-        (false, ..) => Ok(Resolution { variants, title }),
+        (false, ..) => Ok(Resolution {
+            variants,
+            title,
+            note: None,
+        }),
         (true, p, _) if p > 0 => Err(Refusal::Protected),
         (true, _, c) if c > 0 => Err(changed("every format needs a signature")),
         _ => Err(changed("no usable formats")),
@@ -241,15 +283,38 @@ mod tests {
           {"itag": 999, "url": "https://x.test/drm", "mimeType": "video/mp4", "drmFamilies": ["WIDEVINE"]},
           {"itag": 140, "url": "https://rr1.googlevideo.test/videoplayback?itag=140", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 130000, "contentLength": 3000}
         ]
-      }
+      },
+      "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [
+        {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en", "name": {"simpleText": "English"}, "languageCode": "en"},
+        {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=de&kind=asr", "name": {"runs": [{"text": "German (auto-generated)"}]}, "languageCode": "de"},
+        {"baseUrl": "https://evil.test/x", "languageCode": "fr"}
+      ]}}
     }"#;
 
     #[test]
     fn a_player_answer_lists_direct_formats() {
         let r = parse_player(PLAYER).unwrap();
         assert_eq!(r.title.as_deref(), Some("A Song"));
-        let v = &r.variants;
-        assert_eq!(v.len(), 3, "the ciphered and the DRM format are dropped");
+        let (v, subs) = r.variants.split_at(3);
+        assert!(
+            v.iter().all(|v| v.track != Track::Subtitle),
+            "the ciphered and the DRM format are dropped"
+        );
+        let subs: Vec<(&str, Option<&str>, Container)> = subs
+            .iter()
+            .map(|s| (s.codecs.as_str(), s.lang.as_deref(), s.container))
+            .collect();
+        assert_eq!(
+            subs,
+            [
+                ("English", Some("en"), Container::Vtt),
+                ("German (auto-generated)", Some("de"), Container::Vtt)
+            ]
+        );
+        assert!(matches!(
+            &r.variants[3].source,
+            Source::File { url, .. } if url.ends_with("lang=en&fmt=vtt")
+        ));
         assert_eq!(
             (v[0].track, v[0].height, v[0].size),
             (Track::Muxed, Some(360), Some(1000))
@@ -299,20 +364,44 @@ mod tests {
 
     #[test]
     fn video_ids_from_urls() {
-        let id = Some("dQw4w9WgXcQ".to_owned());
-        assert_eq!(
-            video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1"),
-            id
-        );
-        assert_eq!(
-            video_id("https://m.youtube.com/watch?feature=x&v=dQw4w9WgXcQ"),
-            id
-        );
-        assert_eq!(video_id("https://youtu.be/dQw4w9WgXcQ?si=1"), id);
-        assert_eq!(video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"), id);
-        assert_eq!(video_id("https://www.youtube.com/watch?v=short"), None);
-        assert_eq!(video_id("https://www.youtube.com/feed/trending"), None);
-        assert_eq!(video_id("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), None);
+        let cases = [
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1", true),
+            ("https://m.youtube.com/watch?feature=x&v=dQw4w9WgXcQ", true),
+            ("https://youtu.be/dQw4w9WgXcQ?si=1", true),
+            ("https://www.youtube.com/shorts/dQw4w9WgXcQ", true),
+            ("https://www.youtube.com/live/dQw4w9WgXcQ", true),
+            // embeds, as an iframe's `src` names them
+            ("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1", true),
+            ("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ", true),
+            (
+                "https://youtube-nocookie.com/embed/dQw4w9WgXcQ?start=30",
+                true,
+            ),
+            ("https://www.youtube.com/v/dQw4w9WgXcQ", true),
+            ("https://www.youtube.com/e/dQw4w9WgXcQ", true),
+            (
+                "https://www.youtube.com/embed/videoseries?list=PL1234",
+                false,
+            ),
+            (
+                "https://www.youtube.com/embed/live_stream?channel=UC1",
+                false,
+            ),
+            ("https://www.youtube-nocookie.com/watch?v=short", false),
+            ("https://www.youtube.com/embed/", false),
+            ("https://www.youtube.com/watch?v=short", false),
+            ("https://www.youtube.com/feed/trending", false),
+            ("https://notyoutube.com/watch?v=dQw4w9WgXcQ", false),
+            (
+                "https://youtube-nocookie.com.evil.test/embed/dQw4w9WgXcQ",
+                false,
+            ),
+            ("about:blank", false),
+        ];
+        for (url, found) in cases {
+            let want = found.then(|| "dQw4w9WgXcQ".to_owned());
+            assert_eq!(video_id(url), want, "{url}");
+        }
     }
 
     #[test]

@@ -39,22 +39,29 @@ pub use migrate::MIGRATIONS;
 pub use settings::{
     A11yWeb, ArchiveAfterSetting, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled,
     BlockerExceptions, BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, BoostsEnabled,
-    DevtoolsRemotePort, DownloadsAskWhere, FullUrls, GlanceEnabled, GlassQuality, GlassScene,
-    HintsAlphabet, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MediaAskEachTime,
-    MediaConcurrency, MediaEnabled, MediaKeys, MediaMinBytes, MediaQuality, MediaSaveDir,
-    MediaYoutube, MemoryBackForwardCache, MemoryMaxDecodedImageMb, MiddleClickAutoscroll,
-    OverlayScrollbars, PageLayerOn, PageThemeDefault, PageThemeSites, PagesContrast,
-    PagesMinFontSize, PagesMotion, PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch,
-    ProcessRendererLimit, ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect,
-    ReaderFontSetting, ReaderSize, ReaderThemeSetting, ReaderWidthSetting, ReduceMotion,
-    RoutingRules, ScreenshotOutput, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth,
-    SiteZoom, SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, SleepNeverSites,
-    SoundMutedSites, SponsorActions, SponsorAsked, SponsorEnabled, TouchSizing, UpdateCheckOnOpen,
+    DevtoolsRemotePort, DownloadsAskWhere, DownloadsDir, FullUrls, GlanceEnabled, GlassQuality,
+    GlassScene, HintsAlphabet, HistoryRetentionDays, HomeUrl, KeybindingOverrides, LiveSuggestions,
+    MediaAskEachTime, MediaConcurrency, MediaEnabled, MediaKeys, MediaMinBytes, MediaQuality,
+    MediaSaveDir, MediaYoutube, MemoryBackForwardCache, MemoryMaxDecodedImageMb,
+    MiddleClickAutoscroll, OverlayScrollbars, PageLayerOn, PageThemeDefault, PageThemeSites,
+    PagesContrast, PagesMinFontSize, PagesMotion, PasswordsAutofill, PasswordsOfferToSave,
+    PipOnTabSwitch, ProcessRendererLimit, ProcessSiteIsolation, ProcessSpareRenderer, QuitWarn,
+    ReaderDetect, ReaderFontSetting, ReaderSize, ReaderThemeSetting, ReaderWidthSetting,
+    ReduceMotion, RoutingRules, ScreenshotOutput, SearchCustom, SearchDiscoverSites,
+    SearchDiscovered, SearchEngineChoice, SearchRegion, SessionExitedCleanly, Setting,
+    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SleepKeepPinned, SleepNeverSites, SoundMutedSites, SponsorActions, SponsorAsked,
+    SponsorEnabled, StartupModeSetting, StartupPages, TouchSizing, UpdateCheckOnOpen,
     UpdateLastCheck, VideoCollapsed, VideoControls, VideoHardwareDecode, VideoHiddenSites,
     VideoRates, ZoomDefault, text_of,
 };
 
 pub use settings::InstalledExtensions;
+pub use settings::{
+    PdfDownload, PrivacyAdMeasurement, PrivacyAdTopics, PrivacyCanMakePayment, PrivacyDoNotTrack,
+    PrivacyGpc, PrivacyHttpsAllowed, PrivacyHttpsMode, PrivacyPreload, PrivacySecureDns,
+    PrivacySiteSuggestedAds, PrivacyWebrtcIp,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -278,8 +278,12 @@ pub struct View {
     filter: Option<Arc<dyn ContentFilter>>,
     /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
     favicons: crate::favicon::Sink,
-    /// The scripts every new document runs first ([`Self::set_document_scripts`]).
+    /// The scripts every new document runs first: the host's ([`Self::set_document_scripts`])
+    /// and then the blocker's scriptlets for the page being navigated to
+    /// ([`Self::scriptlets_for`]).
     doc_scripts: cdp::DocScripts,
+    host_scripts: Vec<String>,
+    scriptlet: Option<String>,
     /// The navigations the page asked for, from its DevTools events.
     nav_requests: cdp::NavRequests,
     /// The client DevTools windows are created with: it reports them to the
@@ -305,6 +309,31 @@ pub struct View {
 struct Popups {
     on: Arc<std::sync::atomic::AtomicBool>,
     pending: Arc<std::sync::Mutex<HashMap<i32, Pending>>>,
+    /// The page's last click, shared with the navigation guard (read on CEF's UI thread).
+    clicks: Arc<std::sync::Mutex<LastClick>>,
+}
+
+/// The page's last pointer press as its content script measured it
+/// (`wubble_core::click_guard`), and the navigations the guard held for it.
+#[derive(Default)]
+struct LastClick {
+    pressed: Option<Pressed>,
+    /// Each held navigation's URL and the frame whose overlay led to it, until reported.
+    held: Vec<(String, String)>,
+}
+
+struct Pressed {
+    click: wubble_core::click_guard::Click,
+    /// The frame it landed in, and the page's URL then.
+    frame: String,
+    page: String,
+    at: std::time::Instant,
+}
+
+impl Pressed {
+    fn age_ms(&self) -> u64 {
+        u64::try_from(self.at.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 /// A pop-up CEF is creating: its navigation rule and pop-up switch, and its opener's layout
@@ -371,12 +400,15 @@ impl View {
             layout,
             pacing: (config.frame_rate, config.begin_frames),
             request_filter: filter.clone().map(crate::filter::request_filter),
-            response_observer: observer.map(crate::filter::response_observer),
+            response_observer: observer.map(|o| crate::filter::response_observer(o, None)),
         };
         let rule: NavigationRule = Arc::default();
         let popups = Popups::default();
-        let mut surface =
-            surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &popups));
+        let mut surface = surface_config(
+            &hooks,
+            guard(&rule, &popups),
+            popup_factory(&hooks, &rule, &popups),
+        );
         surface.initial_url = config.url;
         surface.profile = Some(profile);
         let mut producer = new_producer(runtime, surface, &config.gpu)?;
@@ -433,6 +465,8 @@ impl View {
             drag: DragSource::default(),
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
+            host_scripts: Vec::new(),
+            scriptlet: None,
             nav_requests: cdp::NavRequests::default(),
             devtools_client,
             rule,
@@ -452,6 +486,32 @@ impl View {
         self.popups
             .on
             .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The page's last pointer press (`wubble_core::click_guard`) and how long ago it was, ms.
+    pub fn last_click(&self) -> Option<(wubble_core::click_guard::Click, u64)> {
+        let last = self.popups.clicks.lock().unwrap_or_else(|e| e.into_inner());
+        last.pressed.as_ref().map(|p| (p.click.clone(), p.age_ms()))
+    }
+
+    /// The window or download the last press led to was held: its frame removes the invisible
+    /// overlay it landed on (if it still is one), so the next click reaches the page; the
+    /// press is forgotten.
+    pub fn remove_click_overlay(&mut self) {
+        let pressed = self
+            .popups
+            .clicks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pressed
+            .take();
+        if let Some(p) = pressed {
+            self.send_frame_message(
+                &p.frame,
+                FrameChannel::Cosmetic,
+                &crate::cosmetic::unclick_text(),
+            );
+        }
     }
 
     /// The pop-up browsers this view's page opened since the last call, as views, with what
@@ -523,6 +583,7 @@ impl View {
     }
 
     pub fn load(&mut self, url: &str) {
+        self.scriptlets_for(url);
         self.apply_nav(NavInput::Load(url.into()));
     }
 
@@ -927,32 +988,6 @@ impl View {
         self.producer.take_os_buffers_lost()
     }
 
-    /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
-    /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
-    /// set on this view's request context; Chromium pushes it to the profile's open pages.
-    /// `Err` when the view is not open yet or CEF refuses it.
-    pub fn set_minimum_font_size(&mut self, px: u32) -> Result<(), String> {
-        const PREF: &str = "webkit.webprefs.minimum_font_size";
-        let px = i32::try_from(px).map_err(|e| e.to_string())?;
-        let mut result = Err(format!("{PREF}: the view is not open"));
-        self.send(|host| {
-            result = (|| {
-                let context = host.request_context().ok_or("no request context")?;
-                let mut value = cef::value_create().ok_or("CEF made no value")?;
-                value.set_int(px);
-                // Not `CefString::default()`: that passes a null `error`, and CEF's C wrapper
-                // refuses the call outright when an out-parameter is null.
-                let mut error = cef::CefString::from("");
-                let name = cef::CefString::from(PREF);
-                if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
-                    return Err(format!("{PREF}: {error}"));
-                }
-                Ok(())
-            })();
-        });
-        result
-    }
-
     /// Chromium's sound content setting (`ContentSettingsType::SOUND`, what Chrome's "Mute
     /// site" writes) for each of `urls` (`wubble_core::sitesound::origins`) on this view's
     /// request context, its container's profile: blocked, or back to the default. Chrome's
@@ -1028,7 +1063,7 @@ impl View {
                     }
                     let mut value = cef::value_create().ok_or("CEF made no value")?;
                     value.set_bool(i32::from(on));
-                    // a non-null `error`, as in `set_minimum_font_size`
+                    // a non-null `error`, as in `storage::set_pref`
                     let mut error = cef::CefString::from("");
                     if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0
                     {
@@ -1177,7 +1212,9 @@ impl View {
             }
         }
         while let Some(text) = self.producer.poll_devtools_message() {
-            self.nav_requests.read(&text);
+            if let Some(url) = self.nav_requests.read(&text) {
+                self.scriptlets_for(&url);
+            }
             if let Some(opened) = cdp::chooser_opened(&text) {
                 self.page.push(PageEvent::ChooserIntercepted(opened));
                 continue;
@@ -1261,6 +1298,24 @@ impl View {
                     self.sync_history();
                 }
             }
+            Route::Page(PageEvent::NavigationRefused { url, redirect }) => {
+                let held = {
+                    let mut last = self.popups.clicks.lock().unwrap_or_else(|e| e.into_inner());
+                    let at = last.held.iter().position(|(u, _)| *u == url);
+                    at.map(|i| last.held.remove(i).1)
+                };
+                match held {
+                    Some(frame) => {
+                        self.send_frame_message(
+                            &frame,
+                            FrameChannel::Cosmetic,
+                            &crate::cosmetic::unclick_text(),
+                        );
+                        self.events.push(WebEvent::OverlayNavigationHeld(url));
+                    }
+                    None => self.emit_page(PageEvent::NavigationRefused { url, redirect }, mode),
+                }
+            }
             Route::Page(event) => {
                 if let PageEvent::LoadFailed { url, code, text } = &event {
                     eprintln!(
@@ -1308,6 +1363,19 @@ impl View {
             self.nav.page.url.clone()
         };
         let reply = match Request::parse(body) {
+            Some(Request::Click(click)) => {
+                self.popups
+                    .clicks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .pressed = Some(Pressed {
+                    click,
+                    frame: frame.id.clone(),
+                    page: self.nav.page.url.clone(),
+                    at: std::time::Instant::now(),
+                });
+                return;
+            }
             Some(Request::Hello) => {
                 let mut given = filter.frame_cosmetic(&top, &frame.url);
                 if let Some(script) = given.script.take() {
@@ -1748,7 +1816,32 @@ impl View {
     /// scripts, replacing what an earlier call set (`cdp::DocScripts`). The page now on screen
     /// is not touched: [`Self::run_script`] that.
     pub fn set_document_scripts(&mut self, sources: &[String]) {
-        let calls = self.doc_scripts.set(sources);
+        self.host_scripts = sources.to_vec();
+        self.send_doc_scripts();
+    }
+
+    /// The main frame is about to navigate to `url`: its document starts with the blocker's
+    /// scriptlets for it, before any of the page's own scripts (uBO's document_start). Only a
+    /// document of that host runs them (`cosmetic::document_start`); another frame, or a page
+    /// a redirect took elsewhere, gets its own when it says hello.
+    fn scriptlets_for(&mut self, url: &str) {
+        let Some(filter) = self.filter.clone() else {
+            return;
+        };
+        let script = filter
+            .frame_cosmetic(url, url)
+            .script
+            .and_then(|s| crate::cosmetic::document_start(&s, url));
+        if script != self.scriptlet {
+            self.scriptlet = script;
+            self.send_doc_scripts();
+        }
+    }
+
+    fn send_doc_scripts(&mut self) {
+        let mut all = self.host_scripts.clone();
+        all.extend(self.scriptlet.clone());
+        let calls = self.doc_scripts.set(&all);
         self.send_doc_calls(calls);
     }
 
@@ -2471,11 +2564,25 @@ fn weld_modifiers(m: &Modifiers) -> welding::EventModifiers {
 }
 
 /// The navigation guard reading `rule`.
-fn guard(rule: &NavigationRule) -> welding::NavigationGuard {
+fn guard(rule: &NavigationRule, popups: &Popups) -> welding::NavigationGuard {
     let read = Arc::clone(rule);
+    let clicks = Arc::clone(&popups.clicks);
     welding::NavigationGuard::new(move |url| {
         let rule = read.read().unwrap_or_else(|e| e.into_inner());
-        rule.as_ref().is_none_or(|allows| allows(url))
+        if !rule.as_ref().is_none_or(|allows| allows(url)) {
+            return false;
+        }
+        // another site right after a press on an invisible overlay: held for the address
+        // pill (`View::drain_events` reports it), and the press forgotten, so the user's
+        // "open anyway" and the hops after it go through
+        let mut last = clicks.lock().unwrap_or_else(|e| e.into_inner());
+        let held = last.pressed.as_ref().is_some_and(|p| {
+            wubble_core::click_guard::navigated(Some(&p.click), p.age_ms(), &p.page, url)
+        });
+        if held && let Some(p) = last.pressed.take() {
+            last.held.push((url.to_owned(), p.frame));
+        }
+        !held
     })
 }
 
@@ -2530,7 +2637,11 @@ fn popup_factory(
             .clone();
         let rule: NavigationRule = Arc::new(std::sync::RwLock::new(inherited));
         let own = Popups::default();
-        let config = surface_config(&hooks, guard(&rule), popup_factory(&hooks, &rule, &own));
+        let config = surface_config(
+            &hooks,
+            guard(&rule, &own),
+            popup_factory(&hooks, &rule, &own),
+        );
         popups
             .pending
             .lock()

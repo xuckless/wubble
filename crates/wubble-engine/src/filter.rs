@@ -17,6 +17,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use wubble_core::space::ContainerId;
+
 /// What a request loads, neutral to CEF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RequestKind {
@@ -162,9 +164,15 @@ pub struct ResponseInfo<'a> {
     /// The raw `Content-Range` header (empty when absent).
     pub content_range: &'a str,
     pub accepts_ranges: bool,
+    /// The origin that started the request (may be empty): a service worker's own origin for
+    /// its fetches.
+    pub initiator: &'a str,
+    /// A response without a browser (a service worker's fetch): the container whose context
+    /// made it. `None` for a view's responses, which name their browser.
+    pub worker_container: Option<ContainerId>,
 }
 
-/// Sees every response a view gets (the media downloader's detection). Called on CEF's IO
+/// Sees every response a view gets, and its containers' service workers' (the media downloader's detection). Called on CEF's IO
 /// thread: it must be cheap, never wait on the UI thread, and not panic.
 pub trait ResponseObserver: Send + Sync {
     fn seen(&self, response: &ResponseInfo<'_>);
@@ -176,8 +184,12 @@ impl fmt::Debug for dyn ResponseObserver {
     }
 }
 
-/// welding's response observer for `observer`.
-pub(crate) fn response_observer(observer: Arc<dyn ResponseObserver>) -> welding::ResponseObserver {
+/// welding's response observer for `observer`: a view's (`worker_container` `None`), or a
+/// container context's, for its browserless requests.
+pub(crate) fn response_observer(
+    observer: Arc<dyn ResponseObserver>,
+    worker_container: Option<ContainerId>,
+) -> welding::ResponseObserver {
     welding::ResponseObserver::new(move |r| {
         observer.seen(&ResponseInfo {
             url: &r.url,
@@ -188,6 +200,8 @@ pub(crate) fn response_observer(observer: Arc<dyn ResponseObserver>) -> welding:
             content_length: r.content_length,
             content_range: &r.content_range,
             accepts_ranges: r.accepts_ranges,
+            initiator: &r.initiator,
+            worker_container,
         })
     })
 }

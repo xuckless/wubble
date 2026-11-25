@@ -8,6 +8,7 @@
 //! made of them. The page is drawn from them each time they or the model change.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use wubble_blocker::ListRow;
 use wubble_blocker::catalog::Selection;
@@ -17,6 +18,7 @@ use wubble_core::keys::{self, Capture, CaptureEvent, Chord, Override, Platform};
 use wubble_core::model::Command;
 use wubble_core::pages::{self, InternalPage};
 use wubble_core::seam::SidebarMode;
+use wubble_core::search;
 use wubble_core::settings as defs;
 use wubble_core::space::{Rgb, SpaceIcon, SpaceId, SpaceKind};
 use wubble_store::{KeybindingOverrides, SiteZoom, text_of};
@@ -88,13 +90,30 @@ impl Host {
                 self.apply_setting(applied);
             }
         }
+        // the preferences no setting changes (Chromium's own HTTPS upgrades off)
+        for (name, value) in wubble_core::privacy::FIXED {
+            self.engine.set_profile_pref(name, value.clone());
+        }
+        // the search region, once: the country of the system's locale (Chrome keeps the country
+        // it was installed in); none known leaves Chromium's default list
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+        if apply::value_of(&defs::SEARCH_REGION, &self.settings.stored).is_empty()
+            && let Some(country) = locale
+                .as_deref()
+                .and_then(wubble_core::engines::country_of_locale)
+        {
+            self.write_setting(defs::SEARCH_REGION.key, &country);
+        }
     }
 
     /// The one place a setting takes effect while the app runs.
     fn apply_setting(&mut self, applied: Applied) {
         match applied {
-            Applied::SearchEngine(engine) => self.search_engine = engine,
+            Applied::SearchEngines(engines) => self.search = engines,
             Applied::LiveSuggestions(on) => self.live_suggestions = on,
+            Applied::DiscoverSites(on) => self.site_search_enabled(on),
             Applied::SidebarMode(mode) => {
                 if let Some(window) = self.w.window.upgrade()
                     && SidebarMode::from(window.get_sidebar_mode()) != mode
@@ -102,7 +121,12 @@ impl Host {
                     window.invoke_sidebar_mode_requested(mode.into());
                 }
             }
-            Applied::BlockerEnabled(on) => self.blocking.set_enabled(on),
+            Applied::BlockerEnabled(on) => {
+                self.blocking.set_enabled(on);
+                if !on {
+                    self.gate_event(wubble_core::blocker_gate::GateEvent::BlockerOff);
+                }
+            }
             Applied::BlockerExceptions(hosts) => {
                 self.blocker_hosts = hosts;
                 self.run_site_lists();
@@ -154,10 +178,21 @@ impl Host {
                 sites,
                 media,
             } => self.set_page_themes(default, sites, media),
-            Applied::MinFontSize(px) => self.set_min_font_size(px),
+            Applied::ProfilePref { name, value } => self.engine.set_profile_pref(name, value),
+            Applied::Https { mode, allowed } => self.blocking.https.set(mode, allowed),
+            Applied::GlobalPrefs(prefs) => {
+                for (name, value) in prefs {
+                    if let Err(e) = self.engine.set_global_pref(name, &value) {
+                        eprintln!("wubble: {e}");
+                    }
+                }
+            }
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
+            Applied::DownloadsDir(dir) => self
+                .downloads
+                .set_dir((!dir.is_empty()).then(|| PathBuf::from(dir))),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
             Applied::Video {
                 controls,
@@ -182,7 +217,7 @@ impl Host {
                 self.after_change();
             }
             Applied::McpHosting(on) => self.mcp_switch(on),
-            Applied::RestartOnly => {}
+            Applied::RestartOnly | Applied::ReadWhenUsed => {}
         }
     }
 
@@ -197,10 +232,20 @@ impl Host {
     }
 
     /// Writes one setting: refused unless `key` is a setting and `text` a value of it; then
-    /// stored, applied and shown.
+    /// stored, applied and shown. A refused secure DNS template says why on its row.
     pub(crate) fn write_setting(&mut self, key: &str, text: &str) -> bool {
         if !self.store.set_setting(key, text) {
+            if let Some(Err(note)) = (key == defs::PRIVACY_SECURE_DNS.key)
+                .then(|| wubble_core::secure_dns::SecureDns::parse(text))
+            {
+                self.answer(key, note);
+                self.render_settings();
+            }
             return false;
+        }
+        // a value taken clears the row's last refusal
+        if self.settings.answer.0 == key {
+            self.settings.answer.2 = "";
         }
         self.settings.stored.insert(key.to_owned(), text.to_owned());
         if let Some(applied) = apply::effect_of(key, &self.settings.stored) {
@@ -246,6 +291,37 @@ impl Host {
         }
         if let Some(text) = apply::without_entry(key, &self.settings.stored, entry) {
             self.write_setting(key, &text);
+            if key == defs::SEARCH_CUSTOM.key {
+                self.custom_engine_changed(entry, None);
+            }
+        }
+    }
+
+    /// One of the user's engines was edited (`new`) or removed: the default follows it (a
+    /// removed default asks again on the next search), and a site search found on pages with
+    /// the new one's keyword is no longer listed as inactive.
+    fn custom_engine_changed(&mut self, old: &str, new: Option<&str>) {
+        let default = apply::value_of(&defs::SEARCH_ENGINE, &self.settings.stored).to_owned();
+        if let Some(id) = search::default_after_edit(&default, old, new) {
+            self.write_setting(defs::SEARCH_ENGINE.key, &id);
+        }
+        if let Some(entry) = new.and_then(search::EngineEntry::parse) {
+            self.custom_engine_added(&entry.keyword);
+        }
+    }
+
+    /// A site search found on pages with `keyword` leaves the inactive list: the user's own
+    /// engine has it now.
+    fn custom_engine_added(&mut self, keyword: &str) {
+        let found: Vec<String> = serde_json::from_str(apply::value_of(
+            &defs::SEARCH_DISCOVERED,
+            &self.settings.stored,
+        ))
+        .unwrap_or_default();
+        if let Some(kept) = search::without_keyword(&found, keyword)
+            && let Ok(text) = serde_json::to_string(&kept)
+        {
+            self.write_setting(defs::SEARCH_DISCOVERED.key, &text);
         }
     }
 
@@ -261,22 +337,73 @@ impl Host {
         let draft = pages::submission(entry);
         let text = pages::entry_text(key, &draft.cells);
         let put = apply::put_entry(key, &self.settings.stored, draft.replacing, &text);
-        let serial = self.settings.answer.1.wrapping_add(1);
-        self.settings.answer = (
-            key.to_owned(),
-            serial,
-            put.as_ref().err().map_or("", |r| r.note()),
-        );
+        self.answer(key, put.as_ref().err().map_or("", |r| r.note()));
         match put {
-            Ok(text) => {
-                self.write_setting(key, &text);
+            Ok(stored) => {
+                self.write_setting(key, &stored);
+                if key == defs::SEARCH_CUSTOM.key {
+                    match draft.replacing {
+                        Some(old) => self.custom_engine_changed(old, Some(text.as_str())),
+                        None => {
+                            if let Some(entry) = search::EngineEntry::parse(&text) {
+                                self.custom_engine_added(&entry.keyword);
+                            }
+                        }
+                    }
+                }
             }
             Err(_) => self.render_settings(),
         }
     }
 
+    /// The row `key` hears back: a new serial, and why its value was refused (empty: taken).
+    fn answer(&mut self, key: &str, note: &'static str) {
+        let serial = self.settings.answer.1.wrapping_add(1);
+        self.settings.answer = (key.to_owned(), serial, note);
+    }
+
+    /// A folder row's Change: the OS folder chooser, starting at the row's folder (else the
+    /// downloads folder); the folder picked is stored, a cancel changes nothing.
+    pub(crate) fn setting_folder_requested(&mut self, key: &str) {
+        let Some(def) = defs::find(key).filter(|d| d.kind == defs::SettingKind::Folder) else {
+            return;
+        };
+        let current = apply::value_of(def, &self.settings.stored)
+            .trim()
+            .to_owned();
+        let start = match current.as_str() {
+            "" => self.downloads.dir().map(PathBuf::from).unwrap_or_default(),
+            dir => PathBuf::from(dir),
+        };
+        let spec = crate::chooser::dialog_spec(
+            wubble_engine::page::FileChooserMode::OpenFolder,
+            def.label,
+            &start,
+            &[],
+        );
+        let window = self.w.window.upgrade();
+        let dialog =
+            crate::chooser::dialog(&spec, window.as_ref().map(slint::ComponentHandle::window));
+        let key = def.key;
+        let task = slint::spawn_local(async move {
+            let picked = crate::chooser::pick(spec, dialog).await;
+            if let Some(folder) = picked.and_then(|p| p.into_iter().next()) {
+                crate::with_host(|host| {
+                    host.write_setting(key, &folder.to_string_lossy());
+                });
+            }
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the folder dialog: {e}");
+        }
+    }
+
     /// The lists' state changed on the blocker's thread (a rebuild or an update ended).
     pub(crate) fn filter_lists_changed(&mut self) {
+        // the start-up compile ended (swapped in, or given up): the held pages load
+        if !self.blocking.is_busy() {
+            self.gate_event(wubble_core::blocker_gate::GateEvent::BlockerReady);
+        }
         self.render_settings();
     }
 

@@ -1,51 +1,179 @@
-//! DASH manifests (static, one period): each `Representation` as a [`Variant`] with its
-//! segments expanded. Parsed by `dash-mpd-core` (MIT); the expansion rules are DASH-IF IOP and
-//! dash.js (Dash-Industry-Forum/dash.js, BSD-3-Clause; rules ported, no code copied):
+//! DASH manifests (static): each `Representation` as a [`Variant`] with its segments expanded.
+//! Parsed by `dash-mpd-core` (MIT); the expansion rules are DASH-IF IOP and dash.js
+//! (Dash-Industry-Forum/dash.js, BSD-3-Clause; rules ported, no code copied):
 //! `SegmentTemplate` identifiers `$RepresentationID$`, `$Number$`, `$Time$`, `$Bandwidth$` and
 //! their `%0Nd` width (dash.js `SegmentsUtils.js` `replaceTokenForTemplate`), `SegmentTimeline`
 //! `S@t/@d/@r` with `r=-1` repeating to the period's end (`TimelineSegmentsGetter.js`),
-//! duration-based templates counted over the presentation's duration, `SegmentList`, and a
-//! single `BaseURL` file (`SegmentBase`). `BaseURL` resolves MPD > Period > AdaptationSet >
-//! Representation; the first template found on the Representation, AdaptationSet or Period is
-//! used whole (no attribute-level inheritance).
+//! duration-based templates counted over the period's duration from its
+//! `presentationTimeOffset`, `SegmentList`, and a single `BaseURL` file (`SegmentBase`).
+//! `BaseURL` resolves MPD > Period > AdaptationSet > Representation; the first template found on
+//! the Representation, AdaptationSet or Period is used whole (no attribute-level inheritance).
+//!
+//! Several periods: a period's start is its `@start`, else where the previous one ended; its
+//! length its `@duration`, else up to the next period's `@start` (or the presentation's end), as
+//! dash.js `DashManifestModel.getRegularPeriods` reads them. The longest period is the main
+//! content; each of its representations is followed through the other periods to its match
+//! there (same kind, then the same `@id`, then the same height and codecs at the nearest bit
+//! rate: dash.js keeps a track across periods by its id, then its attributes), and its variant's
+//! segments are every matched period's in order, each period with its own init ([`Plan::periods`]
+//! marks where one begins). A period nothing matches (a pre-roll ad) is left out and the menu says
+//! so; a representation that misses a period others match is not offered.
+//!
+//! Subtitles: a text `AdaptationSet` of WebVTT or TTML files (`text/vtt`,
+//! `application/ttml+xml`) is a [`Track::Subtitle`] variant with the set's `@lang` and `Label`;
+//! subtitles inside fragmented MP4 (`application/mp4`, `stpp`/`wvtt`) are not files and are left
+//! out, and so are subtitles of a programme in several periods (each period's file starts its
+//! cues at zero again).
 //!
 //! Any `ContentProtection` (Widevine, PlayReady, ClearKey or the bare `mp4protection` CENC
 //! signal) marks the representation [`Refusal::Protected`]: EME streams are never fetched.
 
-use dash_mpd_core::{AdaptationSet, Period, Representation, SegmentTemplate};
+use dash_mpd_core::{AdaptationSet, MPD, Period, Representation, SegmentTemplate};
 
-use super::{ByteRange, Container, Plan, Refusal, Segment, Source, Track, Variant, join_url};
+use super::{
+    ByteRange, Container, Plan, Refusal, Resolution, Segment, Source, Track, Variant, join_url,
+};
 
 /// Most segments one representation may expand to (a malformed manifest's runaway count).
 const MAX_SEGMENTS: u64 = 100_000;
 /// Widest zero-padded template identifier (`%0Nd`): stops a crafted manifest from allocating GiB.
 const MAX_FORMAT_WIDTH: usize = 32;
 
-/// The variants a detected MPD offers.
-pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
+/// What the menu says when periods were left out.
+pub const ADS_LEFT_OUT: &str = "ad periods left out";
+
+/// One representation of one period: its `@id` (for matching across periods) and its variant.
+type Rep = (Option<String>, Variant);
+
+/// What a detected MPD offers.
+pub fn variants(text: &str, base: &str) -> Result<Resolution, Refusal> {
     let mpd = dash_mpd_core::parse(text)
         .map_err(|e| Refusal::Failed(format!("not a DASH manifest ({e})")))?;
     if mpd.mpdtype.as_deref() == Some("dynamic") {
         return Err(Refusal::Live);
     }
-    let [period] = mpd.periods.as_slice() else {
-        return Err(Refusal::Unsupported(
-            "a manifest with several periods".into(),
-        ));
-    };
     let base = mpd
         .base_url
         .first()
         .map_or_else(|| base.to_owned(), |b| join_url(base, &b.base));
+    let lengths = period_lengths(&mpd);
+    let mut periods: Vec<(Vec<Rep>, usize)> = Vec::with_capacity(mpd.periods.len());
+    for (period, seconds) in mpd.periods.iter().zip(&lengths) {
+        periods.push(period_reps(&mpd, period, &base, *seconds)?);
+    }
+    // The longest period (the first of equals: `rev` makes `max_by` keep the earliest).
+    let main = (0..periods.len())
+        .rev()
+        .max_by(|&a, &b| {
+            lengths[a]
+                .unwrap_or(0.0)
+                .total_cmp(&lengths[b].unwrap_or(0.0))
+        })
+        .ok_or_else(|| Refusal::Failed("the manifest has no period".into()))?;
+    let (main_reps, protected) = &periods[main];
+    if main_reps.is_empty() {
+        return Err(match *protected {
+            0 => Refusal::Failed("the manifest lists no audio or video".into()),
+            _ => Refusal::Protected,
+        });
+    }
+    // Per main representation, its match in each period.
+    let chains: Vec<Vec<Option<usize>>> = (0..main_reps.len())
+        .map(|m| {
+            periods
+                .iter()
+                .enumerate()
+                .map(|(p, (reps, _))| {
+                    if p == main {
+                        Some(m)
+                    } else {
+                        matching(&main_reps[m], reps)
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let content: Vec<bool> = (0..periods.len())
+        .map(|p| chains.iter().any(|chain| chain[p].is_some()))
+        .collect();
+    let out: Vec<Variant> = main_reps
+        .iter()
+        .zip(&chains)
+        .filter(|((_, v), chain)| {
+            let spans = chain.iter().zip(&content).all(|(m, c)| m.is_some() || !c);
+            let programme = content.iter().filter(|c| **c).count();
+            spans && (v.track != Track::Subtitle || programme == 1)
+        })
+        .map(|((_, v), chain)| {
+            let mut segments = Vec::new();
+            let mut starts = Vec::new();
+            for (p, at) in chain.iter().enumerate() {
+                let Some(at) = at else { continue };
+                if let Source::Planned(plan) = &periods[p].0[*at].1.source {
+                    if !segments.is_empty() {
+                        starts.push(segments.len());
+                    }
+                    segments.extend(plan.segments.iter().cloned());
+                }
+            }
+            Variant {
+                source: Source::Planned(Plan {
+                    segments,
+                    container: v.container,
+                    periods: starts,
+                }),
+                ..v.clone()
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        return Err(Refusal::Unsupported(
+            "periods whose streams do not line up".into(),
+        ));
+    }
+    let left_out = content.iter().any(|c| !c);
+    Ok(Resolution {
+        variants: out,
+        title: None,
+        note: left_out.then(|| ADS_LEFT_OUT.to_owned()),
+    })
+}
+
+/// Each period's length in seconds, when the manifest gives it.
+fn period_lengths(mpd: &MPD) -> Vec<Option<f64>> {
+    let secs = |d: std::time::Duration| d.as_secs_f64();
+    let total = mpd.mediaPresentationDuration.map(secs);
+    let mut start = Some(0.0);
+    let mut out = Vec::with_capacity(mpd.periods.len());
+    for (i, period) in mpd.periods.iter().enumerate() {
+        start = period.start.map(secs).or(start);
+        let end = match mpd.periods.get(i + 1) {
+            Some(next) => next.start.map(secs),
+            None => total,
+        };
+        let length = period
+            .duration
+            .map(secs)
+            .or_else(|| Some(end? - start?).filter(|l| *l >= 0.0));
+        start = start.zip(length).map(|(s, l)| s + l);
+        out.push(length);
+    }
+    out
+}
+
+/// A period's clear representations with their segments, and how many were protected.
+fn period_reps(
+    mpd: &MPD,
+    period: &Period,
+    base: &str,
+    seconds: Option<f64>,
+) -> Result<(Vec<Rep>, usize), Refusal> {
     let base = period
         .BaseURL
         .first()
-        .map_or(base.clone(), |b| join_url(&base, &b.base));
-    let seconds = period
-        .duration
-        .or(mpd.mediaPresentationDuration)
-        .map(|d| d.as_secs_f64());
-    let mpd_protected = !mpd.ContentProtection.is_empty() || !period.ContentProtection.is_empty();
+        .map_or(base.to_owned(), |b| join_url(base, &b.base));
+    let period_protected =
+        !mpd.ContentProtection.is_empty() || !period.ContentProtection.is_empty();
     let mut out = Vec::new();
     let mut protected = 0;
     for set in &period.adaptations {
@@ -57,7 +185,7 @@ pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
             let Some(track) = track_of(set, rep) else {
                 continue;
             };
-            if mpd_protected
+            if period_protected
                 || !set.ContentProtection.is_empty()
                 || !rep.ContentProtection.is_empty()
             {
@@ -74,14 +202,19 @@ pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
                 .as_deref()
                 .or(set.mimeType.as_deref())
                 .unwrap_or_default();
-            let container = match Container::of_mime(mime) {
-                Some(Container::M4a) if track != Track::Audio => Container::Mp4,
-                Some(Container::Mp4) if track == Track::Audio => Container::M4a,
-                Some(c) => c,
-                None if track == Track::Audio => Container::M4a,
-                None => Container::Mp4,
+            let container = match (track, Container::of_mime(mime)) {
+                (Track::Subtitle, Some(c)) if c.is_subtitle() => c,
+                // Subtitles in fragmented MP4, or of a type not known: no file to save.
+                (Track::Subtitle, _) => continue,
+                (Track::Audio, Some(Container::Mp4) | None) => Container::M4a,
+                (Track::Audio, Some(c)) => c,
+                (_, Some(Container::M4a) | None) => Container::Mp4,
+                (_, Some(c)) => c,
             };
-            out.push(Variant {
+            let lang = rep.lang.clone().or_else(|| set.lang.clone());
+            // A subtitle's name: the set's label, else its language.
+            let name = set.Label.first().map(|l| l.content.trim().to_owned());
+            let variant = Variant {
                 track,
                 container,
                 height: rep
@@ -89,28 +222,46 @@ pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
                     .or(set.height)
                     .and_then(|h| u32::try_from(h).ok()),
                 bandwidth: rep.bandwidth,
-                codecs: rep
-                    .codecs
-                    .clone()
-                    .or_else(|| set.codecs.clone())
-                    .unwrap_or_default(),
+                codecs: match track {
+                    Track::Subtitle => name.or_else(|| lang.clone()).unwrap_or_default(),
+                    _ => rep
+                        .codecs
+                        .clone()
+                        .or_else(|| set.codecs.clone())
+                        .unwrap_or_default(),
+                },
                 size: None,
                 source: Source::Planned(Plan {
                     segments,
                     container,
+                    periods: vec![],
                 }),
                 group: None,
                 headers: vec![],
-            });
+                lang,
+            };
+            out.push((rep.id.clone(), variant));
         }
     }
-    match (out.is_empty(), protected) {
-        (true, 0) => Err(Refusal::Failed(
-            "the manifest lists no audio or video".into(),
-        )),
-        (true, _) => Err(Refusal::Protected),
-        (false, _) => Ok(out),
-    }
+    Ok((out, protected))
+}
+
+/// `want`'s representation among another period's `reps`: of the same kind, the same `@id`,
+/// else the same height and codecs at the nearest bit rate.
+fn matching(want: &Rep, reps: &[Rep]) -> Option<usize> {
+    let (id, v) = want;
+    let kind = |r: &Variant| r.track == v.track;
+    let by_id = id.as_ref().and_then(|id| {
+        reps.iter()
+            .position(|(rid, r)| kind(r) && rid.as_ref() == Some(id))
+    });
+    by_id.or_else(|| {
+        reps.iter()
+            .enumerate()
+            .filter(|(_, (_, r))| kind(r) && r.height == v.height && r.codecs == v.codecs)
+            .min_by_key(|(_, (_, r))| r.bandwidth.unwrap_or(0).abs_diff(v.bandwidth.unwrap_or(0)))
+            .map(|(i, _)| i)
+    })
 }
 
 /// Video, audio or both; `None` for text, images and the rest.
@@ -143,6 +294,8 @@ fn track_of(set: &AdaptationSet, rep: &Representation) -> Option<Track> {
         "video" if has_audio && codecs.contains(',') => Some(Track::Muxed),
         "video" => Some(Track::Video),
         "audio" => Some(Track::Audio),
+        // `text/vtt`'s major type, `application/ttml+xml`'s, or a set that says so.
+        "text" | "application" => Some(Track::Subtitle),
         _ => None,
     }
 }
@@ -257,6 +410,8 @@ fn template_segments(
         .ok_or_else(|| Refusal::Failed("a segment template without media".into()))?;
     let start = t.startNumber.unwrap_or(1);
     let timescale = t.timescale.unwrap_or(1).max(1);
+    // Media time of the period's start: `$Time$` and the timeline's end count from it.
+    let offset = t.presentationTimeOffset.unwrap_or(0);
     let init = t
         .initialization
         .as_deref()
@@ -268,7 +423,7 @@ fn template_segments(
     let mut out: Vec<Segment> = init.into_iter().collect();
     let too_many = || Refusal::Unsupported("more segments than a download takes".into());
     if let Some(timeline) = &t.SegmentTimeline {
-        let end = seconds.map(|s| (s * timescale as f64) as u64);
+        let end = seconds.map(|s| offset.saturating_add((s * timescale as f64) as u64));
         let mut time = 0u64;
         let mut number = start;
         for (i, s) in timeline.segments.iter().enumerate() {
@@ -319,7 +474,7 @@ fn template_segments(
         return Err(too_many());
     }
     for n in 0..count {
-        let time = (n as f64 * duration) as u64;
+        let time = offset.saturating_add((n as f64 * duration) as u64);
         out.push(Segment::whole(&join_url(
             base,
             &fill(media, rep, start.saturating_add(n), time),
@@ -355,7 +510,7 @@ mod tests {
 
     #[test]
     fn separate_audio_and_video_expand_their_templates() {
-        let v = variants(&mpd(AV), BASE).unwrap();
+        let v = variants(&mpd(AV), BASE).unwrap().variants;
         assert_eq!(v.len(), 3);
         assert_eq!(
             (v[0].track, v[0].height, v[0].container),
@@ -395,7 +550,7 @@ mod tests {
         let body = "<AdaptationSet mimeType=\"audio/mp4\"><Representation id=\"a\" bandwidth=\"1\">\
             <SegmentTemplate media=\"$Number$.m4s\" timescale=\"10\"><SegmentTimeline><S t=\"0\" d=\"30\" r=\"-1\"/></SegmentTimeline></SegmentTemplate>\
             </Representation></AdaptationSet>";
-        let v = variants(&mpd(body), BASE).unwrap();
+        let v = variants(&mpd(body), BASE).unwrap().variants;
         let Source::Planned(plan) = &v[0].source else {
             panic!()
         };
@@ -411,7 +566,7 @@ mod tests {
             <Representation id=\"2\" bandwidth=\"1\" height=\"480\" codecs=\"vp9\"><SegmentList><Initialization sourceURL=\"i.webm\" range=\"0-9\"/>\
             <SegmentURL media=\"s1.webm\" mediaRange=\"10-19\"/><SegmentURL media=\"s2.webm\"/></SegmentList></Representation>\
             </AdaptationSet>";
-        let v = variants(&mpd(body), BASE).unwrap();
+        let v = variants(&mpd(body), BASE).unwrap().variants;
         assert_eq!(
             (v[0].track, v[0].container),
             (Track::Muxed, Container::Webm)
@@ -421,6 +576,7 @@ mod tests {
             Source::Planned(Plan {
                 segments: vec![Segment::whole("https://cdn.test/dash/media/clip.webm")],
                 container: Container::Webm,
+                periods: vec![],
             })
         );
         let Source::Planned(plan) = &v[1].source else {
@@ -447,7 +603,7 @@ mod tests {
             <BaseURL>v.mp4</BaseURL><SegmentList duration=\"2\"><Initialization range=\"0-819\"/>\
             <SegmentURL mediaRange=\"820-1000\"/><SegmentURL mediaRange=\"1001-2000\"/></SegmentList>\
             </Representation></AdaptationSet>";
-        let v = variants(&mpd(body), BASE).unwrap();
+        let v = variants(&mpd(body), BASE).unwrap().variants;
         let Source::Planned(plan) = &v[0].source else {
             panic!()
         };
@@ -501,20 +657,228 @@ mod tests {
         let mixed = "<AdaptationSet mimeType=\"video/mp4\"><ContentProtection schemeIdUri=\"urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed\"/>\
             <Representation id=\"v\" bandwidth=\"1\"><BaseURL>v.mp4</BaseURL></Representation></AdaptationSet>\
             <AdaptationSet mimeType=\"audio/mp4\"><Representation id=\"a\" bandwidth=\"1\"><BaseURL>a.m4a</BaseURL></Representation></AdaptationSet>";
-        let v = variants(&mpd(mixed), BASE).unwrap();
+        let v = variants(&mpd(mixed), BASE).unwrap().variants;
         assert_eq!((v.len(), v[0].track), (1, Track::Audio));
     }
 
     #[test]
-    fn live_multi_period_and_junk_are_refused() {
+    fn live_empty_and_junk_are_refused() {
         let live = "<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"dynamic\"><Period/></MPD>";
         assert_eq!(variants(live, BASE), Err(Refusal::Live));
         let two = "<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"><Period/><Period/></MPD>";
-        assert!(matches!(variants(two, BASE), Err(Refusal::Unsupported(_))));
+        assert!(matches!(variants(two, BASE), Err(Refusal::Failed(_))));
         assert!(matches!(
             variants("not xml at all", BASE),
             Err(Refusal::Failed(_))
         ));
+    }
+
+    /// A manifest of `periods` (each `(attributes, body)`), ten seconds long.
+    fn periods(periods: &[(&str, &str)]) -> String {
+        let body: String = periods
+            .iter()
+            .map(|(attrs, body)| format!("<Period {attrs}>{body}</Period>"))
+            .collect();
+        format!(
+            "<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" \
+             mediaPresentationDuration=\"PT10S\">{body}</MPD>"
+        )
+    }
+
+    /// A period's video and audio: representation ids `vid` and `vid` + `a` under `dir`, two-second
+    /// segments, the video `height` high in `vcodec`, the audio in `acodec`.
+    fn av(dir: &str, vid: &str, height: u32, vcodec: &str, acodec: &str) -> String {
+        format!(
+            "<AdaptationSet contentType=\"video\" mimeType=\"video/mp4\">\
+             <SegmentTemplate initialization=\"{dir}/$RepresentationID$-init.mp4\" media=\"{dir}/$RepresentationID$-$Number$.m4s\" duration=\"2\"/>\
+             <Representation id=\"{vid}\" bandwidth=\"1000\" height=\"{height}\" codecs=\"{vcodec}\"/></AdaptationSet>\
+             <AdaptationSet contentType=\"audio\" mimeType=\"audio/mp4\">\
+             <SegmentTemplate initialization=\"{dir}/a-init.mp4\" media=\"{dir}/a-$Number$.m4s\" duration=\"2\"/>\
+             <Representation id=\"{vid}a\" bandwidth=\"128\" codecs=\"{acodec}\"/></AdaptationSet>"
+        )
+    }
+
+    fn urls(v: &Variant) -> (Vec<String>, Vec<usize>) {
+        let Source::Planned(plan) = &v.source else {
+            panic!("not planned")
+        };
+        let names = plan
+            .segments
+            .iter()
+            .map(|s| {
+                s.url
+                    .trim_start_matches("https://cdn.test/dash/")
+                    .to_owned()
+            })
+            .collect();
+        (names, plan.periods.clone())
+    }
+
+    /// A pre-roll ad, then the programme in two periods around a mid-roll that repeats its
+    /// streams: the ad is left out, the programme's periods are chained, each with its init.
+    #[test]
+    fn periods_chain_by_id_and_ads_are_left_out() {
+        let text = periods(&[
+            (
+                "id=\"ad\" duration=\"PT2S\"",
+                &*av("ad", "adv", 480, "avc1.4d401e", "mp4a.40.5"),
+            ),
+            (
+                "id=\"p1\" start=\"PT2S\" duration=\"PT4S\"",
+                &*av("p1", "v", 720, "avc1.64001f", "mp4a.40.2"),
+            ),
+            (
+                "id=\"p2\" start=\"PT6S\"",
+                &*av("p2", "v", 720, "avc1.64001f", "mp4a.40.2"),
+            ),
+        ]);
+        let r = variants(&text, BASE).unwrap();
+        assert_eq!(r.note.as_deref(), Some(ADS_LEFT_OUT));
+        assert_eq!(r.variants.len(), 2);
+        assert_eq!(
+            (r.variants[0].track, r.variants[0].height),
+            (Track::Video, Some(720))
+        );
+        let (names, starts) = urls(&r.variants[0]);
+        assert_eq!(
+            names,
+            [
+                "p1/v-init.mp4",
+                "p1/v-1.m4s",
+                "p1/v-2.m4s",
+                "p2/v-init.mp4",
+                "p2/v-1.m4s",
+                "p2/v-2.m4s",
+            ]
+        );
+        assert_eq!(starts, [3]);
+        let (names, starts) = urls(&r.variants[1]);
+        assert_eq!((names.len(), starts), (6, vec![3]));
+    }
+
+    /// Without ids in common, the same height and codecs match, at the nearest bit rate; a
+    /// period's length comes from the next one's start, the last one's from the presentation's.
+    #[test]
+    fn periods_match_by_attributes_and_time_their_segments() {
+        let text = periods(&[
+            (
+                "start=\"PT0S\"",
+                &*av("x", "v1", 720, "avc1.64001f", "mp4a.40.2"),
+            ),
+            (
+                "start=\"PT6S\"",
+                &*av("y", "v9", 720, "avc1.64001f", "mp4a.40.2"),
+            ),
+        ]);
+        let r = variants(&text, BASE).unwrap();
+        assert_eq!(r.note, None);
+        let (names, starts) = urls(&r.variants[0]);
+        // 6 s and 4 s at 2 s a segment: 3 and 2, each after its init.
+        assert_eq!(
+            names,
+            [
+                "x/v1-init.mp4",
+                "x/v1-1.m4s",
+                "x/v1-2.m4s",
+                "x/v1-3.m4s",
+                "y/v9-init.mp4",
+                "y/v9-1.m4s",
+                "y/v9-2.m4s"
+            ]
+        );
+        assert_eq!(starts, [4]);
+        // One period alone has no breaks.
+        let one = variants(&mpd(AV), BASE).unwrap();
+        assert!(one.variants.iter().all(|v| urls(v).1.is_empty()));
+        assert_eq!(one.note, None);
+    }
+
+    /// A representation that misses a period others match is not offered; when none spans
+    /// the programme, the manifest is refused. A protected programme after a clear ad is
+    /// protected, not the ad.
+    #[test]
+    fn periods_that_do_not_line_up_are_refused() {
+        let video = |dir: &str| {
+            format!(
+                "<AdaptationSet contentType=\"video\" mimeType=\"video/mp4\"><Representation id=\"v\" bandwidth=\"1\" height=\"720\" codecs=\"avc1\"><BaseURL>{dir}.mp4</BaseURL></Representation></AdaptationSet>"
+            )
+        };
+        let audio = |dir: &str| {
+            format!(
+                "<AdaptationSet contentType=\"audio\" mimeType=\"audio/mp4\"><Representation id=\"a\" bandwidth=\"1\" codecs=\"mp4a.40.2\"><BaseURL>{dir}.m4a</BaseURL></Representation></AdaptationSet>"
+            )
+        };
+        let main = format!("{}{}", video("m"), audio("m"));
+        // The second period has video only: the audio is not offered, the video is.
+        let text = periods(&[
+            ("duration=\"PT6S\"", &*main),
+            ("duration=\"PT4S\"", &*video("b")),
+        ]);
+        let r = variants(&text, BASE).unwrap();
+        assert_eq!(r.variants.len(), 1);
+        assert_eq!(urls(&r.variants[0]).0, ["m.mp4", "b.mp4"]);
+        // Video only in one period, audio only in the other: nothing spans both.
+        let text = periods(&[
+            ("duration=\"PT6S\"", &*main),
+            ("duration=\"PT2S\"", &*video("b")),
+            ("duration=\"PT2S\"", &*audio("c")),
+        ]);
+        assert!(matches!(
+            variants(&text, BASE),
+            Err(Refusal::Unsupported(_))
+        ));
+        let sealed = main.replace(
+            "<Representation id=\"v\"",
+            "<ContentProtection schemeIdUri=\"urn:mpeg:dash:mp4protection:2011\"/><Representation id=\"v\"",
+        ).replace(
+            "<Representation id=\"a\"",
+            "<ContentProtection schemeIdUri=\"urn:mpeg:dash:mp4protection:2011\"/><Representation id=\"a\"",
+        );
+        let text = periods(&[
+            ("duration=\"PT2S\"", &*main),
+            ("duration=\"PT8S\"", &*sealed),
+        ]);
+        assert_eq!(variants(&text, BASE), Err(Refusal::Protected));
+    }
+
+    /// WebVTT and TTML text sets are subtitles with their language and label; subtitles in
+    /// fragmented MP4 are left out, and so are a programme's of several periods.
+    #[test]
+    fn text_sets_are_subtitles() {
+        let text = format!(
+            "{AV}<AdaptationSet contentType=\"text\" mimeType=\"text/vtt\" lang=\"en\"><Label>English</Label>\
+             <Representation id=\"s1\" bandwidth=\"1\"><BaseURL>subs/en.vtt</BaseURL></Representation></AdaptationSet>\
+             <AdaptationSet mimeType=\"application/ttml+xml\" lang=\"fr\">\
+             <Representation id=\"s2\" bandwidth=\"1\"><BaseURL>subs/fr.ttml</BaseURL></Representation></AdaptationSet>\
+             <AdaptationSet contentType=\"text\" mimeType=\"application/mp4\" lang=\"de\">\
+             <Representation id=\"s3\" bandwidth=\"1\" codecs=\"stpp\"><BaseURL>subs/de.mp4</BaseURL></Representation></AdaptationSet>"
+        );
+        let v = variants(&mpd(&text), BASE).unwrap().variants;
+        let subs: Vec<(Container, Option<&str>, &str)> = v
+            .iter()
+            .filter(|v| v.track == Track::Subtitle)
+            .map(|v| (v.container, v.lang.as_deref(), v.codecs.as_str()))
+            .collect();
+        assert_eq!(
+            subs,
+            [
+                (Container::Vtt, Some("en"), "English"),
+                (Container::Ttml, Some("fr"), "fr")
+            ]
+        );
+        let sub = v.iter().find(|v| v.track == Track::Subtitle).unwrap();
+        assert_eq!(urls(sub).0, ["subs/en.vtt"]);
+        // The audio stays M4A, the video MP4.
+        assert!(
+            v.iter()
+                .any(|v| v.track == Track::Audio && v.container == Container::M4a)
+        );
+        let track = "<AdaptationSet contentType=\"text\" mimeType=\"text/vtt\" lang=\"en\"><Representation id=\"s\" bandwidth=\"1\"><BaseURL>en.vtt</BaseURL></Representation></AdaptationSet>";
+        let one = format!("{}{track}", av("p", "v", 720, "avc1", "mp4a.40.2"));
+        let two = periods(&[("duration=\"PT5S\"", &*one), ("duration=\"PT5S\"", &*one)]);
+        let r = variants(&two, BASE).unwrap();
+        assert!(!r.variants.is_empty());
+        assert!(r.variants.iter().all(|v| v.track != Track::Subtitle));
     }
 
     #[test]

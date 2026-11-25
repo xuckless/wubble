@@ -34,12 +34,27 @@ use crate::menu::MediaRow;
 /// Largest manifest, key or player answer read into memory.
 const MAX_TEXT: usize = 4 << 20;
 
+/// Most candidates waiting for the host's next pump (a page that floods the hook loses the rest).
+const MAX_QUEUED: usize = 256;
+
+/// Whose response a candidate was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Seen {
+    /// A view's, by its browser id.
+    Browser(i32),
+    /// A service worker's own fetch: its container and the origin that made it.
+    Worker {
+        container: ContainerId,
+        origin: String,
+    },
+}
+
 /// The response hook's half, on CEF's IO thread: classifies and queues; the host drains it.
 #[derive(Debug, Default)]
 pub struct MediaObserver {
     enabled: AtomicBool,
     min_bytes: AtomicU64,
-    seen: Mutex<Vec<(i32, Candidate)>>,
+    seen: Mutex<Vec<(Seen, Candidate)>>,
     trace: bool,
 }
 
@@ -60,16 +75,24 @@ impl MediaObserver {
         self.min_bytes.store(settings.min_bytes, Ordering::Relaxed);
     }
 
-    fn take(&self) -> Vec<(i32, Candidate)> {
+    fn take(&self) -> Vec<(Seen, Candidate)> {
         std::mem::take(&mut *self.seen.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
 impl ResponseObserver for MediaObserver {
     fn seen(&self, r: &ResponseInfo<'_>) {
-        if !self.enabled.load(Ordering::Relaxed) || r.browser_id == 0 {
+        if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
+        let from = match (r.browser_id, r.worker_container) {
+            (0, Some(container)) if !r.initiator.is_empty() => Seen::Worker {
+                container,
+                origin: r.initiator.to_owned(),
+            },
+            (0, _) => return,
+            (id, _) => Seen::Browser(id),
+        };
         let response = detect::Response {
             url: r.url,
             mime: r.mime,
@@ -81,15 +104,15 @@ impl ResponseObserver for MediaObserver {
         if self.trace {
             // `--smoke media=probe` with `WUBBLE_PROBE_TRACE=1`: every response the hook sees.
             println!(
-                "probe: response {} {} {:?} {} range={:?} accepts={}",
+                "probe: response {} {} {:?} {} range={:?} accepts={} from={from:?}",
                 r.status, r.mime, r.content_length, r.url, r.content_range, r.accepts_ranges
             );
         }
         if let Some(c) = detect::classify(&response, self.min_bytes.load(Ordering::Relaxed)) {
-            self.seen
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push((r.browser_id, c));
+            let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+            if seen.len() < MAX_QUEUED {
+                seen.push((from, c));
+            }
         }
     }
 }
@@ -186,6 +209,13 @@ impl Run {
     fn received(&self) -> u64 {
         self.fetched.values().sum()
     }
+
+    /// Subtitles saved beside a video, not a video: the strip's save button does not follow it.
+    fn is_subtitle(&self) -> bool {
+        self.tracks
+            .iter()
+            .all(|t| t.variant.track == Track::Subtitle)
+    }
 }
 
 /// The downloader's state, one owner.
@@ -271,9 +301,10 @@ impl Host {
         self.video_save_redraw(save);
     }
 
-    /// A YouTube video's page: listed to be looked up (`media.youtube` on), else listed as
-    /// off, with no request.
-    fn media_youtube_page(&mut self, tab: TabId, url: &str) {
+    /// A YouTube video's page, or a player embedding one (an iframe's `src`, seen on every poll
+    /// of the page kit; the list keeps it once): listed to be looked up (`media.youtube` on),
+    /// else listed as off, with no request.
+    pub(super) fn media_youtube_page(&mut self, tab: TabId, url: &str) {
         if !self.media.settings.enabled || youtube::video_id(url).is_none() {
             return;
         }
@@ -284,6 +315,8 @@ impl Host {
             container: Container::Mp4,
             size: None,
             ranges: false,
+            lang: None,
+            name: String::new(),
         };
         let event = if self.media.settings.youtube {
             MediaEvent::Seen(candidate)
@@ -291,6 +324,33 @@ impl Host {
             MediaEvent::Declined(candidate)
         };
         self.media_update(tab, event);
+    }
+
+    /// A `<track>` of the page's video (the page kit's snapshot, on every poll; the list keeps it
+    /// once): a WebVTT file, listed with its language and label.
+    pub(super) fn media_subtitle_track(
+        &mut self,
+        tab: TabId,
+        src: &str,
+        lang: Option<String>,
+        label: String,
+    ) {
+        if !self.media.settings.enabled {
+            return;
+        }
+        let candidate = Candidate {
+            url: page_key(src).to_owned(),
+            kind: Kind::Subtitle,
+            track: Track::Subtitle,
+            container: Container::of_url(src)
+                .filter(|c| c.is_subtitle())
+                .unwrap_or(Container::Vtt),
+            size: None,
+            ranges: false,
+            lang,
+            name: label,
+        };
+        self.media_update(tab, MediaEvent::Seen(candidate));
     }
 
     /// The main frame of `tab` committed `url` (before `committed` moves on): another page
@@ -401,16 +461,35 @@ impl Host {
     /// Runs on every pump with CEF work, and when the writer reports: the hook's candidates,
     /// the fetches' bytes and ends, the writer's results.
     pub(crate) fn media_pump(&mut self) {
-        for (browser_id, candidate) in self.media.observer.take() {
-            let tab = self
-                .views
-                .iter()
-                .find(|&(_, &v)| {
-                    self.engine
-                        .view(v)
-                        .is_some_and(|view| view.browser_id() == browser_id)
-                })
-                .map(|(&t, _)| t);
+        for (from, candidate) in self.media.observer.take() {
+            let tab = match from {
+                Seen::Browser(browser_id) => self
+                    .views
+                    .iter()
+                    .find(|&(_, &v)| {
+                        self.engine
+                            .view(v)
+                            .is_some_and(|view| view.browser_id() == browser_id)
+                    })
+                    .map(|(&t, _)| t),
+                Seen::Worker { container, origin } => {
+                    // The tabs with a page: each one's container, page and last use.
+                    let live: Vec<detect::LiveTab> = self
+                        .views
+                        .keys()
+                        .filter_map(|t| {
+                            let m = self.model.tabs.get(t)?;
+                            Some(detect::LiveTab {
+                                tab: *t,
+                                container: m.container,
+                                url: self.committed.get(t).unwrap_or(&m.url),
+                                last_active_ms: m.last_active_ms,
+                            })
+                        })
+                        .collect();
+                    detect::worker_tab(&origin, container, &live)
+                }
+            };
             if let Some(tab) = tab {
                 self.media_update(tab, MediaEvent::Seen(candidate));
             }
@@ -534,7 +613,12 @@ impl Host {
                                 let choices = select::choices(v);
                                 let labels: Vec<String> =
                                     choices.iter().map(|c| c.label.clone()).collect();
-                                say(format!("offered {:?} {} {labels:?}", i.kind, i.url));
+                                let subs: Vec<String> =
+                                    select::subtitles(v).into_iter().map(|(_, l)| l).collect();
+                                say(format!(
+                                    "offered {:?} {} {labels:?} subtitles {subs:?}",
+                                    i.kind, i.url
+                                ));
                             }
                             other => say(format!("listed {:?} {} {other:?}", i.kind, i.url)),
                         }
@@ -559,6 +643,18 @@ impl Host {
                         (ProbeSave::All, Some(t)) => {
                             for (item, choice) in saves {
                                 self.save_media(t, item, choice);
+                            }
+                            // and every subtitle, beside the videos just started
+                            let subs: Vec<(u32, usize)> = items
+                                .iter()
+                                .filter_map(|i| match &i.found {
+                                    Found::Ready(v) => Some((i.id, select::subtitles(v))),
+                                    _ => None,
+                                })
+                                .flat_map(|(id, s)| s.into_iter().map(move |(at, _)| (id, at)))
+                                .collect();
+                            for (item, at) in subs {
+                                self.save_subtitle(t, item, at);
                             }
                         }
                         (ProbeSave::Default, Some(t)) => {
@@ -849,13 +945,13 @@ impl Host {
                         Kind::Hls => hls::variants(&text, &url).map(|variants| Resolution {
                             variants,
                             title: None,
+                            note: None,
                         }),
-                        Kind::Dash => dash::variants(&text, &url).map(|variants| Resolution {
-                            variants,
-                            title: None,
-                        }),
+                        Kind::Dash => dash::variants(&text, &url),
                         Kind::YouTube => youtube::parse_player(&text),
-                        Kind::File => Err(Refusal::Failed("not a manifest".into())),
+                        Kind::File | Kind::Subtitle => {
+                            Err(Refusal::Failed("not a manifest".into()))
+                        }
                     },
                 };
                 if let Err(e) = &result {
@@ -899,13 +995,18 @@ impl Host {
                     .map_err(Refusal::Failed)
                     .and_then(|()| hls::parse_media(&String::from_utf8_lossy(&body), &url));
                 match parsed {
-                    Ok(plan) => {
+                    Ok(mut plan) => {
                         if let Some(t) = self
                             .media
                             .runs
                             .get_mut(&job)
                             .and_then(|r| r.tracks.get_mut(track))
                         {
+                            // Subtitle segments may be named without an extension: the file
+                            // is the rendition's kind, not what the segment names guess.
+                            if t.variant.track == Track::Subtitle {
+                                plan.container = t.variant.container;
+                            }
                             t.plan = Some(plan);
                         }
                         self.media_plan_ready(job);
@@ -986,9 +1087,6 @@ impl Host {
     /// the tab's streams at `x`, `y` (window px), or (ask-each-time off) the default quality of
     /// its first saveable stream at once.
     pub(super) fn media_entry(&mut self, tab: TabId, x: f32, y: f32) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         // A video with MediaKeys is protected whatever the page's other streams are: the menu
         // says so and offers nothing.
         let protected = self.video_is_protected(tab);
@@ -1016,6 +1114,33 @@ impl Host {
                 return;
             }
         }
+        self.media_menu(tab, x, y);
+    }
+
+    /// How many ways to save the tab's page the menu offers (every stream's choices and
+    /// subtitles); none for protected media.
+    pub(super) fn media_ways(&self, tab: TabId) -> usize {
+        if self.video_is_protected(tab) {
+            return 0;
+        }
+        self.media_items(tab)
+            .iter()
+            .map(|i| match &i.found {
+                Found::Ready(v) => select::choices(v).len() + select::subtitles(v).len(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// The downloader's menu of the tab's streams at `x`, `y` (window px): every way to save
+    /// each, or why it cannot be saved.
+    pub(super) fn media_menu(&mut self, tab: TabId, x: f32, y: f32) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let protected = self.video_is_protected(tab);
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
         let page_title = self
             .model
             .tabs
@@ -1033,6 +1158,7 @@ impl Host {
             vec![MediaRow {
                 item: 0,
                 title: &page_title,
+                note: None,
                 found: &protected_found,
             }]
         } else {
@@ -1043,6 +1169,7 @@ impl Host {
                 .map(|(i, title)| MediaRow {
                     item: i.id,
                     title,
+                    note: i.note.as_deref(),
                     found: &i.found,
                 })
                 .collect()
@@ -1072,14 +1199,14 @@ impl Host {
         }
     }
 
-    /// The downloads entry of the latest download started from the tab's page.
+    /// The downloads entry of the latest video download started from the tab's page.
     pub(super) fn media_latest(&self, tab: TabId) -> Option<i64> {
         let page = page_key(self.committed.get(&tab)?);
         self.media
             .runs
             .iter()
             .rev()
-            .find(|(_, r)| r.tab == tab && page_key(&r.page) == page)
+            .find(|(_, r)| r.tab == tab && page_key(&r.page) == page && !r.is_subtitle())
             .map(|(&id, _)| id)
     }
 
@@ -1135,6 +1262,83 @@ impl Host {
             chosen.container,
             if pair { None } else { chosen.size },
             &detected.url,
+            None,
+        );
+    }
+
+    /// A menu row chose to save the `index`-th variant of the tab's `item`, a subtitle track:
+    /// saved beside the latest video saved from the page, under its name (`Title (720p).en.vtt`
+    /// beside `Title (720p).mp4`), else under the name the default quality's video would take.
+    pub(super) fn save_subtitle(&mut self, tab: TabId, item: u32, index: usize) {
+        let empty = TabMedia::default();
+        let list = self.media.tabs.get(&tab).unwrap_or(&empty);
+        let Some(detected) = list.get(item) else {
+            return;
+        };
+        let Found::Ready(variants) = &detected.found else {
+            return;
+        };
+        let Some(variant) = variants
+            .get(index)
+            .filter(|v| v.track == Track::Subtitle)
+            .cloned()
+        else {
+            return;
+        };
+        let page = self.committed.get(&tab).cloned().unwrap_or_default();
+        let page_title = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(crate::shell::tab_title)
+            .unwrap_or_default();
+        let page_title = name::page_title(&page_title).to_owned();
+        let title = item_title(detected, &page_title);
+        let saved = self
+            .media_latest(tab)
+            .and_then(|id| self.media.runs.get(&id))
+            .and_then(|r| Some(r.output.file_stem()?.to_string_lossy().into_owned()));
+        let stem = saved.unwrap_or_else(|| {
+            // The first stream the default quality would save, as `save_media` would name it.
+            let can_join = wubble_engine::save::find_ffmpeg().is_some();
+            let default = list.items.iter().find_map(|i| {
+                let Found::Ready(v) = &i.found else {
+                    return None;
+                };
+                let choices = select::choices(v);
+                let pick = select::choose(&choices, self.media.settings.quality, can_join)?;
+                Some((i, choices[pick].height))
+            });
+            let (title, note) = match default {
+                Some((i, height)) => (
+                    item_title(i, &page_title),
+                    height.map(|h| format!("{h}p")).unwrap_or_default(),
+                ),
+                None => (title.clone(), String::new()),
+            };
+            let file = name::media_file_name(&title, &note, Container::Mp4);
+            Path::new(&file)
+                .file_stem()
+                .map_or(file.clone(), |s| s.to_string_lossy().into_owned())
+        });
+        let file_name = name::subtitle_file_name(&stem, variant.lang.as_deref(), variant.container);
+        let url = detected.url.clone();
+        let Some(container) = self.model.container_of(tab) else {
+            return;
+        };
+        let lang = variant.lang.clone().unwrap_or_default();
+        let kind = variant.container;
+        self.start_media(
+            tab,
+            container,
+            page,
+            title,
+            lang,
+            vec![variant],
+            kind,
+            None,
+            &url,
+            Some(file_name),
         );
     }
 
@@ -1168,6 +1372,8 @@ impl Host {
         .ok_or_else(|| format!("no free name for {file_name} in {}", dir.display()))
     }
 
+    /// A download of `variants` into the media folder, under `file_name` when given (subtitles
+    /// beside their video), else `Title (note).ext`.
     #[allow(clippy::too_many_arguments)]
     fn start_media(
         &mut self,
@@ -1180,8 +1386,11 @@ impl Host {
         container: Container,
         size: Option<u64>,
         url: &str,
+        file_name: Option<String>,
     ) {
-        let output = match self.media_path(&name::media_file_name(&title, &note, container)) {
+        let file_name =
+            file_name.unwrap_or_else(|| name::media_file_name(&title, &note, container));
+        let output = match self.media_path(&file_name) {
             Ok(output) => output,
             Err(why) => {
                 eprintln!("wubble: media: {why}");
@@ -1408,6 +1617,11 @@ impl Host {
                     .map(|t| t.plan.as_ref().map_or(t.variant.container, |p| p.container))?;
                 let (title, note) = (run.title.clone(), run.note.clone());
                 let parts: Vec<PathBuf> = run.tracks.iter().map(|t| t.part.clone()).collect();
+                let periods: Vec<Vec<usize>> = run
+                    .tracks
+                    .iter()
+                    .map(|t| t.plan.as_ref().map_or_else(Vec::new, |p| p.periods.clone()))
+                    .collect();
                 let containers: Vec<Container> = run
                     .tracks
                     .iter()
@@ -1457,6 +1671,7 @@ impl Host {
                     container,
                     fallback,
                     remux,
+                    periods,
                 }));
                 None
             }
@@ -1550,6 +1765,15 @@ impl Host {
             run.note.clone(),
             run.size,
         );
+        // Subtitles keep the name beside their video; a video is named again from its title.
+        let file_name = run
+            .is_subtitle()
+            .then(|| {
+                run.output
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .flatten();
         if let Err(why) = self.media_dir() {
             eprintln!("wubble: media: {why}");
             if let Some(window) = self.w.window.upgrade() {
@@ -1561,7 +1785,7 @@ impl Host {
         let url = self.download_url(id).unwrap_or_default();
         self.forget_download(id);
         self.start_media(
-            tab, container, page, title, note, variants, file, size, &url,
+            tab, container, page, title, note, variants, file, size, &url, file_name,
         );
     }
 }
@@ -1619,6 +1843,7 @@ mod tests {
             url: "https://a.test/v/clip.mp4".into(),
             kind: Kind::File,
             title: title.map(str::to_owned),
+            note: None,
             found: Found::Resolving,
         };
         assert_eq!(item_title(&item(Some("Own")), "Page"), "Own");

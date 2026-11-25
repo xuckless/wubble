@@ -29,7 +29,8 @@ while [ $# -gt 0 ]; do
 done
 
 # The whole configuration: what a stream copy needs and nothing else. Demuxers and muxers for
-# MP4/MOV (also fragmented), MPEG-TS, Matroska/WebM and bare audio; the parsers that read a
+# MP4/MOV (also fragmented), MPEG-TS, Matroska/WebM and bare audio, and the concat demuxer (a
+# multi-period DASH track's periods put back together); the parsers that read a
 # stream's headers without decoding it; the bitstream filters (aac_adtstoasc is what puts ADTS AAC
 # from an HLS segment into an MP4); the AAC decoder, which the AAC-in-TS probe needs for the
 # sample rate. Everything else, `--disable-everything`.
@@ -37,7 +38,7 @@ CONFIG="--disable-everything --disable-autodetect --disable-network --disable-do
  --disable-ffplay --disable-ffprobe --disable-avdevice --disable-swscale --disable-swresample
  --disable-x86asm --enable-small --enable-static --disable-shared
  --enable-protocol=file,pipe
- --enable-demuxer=mov,mpegts,matroska,aac,mp3,ac3,eac3,flac,ogg
+ --enable-demuxer=mov,mpegts,matroska,aac,mp3,ac3,eac3,flac,ogg,concat
  --enable-muxer=mp4,matroska,webm,ipod,adts,mp3
  --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio,vp8,vp9,av1,opus,vorbis,flac,mpeg4video
  --enable-bsf=aac_adtstoasc,extract_extradata,vp9_superframe,h264_mp4toannexb,hevc_mp4toannexb

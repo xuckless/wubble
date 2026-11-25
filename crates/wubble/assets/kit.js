@@ -62,6 +62,13 @@
     return best;
   }
   k.primary = primary;
+  // The video under a point of the view (physical px, view-relative: the context menu's), else
+  // the main one.
+  function at(x, y) {
+    const e = Number.isFinite(x) && Number.isFinite(y)
+      ? document.elementFromPoint(x / devicePixelRatio, y / devicePixelRatio) : null;
+    return (e && e.closest("video")) || primary();
+  }
 
   // ----- jumps: the host's skip table
   let jumps = [];
@@ -124,7 +131,8 @@
 
   // The largest visible embedded frame (a cross-origin player the kit cannot run in): where the
   // strip offers the save control over what the downloader saw of the page. The host shows it
-  // only when the downloader lists something, so an ad frame gets nothing.
+  // only when the downloader lists something, so an ad frame gets nothing. Its address goes
+  // with it: an embedded YouTube player is looked up as its watch page would be.
   function bigFrame() {
     let best = null, bestArea = 0;
     for (const f of document.querySelectorAll("iframe, embed, object")) {
@@ -132,7 +140,7 @@
       const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
       const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
       if (w < 200 || h < 112 || getComputedStyle(f).visibility === "hidden") continue;
-      if (w * h > bestArea) { best = r; bestArea = w * h; }
+      if (w * h > bestArea) { best = { r, src: String(f.src || f.data || "").slice(0, 2048) }; bestArea = w * h; }
     }
     return best;
   }
@@ -157,14 +165,24 @@
         doc: performance.timeOrigin,
         // EME MediaKeys attached: protected media, which the downloader never touches.
         drm: !!v.mediaKeys,
+        // Its subtitle files (`<track>`), which load only when shown: the downloader lists them.
+        tracks: [...v.querySelectorAll("track")]
+          .filter((t) => (t.kind === "subtitles" || t.kind === "captions") && /^https?:/.test(t.src))
+          .slice(0, 16)
+          .map((t) => ({
+            src: String(t.src).slice(0, 2048),
+            lang: String(t.srclang || "").slice(0, 16),
+            label: String(t.label || "").slice(0, 80),
+          })),
       };
     } else if (window === window.top) {
-      const r = bigFrame();
-      if (r) {
+      const f = bigFrame();
+      if (f) {
+        const r = f.r;
         out.v = {
           x: r.left, y: r.top, w: r.width, h: r.height, t: 0, dur: null, paused: true,
           rate: 1, loop: false, muted: false, doc: performance.timeOrigin, drm: false,
-          frame: true,
+          frame: true, src: f.src,
         };
       }
     }
@@ -188,9 +206,10 @@
     return true;
   };
 
-  // The frame on screen as PNG base64 (`null` for a cross-origin video the canvas may not read).
-  k.frame = function () {
-    const v = primary();
+  // The frame on screen as PNG base64 (`null` for a cross-origin video the canvas may not read):
+  // the main video's, or with a point the one under it.
+  k.frame = function (x, y) {
+    const v = at(x, y);
     if (!v || !v.videoWidth) return null;
     try {
       const c = document.createElement("canvas");
@@ -203,13 +222,15 @@
     }
   };
 
-  // Picture-in-picture: the main video alone, fullscreen in the tab's own view.
-  k.pip = function () {
-    const v = primary();
+  // Picture-in-picture: the main video alone, fullscreen in the tab's own view; `pipAt`, the
+  // one under a point (the context menu's).
+  function pipOf(v) {
     if (!v) return Promise.reject(new Error("no video"));
     if (v.disablePictureInPicture) return Promise.reject(new Error("the page disallows it"));
     return v.requestFullscreen().then(() => true);
-  };
+  }
+  k.pip = function () { return pipOf(primary()); };
+  k.pipAt = function (x, y) { return pipOf(at(x, y)); };
 
   // ----- Boosts
   let sheet = null;

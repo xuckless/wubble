@@ -6,8 +6,6 @@
 //! parallel typed default), so the store decodes it with its codec and the page shows it as is.
 //! Design reference, no code copied: Chromium's pref registration (path, type, default per pref).
 
-use crate::omnibox::SearchEngine;
-
 /// What a setting holds, and so which values are valid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SettingKind {
@@ -17,7 +15,8 @@ pub enum SettingKind {
     Count { min: u32, max: u32 },
     /// A finite number in `min..=max`.
     Float { min: f32, max: f32 },
-    /// `""` (ask on first run) or one of `omnibox::ENGINES` by id.
+    /// `""` (ask on first run), one of `engines::ENGINES` by id, or one of the user's own
+    /// engines (`search::CUSTOM_PREFIX` and its keyword).
     SearchEngine,
     /// A JSON array of strings; entries are opaque here.
     List,
@@ -27,6 +26,11 @@ pub enum SettingKind {
     Map,
     /// Any one line of text (a folder path; empty for the default).
     Text,
+    /// A folder's path; empty for the default. Picked with the OS folder chooser.
+    Folder,
+    /// Secure DNS: `automatic`, `off`, a provider's word or `custom:` and a template
+    /// (`secure_dns::SecureDns::parse`).
+    SecureDns,
 }
 
 impl SettingKind {
@@ -40,13 +44,14 @@ impl SettingKind {
             SettingKind::Float { min, max } => text
                 .parse::<f32>()
                 .is_ok_and(|v| v.is_finite() && (min..=max).contains(&v)),
-            SettingKind::SearchEngine => text.is_empty() || SearchEngine::from_id(text).is_some(),
+            SettingKind::SearchEngine => text.is_empty() || crate::search::is_engine_id(text),
             SettingKind::List => serde_json::from_str::<Vec<String>>(text).is_ok(),
             SettingKind::Choice(words) => words.contains(&text),
             SettingKind::Map => {
                 serde_json::from_str::<std::collections::BTreeMap<String, u32>>(text).is_ok()
             }
-            SettingKind::Text => !text.contains(['\n', '\r']),
+            SettingKind::Text | SettingKind::Folder => !text.contains(['\n', '\r']),
+            SettingKind::SecureDns => crate::secure_dns::SecureDns::parse(text).is_ok(),
         }
     }
 }
@@ -68,6 +73,8 @@ pub enum Section {
     Appearance,
     /// Tab sleep and glass quality.
     Performance,
+    /// Where downloads and saved media go (the design's Downloads section).
+    Downloads,
     /// Stored but not a row on the page (it has its own editor or is dragged).
     Hidden,
 }
@@ -80,6 +87,7 @@ impl Section {
             Section::Privacy => "Privacy",
             Section::Appearance => "Appearance",
             Section::Performance => "Performance",
+            Section::Downloads => "Downloads",
             Section::Hidden => "",
         }
     }
@@ -115,6 +123,48 @@ pub const LIVE_SUGGESTIONS: SettingDef = SettingDef {
     default: "0",
     label: "Search suggestions from the search engine (sends what you type, never addresses)",
     section: Section::Privacy,
+    restart: false,
+};
+/// The user's own search engines (`search::EngineEntry`, `name | keyword | address`): each
+/// searched by its keyword, any of them the default. The list editor checks each
+/// (`search::check`).
+pub const SEARCH_CUSTOM: SettingDef = SettingDef {
+    key: "search.custom",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Your own search engines (a keyword, and the address with %s for the search)",
+    section: Section::General,
+    restart: false,
+};
+/// Site searches found on pages (OpenSearch), inactive: listed, never searched by keyword nor
+/// made the default until the user adds one to their own engines.
+pub const SEARCH_DISCOVERED: SettingDef = SettingDef {
+    key: "search.discovered",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Site searches found on pages (inactive)",
+    section: Section::General,
+    restart: false,
+};
+/// Fetch the search description a page links to (`<link rel="search">`), to list the site's
+/// search: a request wubble makes itself, so off by default.
+pub const SEARCH_DISCOVER_SITES: SettingDef = SettingDef {
+    key: "search.discover_sites",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Find site searches on pages (fetches the search description a site links to)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The country whose search engines are offered (`engines::region`): an ISO 3166 code, written
+/// once from the system's locale at start while empty (Chrome keeps the country it was
+/// installed in); empty or unknown: Chromium's default list.
+pub const SEARCH_REGION: SettingDef = SettingDef {
+    key: "search.region",
+    kind: SettingKind::Text,
+    default: "",
+    label: "Search engine region",
+    section: Section::Hidden,
     restart: false,
 };
 /// The extended sidebar's width, logical px (the seam's `saved`); the default is the design's
@@ -354,6 +404,89 @@ pub const ROUTING_RULES: SettingDef = SettingDef {
     section: Section::General,
     restart: false,
 };
+/// What wubble opens when it starts (`startup::StartupMode`): the last session, a start page in
+/// each window, or the pages of [`STARTUP_PAGES`]. Read when wubble opens, so a change applies
+/// at the next start (as Chrome's "On startup" does, without a restart note).
+pub const STARTUP_MODE: SettingDef = SettingDef {
+    key: "startup.mode",
+    kind: SettingKind::Choice(&crate::startup::MODE_WORDS),
+    default: "last-session",
+    label: "When wubble opens",
+    section: Section::General,
+    restart: false,
+};
+/// The pages "Specific pages" opens, as addresses (`startup::page_address`); shown only while
+/// that mode is chosen ([`SHOWN_WHEN`]).
+pub const STARTUP_PAGES: SettingDef = SettingDef {
+    key: "startup.pages",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Pages to open",
+    section: Section::General,
+    restart: false,
+};
+/// Where Home goes (Alt+Home, Cmd+Shift+H): empty for the start page (`startup::home_url`).
+pub const HOME_URL: SettingDef = SettingDef {
+    key: "home.url",
+    kind: SettingKind::Text,
+    default: "",
+    label: "Home page (empty: the start page)",
+    section: Section::General,
+    restart: false,
+};
+/// The quit keys quit only when pressed twice or held (`quit::QuitGuard`); on by default on
+/// macOS, as Chrome's "Warn Before Quitting".
+pub const QUIT_WARN: SettingDef = SettingDef {
+    key: "quit.warn",
+    kind: SettingKind::Bool,
+    default: if cfg!(target_os = "macos") { "1" } else { "0" },
+    label: "Warn before quitting (press the quit keys twice or hold them)",
+    section: Section::General,
+    restart: false,
+};
+/// Written "0" as wubble opens and "1" once it has quit in order: a "0" at start means the last
+/// run crashed or was killed (the "Restore pages?" offer, `startup::Offer`).
+pub const SESSION_EXITED_CLEANLY: SettingDef = SettingDef {
+    key: "session.exited_cleanly",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "The last run quit in order",
+    section: Section::Hidden,
+    restart: false,
+};
+
+/// Rows the page shows only while another row has a value: (row, the row it follows, value).
+pub const SHOWN_WHEN: [(&str, &str, &str); 1] = [(STARTUP_PAGES.key, STARTUP_MODE.key, "pages")];
+
+/// Choice rows the page shows as a Select (a menu of labels) rather than segments, with the
+/// label of each stored word.
+pub const SELECT_ROWS: [(&str, &[(&str, &str)]); 2] = [
+    (STARTUP_MODE.key, &crate::startup::MODE_LABELS),
+    (PRIVACY_SECURE_DNS.key, &crate::secure_dns::LABELS),
+];
+
+/// The stored words of a Select row's labels, in their order: the row's choices, from the one
+/// table that names them.
+pub const fn select_words<const N: usize>(
+    labels: &[(&'static str, &'static str); N],
+) -> [&'static str; N] {
+    let mut words = [""; N];
+    let mut i = 0;
+    while i < N {
+        words[i] = labels[i].0;
+        i += 1;
+    }
+    words
+}
+
+/// The Select labels of a choice row ([`SELECT_ROWS`]); `None` for a segmented row.
+pub fn select_labels(key: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    SELECT_ROWS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, labels)| *labels)
+}
+
 /// Which glass levels the scene's governor may use (`apply::GlassSetting`).
 pub const GLASS_QUALITY: SettingDef = SettingDef {
     key: "glass.quality",
@@ -429,7 +562,7 @@ pub const MEDIA_ENABLED: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "1",
     label: "Offer to save videos and audio",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Ask YouTube's player API for a video's formats (a request wubble makes itself, so off by
@@ -439,7 +572,7 @@ pub const MEDIA_YOUTUBE: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "0",
     label: "Look up YouTube video formats (asks YouTube)",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// The quality a download takes when the menu is not asked (`media::select::Quality`).
@@ -448,16 +581,26 @@ pub const MEDIA_QUALITY: SettingDef = SettingDef {
     kind: SettingKind::Choice(&crate::media::select::QUALITY_WORDS),
     default: "720p",
     label: "Video quality",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Where saved media goes; empty: the downloads folder.
 pub const MEDIA_SAVE_DIR: SettingDef = SettingDef {
     key: "media.save_dir",
-    kind: SettingKind::Text,
+    kind: SettingKind::Folder,
     default: "",
     label: "Save videos to (empty: the downloads folder)",
-    section: Section::General,
+    section: Section::Downloads,
+    restart: false,
+};
+/// Where downloads go (Chrome's Downloads > Location); empty: the OS downloads folder. A
+/// `--downloads` folder on the command line wins over it.
+pub const DOWNLOADS_DIR: SettingDef = SettingDef {
+    key: "downloads.dir",
+    kind: SettingKind::Folder,
+    default: "",
+    label: "Save files to",
+    section: Section::Downloads,
     restart: false,
 };
 /// Every download asks where to save it (the Save ... As rows always ask).
@@ -466,7 +609,7 @@ pub const DOWNLOADS_ASK_WHERE: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "0",
     label: "Always ask where to save",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// The glyph opens the menu of qualities; off, it saves the default quality at once.
@@ -475,7 +618,7 @@ pub const MEDIA_ASK_EACH_TIME: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "1",
     label: "Ask which quality each time",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Segments one media download fetches at once.
@@ -891,10 +1034,134 @@ pub const EXTENSIONS_INSTALLED: SettingDef = SettingDef {
     restart: true,
 };
 
+/// Chrome's "Send a \"Do Not Track\" request with your browsing traffic" (`enable_do_not_track`,
+/// `privacy::PREFS`).
+pub const PRIVACY_DO_NOT_TRACK: SettingDef = SettingDef {
+    key: "privacy.do_not_track",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Send a Do Not Track request with your browsing",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Preload pages" (`net.network_prediction_options`): standard, Chrome's default
+/// (no request of wubble's own), or off.
+pub const PRIVACY_PRELOAD: SettingDef = SettingDef {
+    key: "privacy.preload",
+    kind: SettingKind::Choice(&["standard", "off"]),
+    default: "standard",
+    label: "Preload pages for faster browsing",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Allow sites to check if you have payment methods saved"
+/// (`payments.can_make_payment_enabled`).
+pub const PRIVACY_CAN_MAKE_PAYMENT: SettingDef = SettingDef {
+    key: "privacy.can_make_payment",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Allow sites to check if you have payment methods saved",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's Ad privacy: Ad topics (`privacy_sandbox.m1.topics_enabled`). Off: Chrome asks for
+/// consent first, and wubble never shows that consent.
+pub const PRIVACY_AD_TOPICS: SettingDef = SettingDef {
+    key: "privacy.ad_topics",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Ad topics: sites ask the browser for your interests",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Ad privacy: Site-suggested ads (`privacy_sandbox.m1.fledge_enabled`), off like the topics.
+pub const PRIVACY_SITE_SUGGESTED_ADS: SettingDef = SettingDef {
+    key: "privacy.site_suggested_ads",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Site-suggested ads: sites keep ad interests in the browser",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Ad privacy: Ad measurement (`privacy_sandbox.m1.ad_measurement_enabled`), off like the topics.
+pub const PRIVACY_AD_MEASUREMENT: SettingDef = SettingDef {
+    key: "privacy.ad_measurement",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Ad measurement: sites ask the browser how their ads did",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The WebRTC IP handling policy (`webrtc.ip_handling_policy`; Chrome has no row, Brave does):
+/// which local addresses a WebRTC connection may use and so show the site.
+pub const PRIVACY_WEBRTC_IP: SettingDef = SettingDef {
+    key: "privacy.webrtc_ip",
+    kind: SettingKind::Choice(&["default", "public-and-private", "public-only", "proxy-only"]),
+    default: "default",
+    label: "WebRTC addresses sites can see",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's Site settings > PDF documents, "Download PDFs" (`plugins.always_open_pdf_externally`):
+/// a PDF navigation becomes a download instead of opening in Chromium's viewer.
+pub const PDF_DOWNLOAD: SettingDef = SettingDef {
+    key: "pdf.download",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Download PDFs instead of opening them",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Use secure DNS" (`secure_dns`): Chromium's default, automatic; a provider is only
+/// asked once the user picks it.
+pub const PRIVACY_SECURE_DNS: SettingDef = SettingDef {
+    key: "privacy.secure_dns",
+    kind: SettingKind::SecureDns,
+    default: "automatic",
+    label: "Use secure DNS",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Global Privacy Control (`Sec-GPC: 1` and `navigator.globalPrivacyControl`, as Brave and
+/// Firefox send it): Chromium's own, through the profile preference `universal_optout.enabled`
+/// (`privacy::PREFS`; the features are on at every start, `wubble_engine::app`). Off by default.
+pub const PRIVACY_GPC: SettingDef = SettingDef {
+    key: "privacy.gpc",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Tell sites not to sell or share your data (Global Privacy Control)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Chrome's "Always use secure connections" (`https`): upgrade (Chrome's automatic
+/// HTTPS-Upgrades: https first, http without asking when it fails), only (ask first), or off.
+pub const PRIVACY_HTTPS_MODE: SettingDef = SettingDef {
+    key: "privacy.https_mode",
+    kind: SettingKind::Choice(&crate::https::HttpsMode::WORDS),
+    default: "upgrade",
+    label: "Secure connections (upgrade: https first; only: ask before http)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The sites Continue to site keeps on http (`https::allow`): `container/host` to the Unix
+/// second it ends.
+pub const PRIVACY_HTTPS_ALLOWED: SettingDef = SettingDef {
+    key: "privacy.https_allowed",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Sites allowed without a secure connection",
+    section: Section::Hidden,
+    restart: false,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
     &LIVE_SUGGESTIONS,
+    &SEARCH_CUSTOM,
+    &SEARCH_DISCOVERED,
+    &SEARCH_DISCOVER_SITES,
+    &SEARCH_REGION,
     &SIDEBAR_WIDTH,
     &SIDEBAR_MODE,
     &REDUCE_MOTION,
@@ -921,6 +1188,11 @@ pub const ALL: &[&SettingDef] = &[
     &SLEEP_NEVER_SITES,
     &ARCHIVE_AFTER,
     &ROUTING_RULES,
+    &STARTUP_MODE,
+    &STARTUP_PAGES,
+    &HOME_URL,
+    &QUIT_WARN,
+    &SESSION_EXITED_CLEANLY,
     &GLASS_QUALITY,
     &GLASS_SCENE,
     &PAGE_LAYER,
@@ -943,6 +1215,7 @@ pub const ALL: &[&SettingDef] = &[
     &MEDIA_ASK_EACH_TIME,
     &MEDIA_CONCURRENCY,
     &MEDIA_MIN_BYTES,
+    &DOWNLOADS_DIR,
     &DOWNLOADS_ASK_WHERE,
     &PAGE_THEME,
     &PAGE_THEME_SITES,
@@ -970,6 +1243,18 @@ pub const ALL: &[&SettingDef] = &[
     &UPDATE_CHECK_ON_OPEN,
     &UPDATE_LAST_CHECK,
     &EXTENSIONS_INSTALLED,
+    &PRIVACY_DO_NOT_TRACK,
+    &PRIVACY_PRELOAD,
+    &PRIVACY_CAN_MAKE_PAYMENT,
+    &PRIVACY_AD_TOPICS,
+    &PRIVACY_SITE_SUGGESTED_ADS,
+    &PRIVACY_AD_MEASUREMENT,
+    &PRIVACY_WEBRTC_IP,
+    &PDF_DOWNLOAD,
+    &PRIVACY_SECURE_DNS,
+    &PRIVACY_GPC,
+    &PRIVACY_HTTPS_MODE,
+    &PRIVACY_HTTPS_ALLOWED,
 ];
 
 /// The definition of `key`, if it is a setting.
@@ -1072,9 +1357,19 @@ mod tests {
         assert!(MEDIA_QUALITY.kind.accepts("1080p") && !MEDIA_QUALITY.kind.accepts("4k"));
         assert_eq!(
             find("media.save_dir").map(|d| d.kind),
-            Some(SettingKind::Text)
+            Some(SettingKind::Folder)
         );
         assert!(MEDIA_CONCURRENCY.kind.accepts("8") && !MEDIA_CONCURRENCY.kind.accepts("0"));
+    }
+
+    #[test]
+    fn site_search_discovery_is_off_by_default() {
+        // fetching a site's search description is a request wubble makes itself
+        assert_eq!(SEARCH_DISCOVER_SITES.default, "0");
+        for d in [&SEARCH_CUSTOM, &SEARCH_DISCOVERED] {
+            assert_eq!((d.kind, d.default), (SettingKind::List, "[]"), "{}", d.key);
+            assert_eq!(d.section, SEARCH_ENGINE.section, "{}", d.key);
+        }
     }
 
     #[test]
@@ -1101,6 +1396,40 @@ mod tests {
         }
         // A row of its own now that the Pip window exists.
         assert_eq!(PIP_ON_TAB_SWITCH.section, Section::General);
+    }
+
+    #[test]
+    fn the_downloads_section_holds_its_rows_under_their_old_keys() {
+        for d in [
+            &DOWNLOADS_DIR,
+            &DOWNLOADS_ASK_WHERE,
+            &MEDIA_ENABLED,
+            &MEDIA_YOUTUBE,
+            &MEDIA_QUALITY,
+            &MEDIA_SAVE_DIR,
+            &MEDIA_ASK_EACH_TIME,
+        ] {
+            assert_eq!(d.section, Section::Downloads, "{}", d.key);
+        }
+        // moved, not renamed
+        assert_eq!(DOWNLOADS_ASK_WHERE.key, "downloads.ask_where");
+        assert_eq!(MEDIA_SAVE_DIR.key, "media.save_dir");
+        assert_eq!(Section::Downloads.title(), "Downloads");
+        // empty: the OS downloads folder
+        assert_eq!(
+            (DOWNLOADS_DIR.key, DOWNLOADS_DIR.kind, DOWNLOADS_DIR.default),
+            ("downloads.dir", SettingKind::Folder, "")
+        );
+    }
+
+    #[test]
+    fn pdfs_open_in_the_viewer_by_default() {
+        assert_eq!(find("pdf.download"), Some(&PDF_DOWNLOAD));
+        assert_eq!(PDF_DOWNLOAD.kind, SettingKind::Bool);
+        assert_eq!(PDF_DOWNLOAD.default, "0");
+        // Chrome keeps it under Privacy and security > Site settings
+        assert_eq!(PDF_DOWNLOAD.section, Section::Privacy);
+        const { assert!(!PDF_DOWNLOAD.restart) };
     }
 
     #[test]
@@ -1133,7 +1462,11 @@ mod tests {
             (SettingKind::SearchEngine, "", true),
             (SettingKind::SearchEngine, "google", true),
             (SettingKind::SearchEngine, "duckduckgo", true),
-            (SettingKind::SearchEngine, "bing", false),
+            (SettingKind::SearchEngine, "bing", true),
+            (SettingKind::SearchEngine, "custom:wiki", true),
+            (SettingKind::SearchEngine, "custom:", false),
+            (SettingKind::SearchEngine, "custom:two words", false),
+            (SettingKind::SearchEngine, "altavista", false),
             (SettingKind::List, "[]", true),
             (SettingKind::List, "[\"a\"]", true),
             (SettingKind::List, "[1]", false),
@@ -1147,6 +1480,20 @@ mod tests {
             (SettingKind::Text, "", true),
             (SettingKind::Text, "/home/x/Videos", true),
             (SettingKind::Text, "a\nb", false),
+            (SettingKind::Folder, "", true),
+            (SettingKind::Folder, "/home/x/Downloads", true),
+            (SettingKind::Folder, "/a\n/b", false),
+            (SettingKind::SecureDns, "automatic", true),
+            (SettingKind::SecureDns, "off", true),
+            (SettingKind::SecureDns, "provider:quad9", true),
+            (SettingKind::SecureDns, "custom:", true),
+            (
+                SettingKind::SecureDns,
+                "custom:https://d.test/q{?dns}",
+                true,
+            ),
+            (SettingKind::SecureDns, "custom:http://d.test/q", false),
+            (SettingKind::SecureDns, "secure", false),
         ];
         for (kind, text, want) in cases {
             assert_eq!(kind.accepts(text), *want, "{kind:?} {text:?}");

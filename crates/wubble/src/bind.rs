@@ -208,6 +208,7 @@ pub fn render_bar(
     window: &AppWindow,
     rows: &[BarRow],
     icons: &HashMap<String, wubble_store::Favicon>,
+    closed_icons: &HashMap<String, wubble_store::Favicon>,
     tab_icons: &BTreeMap<TabId, slint::Image>,
     // tab search: an open tab's row has its close button
     closable: bool,
@@ -225,7 +226,7 @@ pub fn render_bar(
                 .and_then(|t| tab_icons.get(&t).cloned())
                 .or_else(|| {
                     r.icon_url()
-                        .and_then(|u| icons.get(u))
+                        .and_then(|u| icons.get(u).or_else(|| closed_icons.get(u)))
                         .map(|f| favicon_image(f.width, f.height, &f.rgba))
                 })
                 .unwrap_or_default(),
@@ -234,4 +235,21 @@ pub fn render_bar(
     sync(window.get_command_results(), rows, |m| {
         window.set_command_results(m)
     });
+}
+
+/// The field's inline completion (`CommandHead.inline`): the typed text, the suffix shown
+/// selected after it ("" for none) and that selection's UTF-8 offsets. `serial` is the query's
+/// generation: the field re-applies a completion once per query.
+pub fn render_inline(window: &AppWindow, typed: &str, suffix: &str, serial: u64) {
+    let offset = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+    let view = wubble_ui::CommandInline {
+        base: typed.into(),
+        suffix: suffix.into(),
+        from: offset(typed.len()),
+        to: offset(typed.len() + suffix.len()),
+        serial: (serial & 0x7fff_ffff) as i32,
+    };
+    if window.get_command_inline() != view {
+        window.set_command_inline(view);
+    }
 }

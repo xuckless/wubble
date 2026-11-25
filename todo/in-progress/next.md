@@ -3,11 +3,11 @@
 Legend: `[ ]` open · `[~]` in progress. Loaded by the owner while the sprint compiles; written blind now on their own branches, integrated after the sprint passes.
 
 ## A. Written branches to integrate, and more search engines
-- [ ] More search engines (owner): Chrome's list plus privacy ones: Google, Bing, DuckDuckGo, Kagi, Brave Search, Startpage, Ecosia, Qwant, Yahoo, Yandex, Baidu, Naver, Perplexity, plus Wikipedia, YouTube and GitHub as keyword engines; Chromium's regional defaults table
+- [x] More search engines (owner), integrated on `next/all` (`crates/wubble-core/src/engines.rs`; unit tests, Settings smokes): Chrome's list plus privacy ones: Google, Bing, DuckDuckGo, Kagi, Brave Search, Startpage, Ecosia, Qwant, Yahoo, Yandex, Baidu, Naver, Perplexity, plus Wikipedia, YouTube and GitHub as keyword engines; Chromium's regional defaults table
 
 ## Command bar: local calculator and unit conversion answers (`omni-calculator-units`)
 
-Key: `omni-calculator-units` · engine patch: no · state: written on `feat/omni-calculator-units`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `omni-calculator-units` · engine patch: no · state: [~] integrated on `next/all` (unit tests pass; no smoke types into the bar yet: the answer row and its toast unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's omnibox answers '12*7+3', 'sqrt(2)', '5 km in miles' and '70 F to C' as a row above the search. Chrome gets these from the server; wubble must compute them on the device with no request. Today omnibox::Kind (crates/wubble-core/src/omnibox.rs) has OpenTab/History/Bookmark/Search/Action and there is no answer row.
 
@@ -20,7 +20,7 @@ Add Kind::Answer and Target::Copy(String). Choosing the row copies the result th
 
 ## Command bar: inline autocomplete and Chrome's omnibox keys (`omni-inline-autocomplete`)
 
-Key: `omni-inline-autocomplete` · engine patch: no · state: written on `feat/omni-inline-autocomplete`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `omni-inline-autocomplete` · engine patch: no · state: [~] integrated on `next/all` (unit tests pass; the field's selected completion and the keys unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome finishes a typed address inside the field. Type 'git' and it shows 'github.com/' with the added part selected. Right or End accepts it, Backspace drops it, Enter goes to the completed URL. Only a history entry whose host or URL starts with the typed text and whose typed_count is above 0 (or that has a high visit_count) is offered. wubble has no inline completion. CommandHead (crates/wubble-ui/ui/kit/chrome/command-head.slint) handles only Up, Down, Enter and Escape, and omnibox::rank (crates/wubble-core/src/omnibox.rs) returns rows only.
 
@@ -37,7 +37,7 @@ Wire it in crates/wubble/src/bar.rs and the host's command-bar handling. Add uni
 
 ## Search engines: more built-ins, custom engines with keywords, management in Settings (`search-engines-keywords`)
 
-Key: `search-engines-keywords` · engine patch: no · state: written on `feat/search-engines-keywords`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `search-engines-keywords` · engine patch: no · state: [~] integrated on `next/all` (unit tests and the Settings tests pass; site search discovery against a live OpenSearch page unchecked) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome keeps a list of search engines, each with a name, a keyword and a URL with %s. You can set any of them as the default, add and edit your own, and site searches are picked up from pages. wubble has only `ENGINES: [EngineInfo; 2]` (Google, DuckDuckGo) in crates/wubble-core/src/omnibox.rs, chosen by the `search.engine` Select in settings.rs.
 
@@ -50,13 +50,13 @@ The Settings section shows the default engine, the built-in list and the custom 
 
 ## Startup, home page and quit settings (`startup-home-settings`)
 
-Key: `startup-home-settings` · engine patch: no · state: written on `feat/startup-home-settings`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `startup-home-settings` · engine patch: no · state: [~] integrated on `next/all` (unit tests, session smoke on the default mode; Start page and Specific pages modes, the Restore notice and the macOS quit warning (Cmd+Q, Mac) unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's 'On startup' setting offers: open the New Tab page, continue where you left off, or open a specific set of pages. There is a Home page (Alt+Home / Cmd+Shift+H), a 'Restore pages?' offer after a crash, and on macOS 'Warn before quitting'. The design's settings (pages/settings.tsx row `startup`: 'When Wubble opens', Start page | Last session) have the first two. wubble has no such setting: it always restores the stored session (wubble-store session.rs load_session). Build: settings rows in crates/wubble-core/src/settings.rs. `startup.mode` is a Select of Last session (default), Start page, or Specific pages. `startup.pages` is a list editor of URLs, shown only for Specific pages. `home.url` is empty for the start page. `quit.warn` (macOS default on) requires a second Cmd+Q or a hold. At start, in crates/wubble/src (where the loaded Model is handed to the host): with Start page, keep Spaces, pinned tabs and folders, but open a start tab in each window. The unpinned tabs of the last session go to the archive or recently closed, following Chrome's 'new tab page' semantics: they are not restored. Pinned tabs always stay. With Specific pages, open those pages as new tabs. Record a clean-exit flag in the store. When the last run did not exit cleanly and the mode is not Last session, show a kit banner 'Restore pages?' that restores the saved session. Add `Action::GoHome` (Alt+Home on Linux/Windows, Cmd+Shift+H on macOS) and a palette title 'Home'. Add a command-bar row 'Open pages from last session'.
 
 ## Recently closed windows, folders and Spaces, and a recently-closed list UI (`recently-closed-full`)
 
-Key: `recently-closed-full` · engine patch: no · state: written on `feat/recently-closed-full`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `recently-closed-full` · engine patch: no · state: [~] integrated on `next/all` (unit tests, store migration v17 tests, smokes pass; reopening a window, folder or Space unchecked by hand; a reopened window comes back in its normal size, not maximized) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's TabRestoreService keeps tabs, whole windows and tab groups. Ctrl+Shift+T reopens the newest entry of any kind, and the History menu and tab search list 'Recently closed' with titles. Today crates/wubble-core/src/closed.rs and wubble-store/src/closed.rs keep tab entries only, and nothing lists them (`Store::recently_closed` has no caller in crates/wubble). A closed Main window keeps its Space, so it is not remembered at all (model/windows.rs close_window), and a closed folder or deleted Space adds its tabs one by one, if at all. Build: generalize the store row into an entry enum, `Tab | Window { space, geometry } | Folder { name, tabs } | Space { name, tint, icon, container, tabs }`, with a migration. Grouped entries carry child tab rows with url, title, container, place and, once captured, history. Record a Window entry in `close_window` (and a Space entry from `DeleteSpace` and `FolderRow::Close`, when they actually close tabs). Extend the `closed::Event` and `Effect` machine: `Restore` gains a window variant (reopen a Main window on that Space at its geometry, or recreate the Space if it is gone) and a folder or Space variant. Mod+Shift+T and Mod+Z pop any kind. UI: a 'Recently closed' block at the top of wubble://history (pages.rs, history page model), and command-bar rows (bar.rs) listing the entries with titles. Each row reopens its entry and can be deleted on its own. Keep RECENTLY_CLOSED_MAX at 25 entries. Agent and private tabs stay off the list.
 
@@ -64,7 +64,7 @@ Chrome's TabRestoreService keeps tabs, whole windows and tab groups. Ctrl+Shift+
 
 ## HTTPS-First and HTTPS-Only mode (`https-upgrade-mode`)
 
-Key: `https-upgrade-mode` · engine patch: no · state: not written.
+Key: `https-upgrade-mode` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); a live http-only site and the https-redirects-to-http case unchecked by hand.
 
 Chrome's "Always use secure connections" setting tries https for every http navigation. If https fails, it shows an interstitial ("Connection is not secure" … "Continue to site") and remembers the choice per site for a while. Chrome also upgrades automatically with a silent fallback (HTTPS-Upgrades). wubble only upgrades typed scheme-less public hosts (decision "Typed local addresses") and has no mode.
 
@@ -77,7 +77,7 @@ Build:
 
 ## Secure DNS (DNS-over-HTTPS) setting (`secure-dns`)
 
-Key: `secure-dns` · engine patch: no · state: not written.
+Key: `secure-dns` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); not checked against a live resolver.
 
 Chrome Settings > Security > "Use secure DNS" offers Off, "With your current service provider" (automatic upgrade), or a chosen provider (Cloudflare, Google, Quad9, CleanBrowsing, NextDNS, OpenDNS, …) or a custom template. wubble has no row, and Chromium's default (automatic) applies silently.
 
@@ -90,7 +90,7 @@ Build:
 
 ## Global Privacy Control (Sec-GPC header and navigator.globalPrivacyControl) (`global-privacy-control`)
 
-Key: `global-privacy-control` · engine patch: no · state: not written.
+Key: `global-privacy-control` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); the `Sec-GPC` header and `navigator.globalPrivacyControl` not checked on a live page (the feature names are from source, unverified on libcef 156).
 
 GPC sends `Sec-GPC: 1` on every request and exposes `navigator.globalPrivacyControl === true`. Brave and Firefox ship it, and Chrome has it behind a feature. wubble has neither.
 
@@ -103,7 +103,7 @@ Build:
 
 ## Privacy preferences table: Do Not Track, preload pages, ad privacy, WebRTC IP (`privacy-prefs-table`)
 
-Key: `privacy-prefs-table` · engine patch: no · state: not written.
+Key: `privacy-prefs-table` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); each pref not read back from a live Chromium.
 
 Chrome's privacy settings are profile prefs: "Send a Do Not Track request" (`enable_do_not_track`, off by default), "Preload pages" (`net.network_prediction_options`), "Allow sites to check if you have payment methods saved" (`payments.can_make_payment_enabled`), the Ad privacy toggles (`privacy_sandbox.m1.topics_enabled`, `privacy_sandbox.m1.fledge_enabled`, `privacy_sandbox.m1.ad_measurement_enabled`), and the WebRTC IP handling policy (`webrtc.ip_handling_policy`, with no UI in Chrome; Brave exposes it). wubble sets one pref only (`webkit.webprefs.minimum_font_size`, crates/wubble-engine/src/view.rs:848) and exposes none of these.
 
@@ -114,7 +114,7 @@ Build:
 
 ## "Download PDFs instead of opening them" site setting (`pdf-download-setting`)
 
-Key: `pdf-download-setting` · engine patch: no · state: not written.
+Key: `pdf-download-setting` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's Settings → Privacy → Site settings → PDF documents offers "Open PDFs in Chrome" or "Download PDFs", stored as the pref plugins.always_open_pdf_externally. When it is on, a PDF navigation becomes a download that the system viewer can open. wubble always shows PDFs in Chromium's viewer (host/builtins.rs `pdf` set) and has no such setting.
 
@@ -122,7 +122,7 @@ What to build: (1) wubble-core/src/settings.rs: `PDF_DOWNLOAD` (key pdf.download
 
 ## Downloads settings section with a folder picker (`download-location-setting`)
 
-Key: `download-location-setting` · engine patch: no · state: not written.
+Key: `download-location-setting` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's Settings → Downloads has Location [Change] and "Ask where to save each file". The design has a Downloads section with "Save files to" (a folder choice), "Ask where to save each file" and "Open safe files after downloading" (ref/the-wallpaper-project/src/wubble/pages/settings.tsx lines ~55-123). In wubble the downloads folder can only be set on the command line (crates/wubble/src/profile.rs downloads_dir: the CLI, else dirs::download_dir). DOWNLOADS_ASK_WHERE and the media rows sit under Section::General, and there is no Downloads section.
 
@@ -132,14 +132,14 @@ What to build: (1) wubble-core/src/settings.rs: add `Section::Downloads` (title 
 
 ## Context menu: the missing link, selection, page and frame rows (`ctx-menu-link-page-frame`)
 
-Key: `ctx-menu-link-page-frame` · engine patch: no · state: not written.
+Key: `ctx-menu-link-page-frame` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); the macOS Emoji & Symbols and Writing Direction rows need a run on the Mac.
 Note: 0.6.1 shipped more context-menu entries: check what is left before writing.
 
 Chrome's `RenderViewContextMenu` has rows that wubble's `ROWS` (crates/wubble/src/menu.rs) lacks. Link: "Open link in new window" (now possible: `Action::NewWindow` and `Command::MoveToWindow` exist; the comment above `ROWS` saying one window is stale), "Open link in split view" (wubble has split: `Command::SplitWith`), an "Open link in Glance" equivalent (`ModelCommand::OpenGlance`), and "Copy link text". Selection: "Copy link to highlight", which puts a `#:~:text=` URL on the clipboard, built as Chromium's `shared_highlighting` text-fragment generator does (port the generator to a helper page script, BSD-3, run with `View::run_script_in` in `ContextMenu::frame`), plus a search row for a selected URL that offers "Go to <url>". Frame (when `frame_url` is non-empty and differs from `page_url`): "Reload frame" (script `location.reload()` in the frame) and "View frame source" (view-source: of frame_url via the existing `Action::ViewSource` path, parameterised by URL). Editable: "Emoji" on macOS (`orderFrontCharacterPalette:`) and Windows (the Win+. panel through `CoreInputView`/SendInput), plus "Writing direction" on macOS. Keep the Chromium group order, with dividers from the `row!` group numbers. Add `Command` variants as needed and execute them where the host runs `menu::Command` (crates/wubble/src/host). Unit-test each row's predicate in menu.rs's tests as the existing ones do.
 
 ## Media context menu: Picture in Picture, Mute, video frame rows (`media-context-menu`)
 
-Key: `media-context-menu` · engine patch: no · state: not written.
+Key: `media-context-menu` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's context menu on a video has Play/Pause, Mute/Unmute, Loop, Show controls, Picture in picture, Open video in new tab, Save video as, Copy video address, and since M120 Copy video frame and Save video frame as. wubble's crates/wubble/src/menu.rs ROWS has Play, Loop, Show Controls, the three address rows and the screenshot row. Picture in Picture is left out on purpose (comment at ~line 313 and TODO.md M1 "Page context menu: the Picture in Picture row"), and there is no Mute or frame row, even though wubble now has its own PiP (wubble_core::pip) and a frame grab (kit.js `k.frame`).
 
@@ -147,20 +147,20 @@ What to build in menu.rs, with its label tests updated: (1) A Mute/Unmute row: `
 
 ## Video strip save button: wording and in-progress state (`video-save-button-states`)
 
-Key: `video-save-button-states` · engine patch: no · state: not written.
+Key: `video-save-button-states` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 TODO.md review findings: "Video strip button reads 'Save video'; a second click mid-download re-enters the downloader". Chrome has no such control. The rules for this one come from wubble (decisions.md "Save control"). The strip's save state is wubble_core::video::Save (host/videos.rs video_save_now, video_save_state, video_save_redraw), and the click goes to `video_save(x, y)`, which starts the downloader again even while that video's job runs.
 
 What to build: (1) Core (wubble-core/src/video.rs): make `Save` carry the job's state for this tab's video: Idle, Saving{fraction}, Saved, Failed. Derive it from the downloads entry the media job owns, which has one owner, the downloads list. The click maps to a pure effect: Idle → start the downloader; Saving → open the downloads popover at that row, never a second job; Saved → show in folder or open the menu; Failed → retry. Unit tests over the states. (2) Label: the button's accessible label and tooltip read from that state ("Save video", "Saving video, 40%", "Saved, show in folder", "Save failed, retry"), and the glyph shows progress with the kit's progress part. Settle the wording with the owner's decision on wording if one exists; otherwise use these and flag them. (3) video-controls.slint binds the new fields only (no new drawing outside kit parts). All platforms.
 
 ## D. Video downloader: wider and harder (owner: "more sites and formats, quality and codec choice, and a way to detect subtitle files too")
-- [ ] More sites and formats: embedded players (iframes, YouTube and Vimeo embeds), service-worker-served media, multi-period DASH, audio-only
-- [ ] Quality and codec choice: the best quality this machine plays by default, a quality menu, audio and video merged
-- [ ] Subtitles: detect subtitle tracks and files (WebVTT, SRT, TTML, HLS/DASH subtitle renditions) and offer them with the video
+- [~] More sites and formats: embedded players (iframes, YouTube and Vimeo embeds), service-worker-served media, multi-period DASH, audio-only (integrated on `next/all`: loopback probes save iframe, `sw`, `dash-periods` (16 s, the ad period left out, joined by the rebuilt bundled ffmpeg) and audio; the YouTube embeds need `media.youtube` and a live check; Vimeo embeds not written)
+- [x] Quality and codec choice: the best quality this machine plays by default, a quality menu, audio and video merged (integrated on `next/all`; unit tests, probes)
+- [x] Subtitles: detect subtitle tracks and files (WebVTT, SRT, TTML, HLS/DASH subtitle renditions) and offer them with the video (integrated on `next/all`; probes save `<track>`, SRT, HLS and DASH subtitles beside the video; TTML and YouTube captions by unit tests only)
 
 ## Media downloader: multi-period DASH and codec-aware default quality (`media-dash-periods-codec`)
 
-Key: `media-dash-periods-codec` · engine patch: no · state: not written.
+Key: `media-dash-periods-codec` · engine patch: no · state: [x] integrated on `next/all` (unit tests; `dash-periods` probe joined with the bundled ffmpeg rebuilt with `concat`).
 
 TODO.md: "Media downloader: a DASH manifest of several periods is refused ('Not supported'); the default quality takes the first row of a height whatever its codec (HEVC or AV1 before H.264)". In wubble-core/src/media/dash.rs, `let [period] = mpd.periods.as_slice() else { … "a manifest with several periods" }` refuses multi-period manifests. In wubble-core/src/media/select.rs, `choose` takes the first choice of the wanted height.
 
@@ -168,22 +168,23 @@ What to build: (1) dash.rs: for several periods, match representations across pe
 
 ## Media detection for service-worker answers and embedded YouTube (`media-detect-sw-iframe`)
 
-Key: `media-detect-sw-iframe` · engine patch: no · state: not written.
+Key: `media-detect-sw-iframe` · engine patch: no · state: [~] integrated on `next/all` (the `sw` probe saves the worker's clip, after a fix: welding change 69's handler cancelled every service worker fetch; the embedded YouTube lookup unchecked live).
 
 TODO.md review findings: "a video a service worker answers is not seen by the detection (the worker's own fetch has no tab; `--smoke media=probe` on fixtures `sw`): the save control says nothing was found" and "an embedded YouTube player (an iframe of youtube.com) has no lookup, since the lookup keys on the tab's own address". The response hook (host/media.rs, on CEF's IO thread) attributes responses by browser, and a service worker's fetch has none. The YouTube lookup (`media_youtube_page`) runs only for the tab's committed URL (youtube::video_id).
 
 What to build: (1) Service workers: in the response hook, a response with no browser but with a service worker's scope or initiator origin is kept in a small per-origin queue. On the host side, it is credited to every live tab of the same container whose committed origin equals the worker's origin, and the newest active tab of that origin wins when several match. Put the attribution in a pure function in wubble_core::media::detect with unit tests. (2) Embedded YouTube: kit.js's `bigFrame()` also reports the iframe's `src` when it is a youtube.com or youtube-nocookie.com /embed/ID URL. The host feeds that ID to the existing lookup (behind media.youtube, still off by default) and lists the result for the tab as Kind::YouTube, so the strip's save control over the iframe works. Extend youtube::video_id with the embed forms and nocookie hosts, with unit tests. (3) Add the fixture rows to scripts/media-fixtures.py for hand runs. All platforms.
 
 ## E. Ad blocker: uBlock Origin parity and click abuse (owner)
-- [ ] uBlock Origin parity: scriptlets at document start, procedural cosmetic filters (`:has-text`, `:upward`, `:remove`, ...), redirect resources, `$removeparam`, `$csp`, `$popup`/`$popunder`
-- [ ] "Weird invisible panes on websites that open up another tab when clicked": the invisible full-page overlay that opens a new tab (popunder) on the first click: block it
-- [ ] "Not allowing arbitrary downloads and scripts to happen when clicking something": a click must not start a download or a navigation to another site the user did not aim at
-- [ ] Content blocker: uBO scriptlet coverage
-- [ ] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
+Written blind on next/blocker (2026-11-25), integrated on `next/all` (unit tests; block, popup, builtins, data, spell smokes pass).
+- [~] uBlock Origin parity: scriptlets at document start, procedural cosmetic filters (`:has-text`, `:upward`, `:remove`, ...), redirect resources, `$removeparam`, `$csp`, `$popup`/`$popunder`
+- [~] (integrated; no smoke clicks an invisible overlay yet: unchecked on a live ad site) "Weird invisible panes on websites that open up another tab when clicked": the invisible full-page overlay that opens a new tab (popunder) on the first click: block it
+- [~] (integrated; the prompt asks on every site's first download of a run, a click aimed or not; the page's own file (the PDF viewer's Save) goes without asking) "Not allowing arbitrary downloads and scripts to happen when clicking something": a click must not start a download or a navigation to another site the user did not aim at
+- [~] Content blocker: uBO scriptlet coverage
+- [~] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
 
 ## Content blocker start-up gate holds the first navigation (`blocker-startup-gate`)
 
-Key: `blocker-startup-gate` · engine patch: no · state: not written.
+Key: `blocker-startup-gate` · engine patch: no · state: [x] integrated on `next/all` (a fresh profile's first web page waited about 0.15 s in the smokes; lists ready before the first frame now open the gate then, not at its 10 s deadline).
 
 With no compiled-engine cache (first run, or after a list change), requests go through unfiltered for several seconds until the lists compile. Chrome extensions such as uBO hold requests at start-up. wubble cannot wait on CEF's IO thread, so the hold belongs at the host. The swap point is `Blocking::swap` around crates/wubble/src/blocking.rs:477-481 (`measure::Stage::BlockerReady`).
 
@@ -191,7 +192,7 @@ To build: a pure lifecycle in wubble-core (for example `blocker_gate.rs`: `enum 
 
 ## Blocker scriptlets run at document start (`blocker-scriptlets-at-start`)
 
-Key: `blocker-scriptlets-at-start` · engine patch: no · state: not written.
+Key: `blocker-scriptlets-at-start` · engine patch: no · state: [~] integrated on `next/all` (unit tests, block smoke; a live page's document-start scriptlet unchecked by hand).
 
 uBO injects scriptlets (`##+js(...)`) at document_start, before any page script runs. In wubble the frame's `cosmetic.js` sends `hello` when its context is created; the browser answers, and only then runs the scriptlets with `run_script_in` (crates/wubble-engine/src/view.rs `answer_cosmetic`, around line 1099). By then the page's own scripts have often run, so many scriptlets (set-constant, abort-on-property-read, json-prune, no-fetch-if) come too late. That is the "uBO scriptlet coverage" gap.
 
@@ -199,7 +200,7 @@ To build: when a view's main frame is about to navigate (`OnBeforeBrowse`/nav co
 
 ## Dangerous-site interstitial for blocker badware/malware document blocks (`dangerous-site-interstitial`)
 
-Key: `dangerous-site-interstitial` · engine patch: no · state: not written.
+Key: `dangerous-site-interstitial` · engine patch: no · state: [~] integrated on `next/all` (unit tests; no smoke opens a badware-listed page).
 
 Chrome shows a red full-page "Dangerous site" warning with "Back to safety" and, under Details, "visit this unsafe site". uBlock Origin's strict blocking does the same for `$doc` and badware rules. wubble's blocker ships the uBO badware list (crates/wubble-blocker/src/catalog.rs `ublock-badware`). A blocked main-frame document ends as ERR_BLOCKED_BY_CLIENT in the generic error panel (crates/wubble-core/src/neterror.rs -20), with no way through and no explanation.
 
@@ -212,14 +213,17 @@ Build:
 - No network lookups: Safe Browsing stays out.
 
 ## F. Linux measurement against Firefox (owner: "make sure the performance is better than at least Firefox")
-- [ ] The Mac harness's states on Linux (idle, a still page, video, video under glass, scrolling, typing: CPU per process, memory, GPU, energy where Linux exposes it), the same run in Firefox, a comparison table; wubble must beat Firefox in every state
+- [~] The Mac harness's states on Linux (idle, a still page, video, video under glass, scrolling, typing: CPU per process, memory, GPU, energy where Linux exposes it), the same run in Firefox, a comparison table; wubble must beat Firefox in every state · the bench is `scripts/bench/linux-vs-firefox.py` (merged into `next/all`); its first run loses to Firefox on video, scroll and animation (section H)
 
 ## G. Leftovers from the sprint and this round (owner, 2026-11-25)
 - [ ] macOS: the search region from the system's region setting (`NSLocale`), not `LANG` (a GUI app has none; today it falls back to Google, Bing, Yahoo)
 - [ ] `$csp` filters: main-frame responses the blocker names get the CSP through DevTools `Fetch` (CEF cannot change response headers)
 - [ ] Picture-in-picture and the video frame rows for a video inside a subframe
+- [ ] The shell draws Hangul syllables as separate jamo (Settings' engine list shows 네이버 as ㄴㅔㅇㅣㅂㅓ in the Linux gallery): the font fallback for Korean
+- [ ] A reopened window (recently closed) comes back in its normal size: the store keeps its size and place, not maximized, fullscreen or its monitor
+- [ ] Another country's built-in engines are hidden from Settings' list but their keywords still search (`Engines::resolve` keeps every built-in active): keep or drop them as Chrome does
 - [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
-- [ ] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH
+- [~] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH (the build script's stamp includes the configuration, so packaging rebuilds it; built and checked on Linux for `next/all`; the Mac's build on the Mac)
 - [ ] macOS Keychain prompts (owner, 2026-11-25: twice on a first install, again on every test build). Found on the Mac: the release's signature requirement is team and bundle id (`identifier "dev.wubble.browser" ... OU = "2MGLZ5685D"`), so signed updates keep their grant; an ad hoc build's is its cdhash, so every rebuild asks. Two items, so two prompts: `wubble`/`vault-wubble` (the vault key) and `Chromium Safe Storage`/`Chromium` (CEF's cookie and password key, named for Chromium, so shared with any Chromium-branded app on the machine).
   - [ ] A `--profile DIR` run can be throwaway (honour the `.wubble-smoke-profile` marker or a flag), so the harness and test apps use Chromium's mock keychain and a test vault
   - [ ] One prompt, not two: the vault's key kept in wubble's own item next to the cookie key, or derived from one item
@@ -228,6 +232,6 @@ Build:
 ## H. Linux performance and reach (owner, 2026-11-25, after the first Linux-vs-Firefox run: wubble loses 1.5x on video, 2-3x on scroll and animation)
 - [~] A Linux page layer: Chromium's frame as its own Wayland subsurface below the shell, no copy and no shell draw per page frame. Feasibility research first (`docs/research/linux-page-layer.md` on `research/linux-layer`), then a one-day experiment, then the build
 - [ ] Linux releases built in an older container (for example Ubuntu 22.04, glibc 2.35), not on Fedora 44 (today's release needs glibc 2.43, so only 2026 distros run it)
-- [ ] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merge with the next round
+- [x] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merged into `next/all`
 - [ ] A locked store falls back to defaults for the whole session, silently (Mac harness, 2026-11-25: a quick relaunch while the previous run still held `wubble.db` started with every setting at its default and no saved session). Wait and retry the lock for a few seconds at start, and if it stays locked, say so in a notice instead of only stderr; find what still holds the file after quit
 - [ ] The "ready: restart to update" toast leaves after about 30 s; a click on its Restart after that did nothing (Mac session, 0.6.2 to 0.6.3, unconfirmed). Keep the toast until it is acted on, or make sure a click while it leaves still restarts

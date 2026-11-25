@@ -12,6 +12,10 @@
 //! Widevine and PlayReady `urn:uuid:...`), on a segment or as a master's `EXT-X-SESSION-KEY`,
 //! makes the stream [`Refusal::Protected`]. Plain `AES-128` with the `identity` key format is
 //! ordinary transport encryption: the key is fetched and the segment decrypted ([`decrypt`]).
+//!
+//! Subtitle renditions (`EXT-X-MEDIA:TYPE=SUBTITLES` with a `URI`: a playlist of WebVTT
+//! segments) are variants of [`Track::Subtitle`] with their `LANGUAGE` and `NAME`; closed
+//! captions inside the video (`CLOSED-CAPTIONS`, no playlist) are not files and are left out.
 
 use m3u8_rs::{AlternativeMediaType, Key, KeyMethod, MasterPlaylist, MediaPlaylist, Playlist};
 
@@ -50,7 +54,12 @@ pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
     match parse(text, base)? {
         Parsed::Master(v) => Ok(v),
         Parsed::Media(plan) => Ok(vec![Variant {
-            track: Track::Muxed,
+            // A playlist of WebVTT segments is subtitles.
+            track: if plan.container.is_subtitle() {
+                Track::Subtitle
+            } else {
+                Track::Muxed
+            },
             container: plan.container,
             height: None,
             bandwidth: None,
@@ -59,6 +68,7 @@ pub fn variants(text: &str, base: &str) -> Result<Vec<Variant>, Refusal> {
             source: Source::Planned(plan),
             group: None,
             headers: vec![],
+            lang: None,
         }]),
     }
 }
@@ -97,9 +107,29 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
                 source: Source::HlsPlaylist(join_url(base, uri)),
                 group: Some(a.group_id.clone()),
                 headers: vec![],
+                lang: a.language.clone(),
             })
         })
         .collect();
+    let subtitles = m
+        .alternatives
+        .iter()
+        .filter(|a| a.media_type == AlternativeMediaType::Subtitles)
+        .filter_map(|a| {
+            let uri = a.uri.as_deref()?;
+            Some(Variant {
+                track: Track::Subtitle,
+                container: Container::Vtt,
+                height: None,
+                bandwidth: None,
+                codecs: a.name.clone(),
+                size: None,
+                source: Source::HlsPlaylist(join_url(base, uri)),
+                group: Some(a.group_id.clone()),
+                headers: vec![],
+                lang: a.language.clone(),
+            })
+        });
     let mut out: Vec<Variant> = m
         .variants
         .iter()
@@ -131,6 +161,7 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
                 source: Source::HlsPlaylist(join_url(base, &v.uri)),
                 group: v.audio.clone().filter(|_| separate && !sound_only),
                 headers: vec![],
+                lang: None,
             }
         })
         .collect();
@@ -138,6 +169,7 @@ fn master(m: &MasterPlaylist, base: &str) -> Result<Vec<Variant>, Refusal> {
     if out.is_empty() {
         return Err(Refusal::Failed("the playlist lists no streams".into()));
     }
+    out.extend(subtitles);
     Ok(out)
 }
 
@@ -157,7 +189,7 @@ fn names_picture(codecs: &str) -> bool {
 /// by its `EXT-X-MAP`): the same for every variant of a stream.
 pub fn with_container(mut variants: Vec<Variant>, plan: Container) -> Vec<Variant> {
     for v in &mut variants {
-        if matches!(v.source, Source::HlsPlaylist(_)) {
+        if matches!(v.source, Source::HlsPlaylist(_)) && v.track != Track::Subtitle {
             v.container = match (v.track, plan) {
                 (Track::Audio, Container::Mp4) => Container::M4a,
                 _ => plan,
@@ -274,6 +306,7 @@ fn media(m: &MediaPlaylist, base: &str) -> Result<Plan, Refusal> {
     Ok(Plan {
         segments,
         container,
+        periods: vec![],
     })
 }
 
@@ -405,6 +438,53 @@ other.mp4
         assert_eq!(k2.uri, "https://cdn.test/v/k2");
         assert_eq!(k2.iv, core::array::from_fn(|i| i as u8));
         assert_eq!((s[4].key.as_ref(), s[4].range), (None, None));
+    }
+
+    #[test]
+    fn subtitle_renditions_are_listed_with_their_language() {
+        let text = "#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,URI=\"subs/en.m3u8\"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"Deutsch\",LANGUAGE=\"de\",URI=\"subs/de.m3u8\"
+#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"CC1\",INSTREAM-ID=\"CC1\"
+#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,SUBTITLES=\"subs\",CLOSED-CAPTIONS=\"cc\"
+v360/index.m3u8
+";
+        let Parsed::Master(v) = parse(text, BASE).unwrap() else {
+            panic!("not a master")
+        };
+        let subs: Vec<(&str, Option<&str>, &Source)> = v
+            .iter()
+            .filter(|v| v.track == Track::Subtitle)
+            .map(|v| (v.codecs.as_str(), v.lang.as_deref(), &v.source))
+            .collect();
+        assert_eq!(
+            subs,
+            [
+                (
+                    "English",
+                    Some("en"),
+                    &Source::HlsPlaylist("https://cdn.test/hls/subs/en.m3u8".into())
+                ),
+                (
+                    "Deutsch",
+                    Some("de"),
+                    &Source::HlsPlaylist("https://cdn.test/hls/subs/de.m3u8".into())
+                ),
+            ]
+        );
+        // The segments' container is the video's, never the subtitles'.
+        let fmp4 = with_container(v, Container::Mp4);
+        assert!(
+            fmp4.iter()
+                .all(|v| (v.track == Track::Subtitle) == (v.container == Container::Vtt))
+        );
+        // A playlist of WebVTT segments read alone is subtitles.
+        let media = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg0.vtt\n#EXTINF:6,\nseg1.webvtt\n#EXT-X-ENDLIST\n";
+        let v = variants(media, BASE).unwrap();
+        assert_eq!(
+            (v[0].track, v[0].container),
+            (Track::Subtitle, Container::Vtt)
+        );
     }
 
     #[test]

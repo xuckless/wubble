@@ -42,6 +42,7 @@ use crate::tidy;
 use crate::window::{Geometry, Shown, Window, WindowId, WindowTarget};
 
 mod crossing;
+mod reopen;
 mod windows;
 
 pub use crossing::{Crossing, Reach, crossing};
@@ -140,6 +141,9 @@ pub enum Command {
     },
     /// The folder's tabs stay, at the folder's position.
     DeleteFolder(FolderId),
+    /// The folder header's "Close Folder": its tabs close and the folder goes with them (the
+    /// recently-closed list keeps it as one entry, `closed::Entry::Folder`).
+    CloseFolder(FolderId),
     /// Fold the folder's tabs away in the sidebar, or show them.
     SetFolderCollapsed {
         folder: FolderId,
@@ -280,6 +284,14 @@ pub enum Command {
     CloseWindow(WindowId),
     /// The platform focused this window.
     FocusWindow(WindowId),
+    /// A recently-closed Main window again: on its Space at its geometry, the Space rebuilt from
+    /// the entry when it is gone; a window already showing the Space is focused instead.
+    ReopenWindow(crate::closed::ClosedWindow),
+    /// A recently-closed folder again, last in its Space (the active one when that is gone),
+    /// its first tab shown.
+    ReopenFolder(crate::closed::ClosedFolder),
+    /// A deleted Space again, with its tabs, shown in the focused window.
+    ReopenSpace(crate::closed::ClosedSpace),
     /// The window's size or position changed (kept for the session).
     ResizeWindow {
         window: WindowId,
@@ -2290,6 +2302,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             vec![]
         }
         Command::DeleteFolder(f) => m.delete_folder(f),
+        Command::CloseFolder(f) => m.close_folder(f),
         Command::SetFolderCollapsed { folder, collapsed } => {
             if let Some(si) = m.folder_space(folder)
                 && let Some(f) = m.spaces[si].folder_mut(folder)
@@ -2394,6 +2407,9 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::NewWindow { space } => m.new_window(space),
         Command::NewPrivateWindow { url } => m.new_private_window(url),
         Command::CloseWindow(w) => m.close_window(w),
+        Command::ReopenWindow(w) => m.reopen_window(w),
+        Command::ReopenFolder(f) => m.reopen_folder(f),
+        Command::ReopenSpace(s) => m.reopen_space(s),
         Command::FocusWindow(w) => {
             m.focus(w);
             vec![]

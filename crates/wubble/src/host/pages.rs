@@ -459,7 +459,11 @@ impl Host {
             }
             self.pages.shown = page;
             match page {
-                Some(InternalPage::History) => self.feed_fetch(Feed::History, false, HISTORY_PAGE),
+                Some(InternalPage::History) => {
+                    self.feed_fetch(Feed::History, false, HISTORY_PAGE);
+                    // the "Recently closed" rows above the visits
+                    self.recent_refresh();
+                }
                 Some(InternalPage::Archive) => self.feed_fetch(Feed::Archive, false, HISTORY_PAGE),
                 Some(InternalPage::Bookmarks) => self.bookmarks_request(None),
                 Some(InternalPage::AgentLog) => self.agent_log_shown(),
@@ -630,6 +634,12 @@ impl Host {
     pub(crate) fn history_query(&mut self, query: &str) {
         query.clone_into(&mut self.pages.history.query);
         self.feed_fetch(Feed::History, false, HISTORY_PAGE);
+        self.render_recent();
+    }
+
+    /// What the history page's search field holds (its "Recently closed" rows follow it too).
+    pub(super) fn history_search(&self) -> &str {
+        &self.pages.history.query
     }
 
     pub(crate) fn history_more(&mut self) {
@@ -678,7 +688,10 @@ impl Host {
         let shown = self.pages.history.rows.len().max(HISTORY_PAGE);
         self.store.clear_history(what, move |_| {
             let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| host.feed_fetch(Feed::History, false, shown));
+                with_host(|host| {
+                    host.feed_fetch(Feed::History, false, shown);
+                    host.recent_refresh();
+                });
             });
         });
     }

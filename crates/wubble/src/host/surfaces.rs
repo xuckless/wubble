@@ -51,6 +51,9 @@ pub(super) struct Drawn {
     permission: Option<PermissionPrompt>,
 }
 
+/// Chromium's ERR_BLOCKED_BY_CLIENT: a request the content filter cancelled.
+const BLOCKED_BY_CLIENT: i32 = -20;
+
 impl Host {
     pub(super) fn on_page_event(&mut self, window: &AppWindow, view: ViewId, event: PageEvent) {
         // Events of a view whose tab is already gone: welding answered its
@@ -82,7 +85,10 @@ impl Host {
             if self.pinch_smoke_answer(&event) {
                 return;
             }
-            if self.agent_answer(&event) || self.ax_answer(&event) || self.media_answer(tab, &event)
+            if self.agent_answer(&event)
+                || self.ax_answer(&event)
+                || self.media_answer(tab, &event)
+                || self.site_search_answer(tab, &event)
             {
                 return;
             }
@@ -124,8 +130,8 @@ impl Host {
                     });
                 let nav = NavFlags {
                     zoomed: self.zoomed(tab),
-                    search: self.search_engine.map(|e| e.info().name),
-                    image: self.search_engine.and_then(|e| e.info().image),
+                    search: self.search.default.as_ref().map(|e| e.name.clone()),
+                    image: self.search.default.as_ref().and_then(|e| e.image.clone()),
                     private: self.model.side_of_tab(tab) == Side::Private,
                     ..nav
                 };
@@ -209,15 +215,26 @@ impl Host {
             Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
             Routed::Zoomed => window.set_address_zoom(self.address_zoom()),
+            // a failed upgrade is HTTPS-Upgrades' own: it loads http or asks
             Routed::LoadFailed { url, code } => {
-                let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
-                let event = ErrorEvent::LoadFailed {
-                    url,
-                    code,
-                    now_ms: wall_ms(),
-                    shown,
-                };
-                self.apply_error(tab, event);
+                if !self.https_failed(tab, &url) {
+                    let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
+                    // a page the blocker stopped says so (ERR_BLOCKED_BY_CLIENT)
+                    let browser = self.tab_view(tab).map(|v| v.browser_id());
+                    let blocked = browser
+                        .filter(|_| code == BLOCKED_BY_CLIENT)
+                        .and_then(|b| self.blocking.document_block(b, &url));
+                    let event = match blocked {
+                        Some(dangerous) => ErrorEvent::DocumentBlocked { url, dangerous },
+                        None => ErrorEvent::LoadFailed {
+                            url,
+                            code,
+                            now_ms: wall_ms(),
+                            shown,
+                        },
+                    };
+                    self.apply_error(tab, event);
+                }
             }
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => {
@@ -385,6 +402,12 @@ impl Host {
                         view.answer_permission(id, &granted);
                     }
                 }
+                Reply::Download {
+                    id,
+                    download,
+                    name,
+                    allow,
+                } => self.download_answered(tab, id, download, &name, allow),
             }
         }
     }
@@ -442,6 +465,16 @@ impl Host {
             }
             return;
         }
+        // an upgraded navigation's certificate error is a failed upgrade: refused, and http
+        // loads or the HTTPS-Only panel asks
+        let browser = self.tab_view(tab).map_or(0, |v| v.browser_id());
+        if self.blocking.https.owns(browser, &url) {
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_certificate(id, false);
+            }
+            self.https_failed(tab, &url);
+            return;
+        }
         if zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code)) {
             if let Some(view) = self.tab_view(tab) {
                 view.answer_certificate(id, true);
@@ -464,21 +497,18 @@ impl Host {
         // the panel is the tab's store overlay while its machine holds an error
         self.layer_is(Kind::ErrorPanel, tab, open);
         for effect in effects {
-            if let ErrorEffect::Allow { host, code } = &effect {
-                self.cert_exceptions.allow(host, *code);
-                continue;
-            }
-            let Some(view) = self.tab_view(tab) else {
-                continue;
-            };
+            // the view's own effects need the view; the rest are the host's
+            let view = self.tab_view(tab);
             match effect {
-                ErrorEffect::Reload { .. } => view.reload(),
-                ErrorEffect::Back => view.back(),
-                ErrorEffect::Blank => view.load("about:blank"),
-                ErrorEffect::AnswerCert { request, proceed } => {
-                    view.answer_certificate(request, proceed);
-                }
-                ErrorEffect::Allow { .. } => {}
+                ErrorEffect::Allow { host, code } => self.cert_exceptions.allow(&host, code),
+                ErrorEffect::ContinueHttp => self.https_continue(tab),
+                ErrorEffect::Unblock { host } => self.blocking.allow_pages_for_session(&host),
+                ErrorEffect::Reload { .. } => view.into_iter().for_each(|v| v.reload()),
+                ErrorEffect::Back => view.into_iter().for_each(|v| v.back()),
+                ErrorEffect::Blank => view.into_iter().for_each(|v| v.load("about:blank")),
+                ErrorEffect::AnswerCert { request, proceed } => view.into_iter().for_each(|v| {
+                    v.answer_certificate(request, proceed);
+                }),
             }
         }
     }
@@ -641,6 +671,33 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenInPrivateWindow(url)) => {
                     self.dispatch(Command::NewPrivateWindow { url: Some(url) });
                 }
+                MenuEffect::Run(MenuCommand::PictureInPicture { x, y }) => {
+                    self.pip_event(wubble_core::pip::PipInput::RequestAt(tab, (x, y)));
+                }
+                MenuEffect::Run(MenuCommand::VideoFrame { x, y, output }) => {
+                    self.video_frame_at(tab, (x, y), output);
+                }
+                MenuEffect::Run(MenuCommand::OpenInGlance(url)) => {
+                    let window = self.w.id;
+                    self.dispatch(Command::OpenGlance {
+                        window,
+                        opener: tab,
+                        url,
+                    });
+                }
+                // the field keeps its focus: the viewer types into it
+                MenuEffect::Run(MenuCommand::EmojiPalette) => {
+                    #[cfg(target_os = "macos")]
+                    if let Some(mtm) = objc2::MainThreadMarker::new() {
+                        // SAFETY: on the main thread (`mtm`), with no sender, as AppKit's
+                        // Edit menu sends it
+                        #[allow(unused_unsafe)]
+                        unsafe {
+                            objc2_app_kit::NSApplication::sharedApplication(mtm)
+                                .orderFrontCharacterPalette(None);
+                        }
+                    }
+                }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),
                 MenuEffect::Run(MenuCommand::Search(text)) => self.search_for(tab, text),
@@ -717,6 +774,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
                     self.save_media(tab, item, choice)
                 }
+                MenuEffect::Run(MenuCommand::SaveSubtitle { item, index }) => {
+                    self.save_subtitle(tab, item, index)
+                }
                 MenuEffect::Run(
                     MenuCommand::Engine(_)
                     | MenuCommand::Separator
@@ -749,9 +809,9 @@ impl Host {
     /// is picked.
     fn search_for(&mut self, tab: TabId, text: String) {
         let query = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        match self.search_engine {
+        match self.search.default.as_ref() {
             Some(engine) => {
-                let url = wubble_core::omnibox::fill(engine.info().search, &query);
+                let url = engine.search_url(&query);
                 self.dispatch(new_tab(url, Some(tab)));
             }
             None => {
@@ -1086,7 +1146,9 @@ impl Host {
             return;
         };
         let event = match self.surfaces.get(&tab).map(|s| &s.error) {
-            Some(PageError::Cert { .. }) => ErrorEvent::GoBack {
+            Some(
+                PageError::Cert { .. } | PageError::HttpsOnly { .. } | PageError::Blocked { .. },
+            ) => ErrorEvent::GoBack {
                 can_go_back: self.tab_view(tab).is_some_and(|v| v.nav().page.can_go_back),
             },
             _ => ErrorEvent::Reload,

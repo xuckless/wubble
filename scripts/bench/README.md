@@ -18,36 +18,5 @@ CPU per second) differ on a real 300 Hz display.
 | `fold.py` | perf's samples to folded stacks: each Chromium helper process is one frame, runs of `libcef.so` frames in the main process collapse to one, LBR stacks (32 frames at most) are completed from the most common caller chain |
 | `breakdown.py` | the folded stacks as two tables: samples by process, and wubble's main thread by what it does (frame arrival, the Slint render and its parts, the CEF pump); its rules name functions of the pinned Slint, Skia and wgpu |
 | `runner.py` | one browser (wubble, Chromium or Firefox) on Speedometer 3.1 or MotionMark 1.3 served from loopback inside a 1000x680 frame; prints a JSON line: score, CPU seconds over the process tree, peak PSS |
-
-The frame path's own numbers come from wubble itself: `wubble --measure idle|scroll|video|resize|typing`
-([docs/smokes.md](../../docs/smokes.md)).
-
-## perf without root
-
-The box gives no root and `kernel.perf_event_paranoid` is 2, so perf records user space only (no
-kernel time: GPU driver ioctls and present are not seen). Fedora's `perf` package unpacks into any
-directory:
-
-    mkdir -p TOOLS/rpms TOOLS/root && cd TOOLS/rpms
-    dnf download perf libtraceevent libbabeltrace   # as the user; keep the x86_64 ones
-    cd ../root && for r in ../rpms/*x86_64.rpm; do rpm2cpio "$r" | cpio -idm; done
-    # TOOLS/perf: LD_LIBRARY_PATH=TOOLS/root/usr/lib64 exec TOOLS/root/usr/bin/perf "$@"
-
-DWARF unwinding of the wubble binary failed in perf 7.3; `-e cycles:u --call-graph lbr` (the
-default here, `-g lbr`) works on this Intel CPU. FlameGraph (`git clone
-https://github.com/brendangregg/FlameGraph`) needs the `use open qw(:std :utf8);` line of
-`flamegraph.pl` commented out (wide-character errors on the folded stacks otherwise).
-
-## Runs
-
-    cargo build --release --workspace          # release keeps the symbol table; dist strips it
-    scripts/bench/video-page.sh FIXTURE
-    PERF=TOOLS/perf scripts/headless.sh timeout 120 \
-      scripts/bench/profile.sh -b target/release/wubble -s FIXTURE -o OUT -f FLAMEGRAPH video video.html
-    scripts/headless.sh timeout 60 target/release/wubble --measure idle --seconds 4
-    scripts/headless.sh timeout 60 target/release/wubble --measure scroll --seconds 10
-    WUBBLE=target/release/wubble scripts/headless.sh timeout 900 \
-      python3 scripts/bench/runner.py SUITES OUT wubble speedometer
-
-`profile.sh` serves on a port the kernel picks and stops unless wubble fetched the page (and nothing
-it asked for was missing), so a run never profiles a wrong page.
+| `linux-vs-firefox.py` | wubble against Firefox, the Mac harness's states (idle, video, video under the find bar and the command bar, scrolling, typing) and an animation page (the rate each browser draws at), a fresh launch of each per state: CPU per process group, RSS/PSS, GPU (nvidia-smi), package W (RAPL, if readable) once a second, frames per second from the pages; the display's rate from `WUBBLE_HEADLESS_SIZE=WxH@R`; wubble's trace only under `--trace`; `samples.csv` and `results.md` (per state, wubble / Firefox, a verdict) in `.local/bench/<time>/`. Run from the repo as `~/Dev/wubble/.local/bin/run.sh timeout 900 scripts/headless.sh python3 scripts/bench/linux-vs-firefox.py --wubble target/release/wubble` (about 8 min a round; `--rounds 2` needs `timeout 1800`) |
+| `common.py` | what the harnesses share: the process tree and its memory from `/proc`, a loopback server pages report to (`/log?k=v`), wubble's trace summary lines |

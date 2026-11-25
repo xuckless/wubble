@@ -1,6 +1,8 @@
 //! The media downloader's pure half: which responses are media ([`detect`]), what a manifest
 //! offers ([`hls`], [`dash`], [`youtube`]), which variant to take ([`select`]), the life of one
-//! download ([`job`]) and its file name ([`name`]). The engine fetches and writes; the host
+//! download ([`job`]), its file name ([`name`]) and a segmented WebVTT file put together
+//! ([`subtitle`]). Subtitles are variants of their own ([`Track::Subtitle`]): sidecar files
+//! (WebVTT, SRT, TTML) and HLS/DASH subtitle renditions, saved beside the video. The engine fetches and writes; the host
 //! routes. Nothing here decrypts DRM: a stream that needs a DRM system (EME: Widevine,
 //! PlayReady, FairPlay, ClearKey) is [`Refusal::Protected`] and never fetched. Plain HLS
 //! AES-128 with a fetchable key is transport encryption and is handled ([`hls::decrypt`]).
@@ -11,6 +13,7 @@ pub mod hls;
 pub mod job;
 pub mod name;
 pub mod select;
+pub mod subtitle;
 pub mod youtube;
 
 /// The file format of a variant's bytes, which names the saved file.
@@ -23,6 +26,12 @@ pub enum Container {
     M4a,
     Mp3,
     Ogg,
+    /// WebVTT subtitles.
+    Vtt,
+    /// SubRip subtitles.
+    Srt,
+    /// TTML (DFXP) subtitles.
+    Ttml,
     Other,
 }
 
@@ -46,6 +55,17 @@ const CONTAINERS: &[(Container, &str, &[&str])] = &[
         "ogg",
         &["audio/ogg", "video/ogg", "audio/opus"],
     ),
+    (Container::Vtt, "vtt", &["text/vtt"]),
+    (
+        Container::Srt,
+        "srt",
+        &["application/x-subrip", "text/srt", "application/srt"],
+    ),
+    (
+        Container::Ttml,
+        "ttml",
+        &["application/ttml+xml", "application/ttaf+xml"],
+    ),
 ];
 
 impl Container {
@@ -66,12 +86,20 @@ impl Container {
             .map(|(c, ..)| *c)
     }
 
-    /// The container a URL's path extension names (`mov` and `m4v` are MP4).
+    /// The container a URL's path extension names (`mov` and `m4v` are MP4, `webvtt` WebVTT,
+    /// `dfxp` TTML).
     pub fn of_url(url: &str) -> Option<Container> {
         Some(match path_ext(url)?.as_str() {
             "mov" | "m4v" => Container::Mp4,
+            "webvtt" => Container::Vtt,
+            "dfxp" => Container::Ttml,
             ext => CONTAINERS.iter().find(|(_, e, _)| *e == ext)?.0,
         })
+    }
+
+    /// Subtitles, not sound or picture.
+    pub fn is_subtitle(self) -> bool {
+        matches!(self, Container::Vtt | Container::Srt | Container::Ttml)
     }
 }
 
@@ -99,6 +127,8 @@ pub enum Track {
     Muxed,
     Video,
     Audio,
+    /// Subtitles: a file of their own, saved beside the video.
+    Subtitle,
 }
 
 /// Part of a resource: `len` bytes from `start`.
@@ -145,6 +175,10 @@ impl Segment {
 pub struct Plan {
     pub segments: Vec<Segment>,
     pub container: Container,
+    /// Where each later period of a multi-period DASH stream begins (an index into `segments`,
+    /// at that period's own init segment): the joined file is cut there and concatenated, since
+    /// one fragmented MP4 holds one init. Empty for one period.
+    pub periods: Vec<usize>,
 }
 
 /// Bytes per ranged fetch of a single file (its segments).
@@ -174,6 +208,7 @@ impl Source {
             Source::File { url, size, ranges } => Some(Plan {
                 segments: file_segments(url, *size, *ranges),
                 container,
+                periods: vec![],
             }),
             Source::HlsPlaylist(_) => None,
             Source::Planned(plan) => Some(plan.clone()),
@@ -230,6 +265,8 @@ pub struct Variant {
     pub group: Option<String>,
     /// Headers every fetch of this variant sends (a site's client identity).
     pub headers: Vec<(String, String)>,
+    /// Subtitles and sound: the language code the manifest gives (BCP 47, `en`, `pt-BR`).
+    pub lang: Option<String>,
 }
 
 impl Variant {
@@ -255,6 +292,7 @@ impl Variant {
             },
             group: None,
             headers: vec![],
+            lang: None,
         }
     }
 }
@@ -266,7 +304,7 @@ pub enum Refusal {
     Protected,
     /// A live stream (no end): recording is not supported.
     Live,
-    /// A manifest shape this version does not take (multi-period DASH, ...).
+    /// A manifest shape this version does not take (DASH periods that do not line up, ...).
     Unsupported(String),
     /// The site's answer no longer has the shape the parser knows.
     SiteChanged(String),
@@ -297,6 +335,9 @@ pub struct Resolution {
     pub variants: Vec<Variant>,
     /// The stream's own title (a site's player data), over the page title.
     pub title: Option<String>,
+    /// What the menu says of the stream besides its rows (a DASH manifest's ad periods left
+    /// out).
+    pub note: Option<String>,
 }
 
 #[cfg(test)]
@@ -323,6 +364,35 @@ mod tests {
         assert_eq!(Container::of_url("https://a.test"), None);
         assert_eq!(Container::Ts.ext(), "ts");
         assert_eq!(Container::Other.ext(), "bin");
+        // Subtitles, by type and by extension.
+        let subtitles = [
+            (
+                Container::of_mime("text/vtt; charset=utf-8"),
+                Container::Vtt,
+            ),
+            (Container::of_mime("application/x-subrip"), Container::Srt),
+            (Container::of_mime("application/ttml+xml"), Container::Ttml),
+            (
+                Container::of_url("https://a.test/s/en.webvtt?x"),
+                Container::Vtt,
+            ),
+            (Container::of_url("https://a.test/s/en.VTT"), Container::Vtt),
+            (Container::of_url("https://a.test/s/en.srt"), Container::Srt),
+            (
+                Container::of_url("https://a.test/s/en.dfxp"),
+                Container::Ttml,
+            ),
+            (
+                Container::of_url("https://a.test/s/en.ttml"),
+                Container::Ttml,
+            ),
+        ];
+        for (got, want) in subtitles {
+            assert_eq!(got, Some(want));
+            assert!(want.is_subtitle());
+        }
+        assert!(!Container::Mp4.is_subtitle() && !Container::Other.is_subtitle());
+        assert_eq!(Container::Srt.ext(), "srt");
     }
 
     #[test]

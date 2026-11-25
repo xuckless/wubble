@@ -12,7 +12,11 @@
 //! ERR_ABORTED skipped) and Chromium's SSL interstitial
 //! (`components/security_interstitials`: "Back to safety" is the default,
 //! proceeding is explicit and remembered for the session), BSD-3-Clause;
-//! behaviour and wording only.
+//! behaviour and wording only. A page the content blocker stopped gets the
+//! same shape (Chromium's Safe Browsing "Dangerous site" page for a malware
+//! list's block, `components/safe_browsing` strings; uBO's strict blocking
+//! page for the rest): Go back is the default, Proceed lets the site's pages
+//! through for the session.
 //!
 //! A load that failed with a network error reloads on its own (Chromium's
 //! `NetErrorAutoReloader`, `components/error_page/content/browser/
@@ -45,7 +49,18 @@ pub enum PageError {
         code: i32,
         request: RequestId,
     },
+    /// The content blocker stopped the page `url`; `dangerous`: a malware list did.
+    Blocked {
+        url: String,
+        dangerous: bool,
+    },
     Crashed,
+    /// HTTPS-Only mode: the upgrade of `url` (http) to `failed` (https) failed; the user goes
+    /// back or continues on http (`wubble_core::https`).
+    HttpsOnly {
+        url: String,
+        failed: String,
+    },
 }
 
 /// A failed load's own reload (`PageError::Load`).
@@ -89,8 +104,19 @@ pub enum ErrorEvent {
         code: i32,
         request: RequestId,
     },
+    /// The blocker stopped the page `url` (its load failed with ERR_BLOCKED_BY_CLIENT and the
+    /// blocker recorded the block); `dangerous`: a malware list's rule.
+    DocumentBlocked {
+        url: String,
+        dangerous: bool,
+    },
     /// The renderer process ended.
     Crashed,
+    /// HTTPS-Only mode asks before loading `url` over http; its upgrade `failed`.
+    HttpsOnly {
+        url: String,
+        failed: String,
+    },
     /// The tab committed `url`.
     Committed(String),
     /// The tab went from not loading to loading: a reload or a new
@@ -136,6 +162,12 @@ pub enum ErrorEffect {
     AnswerCert {
         request: RequestId,
         proceed: bool,
+    },
+    /// HTTPS-Only's Continue to site: the upgrade machine allows the host and loads http.
+    ContinueHttp,
+    /// The blocker lets `host`'s pages through for the session.
+    Unblock {
+        host: String,
     },
 }
 
@@ -207,10 +239,19 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
             (S::Load { url, code, retry }, vec![])
         }
         (_, E::CertError { url, code, request }) => (S::Cert { url, code, request }, vec![]),
+        (_, E::DocumentBlocked { url, dangerous }) => (S::Blocked { url, dangerous }, vec![]),
         (_, E::Crashed) => (S::Crashed, vec![]),
+        (_, E::HttpsOnly { url, failed }) => (S::HttpsOnly { url, failed }, vec![]),
+        // the failed upgrade's error document commits at the https URL, or at the http one
+        // when the cancelled redirect back to http failed
+        (s @ S::HttpsOnly { .. }, E::Committed(at)) if matches!(&s, S::HttpsOnly { url, failed } if *failed == at || *url == at) => {
+            (s, vec![])
+        }
         // Chromium commits the error document at the failed URL; anything
         // else committing means the page moved on.
-        (s @ (S::Load { .. } | S::Cert { .. }), E::Committed(at)) if s.url() == Some(&at) => {
+        (s @ (S::Load { .. } | S::Cert { .. } | S::Blocked { .. }), E::Committed(at))
+            if s.url() == Some(&at) =>
+        {
             (s, vec![])
         }
         // the own reload: its start and its commit change nothing, its end without a failure
@@ -303,6 +344,17 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
                 None => (S::Cert { url, code, request }, vec![]),
             }
         }
+        (S::HttpsOnly { .. }, E::Proceed) => (S::None, vec![ErrorEffect::ContinueHttp]),
+        (S::Blocked { url, dangerous }, E::Proceed) => match wubble_core::zoom::host_of(&url) {
+            Some(host) => (
+                S::None,
+                vec![
+                    ErrorEffect::Unblock { host },
+                    ErrorEffect::Reload { auto: false },
+                ],
+            ),
+            None => (S::Blocked { url, dangerous }, vec![]),
+        },
         (_, E::ViewGone) => (S::None, vec![]),
         // every other pair leaves the state: a button with nothing to do, a tick before the
         // reload is due, the schedule's events where nothing is scheduled
@@ -324,9 +376,11 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
 impl PageError {
     fn url(&self) -> Option<&String> {
         match self {
-            Self::Load { url, .. } | Self::Cert { url, .. } | Self::Reloading { url, .. } => {
-                Some(url)
-            }
+            Self::Load { url, .. }
+            | Self::Cert { url, .. }
+            | Self::Reloading { url, .. }
+            | Self::HttpsOnly { url, .. }
+            | Self::Blocked { url, .. } => Some(url),
             Self::None | Self::Crashed => None,
         }
     }
@@ -396,6 +450,47 @@ pub fn error_text(error: &PageError) -> Option<ErrorText> {
                 cert: true,
             }
         }
+        // Chrome's HTTPS-First interstitial (`https_only_mode_blocking_page.cc`), its wording
+        PageError::HttpsOnly { url, .. } => ErrorText {
+            title: "Connection is not secure".into(),
+            summary: format!(
+                "{} does not support a secure connection. Attackers might be able to see or \
+                 change what you send to it or get from it.",
+                host(url)
+            ),
+            detail: url.clone(),
+            primary: "Go back",
+            secondary: "Continue to site".into(),
+            cert: true,
+        },
+        PageError::Blocked { url, dangerous } => {
+            let host = host(url);
+            let (title, summary, proceed) = if *dangerous {
+                (
+                    "Dangerous site",
+                    format!(
+                        "Attackers on {host} might trick you into doing something dangerous \
+                         like installing software or revealing your personal information \
+                         (for example, passwords, phone numbers or credit cards)."
+                    ),
+                    "Visit this unsafe site",
+                )
+            } else {
+                (
+                    "Page blocked",
+                    format!("The content blocker stopped {host} from loading."),
+                    "Proceed anyway",
+                )
+            };
+            ErrorText {
+                title: title.into(),
+                summary,
+                detail: format!("{url} \u{b7} blocked by a filter list"),
+                primary: "Go back",
+                secondary: proceed.into(),
+                cert: true,
+            }
+        }
         PageError::Crashed => ErrorText {
             title: "This page crashed".into(),
             summary: "Something went wrong while showing this page.".into(),
@@ -414,6 +509,63 @@ mod tests {
 
     const URL: &str = "https://a.test/x";
     const REQ: RequestId = RequestId(9);
+
+    #[test]
+    fn a_blocked_page_goes_back_or_through() {
+        let blocked = |dangerous| E::DocumentBlocked {
+            url: URL.into(),
+            dangerous,
+        };
+        let shown = PageError::Blocked {
+            url: URL.into(),
+            dangerous: true,
+        };
+        assert_eq!(
+            transition(PageError::None, blocked(true)),
+            (shown.clone(), vec![])
+        );
+        assert_eq!(
+            transition(shown.clone(), E::Committed(URL.into())),
+            (shown.clone(), vec![]),
+            "the error document commits at the blocked URL"
+        );
+        assert_eq!(
+            transition(shown.clone(), E::Proceed),
+            (
+                PageError::None,
+                vec![
+                    ErrorEffect::Unblock {
+                        host: "a.test".into()
+                    },
+                    ErrorEffect::Reload { auto: false }
+                ]
+            )
+        );
+        assert_eq!(
+            transition(shown.clone(), E::GoBack { can_go_back: true }),
+            (PageError::None, vec![ErrorEffect::Back])
+        );
+        assert_eq!(
+            transition(shown.clone(), E::Committed("https://b.test/".into())),
+            (PageError::None, vec![])
+        );
+        assert_eq!(
+            transition(shown.clone(), E::Tick(T0)),
+            (shown.clone(), vec![]),
+            "never reloads on its own"
+        );
+        let t = error_text(&shown).unwrap();
+        assert_eq!(t.title, "Dangerous site");
+        assert_eq!(
+            (t.primary, t.secondary.as_str()),
+            ("Go back", "Visit this unsafe site")
+        );
+        assert!(t.cert);
+        let (plain, _) = transition(PageError::None, blocked(false));
+        let t = error_text(&plain).unwrap();
+        assert_eq!(t.title, "Page blocked");
+        assert_eq!(t.secondary, "Proceed anyway");
+    }
 
     fn cert(code: i32) -> PageError {
         transition(
@@ -519,6 +671,86 @@ mod tests {
         for (name, state, event, want, effects) in cases {
             assert_eq!(transition(state, event), (want, effects), "{name}");
         }
+    }
+
+    /// HTTPS-Only's panel: one row per (state, event).
+    #[test]
+    fn https_only_asks_and_goes_back_or_continues() {
+        let asking = || PageError::HttpsOnly {
+            url: "http://a.test/".into(),
+            failed: "https://a.test/".into(),
+        };
+        let cases: Vec<(&str, PageError, ErrorEvent, PageError, Vec<ErrorEffect>)> = vec![
+            (
+                "the upgrade failed",
+                PageError::None,
+                E::HttpsOnly {
+                    url: "http://a.test/".into(),
+                    failed: "https://a.test/".into(),
+                },
+                asking(),
+                vec![],
+            ),
+            (
+                "the failed upgrade's error document commits",
+                asking(),
+                E::Committed("https://a.test/".into()),
+                asking(),
+                vec![],
+            ),
+            (
+                "the cancelled redirect back's error document commits",
+                asking(),
+                E::Committed("http://a.test/".into()),
+                asking(),
+                vec![],
+            ),
+            (
+                "another page commits",
+                asking(),
+                E::Committed("https://b.test/".into()),
+                PageError::None,
+                vec![],
+            ),
+            (
+                "Continue to site",
+                asking(),
+                E::Proceed,
+                PageError::None,
+                vec![ErrorEffect::ContinueHttp],
+            ),
+            (
+                "Go back",
+                asking(),
+                E::GoBack { can_go_back: true },
+                PageError::None,
+                vec![ErrorEffect::Back],
+            ),
+            (
+                "Go back with nowhere to go",
+                asking(),
+                E::GoBack { can_go_back: false },
+                PageError::None,
+                vec![ErrorEffect::Blank],
+            ),
+            (
+                "a tick changes nothing",
+                asking(),
+                E::Tick(T0),
+                asking(),
+                vec![],
+            ),
+        ];
+        for (name, state, event, want, effects) in cases {
+            assert_eq!(transition(state, event), (want, effects), "{name}");
+        }
+        let text = error_text(&asking()).unwrap();
+        assert_eq!(text.title, "Connection is not secure");
+        assert_eq!(
+            (text.primary, text.secondary.as_str(), text.cert),
+            ("Go back", "Continue to site", true)
+        );
+        assert!(text.summary.starts_with("a.test "), "{}", text.summary);
     }
 
     #[test]

@@ -163,6 +163,7 @@ impl Store {
             "SELECT url FROM tabs",
             "SELECT url FROM archive",
             "SELECT url FROM recently_closed",
+            "SELECT url FROM recently_closed_tabs",
         ] {
             let mut rows = self.conn.query(sql, ()).await?;
             while let Some(r) = rows.next().await? {
