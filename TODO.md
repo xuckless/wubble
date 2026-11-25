@@ -5,7 +5,7 @@ are built, the one engine build). Decisions: [docs/decisions.md](docs/decisions.
 
 ## Working on
 - [~] Surface manager (the surface store): compile and test the blind overlays of `untested/store-step2`, then the command bar and focus/key ownership ([surface-manager.md](todo/in-progress/surface-manager.md))
-- [~] Layer: windowed: the owner's first window run on the Mac, then the hand-check list ([page-layer.md](todo/in-progress/page-layer.md))
+- [~] Layer: windowed: measured on the owner's M2 (10 to 12 % main on its layer, about 30 % while an overlay holds it); the overlay fix on `untested/page-layer-2`, then the hand-check list ([page-layer.md](todo/in-progress/page-layer.md))
 - [~] Merge the tested work and push `main` once green on Linux and macOS ([merge-main.md](todo/in-progress/merge-main.md))
 - Open owner decisions: [decisions.md](todo/in-progress/decisions.md)
 

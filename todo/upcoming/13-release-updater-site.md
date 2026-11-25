@@ -13,8 +13,7 @@ versions are semantic from here; Windows is parked ([windows.md](../shelved/wind
 - [ ] Never run on a Mac by hand (as of 2026-11-21): Cmd+Q, the socket check, Cmd+Z undo close tab (the macOS drags and the quarantine fix have their own lines)
 - [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
 - [ ] Before every release: run `cargo test --workspace` on the Mac (it passes there in CI only; preview.2 shipped with MCP hosting broken on macOS; one test there would have caught it), and run the whole suite there once now (never done)
-- [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
-      shellcheck not run on `install.sh`
+- [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; shellcheck not run on `install.sh`
 - [ ] macOS: CEF does not finish shutting down after a windowless run over ssh; find the commit and the cause (M0)
 - [ ] Security update cadence: track Chromium stable
 - [ ] Packaging: Flatpak/RPM, MSI/winget, signed and notarised DMG; auto-update
@@ -23,6 +22,7 @@ versions are semantic from here; Windows is parked ([windows.md](../shelved/wind
 
 ## A more seamless updater (owner, 2026-11-23: "Updater needs an upgrade for sure, need to be more seamless")
 - [ ] A more seamless updater: the follow-ups below first
+- [ ] Roll back a build that cannot even load (`updater-launch-rollback`, below)
 - [ ] macOS: the quarantine fix for updates (`settle_quarantine`, the updater's clear before placing) is compiled but never run on a Mac: on the owner's Mac, an install updated by wubble itself must start from `/Applications` (Settings → Updates not "managed elsewhere") and offer the next update; preview.5 shipped it unchecked
 - [ ] Updater: when is an old `versions/<V>` folder removed (preview.7's is still there after 0.6.1 is marked good)
 
@@ -34,6 +34,12 @@ good right now, the only work for website is to post a lot of articles and docs 
 - [ ] Each release: bump `VERSION` in `site/assets/js/site.js` and `npx wrangler deploy` in `site/` (in docs/release.md)
 
 ## Build-out features (2026-11-22)
+
+## Updater: roll back a build that cannot even load (`updater-launch-rollback`)
+
+Key: `updater-launch-rollback` · engine patch: no · state: not written.
+
+TODO.md M7 "Release gaps: ... rollback misses a build that cannot load". The rollback in `wubble_core::update::install` (`on_start`, `LaunchRecord`, `on_healthy`) runs inside the new `wubble` binary (`updater::on_launch` in `main.rs` `browse`). If that binary cannot start at all (a missing or incompatible `libcef.so` through RUNPATH, a dyld failure in the app, a bad CPU feature), it never runs its own rollback, and the user is stuck. To build: a launcher that does not link CEF. On Linux, `~/.local/bin/wubble` and the desktop entry's `Exec` point at a tiny `wubble-launch` (a new small crate, or a mode of the release tool that links nothing heavy) placed in `<data>/wubble/`. It reads `updates/launch.json`, execs `current/wubble` with the same args, and if the child exits within a few seconds with a loader failure (exit 127, a signal before `on_launch` wrote its start mark) while a trial is open, it applies `on_switch_failed`/`RollBack` itself (switch `current`, mark the version bad) and execs the previous one. The trial rule stays in `wubble_core::update::install` as pure functions with tests; add a `LoaderFailed` event. On macOS the app bundle's main executable is the stub: either a launcher binary in `Contents/MacOS` that loads the real one, or `Contents/Helpers`. Make the bundling change in `wubble-bundle` and `package-macos.sh`. `install.sh` and `package-linux.sh` install the launcher. Docs: docs/release.md "Updating and rollback".
 
 ## Default browser: status, a Settings row, and registration on Linux, macOS and Windows (`default-browser`)
 

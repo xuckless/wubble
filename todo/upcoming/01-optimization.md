@@ -6,7 +6,8 @@ Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../REA
 "Least amount of engine builds as possible"; chosen: one build, when CPU needs it. Engine patches are written and
 collected under `patches/chromium/` without building. The first CEF rebuild happens only when the under-5 % CPU patch
 (road 3 below) is ready, and it carries every collected patch. Every feature in `todo/upcoming/` that needs an engine
-patch is marked "waits for the one engine build".
+patch is marked "waits for the one engine build". The owner, 2026-11-24: "we need to do all the things that require
+engine repatch first and then build engine once".
 
 The own engine (the old milestone M6: ungoogled Chromium + CEF, kept as a patch queue): the owner is "not sure what we
 do with our own engine build"; whatever it becomes rides on this one build. Its CPU items are in this file, its
@@ -22,7 +23,7 @@ The main process under 5 % CPU in steady states (idle, video, scrolling, typing)
 Measured: 26 to 31 % for windowed video on the Mac; on Linux 8 to 9 % for video or a spinner at 60 Hz, 14 % on the
 300 Hz display, 1 to 2 % idle. Roads, in this order (decisions.md "Main-process target", "Page roads"):
 
-- [~] 1. Layer: windowed (`--page-layer=window`): in progress, see [page-layer.md](../in-progress/page-layer.md). On `untested/page-layer-2`: green on Linux, compiled and tested on macOS, the owner's first window run pending; hand-check list in `docs/research/page-layer.md` on that branch
+- [~] 1. Layer: windowed (`--page-layer=window`): in progress, see [page-layer.md](../in-progress/page-layer.md). Measured on the owner's M2 with windowed 1080p60 video: 10 to 12 % main on its layer (off: 28 to 37 %), but about 30 % while a glass surface (Notice, Toast, VideoStrip) holds the page in Entering. The fix on `untested/page-layer-2`: overlays never pull the page off its layer and blur a low-resolution, slowly refreshed snapshot; only overlays meeting the pane count; a remaining hold releases the layer's surfaces after about a second; hand-check list in `docs/research/page-layer.md` on that branch
 - [ ] 2. Zero-copy of CEF's IOSurface (Linux: dmabuf) and CEF's own begin-frame source (estimated 6 to 10 %). The copy, by a CEF patch: OSR keeps the frame's buffer until wubble releases it and delivers RGBA; wubble imports each pooled dmabuf (IOSurface) once and samples it, so the copy and its wait in the paint callback (`vendor/welding/src/native_frame/mod.rs`), the swizzle blit and the per-frame import go
 - [ ] 3. A CEF patch so the GPU process presents the page itself through a CAContext id / `CALayerHost` while off-screen mode stays (estimated 2 to 5 % main; the GPU process also loses its capture copy): about 300 lines in CEF, private API, no Wayland counterpart; three experiments listed in `docs/research/page-layer.md`. When it is ready it triggers the one engine build
 - HDR through the OS layer, and the idea that the page never leaves the OS layer (to be decided before the CEF patch of road 3 is built): [ideas.md](../shelved/ideas.md)
