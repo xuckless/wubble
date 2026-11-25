@@ -302,7 +302,7 @@ class Sampler(threading.Thread):
 
 class Harness:
     def __init__(self, app, out):
-        self.bin = Path(app) / "Contents/MacOS/wubble"
+        self.bin = Path(app).resolve() / "Contents/MacOS/wubble"
         if not os.access(self.bin, os.X_OK):
             sys.exit(f"mac-checks: no {self.bin}")
         self.out = out
@@ -432,6 +432,10 @@ class Harness:
             except subprocess.TimeoutExpired:
                 os.killpg(self.proc.pid, signal.SIGKILL)
                 self.proc.wait()
+            # helpers outlive the browser process for a moment and hold the profile's lock
+            end = time.time() + 15
+            while time.time() < end and str(self.profile) in sh("ps", "-A", "-o", "command=", check=False):
+                time.sleep(0.5)
         self.proc = None
 
     def open_tab(self, url):
@@ -1107,7 +1111,9 @@ def cr(h, ctx):
     if not rates:
         return False, "no `CEF frame rate` line in the log"
     rate, display = int(rates[-1].group(1)), rates[-1].group(2)
-    return rate == 120, f"CEF frame rate {rate} (display {display} mHz); want 120 on the built-in display"
+    screens = sh("system_profiler", "SPDisplaysDataType", check=False).count("Resolution:")
+    note = f"; {screens} displays attached: the rate is read where the window opened, before it is moved" if screens > 1 else ""
+    return rate == 120, f"CEF frame rate {rate} (display {display} mHz); want 120 on the built-in display{note}"
 
 
 CHECKS = [cr, ce, c16, cs, c4, c1, c3, c2, cb, c7, co, c8, c9, c6, c11, c10, c10b, c13, c14, c17]
