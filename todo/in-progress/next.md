@@ -213,3 +213,10 @@ Build:
 
 ## F. Linux measurement against Firefox (owner: "make sure the performance is better than at least Firefox")
 - [ ] The Mac harness's states on Linux (idle, a still page, video, video under glass, scrolling, typing: CPU per process, memory, GPU, energy where Linux exposes it), the same run in Firefox, a comparison table; wubble must beat Firefox in every state
+
+## G. Leftovers from the sprint and this round (owner, 2026-11-25)
+- [ ] macOS: the search region from the system's region setting (`NSLocale`), not `LANG` (a GUI app has none; today it falls back to Google, Bing, Yahoo)
+- [ ] `$csp` filters: main-frame responses the blocker names get the CSP through DevTools `Fetch` (CEF cannot change response headers)
+- [ ] Picture-in-picture and the video frame rows for a video inside a subframe
+- [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
+- [ ] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH
