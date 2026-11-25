@@ -1231,7 +1231,7 @@ pub trait CefSurfaceProducer {
 
     /// wubble change (64): copy this view's frames into OS-presentable buffers (`Some`), which
     /// each [`crate::CopiedFrame`] then carries for the host's compositor layer, or into a
-    /// texture of their own again (`None`, the default). macOS only.
+    /// texture of their own again (`None`, the default). macOS and Linux (change 71).
     fn set_os_buffers(
         &mut self,
         _request: Option<crate::OsBufferRequest>,
@@ -1242,14 +1242,14 @@ pub trait CefSurfaceProducer {
     }
 
     /// wubble change (65): frames dropped since the last call because every OS buffer was in
-    /// use ([`Self::set_os_buffers`]); 0 without OS buffers. macOS only.
+    /// use ([`Self::set_os_buffers`]); 0 without OS buffers. macOS and Linux.
     fn take_os_buffers_busy(&mut self) -> u64 {
         0
     }
 
     /// wubble change (66): whether the newest frame was dropped because every OS buffer was in
     /// use and no frame came after it (cleared by the call). The host asks CEF to paint again.
-    /// false without OS buffers. macOS only.
+    /// false without OS buffers. macOS and Linux.
     fn take_os_buffers_lost(&mut self) -> bool {
         false
     }

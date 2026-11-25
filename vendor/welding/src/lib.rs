@@ -149,8 +149,8 @@ pub use native_frame::{
     CopiedFrame, Damage, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
     NativeFrameKind, NativeFramePixelFormat, OsBufferRequest, WgpuTextureImporter,
 };
-// wubble change (64): the frame copy's OS buffer.
-#[cfg(target_vendor = "apple")]
+// wubble change (64): the frame copy's OS buffer; Linux too (change 71).
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 pub use native_frame::OsBuffer;
 pub use opened::{OpenedWindow, PopupFactory};
 pub use permissions::{PermissionId, PermissionKind};

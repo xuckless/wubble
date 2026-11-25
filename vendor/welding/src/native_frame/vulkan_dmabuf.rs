@@ -192,14 +192,32 @@ pub(super) fn import_vulkan(
 /// The source is welding's own DMABUF import, whose foreign-queue acquire
 /// grafting has already submitted and waited for, so no release barrier is
 /// recorded; the copy is only sampled, never copied from again.
+///
+/// wubble change (71): with `pool` (the host asked for OS buffers) the copy goes into one of its
+/// exported dmabufs instead, carried out as [`CopiedFrame::os`]; `Ok(None)` when every one is in
+/// use (the frame is dropped, as on macOS). Without it this path is as before.
+// TODO(wubble): no release barrier to `VK_QUEUE_FAMILY_FOREIGN_EXT` after the copy into a slot:
+// NVIDIA needed none (docs/research/linux-page-layer.md section 7); Mesa may.
 pub(crate) fn copy_dmabuf_to_owned(
     frame: DmaBufImage,
     ctx: &HostWgpuContext,
     arrived: std::time::Instant,
-) -> Result<CopiedFrame, ImportError> {
+    pool: Option<&mut super::OsBufferPool>,
+) -> Result<Option<CopiedFrame>, ImportError> {
     let started = std::time::Instant::now();
+    let (size, format) = (frame.size, frame.format.add_srgb_suffix());
+    let os = match pool.map(|pool| {
+        let offered = pool.formats().to_vec();
+        pool.next(size, format, || {
+            super::vulkan_pool::Slot::new(&ctx.device, size, format, &offered)
+        })
+    }) {
+        None | Some(super::Next::Unavailable) => None,
+        Some(super::Next::Buffer(buffer)) => Some(buffer),
+        Some(super::Next::Busy) => return Ok(None),
+    };
     let source = import_vulkan(frame, ctx)?;
-    super::copy_to_owned(source, ctx, arrived, started)
+    super::copy_to_owned(source, ctx, arrived, started, os).map(Some)
 }
 
 fn validate_image_layout(buffer_count: usize, planes: &[DmaBufPlane]) -> Result<(), ImportError> {

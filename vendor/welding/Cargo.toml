@@ -132,6 +132,11 @@ package = "wgpu-hal"
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2"
 
+# wubble change (71): the OS buffers' exported Vulkan images; the version wgpu-hal 30 and
+# grafting already use (MIT OR Apache-2.0).
+[target.'cfg(target_os = "linux")'.dependencies.ash]
+version = "0.38"
+
 [target.'cfg(target_os = "macos")'.dependencies.foreign-types-shared]
 version = "0.3.1"
 optional = true

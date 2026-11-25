@@ -158,7 +158,9 @@ pub(crate) fn copy_metal_to_owned(
         },
     )?;
     // wubble change (64): the host's OS buffer, if it asked for them and one is free.
-    let os = match pool.map(|pool| pool.next(&mtl_device, size, format, pixel_format)) {
+    let os = match pool.map(|pool| {
+        pool.next(size, format, || Slot::new(&mtl_device, size, format, pixel_format))
+    }) {
         None | Some(Next::Unavailable) => None,
         Some(Next::Buffer(buffer)) => Some(buffer),
         Some(Next::Busy) => return Ok(None),
@@ -354,83 +356,8 @@ impl Slot {
         std::ptr::NonNull::from(&*self.surface).cast()
     }
 
-    /// A buffer of it is alive (the host holds a frame in it) or the compositor uses it.
-    fn in_use(buffer: &super::OsBuffer) -> bool {
-        std::sync::Arc::strong_count(&buffer.0) > 1 || buffer.0.surface.is_in_use()
-    }
-}
-
-/// wubble change (64): where the next frame of a view goes.
-pub(crate) enum Next {
-    Buffer(super::OsBuffer),
-    /// Every buffer is in use: the frame is dropped.
-    Busy,
-    /// The buffers could not be made: a texture of its own, as without a pool.
-    Unavailable,
-}
-
-/// wubble change (64): a view's OS buffers, made for the frame size and format they last
-/// copied; a new size makes new ones (frames still holding old ones keep them).
-pub(crate) struct OsBufferPool {
-    request: super::OsBufferRequest,
-    /// What `slots` were made for; `slots` is empty when making them failed.
-    made: Option<(dpi::PhysicalSize<u32>, wgpu::TextureFormat)>,
-    slots: Vec<super::OsBuffer>,
-    latest: Option<usize>,
-    /// wubble change (65): frames dropped as [`Next::Busy`] since the host last took the count
-    /// (`CefSurfaceProducer::take_os_buffers_busy`).
-    pub(crate) busy: u64,
-    /// wubble change (66): the newest frame was dropped as [`Next::Busy`] and none was copied
-    /// since, so what the host shows is a frame behind until the page paints again; taken by
-    /// `CefSurfaceProducer::take_os_buffers_lost`, which asks CEF for the frame again.
-    pub(crate) lost: bool,
-}
-
-impl OsBufferPool {
-    pub(crate) fn new(request: super::OsBufferRequest) -> Self {
-        Self {
-            request,
-            made: None,
-            slots: Vec::new(),
-            latest: None,
-            busy: 0,
-            lost: false,
-        }
-    }
-
-    fn next(
-        &mut self,
-        device: &Retained<dyn objc2_metal::MTLDevice>,
-        size: dpi::PhysicalSize<u32>,
-        format: wgpu::TextureFormat,
-        pixel_format: objc2_metal::MTLPixelFormat,
-    ) -> Next {
-        if self.made != Some((size, format)) {
-            self.made = Some((size, format));
-            self.latest = None;
-            self.slots = (0..self.request.slots)
-                .map(|_| Slot::new(device, size, format, pixel_format))
-                .map(|slot| slot.map(|s| super::OsBuffer(std::sync::Arc::new(s))))
-                .collect::<Result<_, _>>()
-                .unwrap_or_else(|error| {
-                    log::error!("no OS buffers for {size:?} {format:?}: {error}");
-                    Vec::new()
-                });
-        }
-        if self.slots.is_empty() {
-            return Next::Unavailable;
-        }
-        let in_use: Vec<bool> = self.slots.iter().map(Slot::in_use).collect();
-        let chosen = (self.request.choose)(&in_use, self.latest);
-        let Some(i) = chosen.filter(|&i| i < self.slots.len()) else {
-            // wubble change (65): counted for the host.
-            self.busy += 1;
-            self.lost = true;
-            return Next::Busy;
-        };
-        // wubble change (66): a frame copied, so none is lost
-        self.lost = false;
-        self.latest = Some(i);
-        Next::Buffer(self.slots[i].clone())
+    /// The compositor uses it (`IOSurfaceIsInUse`); the shared pool also counts live buffers.
+    pub(crate) fn compositor_uses(&self) -> bool {
+        self.surface.is_in_use()
     }
 }

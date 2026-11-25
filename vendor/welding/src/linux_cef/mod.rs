@@ -65,7 +65,13 @@ struct WeldRenderHandlerInner {
     cpu_paints: Arc<AtomicU64>,
     /// Held requests and the drag-source switch (wubble change).
     requests: Arc<crate::handlers::Requests>,
+    /// The host's OS buffers for the frame copy, when it asked for them (wubble change 71).
+    os_buffers: OsBuffers,
 }
+
+/// wubble change (71): a view's OS-buffer pool, set by the host, used by the paint callback.
+#[cfg(feature = "cef-runtime")]
+type OsBuffers = Arc<Mutex<Option<crate::native_frame::OsBufferPool>>>;
 
 // ── cef-runtime: render handler + client ─────────────────────────────────────
 
@@ -115,6 +121,9 @@ pub struct LinuxCefProducer {
     /// Pop-up browsers this page opened, until the host takes them (wubble change 57).
     #[cfg(feature = "cef-runtime")]
     children: Arc<crate::opened::Children<LinuxCefProducer>>,
+    /// wubble change (71): the frame copy's OS buffers.
+    #[cfg(feature = "cef-runtime")]
+    os_buffers: OsBuffers,
 }
 
 // needless_return: cfg-dispatch bodies end in `return X;` because a cfg-gated
@@ -212,6 +221,7 @@ impl LinuxCefProducer {
         let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
         devtools.set_enabled(surface.devtools_protocol);
         let snapshots = Arc::new(crate::snapshot::SnapshotChannel::default());
+        let os_buffers = OsBuffers::default();
         let parts = Parts {
             metrics: metrics.clone(),
             frame_slot: frame_slot.clone(),
@@ -228,6 +238,7 @@ impl LinuxCefProducer {
             size: initial_size,
             cpu_paints: cpu_paints.clone(),
             children: Arc::default(),
+            os_buffers: os_buffers.clone(),
         };
 
         let inner = WeldRenderHandlerInner {
@@ -241,6 +252,7 @@ impl LinuxCefProducer {
             gpu: host_ctx.clone(),
             cpu_paints,
             requests: requests.clone(),
+            os_buffers,
         };
         let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
         let load_handler = cef_backed::WeldLoadHandler::build(inner.clone());
@@ -303,6 +315,7 @@ impl LinuxCefProducer {
             size: parts.size,
             cpu_paints: parts.cpu_paints,
             children: parts.children,
+            os_buffers: parts.os_buffers,
         }
     }
 }
@@ -327,6 +340,7 @@ pub(super) struct Parts {
     size: PhysicalSize<u32>,
     cpu_paints: Arc<AtomicU64>,
     children: Arc<crate::opened::Children<LinuxCefProducer>>,
+    os_buffers: OsBuffers,
 }
 
 // ── CefSurfaceProducer impl ───────────────────────────────────────────────────
@@ -385,6 +399,51 @@ impl CefSurfaceProducer for LinuxCefProducer {
 
     fn surface_mode(&self) -> CefSurfaceMode {
         CefSurfaceMode::AcceleratedPaint
+    }
+
+    /// wubble change (71): the paint callback copies into the pool from its next frame.
+    fn set_os_buffers(
+        &mut self,
+        request: Option<crate::native_frame::OsBufferRequest>,
+    ) -> Result<(), WeldError> {
+        #[cfg(feature = "cef-runtime")]
+        {
+            *self.os_buffers.lock().unwrap() =
+                request.map(crate::native_frame::OsBufferPool::new);
+            return Ok(());
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            Err(WeldError::PlatformUnsupported(
+                "OS buffers require the cef-runtime feature",
+            ))
+        }
+    }
+
+    /// wubble change (71): the pool's count, taken (as macOS, change 65).
+    fn take_os_buffers_busy(&mut self) -> u64 {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let mut pool = self.os_buffers.lock().unwrap();
+            return pool.as_mut().map_or(0, |pool| std::mem::take(&mut pool.busy));
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            0
+        }
+    }
+
+    /// wubble change (71): the pool's flag, taken (as macOS, change 66).
+    fn take_os_buffers_lost(&mut self) -> bool {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let mut pool = self.os_buffers.lock().unwrap();
+            return pool.as_mut().is_some_and(|pool| std::mem::take(&mut pool.lost));
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            false
+        }
     }
 
     fn acquire_native_frame(&mut self) -> Option<NativeFrame> {

@@ -643,6 +643,25 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     negative value).
     For wubble's download rows (speed and time left).
 
+71. **OS buffers for the frame copy (Linux).** `native_frame/vulkan_pool.rs` (new): a
+    Linux pool slot is a Vulkan image made with a DRM format modifier the host's
+    compositor takes (`OsBufferRequest::formats`, new: (fourcc, modifier) pairs; the
+    driver's single-plane modifiers that can be copied into and sampled, LINEAR when
+    none is common), exported as one dmabuf plane and imported into wgpu once
+    (`COPY_DST | TEXTURE_BINDING`, sRGB like the copy). `OsBuffer` on Linux: `fd`,
+    `offset_stride`, `drm_format`, `size`, `compositor_hold` (set by the host while
+    the compositor holds the buffer, cleared on its release) and `host_data` (the
+    host's `wl_buffer`, made once). `native_frame/mod.rs`: `OsBufferPool` and `Next`
+    move here from `metal.rs`, shared by both platforms (the platform's `Slot` makes a
+    slot and says whether the compositor uses it); `copy_to_owned` copies into the
+    slot when given one; `CopiedFrame::os` on Linux. `vulkan_dmabuf.rs`
+    `copy_dmabuf_to_owned` takes the pool and returns `None` for a frame dropped on a
+    busy pool; `linux_cef` keeps the pool (the view's own frames only, never a
+    popup's) and implements `set_os_buffers`, `take_os_buffers_busy` and
+    `take_os_buffers_lost` as `macos_cef` does. `OsBufferRequest` is `Clone`, no
+    longer `Copy`. Dependency: `ash` 0.38 on Linux. For wubble's Wayland page layer
+    (docs/research/linux-page-layer.md); unit-tested: the modifier choice.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

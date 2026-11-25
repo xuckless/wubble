@@ -576,29 +576,41 @@ pub struct CopiedFrame {
     pub damage: Option<Damage>,
     /// wubble change (64): the OS buffer the frame was copied into, when the host asked for
     /// them ([`OsBufferRequest`]); `texture` is the same memory. `None`: a texture of its own.
-    #[cfg(target_vendor = "apple")]
+    /// wubble change (71): Linux too (an exported dmabuf).
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     pub os: Option<OsBuffer>,
 }
 
 /// wubble change (64): what a host asks of
 /// [`crate::CefSurfaceProducer::set_os_buffers`]: the view's frame copy goes into one of
-/// `slots` OS-presentable buffers (macOS: IOSurfaces), which the host may hand to the OS
-/// compositor as they are, instead of a texture of its own per frame.
-#[derive(Clone, Copy)]
+/// `slots` OS-presentable buffers (macOS: IOSurfaces; Linux, change 71: Vulkan images exported
+/// as dmabufs), which the host may hand to the OS compositor as they are, instead of a texture
+/// of its own per frame.
+#[derive(Clone)]
 pub struct OsBufferRequest {
     pub slots: usize,
     /// The slot to copy the next frame into, given which slots are in use (a buffer of it is
     /// alive, or the compositor still reads it) and the one copied into last; `None` drops the
     /// frame. The host's policy, so welding keeps none.
     pub choose: fn(&[bool], Option<usize>) -> Option<usize>,
+    /// wubble change (71): the (DRM fourcc, modifier) pairs the compositor takes buffers in
+    /// (Wayland's `zwp_linux_dmabuf_v1`); a Linux slot is made with one of them that the driver
+    /// can copy into and sample. Empty: LINEAR. Unused on macOS.
+    pub formats: std::sync::Arc<[(u32, u64)]>,
 }
 
-/// wubble change (64): a pool slot a frame was copied into: a retained IOSurface, which the
-/// host may set as a `CALayer`'s contents. Clones share the slot; the slot is copied into again
-/// only once no clone is alive and the compositor no longer uses it.
-#[cfg(target_vendor = "apple")]
+/// wubble change (64): a pool slot a frame was copied into: a retained IOSurface (macOS), which
+/// the host may set as a `CALayer`'s contents, or (Linux, change 71) a dmabuf the host may wrap
+/// in a `wl_buffer`. Clones share the slot; the slot is copied into again only once no clone is
+/// alive and the compositor no longer uses it.
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[derive(Clone)]
-pub struct OsBuffer(std::sync::Arc<metal::Slot>);
+pub struct OsBuffer(std::sync::Arc<Slot>);
+
+#[cfg(target_vendor = "apple")]
+use metal::Slot;
+#[cfg(target_os = "linux")]
+use vulkan_pool::Slot;
 
 #[cfg(target_vendor = "apple")]
 impl OsBuffer {
@@ -608,10 +620,100 @@ impl OsBuffer {
     }
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
 impl std::fmt::Debug for OsBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("OsBuffer").field(&self.io_surface()).finish()
+        f.debug_tuple("OsBuffer").field(&std::sync::Arc::as_ptr(&self.0)).finish()
+    }
+}
+
+/// wubble change (64, shared with Linux in 71): where the next frame of a view goes.
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+pub(crate) enum Next {
+    Buffer(OsBuffer),
+    /// Every buffer is in use: the frame is dropped.
+    Busy,
+    /// The buffers could not be made: a texture of its own, as without a pool.
+    Unavailable,
+}
+
+/// wubble change (64, shared with Linux in 71): a view's OS buffers, made for the frame size
+/// and format they last copied; a new size makes new ones (frames still holding old ones keep
+/// them). The platform's `Slot` says how one is made and whether the compositor still uses it.
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+pub(crate) struct OsBufferPool {
+    request: OsBufferRequest,
+    /// What `slots` were made for; `slots` is empty when making them failed.
+    made: Option<(PhysicalSize<u32>, wgpu::TextureFormat)>,
+    slots: Vec<OsBuffer>,
+    latest: Option<usize>,
+    /// wubble change (65): frames dropped as [`Next::Busy`] since the host last took the count
+    /// (`CefSurfaceProducer::take_os_buffers_busy`).
+    pub(crate) busy: u64,
+    /// wubble change (66): the newest frame was dropped as [`Next::Busy`] and none was copied
+    /// since, so what the host shows is a frame behind until the page paints again; taken by
+    /// `CefSurfaceProducer::take_os_buffers_lost`, which asks CEF for the frame again.
+    pub(crate) lost: bool,
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+impl OsBufferPool {
+    pub(crate) fn new(request: OsBufferRequest) -> Self {
+        Self {
+            request,
+            made: None,
+            slots: Vec::new(),
+            latest: None,
+            busy: 0,
+            lost: false,
+        }
+    }
+
+    /// The host's (DRM fourcc, modifier) pairs, for a Linux slot.
+    #[cfg_attr(target_vendor = "apple", allow(dead_code))]
+    pub(crate) fn formats(&self) -> &[(u32, u64)] {
+        &self.request.formats
+    }
+
+    /// The buffer the next `size` frame of `format` is copied into: the slots are (re)made with
+    /// `make` for a new size or format.
+    pub(crate) fn next(
+        &mut self,
+        size: PhysicalSize<u32>,
+        format: wgpu::TextureFormat,
+        mut make: impl FnMut() -> Result<Slot, ImportError>,
+    ) -> Next {
+        if self.made != Some((size, format)) {
+            self.made = Some((size, format));
+            self.latest = None;
+            self.slots = (0..self.request.slots)
+                .map(|_| make().map(|s| OsBuffer(std::sync::Arc::new(s))))
+                .collect::<Result<_, _>>()
+                .unwrap_or_else(|error| {
+                    log::error!("no OS buffers for {size:?} {format:?}: {error}");
+                    Vec::new()
+                });
+        }
+        if self.slots.is_empty() {
+            return Next::Unavailable;
+        }
+        // a buffer of it is alive (the host holds a frame in it) or the compositor uses it
+        let in_use: Vec<bool> = self
+            .slots
+            .iter()
+            .map(|b| std::sync::Arc::strong_count(&b.0) > 1 || b.0.compositor_uses())
+            .collect();
+        let chosen = (self.request.choose)(&in_use, self.latest);
+        let Some(i) = chosen.filter(|&i| i < self.slots.len()) else {
+            // wubble change (65): counted for the host.
+            self.busy += 1;
+            self.lost = true;
+            return Next::Busy;
+        };
+        // wubble change (66): a frame copied, so none is lost
+        self.lost = false;
+        self.latest = Some(i);
+        Next::Buffer(self.slots[i].clone())
     }
 }
 
@@ -699,6 +801,9 @@ mod dx12;
 mod metal;
 #[cfg(target_os = "linux")]
 mod vulkan_dmabuf;
+// wubble change (71): the Linux OS buffers, exported dmabufs.
+#[cfg(target_os = "linux")]
+mod vulkan_pool;
 
 #[cfg(target_os = "linux")]
 pub use vulkan_dmabuf::build_dmabuf_capable_device;
@@ -706,9 +811,6 @@ pub use vulkan_dmabuf::build_dmabuf_capable_device;
 pub(crate) use vulkan_dmabuf::copy_dmabuf_to_owned;
 #[cfg(target_vendor = "apple")]
 pub(crate) use metal::copy_metal_to_owned;
-// wubble change (64): a view's OS buffers.
-#[cfg(target_vendor = "apple")]
-pub(crate) use metal::OsBufferPool;
 
 /// wubble change: copies an imported, callback-scoped CEF frame into a
 /// weld-owned texture and waits for the copy, so CEF may reuse its pooled
@@ -718,6 +820,9 @@ pub(crate) use metal::OsBufferPool;
 /// The copy is created as `source.format.add_srgb_suffix()`: CEF's bytes are
 /// display-encoded, and the host samples the copy through an sRGB view. The
 /// Linux import is already sRGB (no-op); the macOS copy does the same.
+///
+/// wubble change (71): with `os` (the host's OS buffer for this frame) the copy goes into that
+/// slot's texture instead of a new one, carried out as [`CopiedFrame::os`].
 ///
 /// Ported from cef-rs `cef/src/osr_texture_import/common.rs`
 /// (`texture::copy_to_owned`, `texture::wait_for_copy`; cef-rs #498),
@@ -730,18 +835,25 @@ fn copy_to_owned(
     ctx: &HostWgpuContext,
     arrived: std::time::Instant,
     started: std::time::Instant,
+    os: Option<OsBuffer>,
 ) -> Result<CopiedFrame, ImportError> {
     let format = source.format.add_srgb_suffix();
-    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("weld-cef-frame-copy"),
-        size: source.size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+    // TODO(wubble): without a pool (no page layer) this is still a new texture per frame; a
+    // plain pool of the shell's own would remove it (docs/research/linux-page-layer.md).
+    let texture = match &os {
+        Some(buffer) => buffer.0.texture().clone(),
+        None => ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("weld-cef-frame-copy"),
+            size: source.size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        }),
+    };
+    let format = texture.format();
     let mut encoder = ctx
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -783,6 +895,7 @@ fn copy_to_owned(
         copy: done - started,
         copy_wait: done - waiting,
         damage: None,
+        os,
     })
 }
 
@@ -858,6 +971,8 @@ impl WgpuTextureImporter {
         frame: DmaBufImage,
         ctx: &HostWgpuContext,
     ) -> Result<ImportedTexture, ImportError> {
+        // TODO(wubble): a new VkImage and memory import of CEF's buffer for every frame; CEF's
+        // pool has 11 buffers, so a cache by `fd_identity` would make most imports free.
         #[cfg(target_os = "linux")]
         {
             return vulkan_dmabuf::import_vulkan(frame, ctx);
