@@ -9,6 +9,7 @@ pub mod archive;
 pub mod autofill;
 pub mod autoscroll;
 pub mod beam;
+pub mod blocker_gate;
 pub mod boost;
 pub mod bow;
 pub mod busy;

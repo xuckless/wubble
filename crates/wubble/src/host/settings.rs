@@ -102,7 +102,12 @@ impl Host {
                     window.invoke_sidebar_mode_requested(mode.into());
                 }
             }
-            Applied::BlockerEnabled(on) => self.blocking.set_enabled(on),
+            Applied::BlockerEnabled(on) => {
+                self.blocking.set_enabled(on);
+                if !on {
+                    self.gate_event(wubble_core::blocker_gate::GateEvent::BlockerOff);
+                }
+            }
             Applied::BlockerExceptions(hosts) => {
                 self.blocker_hosts = hosts;
                 self.run_site_lists();
@@ -277,6 +282,10 @@ impl Host {
 
     /// The lists' state changed on the blocker's thread (a rebuild or an update ended).
     pub(crate) fn filter_lists_changed(&mut self) {
+        // the start-up compile ended (swapped in, or given up): the held pages load
+        if !self.blocking.is_busy() {
+            self.gate_event(wubble_core::blocker_gate::GateEvent::BlockerReady);
+        }
         self.render_settings();
     }
 
