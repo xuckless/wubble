@@ -132,7 +132,7 @@ const STORED: [Kind; 29] = [
 ];
 
 /// What the store reads of the host's other owners as an action runs (never copied into it).
-struct HostEnv<'a> {
+pub(super) struct HostEnv<'a> {
     host: &'a Host,
 }
 
@@ -218,7 +218,7 @@ impl Host {
             .find(|x| x.id == w)
     }
 
-    fn env(&self) -> HostEnv<'_> {
+    pub(super) fn env(&self) -> HostEnv<'_> {
         HostEnv { host: self }
     }
 

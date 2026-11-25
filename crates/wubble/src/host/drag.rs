@@ -20,7 +20,7 @@ use slint::winit_030::winit::event::WindowEvent;
 use wubble_core::drag::{self, Drag, Effect, Input};
 use wubble_core::model::Command;
 use wubble_core::omnibox::{self, Intent};
-use wubble_core::overlay::{Kind, Layer, Phase};
+use wubble_core::overlay::{Kind, Layer, Phase, Pointer, PointerOwner};
 use wubble_core::pagedrag::{self, DragOps, Over, PageDrag, Shell};
 use wubble_core::tab::TabId;
 use wubble_core::tabdrag;
@@ -516,10 +516,25 @@ impl Host {
     }
 
     /// A page on screen under `at` that may take a drop: a model tab's with a web view (not the
-    /// DevTools panel or an extension popup, nor one of wubble's own pages, which are the shell's). An agent's drag reaches no other page: [`pagedrag`] confines it.
+    /// DevTools panel or an extension popup, nor one of wubble's own pages, which are the
+    /// shell's), where the store gives the pointer to the page (`Ui::pointer_at`: not under a
+    /// surface that takes it over itself, as the peek's card or an autofill part, nor under a
+    /// sheet's scrim; a drag's own grab is the drag's). An agent's drag reaches no other page:
+    /// [`pagedrag`] confines it.
     fn page_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
-        self.pane_under(window, at)
-            .filter(|t| self.model.tabs.contains_key(t) && self.views.contains_key(t))
+        let tab = self
+            .pane_under(window, at)
+            .filter(|t| self.model.tabs.contains_key(t) && self.views.contains_key(t))?;
+        let (_, facts) = self.page_covers(window, tab);
+        let p = tabdrag::Point {
+            x: f64::from(at.0),
+            y: f64::from(at.1),
+        };
+        let page = match self.ui.pointer_at(&self.env(), &facts, self.w.id, p) {
+            PointerOwner::Page => true,
+            PointerOwner::Layer(l) => l.kind.row().pointer == Pointer::Grab,
+        };
+        page.then_some(tab)
     }
 
     /// The shell's drop target under `at`, while the sidebar shows.
