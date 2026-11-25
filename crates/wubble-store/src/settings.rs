@@ -321,6 +321,7 @@ settings! {
     PdfDownload: bool = defs::PDF_DOWNLOAD;
     /// `wubble_core::secure_dns::SecureDns`'s stored text.
     PrivacySecureDns: String = defs::PRIVACY_SECURE_DNS;
+    PrivacyGpc: bool = defs::PRIVACY_GPC;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

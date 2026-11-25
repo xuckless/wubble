@@ -96,6 +96,13 @@ pub const PREFS: &[PrefRow] = &[
         pref: "plugins.always_open_pdf_externally",
         mapping: Mapping::Bool,
     },
+    // Chrome's renderer preferences read it into `is_global_privacy_control_setting_enabled`,
+    // which sends `Sec-GPC: 1` and sets `navigator.globalPrivacyControl`
+    PrefRow {
+        setting: &s::PRIVACY_GPC,
+        pref: "universal_optout.enabled",
+        mapping: Mapping::Bool,
+    },
 ];
 
 impl PrefRow {
@@ -180,6 +187,8 @@ mod tests {
             ),
             // Chrome's default: PDFs open in its viewer
             ("plugins.always_open_pdf_externally", PrefValue::Bool(false)),
+            // no Sec-GPC header until the user turns it on
+            ("universal_optout.enabled", PrefValue::Bool(false)),
         ];
         for (pref, value) in want {
             let row = PREFS.iter().find(|r| r.pref == *pref).expect(pref);
@@ -227,6 +236,16 @@ mod tests {
                 "pdf.download",
                 "1",
                 Some(("plugins.always_open_pdf_externally", PrefValue::Bool(true))),
+            ),
+            (
+                "privacy.gpc",
+                "1",
+                Some(("universal_optout.enabled", PrefValue::Bool(true))),
+            ),
+            (
+                "privacy.gpc",
+                "0",
+                Some(("universal_optout.enabled", PrefValue::Bool(false))),
             ),
             ("search.engine", "google", None),
         ];

@@ -983,6 +983,17 @@ pub const PRIVACY_SECURE_DNS: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// Global Privacy Control (`Sec-GPC: 1` and `navigator.globalPrivacyControl`, as Brave and
+/// Firefox send it): Chromium's own, through the profile preference `universal_optout.enabled`
+/// (`privacy::PREFS`; the features are on at every start, `wubble_engine::app`). Off by default.
+pub const PRIVACY_GPC: SettingDef = SettingDef {
+    key: "privacy.gpc",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Tell sites not to sell or share your data (Global Privacy Control)",
+    section: Section::Privacy,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -1072,6 +1083,7 @@ pub const ALL: &[&SettingDef] = &[
     &PRIVACY_WEBRTC_IP,
     &PDF_DOWNLOAD,
     &PRIVACY_SECURE_DNS,
+    &PRIVACY_GPC,
 ];
 
 /// The definition of `key`, if it is a setting.

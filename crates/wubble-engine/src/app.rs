@@ -104,6 +104,14 @@ pub enum ProfileKind {
 /// [`NO_SANDBOX_ARG`] is: the helper cannot depend on this crate.
 pub const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
 
+/// Chromium's Global Privacy Control (`Sec-GPC: 1` on requests, `navigator.globalPrivacyControl`)
+/// behind its setting: blink's `GlobalPrivacyControlTest` sends it while the renderer
+/// preferences say the setting is on, which Chrome fills from the profile preference
+/// `universal_optout.enabled` once `UniversalOptOut` and `UniversalOptOutSettings` are on
+/// (`chrome/browser/renderer_preferences_util.cc`). Always on: nothing is sent while that
+/// preference is off (`settings::PRIVACY_GPC`, off by default). All three are strings in libcef 156.
+const GPC_FEATURES: &str = "GlobalPrivacyControlTest,UniversalOptOut,UniversalOptOutSettings";
+
 /// Page features that are Chromium start switches (the settings' restart rows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageFeatures {
@@ -251,6 +259,11 @@ impl PageFeatures {
                 "NVDEC through libva-nvidia-driver (crbug.com/1492880 keeps it off by default): \
                  4K60 VP9 measured 130 to 290 % of a core in software, 25 to 55 % on NVDEC; the GPU \
                  process then has no seccomp sandbox (CUDA threads exist when it would start)",
+            ),
+            (
+                true,
+                Enable(GPC_FEATURES),
+                "Global Privacy Control, sent only while its setting (a profile preference) is on",
             ),
         ]
     }
@@ -1560,7 +1573,9 @@ mod tests {
         let mut want = vec![
             (
                 "enable-features".to_string(),
-                Some("OverlayScrollbar,MiddleClickAutoscroll".to_string()),
+                Some(format!(
+                    "OverlayScrollbar,MiddleClickAutoscroll,{GPC_FEATURES}"
+                )),
             ),
             quiet_features(&[]),
             (
@@ -1674,7 +1689,11 @@ mod tests {
             middle_click_autoscroll: false,
             ..PageFeatures::default()
         };
-        assert_eq!(off.switches(), [quiet_features(&[])]);
+        let gpc_only = (
+            "enable-features".to_string(),
+            Some(GPC_FEATURES.to_string()),
+        );
+        assert_eq!(off.switches(), [gpc_only, quiet_features(&[])]);
         let scrollbars = PageFeatures {
             overlay_scrollbars: true,
             ..off
@@ -1684,7 +1703,7 @@ mod tests {
             [
                 (
                     "enable-features".to_string(),
-                    Some("OverlayScrollbar".to_string())
+                    Some(format!("OverlayScrollbar,{GPC_FEATURES}"))
                 ),
                 quiet_features(&[]),
             ]
@@ -1708,7 +1727,10 @@ mod tests {
             [
                 s(
                     "enable-features",
-                    Some("OverlayScrollbar,BackForwardCache:cache_size/2")
+                    Some(
+                        format!("OverlayScrollbar,BackForwardCache:cache_size/2,{GPC_FEATURES}")
+                            .as_str()
+                    )
                 ),
                 quiet_features(&["SpareRendererForSitePerProcess"]),
                 s("max-decoded-image-size-mb", Some("64")),
@@ -1724,7 +1746,11 @@ mod tests {
         };
         assert_eq!(
             off.switches(),
-            [quiet_features(&[]), s("disable-back-forward-cache", None)]
+            [
+                s("enable-features", Some(GPC_FEATURES)),
+                quiet_features(&[]),
+                s("disable-back-forward-cache", None)
+            ]
         );
     }
 
@@ -1737,7 +1763,13 @@ mod tests {
             ..PageFeatures::default()
         };
         assert_eq!(PageFeatures::default().remote_debugging_port, None);
-        assert_eq!(base.switches(), [quiet_features(&[])]);
+        assert_eq!(
+            base.switches(),
+            [
+                s("enable-features", Some(GPC_FEATURES)),
+                quiet_features(&[])
+            ]
+        );
         let open = PageFeatures {
             remote_debugging_port: Some(9333),
             ..base
@@ -1745,6 +1777,7 @@ mod tests {
         assert_eq!(
             open.switches(),
             [
+                s("enable-features", Some(GPC_FEATURES)),
                 quiet_features(&[]),
                 s("remote-debugging-port", Some("9333")),
                 s("remote-allow-origins", Some("http://127.0.0.1:9333"))
@@ -1960,7 +1993,9 @@ mod tests {
             [
                 s(
                     "enable-features",
-                    Some("OverlayScrollbar,MiddleClickAutoscroll,VaapiOnNvidiaGPUs")
+                    Some(
+                        format!("OverlayScrollbar,MiddleClickAutoscroll,VaapiOnNvidiaGPUs,{GPC_FEATURES}").as_str()
+                    )
                 ),
                 quiet_features(&[]),
                 s("enable-blink-features", Some("MiddleClickAutoscroll")),
