@@ -52,15 +52,23 @@ def memory(pid):
 
 
 def ident(pid):
-    """A process's name and command line, joined: what a kind rule matches against."""
+    """A process's name, command line and its threads' names, joined: what a kind rule matches
+    against (CEF's zygote children keep the zygote's command line; their threads tell them apart)."""
     try:
         with open(f"/proc/{pid}/comm") as f:
             comm = f.read().strip()
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             args = f.read().decode(errors="replace").replace("\0", " ")
+        threads = set()
+        for t in os.listdir(f"/proc/{pid}/task"):
+            try:
+                with open(f"/proc/{pid}/task/{t}/comm") as f:
+                    threads.add(f.read().strip())
+            except OSError:
+                pass
     except OSError:
         return ""
-    return f"{comm}\0{args}"
+    return f"{comm}\0{args}\0{','.join(sorted(threads))}"
 
 
 class Loopback:

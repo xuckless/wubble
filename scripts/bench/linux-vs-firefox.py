@@ -19,8 +19,9 @@ Once a second: CPU % of one core per process group of the browser's tree (main, 
 renderer/content, other) from /proc, the tree's RSS and PSS, the GPU (nvidia-smi: whole-GPU
 busy and board power, the tree's own SM % from pmon where the driver gives it; else sysfs
 gpu_busy_percent) and package power (powercap RAPL, where energy_uj is readable). From wubble's
-trace: cef_frames and slint_renders a second. From the pages: video frames decoded and dropped,
-how far the page scrolled, how much text arrived.
+trace: cef_frames and slint_renders a second (printed only on the page-layer path: not on Linux).
+From the pages: video frames decoded and dropped, how far the page scrolled, how much text
+arrived, whether the find and command keys took the page's focus.
 
 Results go to --out (default ~/Dev/wubble/.local/bench/<time>/): samples.csv (one row a second),
 results.md (per state, wubble against Firefox: median and p90, verdict), logs/. Nothing is
@@ -53,7 +54,8 @@ SIZE = tuple(int(x) for x in os.environ.get("WUBBLE_HEADLESS_SIZE", "1360x880").
 HEAD = """<!doctype html><meta charset=utf-8><title>%s</title><style>body{margin:24px;font:16px sans-serif;background:#f4f4f4}</style>
 <script>const log = q => fetch('/log?' + new URLSearchParams(q)).catch(() => {});
 const every = (ms, f) => { let last = 0; return (...a) => { const n = Date.now(); if (n - last >= ms) { last = n; f(...a); } }; };
-addEventListener('load', () => log({page: document.title}));</script>
+addEventListener('load', () => log({page: document.title}));
+addEventListener('blur', () => log({blur: innerHeight}));</script>
 """
 PROSE = "<p>" + "A still paragraph of text, nothing on the page moves or asks for frames. " * 6 + "</p>"
 PAGES = {
@@ -61,7 +63,7 @@ PAGES = {
     # video-page.sh's clip and shape: 1080p60 VP9 looping muted at 854x480
     "video": """<video id=v src="clip-1080p60.webm" autoplay muted loop playsinline style="width:854px;height:480px;display:block"></video>
 <script>const v = document.getElementById('v');
-v.addEventListener('timeupdate', every(5000, () => { const q = v.getVideoPlaybackQuality();
+v.addEventListener('timeupdate', every(1000, () => { const q = v.getVideoPlaybackQuality();
   log({video: q.totalVideoFrames, dropped: q.droppedVideoFrames}); }));</script>""",
     "long": "".join(f"<h2>Section {i}</h2>{PROSE}<div style='height:120px;background:hsl({i * 7 % 360} 60% 70%)'></div>"
                     for i in range(300))
@@ -135,14 +137,18 @@ BROWSERS = {
     "wubble": {
         "cmd": lambda b, prof, url: [b, "--profile", prof, url],
         "env": {"WUBBLE_TRACE": "1"},
-        "kinds": (("gpu", "--type=gpu-process"), ("renderer", "--type=renderer")),
+        # the zygote's children keep its command line: the GPU process has GpuWatchdog, a
+        # renderer (the sandboxed zygote's) the child IO thread a zygote itself lacks
+        "kinds": (("gpu", ("--type=gpu-process",)), ("gpu", ("GpuWatchdog",)), ("renderer", ("--type=renderer",)),
+                  ("renderer", ("--type=zygote", "Chrome_ChildIOT"))),
     },
     "firefox": {
         # wubble's first window is 1280x800 (kit derived.slint), so Firefox's is too
         "cmd": lambda b, prof, url: [b, "--no-remote", "-profile", prof, "--width", "1280", "--height", "800", url],
         "env": {"MOZ_ENABLE_WAYLAND": "1"},
-        "kinds": (("gpu", "GPU Process"), ("renderer", "Isolated Web Co"), ("renderer", "Web Content"),
-                  ("renderer", "file:// Content")),
+        # no GPU process on Linux (WebRender composites in the main process); video decodes in RDD (other)
+        "kinds": (("gpu", ("GPU Process",)), ("renderer", ("Isolated Web Co",)), ("renderer", ("Web Content",)),
+                  ("renderer", ("file:// Content",))),
         "prefs": FIREFOX_PREFS,
     },
 }
@@ -319,21 +325,23 @@ class Rapl:
 class Sampler(threading.Thread):
     """One row a second for the tree under `root`: CPU % of one core per kind, RSS, PSS, GPU, package W."""
 
-    def __init__(self, root, kinds, gpu, rapl):
+    def __init__(self, root, kinds, gpu, rapl, count):
         super().__init__(daemon=True)
-        self.root, self.rules, self.gpu, self.rapl = root, kinds, gpu, rapl
+        self.root, self.rules, self.gpu, self.rapl, self.count = root, kinds, gpu, rapl, count
         self.rows, self.kind_of, self.stop_flag = [], {}, threading.Event()
 
     def kind(self, pid):
-        if pid not in self.kind_of:
+        """Kept once known; "other" is asked again (a new process's threads start after it)."""
+        if self.kind_of.get(pid, "other") == "other":
             who = common.ident(pid)
-            self.kind_of[pid] = "main" if pid == self.root else next((k for k, s in self.rules if s in who), "other")
+            self.kind_of[pid] = "main" if pid == self.root else \
+                next((k for k, needles in self.rules if all(n in who for n in needles)), "other")
         return self.kind_of[pid]
 
     def run(self):
         prev, t0 = common.tree(self.root), time.monotonic()
         self.rapl.watts()
-        while not self.stop_flag.wait(1.0):
+        while len(self.rows) < self.count and not self.stop_flag.wait(1.0):
             cur, t1 = common.tree(self.root), time.monotonic()
             dt, row = t1 - t0, {f"cpu_{k}": 0.0 for k in KINDS}
             for pid, ticks in cur.items():
@@ -393,16 +401,25 @@ def run_one(a, ctx, browser, state, rnd):
             return [], notes
         seat.click()  # focus: the window, and on the typing page its textarea
         time.sleep(a.warmup)
-        if browser in keys:
+        if browser in keys:  # a bar that takes the keyboard takes it from the page: its window blurs
+            k = loop.mark()
             seat.key(keys[browser])
-        time.sleep(2)
+            time.sleep(2)
+            notes.append(f"{keys[browser]} took the page's focus" if loop.since(k, "blur")
+                         else f"{keys[browser]}: THE PAGE KEPT ITS FOCUS (no bar took the keyboard?)")
+        else:
+            time.sleep(2)
         lines = len(logpath.read_text(errors="replace").splitlines())
         ev = loop.mark()
-        sampler = Sampler(p.pid, b["kinds"], ctx["gpu"], ctx["rapl"])
+        sampler = Sampler(p.pid, b["kinds"], ctx["gpu"], ctx["rapl"], a.seconds)
         sampler.start()
         DRIVERS[driver](seat, a.seconds)
+        sampler.join(3)  # its last second
         sampler.stop_flag.set()
         sampler.join()
+        with logpath.open("a") as log:  # how the tree was grouped, to check the kind rules
+            log.writelines(f"bench: {k} {pid} {common.ident(pid).split(chr(0))[0]}\n"
+                           for pid, k in sorted(sampler.kind_of.items()))
         # what the page and the trace saw in the window
         video = loop.since(ev, "video")
         if page == "video":
@@ -415,10 +432,10 @@ def run_one(a, ctx, browser, state, rnd):
             got = loop.since(ev, "len")
             notes.append(f"{got[-1]['len']} characters reached the page" if got else "NOTHING TYPED reached the page")
         sums = common.summaries(logpath.read_text(errors="replace").splitlines()[lines:])
-        if browser == "wubble":
+        if sums:  # wubble's, printed only on the page-layer path (none on Linux, Decided "Page layer default")
             med = lambda k: statistics.median(s["counts"].get(k, 0) for s in sums)
-            notes.append(f"cef_frames {med('cef_frames'):.0f}/s, slint_renders {med('slint_renders'):.0f}/s"
-                         if sums else "no page-layer summary in the trace")
+            notes.append(f"cef_frames {med('cef_frames'):.0f}/s, slint_renders {med('slint_renders'):.0f}/s")
+            ctx["summaries"] = True
         for i, row in enumerate(sampler.rows):
             ctx["csv"].writerow({"round": rnd, "state": state, "browser": browser, "sec": i + 1} | row)
         ctx["csvfile"].flush()
@@ -558,6 +575,9 @@ def main():
             print("linux-vs-firefox: stopped", flush=True)
         finally:
             ctx["load1"] = " ".join(open("/proc/loadavg").read().split()[:3])
+            if not ctx.get("summaries"):
+                ctx["unreadable"].append("wubble's cef_frames and slint_renders (its trace prints them only on the "
+                                         "page-layer path, which Linux does not take)")
             if all(r.get("gpu_sm") is None for rs, _ in results.values() for r in rs) and ctx["gpu"].procs:
                 ctx["unreadable"].append("the browsers' own GPU share (pmon gave no per-process SM %)")
             write_report(a, ctx, results)
