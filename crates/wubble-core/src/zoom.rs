@@ -48,9 +48,30 @@ pub fn wanted(table: &ZoomTable, page: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
+/// What the address pill's zoom chip shows for a page at `percent`: the percent while it is
+/// not the user's default (Chrome's omnibox zoom icon), else no chip.
+pub fn indicator(percent: u32, default: u32) -> Option<u32> {
+    (percent != default).then_some(percent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_chip_shows_a_zoom_other_than_the_default() {
+        for (percent, default, want) in [
+            (100, 100, None),
+            (125, 100, Some(125)),
+            (90, 100, Some(90)),
+            (100, 125, Some(100)),
+            (125, 125, None),
+            (25, 100, Some(25)),
+            (500, 100, Some(500)),
+        ] {
+            assert_eq!(indicator(percent, default), want, "{percent} {default}");
+        }
+    }
 
     #[test]
     fn hosts_are_the_key() {

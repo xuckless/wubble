@@ -43,8 +43,9 @@ impl Mode {
 pub enum Dock {
     #[default]
     Closed,
-    /// Waiting for the inspected page's target id.
-    Resolving { tab: TabId },
+    /// Waiting for the inspected page's target id; `console`: the frontend opens on its
+    /// Console panel.
+    Resolving { tab: TabId, console: bool },
     /// The frontend view is the docked panel.
     Open { tab: TabId },
     /// DevTools is in its own window.
@@ -56,7 +57,7 @@ impl Dock {
     pub fn tab(&self) -> Option<TabId> {
         match self {
             Self::Closed => None,
-            Self::Resolving { tab } | Self::Open { tab } | Self::Detached { tab } => Some(*tab),
+            Self::Resolving { tab, .. } | Self::Open { tab } | Self::Detached { tab } => Some(*tab),
         }
     }
 
@@ -69,6 +70,10 @@ impl Dock {
 pub enum DockEvent {
     /// F12 or the chord, on the visible tab.
     Toggle(TabId),
+    /// Ctrl+Shift+J: DevTools on its Console panel for the tab. Unlike a toggle it never closes
+    /// (Chromium `DevToolsToggleAction::ShowConsolePanel`): a docked panel opens again on the
+    /// console; CEF's own window takes no panel, so an open one stays as it is.
+    Console(TabId),
     /// The context menu's Inspect at this point of the tab.
     InspectAt(TabId, Point),
     /// The answer to [`DockEffect::AskTarget`].
@@ -103,10 +108,18 @@ pub enum DockEffect {
 /// The frontend page for `target` on the endpoint at `port`. `None` unless `target` is a hex
 /// id, so nothing can add a query parameter or a path.
 pub fn frontend_url(port: u16, target: &str) -> Option<String> {
+    frontend_url_on(port, target, false)
+}
+
+/// [`frontend_url`], on the Console panel when `console`: the frontend's `panel` query
+/// parameter (`front_end/entrypoints/main/MainImpl.ts` reads it), which Chromium's
+/// `DevToolsWindow::OpenDevToolsWindow(.., ShowConsolePanel)` reaches through its bindings.
+pub fn frontend_url_on(port: u16, target: &str, console: bool) -> Option<String> {
     let valid = (16..=64).contains(&target.len()) && target.bytes().all(|b| b.is_ascii_hexdigit());
+    let panel = if console { "&panel=console" } else { "" };
     valid.then(|| {
         format!(
-            "http://127.0.0.1:{port}/devtools/inspector.html?ws=127.0.0.1:{port}/devtools/page/{target}"
+            "http://127.0.0.1:{port}/devtools/inspector.html?ws=127.0.0.1:{port}/devtools/page/{target}{panel}"
         )
     })
 }
@@ -121,14 +134,15 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
         Dock::Detached { tab } => vec![CloseDetached(*tab)],
         Dock::Closed | Dock::Resolving { .. } => vec![],
     };
-    // opening for `tab` the way `mode` allows
-    let open = |tab: TabId| match mode {
-        Mode::Docked { .. } => (Dock::Resolving { tab }, vec![AskTarget(tab)]),
+    // opening for `tab` the way `mode` allows (the native window has no panel to choose)
+    let open_on = |tab: TabId, console: bool| match mode {
+        Mode::Docked { .. } => (Dock::Resolving { tab, console }, vec![AskTarget(tab)]),
         Mode::DetachedOnly => (
             Dock::Detached { tab },
             vec![OpenDetached { tab, inspect: None }],
         ),
     };
+    let open = |tab: TabId| open_on(tab, false);
     match event {
         Toggle(tab) if dock.tab() == Some(tab) => {
             let effects = close(&dock);
@@ -136,6 +150,19 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
         }
         Toggle(tab) => {
             let (next, opening) = open(tab);
+            let mut effects = close(&dock);
+            effects.extend(opening);
+            (next, effects)
+        }
+        // already on its way: it opens on the console
+        Console(tab) if matches!(dock, Dock::Resolving { tab: t, .. } if t == tab) => {
+            (Dock::Resolving { tab, console: true }, vec![])
+        }
+        // CEF's window cannot be told a panel: it stays as it is
+        Console(tab) if dock == (Dock::Detached { tab }) => (dock, vec![]),
+        // the docked panel, or DevTools for another tab, gives way to the console's
+        Console(tab) => {
+            let (next, opening) = open_on(tab, true);
             let mut effects = close(&dock);
             effects.extend(opening);
             (next, effects)
@@ -150,9 +177,10 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
             });
             (Dock::Detached { tab }, effects)
         }
-        TargetId(tab, id) if dock == (Dock::Resolving { tab }) => {
+        TargetId(tab, id) if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) => {
+            let console = matches!(dock, Dock::Resolving { console: true, .. });
             let url = match mode {
-                Mode::Docked { port } => frontend_url(port, &id),
+                Mode::Docked { port } => frontend_url_on(port, &id, console),
                 Mode::DetachedOnly => None,
             };
             match url {
@@ -164,7 +192,7 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
                 ),
             }
         }
-        TargetFailed(tab) if dock == (Dock::Resolving { tab }) => (
+        TargetFailed(tab) if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) => (
             Dock::Detached { tab },
             vec![OpenDetached { tab, inspect: None }],
         ),
@@ -230,7 +258,13 @@ mod tests {
     #[test]
     fn toggle_on_another_tab_moves_the_dock() {
         let (dock, fx) = run(DOCKED, &[Toggle(A), TargetId(A, ID.into()), Toggle(B)]);
-        assert_eq!(dock, Dock::Resolving { tab: B });
+        assert_eq!(
+            dock,
+            Dock::Resolving {
+                tab: B,
+                console: false
+            }
+        );
         assert_eq!(fx[2], [CloseFrontend, AskTarget(B)]);
         // toggling while resolving cancels; the late answer is ignored
         let (dock, fx) = run(DOCKED, &[Toggle(A), Toggle(A), TargetId(A, ID.into())]);
@@ -346,7 +380,13 @@ mod tests {
     #[test]
     fn a_stale_target_id_is_ignored() {
         let (dock, fx) = run(DOCKED, &[Toggle(A), Toggle(B), TargetId(A, ID.into())]);
-        assert_eq!(dock, Dock::Resolving { tab: B });
+        assert_eq!(
+            dock,
+            Dock::Resolving {
+                tab: B,
+                console: false
+            }
+        );
         assert!(fx[2].is_empty());
         assert_eq!(run(DOCKED, &[TargetId(A, ID.into())]).0, Dock::Closed);
     }

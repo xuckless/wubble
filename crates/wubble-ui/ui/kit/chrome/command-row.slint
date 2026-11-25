@@ -6,7 +6,9 @@
 // (.24 s ease-out, from 7 px below at .98, clear and blurred 4) after 60 ms and 30 ms more per
 // row. wubble's rows: the hint is the result's shortcut when it has one, else its subtitle
 // (derived: docs/fidelity/derived-review.md); the favicon when the result has one, else the
-// kind's glyph.
+// kind's glyph. Tab search's open-tab rows end in the list row's close action (RowAction,
+// pages/list-row.slint: `.wb-tab-x`'s reveal on the row's hover or selection), and a recently
+// closed tab wears the clock glyph (derived: docs/fidelity/derived-review.md).
 
 import { BrowserCss } from "../gen/css.slint";
 import { Motion, Tsx } from "../gen/tokens.slint";
@@ -16,6 +18,7 @@ import { KitText } from "../text.slint";
 import { Icon, Glyph } from "../controls/icon.slint";
 import { Replay } from "../motion/tween.slint";
 import { OverlapLook } from "../motion/overlap.slint";
+import { RowAction } from "../pages/list-row.slint";
 import { CommandKind, CommandResult } from "../../components/model.slint";
 
 export component CommandRow inherits Rectangle {
@@ -27,6 +30,8 @@ export component CommandRow inherits Rectangle {
     in property <bool> active: false;
     callback activated();
     callback hovered();
+    // the row's close button (`item.closable`)
+    callback close-requested();
 
     height: BrowserCss.wb-cmd-row--height;
     accessible-role: AccessibleRole.list-item;
@@ -50,6 +55,9 @@ export component CommandRow inherits Rectangle {
         }
         if (kind == CommandKind.search) {
             return Glyph.search;
+        }
+        if (kind == CommandKind.closed-tab) {
+            return Glyph.clock;
         }
         return Glyph.code;
     }
@@ -117,6 +125,19 @@ export component CommandRow inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-alignment: right;
                 overflow: elide;
+            }
+            // tab search: close the open tab, the list stays
+            if root.item.closable: Rectangle {
+                width: close.width;
+                close := RowAction {
+                    y: (parent.height - self.height) / 2;
+                    icon-path: Glyph.close;
+                    label: "Close tab";
+                    reveal: ta.has-hover || root.active;
+                    clicked => {
+                        root.close-requested();
+                    }
+                }
             }
         }
     }

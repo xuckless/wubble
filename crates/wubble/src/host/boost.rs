@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 use wubble_core::boost::{self, At, Boost, Pattern, Tint};
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_core::tab::TabId;
 use wubble_ui::{AppWindow, BoostView};
 
@@ -104,7 +105,7 @@ impl Host {
     pub(super) fn boosts_view_gone(&mut self, tab: TabId) {
         self.boosts.given.remove(&tab);
         if self.boosts.editor.as_ref().is_some_and(|e| e.tab == tab) {
-            self.boosts.editor = None;
+            self.boost_closed();
             self.redraw_boost();
         }
     }
@@ -207,7 +208,17 @@ impl Host {
         }
     }
 
+    /// The editor opens over `tab` as its store overlay, unless the overlays refuse it (one
+    /// editor: another tab's closes first).
     fn open_editor(&mut self, tab: TabId, draft: Boost) {
+        if self.boosts.editor.as_ref().is_some_and(|e| e.tab != tab) {
+            self.stop_zap();
+            self.boost_closed();
+        }
+        self.layer_is(Kind::Boost, tab, true);
+        if self.ui.phase(self.w.id, Layer::new(Kind::Boost, Some(tab))) != Some(Phase::Open) {
+            return;
+        }
         self.boosts.editor = Some(Editor {
             tab,
             draft,
@@ -367,13 +378,13 @@ impl Host {
                     return;
                 }
                 self.stop_zap();
-                self.boosts.editor = None;
+                self.boost_closed();
                 self.store_boost(draft);
             }
             "delete" => {
                 let id = editor.draft.id;
                 self.stop_zap();
-                self.boosts.editor = None;
+                self.boost_closed();
                 self.boosts.all.retain(|b| b.id != id);
                 // from a private window only for the run: the stored row comes back next start
                 if self.records(tab) {
@@ -384,7 +395,7 @@ impl Host {
             }
             "close" => {
                 self.stop_zap();
-                self.boosts.editor = None;
+                self.boost_closed();
                 // Back to what is stored.
                 self.show_css(tab, None);
             }
@@ -469,6 +480,13 @@ impl Host {
         }
     }
 
+    /// The editor closes, and its store overlay with it (the editor is the one writer of both).
+    fn boost_closed(&mut self) {
+        if let Some(e) = self.boosts.editor.take() {
+            self.layer_is(Kind::Boost, e.tab, false);
+        }
+    }
+
     fn redraw_boost(&mut self) {
         if let Some(window) = self.w.window.upgrade() {
             self.render_boost(&window);
@@ -485,7 +503,11 @@ impl Host {
                 });
                 let [_, r, g, b] = tint.rgb.to_be_bytes();
                 BoostView {
-                    open: self.shown() == Some(e.tab),
+                    open: self.shown() == Some(e.tab)
+                        && self
+                            .ui
+                            .phase(self.w.id, Layer::new(Kind::Boost, Some(e.tab)))
+                            == Some(Phase::Open),
                     serial: self.boosts.serial,
                     is_new: d.id == 0,
                     name: d.name.as_str().into(),

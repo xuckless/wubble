@@ -53,9 +53,10 @@ impl SettingKind {
 
 /// The list settings whose entries are sites (a host covers its subdomains): the list editor
 /// keeps each as `routing::site_host` makes it.
-pub const SITE_LISTS: [&str; 3] = [
+pub const SITE_LISTS: [&str; 4] = [
     "blocker.exceptions",
     "sleep.never_sites",
+    "sound.muted_sites",
     "video.hidden_sites",
 ];
 
@@ -157,6 +158,16 @@ pub const TOUCH_SIZING: SettingDef = SettingDef {
     section: Section::Appearance,
     restart: false,
 };
+/// The address pill shows the whole URL, scheme and all (Chrome's "Always show full URLs",
+/// `omnibox.prevent_url_elisions`); off, it shows the host and the rest (`chrome::address_parts`).
+pub const UI_FULL_URLS: SettingDef = SettingDef {
+    key: "ui.full_urls",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Always show full URLs",
+    section: Section::Appearance,
+    restart: false,
+};
 /// Shift+click on a link opens it in a peek over the page (`model::Glance`), not a new tab.
 pub const GLANCE_ENABLED: SettingDef = SettingDef {
     key: "glance.enabled",
@@ -249,6 +260,16 @@ pub const HISTORY_RETENTION_DAYS: SettingDef = SettingDef {
     kind: SettingKind::Count { min: 0, max: 3650 },
     default: "0",
     label: "Keep history for (days, 0 forever)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// Sites whose pages play no sound, in every tab and container (a host covers its subdomains):
+/// Chrome's "Mute site", its sound content setting (`sitesound`).
+pub const SOUND_MUTED_SITES: SettingDef = SettingDef {
+    key: "sound.muted_sites",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Muted sites",
     section: Section::Privacy,
     restart: false,
 };
@@ -879,6 +900,7 @@ pub const ALL: &[&SettingDef] = &[
     &REDUCE_MOTION,
     &TOUCH_SIZING,
     &GLANCE_ENABLED,
+    &UI_FULL_URLS,
     &KEYBINDING_OVERRIDES,
     &BLOCKER_ENABLED,
     &BLOCKER_EXCEPTIONS,
@@ -888,6 +910,7 @@ pub const ALL: &[&SettingDef] = &[
     &BLOCKER_CUSTOM_LISTS,
     &BLOCKER_LISTS,
     &HISTORY_RETENTION_DAYS,
+    &SOUND_MUTED_SITES,
     &SITE_ZOOM,
     &ZOOM_DEFAULT,
     &OVERLAY_SCROLLBARS,

@@ -66,7 +66,7 @@ pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
 fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<TabItem> {
     rows.iter()
         .map(|r| {
-            let marks = Marks::of(r.agent, r.audible, r.muted);
+            let marks = Marks::of(r.agent, r.audible, r.muted, r.site_muted);
             let sound = match marks.sound {
                 None => TabSound::None,
                 Some(Sound::Playing) => TabSound::Playing,
@@ -209,10 +209,13 @@ pub fn render_bar(
     rows: &[BarRow],
     icons: &HashMap<String, wubble_store::Favicon>,
     tab_icons: &BTreeMap<TabId, slint::Image>,
+    // tab search: an open tab's row has its close button
+    closable: bool,
 ) {
     let rows = rows
         .iter()
         .map(|r| CommandResult {
+            closable: closable && r.icon_tab().is_some(),
             kind: r.kind,
             title: r.title.as_str().into(),
             subtitle: r.subtitle.as_str().into(),

@@ -162,14 +162,26 @@ pub enum PageBlur {
     Build,
     /// Build once this much more time has passed (the ambience's rate): the host wakes then.
     After(Duration),
+    /// `P` exists and nothing has read it for [`PAGE_KEEP`]: its textures go (built again on
+    /// demand, as after a resize). Taken at the next render; no wake of its own, so an idle
+    /// window stays idle.
+    Free,
 }
+
+/// How long `P` is kept with nothing over a page and no ambience, since it was last built.
+/// wubble's own value: a menu opened again soon after reuses it.
+pub const PAGE_KEEP: Duration = Duration::from_secs(5);
 
 /// When the page-inclusive blur is built. Nothing over a page and no ambience costs nothing; an
 /// overlay over a page follows every page frame (a video behind a menu moves); the ambience alone
 /// follows at its own low rate; at `flat` the last build stays.
 pub fn page_blur(i: &PageBlurIn) -> PageBlur {
     if !i.pages || !(i.overlay || i.ambience) {
-        return PageBlur::Skip;
+        return if i.built && i.since_build >= PAGE_KEEP {
+            PageBlur::Free
+        } else {
+            PageBlur::Skip
+        };
     }
     if !i.built {
         return PageBlur::Build;
@@ -274,6 +286,20 @@ mod tests {
             ..need()
         };
         assert_eq!(page_blur(&no_pages), Skip, "no pane has a frame");
+        // built, then unread: kept a while, then freed
+        for (since, verdict) in [
+            (MS(10), Skip),
+            (PAGE_KEEP - MS(1), Skip),
+            (PAGE_KEEP, Free),
+            (Duration::MAX, Free),
+        ] {
+            let unread = PageBlurIn {
+                built: true,
+                since_build: since,
+                ..none
+            };
+            assert_eq!(page_blur(&unread), verdict, "{since:?} since its build");
+        }
         // a page frame while nothing needs it: still nothing
         assert_eq!(
             page_blur(&PageBlurIn {

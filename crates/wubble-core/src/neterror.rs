@@ -145,6 +145,42 @@ pub fn describe(code: i32, host: &str) -> (&'static str, String) {
     }
 }
 
+/// The network errors a failed page is reloaded after on its own: the ones that end when the
+/// network comes back (Chromium's `NetErrorAutoReloader`,
+/// `components/error_page/content/browser/net_error_auto_reloader.cc`, BSD-3-Clause; behaviour
+/// only): no network, a name not resolved, the network changed, a connection that failed,
+/// closed, reset, was refused or aborted, an unreachable address, a timeout. Never a certificate
+/// error, a blocked or refused address, or a page the server answered.
+const RETRYABLE: &[i32] = &[
+    -7,   // ERR_TIMED_OUT
+    -21,  // ERR_NETWORK_CHANGED
+    -100, // ERR_CONNECTION_CLOSED
+    -101, // ERR_CONNECTION_RESET
+    -102, // ERR_CONNECTION_REFUSED
+    -103, // ERR_CONNECTION_ABORTED
+    -104, // ERR_CONNECTION_FAILED
+    -105, // ERR_NAME_NOT_RESOLVED
+    -106, // ERR_INTERNET_DISCONNECTED
+    -109, // ERR_ADDRESS_UNREACHABLE
+    -118, // ERR_CONNECTION_TIMED_OUT
+    -137, // ERR_NAME_RESOLUTION_FAILED
+];
+
+/// Whether a load that failed with `code` is reloaded on its own ([`RETRYABLE`]).
+pub fn retryable(code: i32) -> bool {
+    RETRYABLE.contains(&code)
+}
+
+/// How long after each failure the page is reloaded again, in ms: the backoff of Chromium's
+/// auto-reloader (1 s, 5 s, 30 s, 1 min, 5 min, 10 min); later attempts keep the last.
+const RETRY_DELAYS_MS: &[u64] = &[1_000, 5_000, 30_000, 60_000, 300_000, 600_000];
+
+/// The wait before reload number `attempt` (0: the first).
+pub fn retry_delay_ms(attempt: u32) -> u64 {
+    let last = RETRY_DELAYS_MS.len() - 1;
+    RETRY_DELAYS_MS[usize::try_from(attempt).map_or(last, |a| a.min(last))]
+}
+
 /// Certificate errors the user chose to proceed past, per host and error,
 /// for this run only (never stored).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -163,6 +199,49 @@ impl CertExceptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_errors_retry_others_never() {
+        for (code, want) in [
+            (-106, true),
+            (-105, true),
+            (-21, true),
+            (-100, true),
+            (-101, true),
+            (-102, true),
+            (-104, true),
+            (-109, true),
+            (-7, true),
+            (-118, true),
+            (-202, false),
+            (-206, false),
+            (-20, false),
+            (-3, false),
+            (-6, false),
+            (-300, false),
+            (-310, false),
+            (-324, false),
+            (0, false),
+        ] {
+            assert_eq!(retryable(code), want, "{code}");
+        }
+    }
+
+    #[test]
+    fn the_backoff_grows_then_holds() {
+        for (attempt, want) in [
+            (0, 1_000),
+            (1, 5_000),
+            (2, 30_000),
+            (3, 60_000),
+            (4, 300_000),
+            (5, 600_000),
+            (6, 600_000),
+            (u32::MAX, 600_000),
+        ] {
+            assert_eq!(retry_delay_ms(attempt), want, "{attempt}");
+        }
+    }
 
     /// The numbers are Chromium's and never change; this pins the table.
     #[test]

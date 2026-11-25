@@ -178,6 +178,8 @@ struct Run {
     size: Option<u64>,
     /// What the join saved (deleted again when the job was cancelled while joining).
     saved: Vec<PathBuf>,
+    /// The bytes written when the rate was last measured (`download::rate`).
+    sample: Option<download::Sample>,
 }
 
 impl Run {
@@ -799,9 +801,10 @@ impl Host {
         }
     }
 
-    /// The list row's bytes and expected total.
+    /// The list row's bytes, expected total and speed: the bytes written per second since the
+    /// last measure, as CEF's rows report theirs.
     fn media_progress(&mut self, job: i64) {
-        let Some(run) = self.media.runs.get(&job) else {
+        let Some(run) = self.media.runs.get_mut(&job) else {
             return;
         };
         let received = run.received();
@@ -811,7 +814,23 @@ impl Host {
             }
             _ => run.size,
         };
-        self.apply_download(job, DownloadEvent::Progress { received, total });
+        let now = download::Sample {
+            received,
+            at_ms: super::surfaces::wall_ms(),
+        };
+        let speed = run.sample.and_then(|from| download::rate(from, now));
+        // a measure starts the next span; between measures the row keeps its speed
+        if run.sample.is_none() || speed.is_some() {
+            run.sample = Some(now);
+        }
+        self.apply_download(
+            job,
+            DownloadEvent::Progress {
+                received,
+                total,
+                speed,
+            },
+        );
     }
 
     fn media_done(&mut self, purpose: Purpose, result: Result<(), String>) {
@@ -1032,8 +1051,7 @@ impl Host {
             crate::menu::media_entries(&rows, wubble_engine::save::find_ffmpeg().is_some());
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     /// The downloader is on and lists something for the tab's page (a stream, or why not).
@@ -1196,6 +1214,7 @@ impl Host {
             fetched: BTreeMap::new(),
             size,
             saved: Vec::new(),
+            sample: None,
         };
         self.media.runs.insert(id, run);
         self.media_resolve_job(id);

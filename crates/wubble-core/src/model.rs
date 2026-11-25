@@ -95,6 +95,13 @@ pub enum Command {
         container: Option<ContainerId>,
         opener: Option<TabId>,
     },
+    /// Chromium's "New Tab to the Right" (`TabStripModel::CommandNewTabToRight`): a tab on
+    /// `url` right under `tab` (in its folder; under a pinned tab, first of the unpinned ones),
+    /// in the Space's default container, no opener, shown.
+    NewTabBelow {
+        tab: TabId,
+        url: String,
+    },
     /// A link opened in the background (middle click, Ctrl+click): placed right after its
     /// `opener`, never shown, the opener relation kept.
     BackgroundTab {
@@ -762,6 +769,40 @@ impl Model {
         cycle(&self.order(self.active_space()), self.visible_tab(), delta)
     }
 
+    /// Where `tab` goes when moved `delta` places along its own list: the pinned row, its
+    /// folder, or the Space's top-level items (a folder counts as one place there). `None` at
+    /// the list's end, and for a tab shown in a window of its own. Chromium's
+    /// `TabStripModel::MoveTabNext` / `MoveTabPrevious` (Ctrl+Shift+PageDown / PageUp), which
+    /// keeps a tab inside the pinned tabs; nothing copied.
+    pub fn tab_shift(&self, tab: TabId, delta: isize) -> Option<Dest> {
+        if self.windowed(tab).is_some() {
+            return None;
+        }
+        let (si, place) = self.place_of(tab)?;
+        let s = &self.spaces[si];
+        let step = |i: usize, len: usize| i.checked_add_signed(delta).filter(|&j| j < len);
+        Some(match place {
+            Place::Pinned(i) => Dest::Pinned {
+                space: s.id,
+                index: step(i, s.pinned.len())?,
+            },
+            Place::Normal(i) => Dest::Normal {
+                space: s.id,
+                index: step(i, s.items.len())?,
+            },
+            Place::Folder(folder, i) => {
+                let len = s.items.iter().find_map(|item| match item {
+                    Item::Folder(f) if f.id == folder => Some(f.tabs.len()),
+                    _ => None,
+                })?;
+                Dest::Folder {
+                    folder,
+                    index: step(i, len)?,
+                }
+            }
+        })
+    }
+
     /// The active Space's tab at `index` (0-based) in its order, if there is one.
     pub fn nth_tab(&self, index: usize) -> Option<TabId> {
         self.order(self.active_space()).get(index).copied()
@@ -1072,6 +1113,32 @@ impl Model {
             fx.push(Effect::ActivateTab(id));
         }
         fx
+    }
+
+    fn new_tab_below(&mut self, below: TabId, url: String) -> Vec<Effect> {
+        let Some((bi, place)) = self.place_of(below) else {
+            return vec![];
+        };
+        let space = self.spaces[bi].id;
+        let Some((id, si, create)) = self.place_new_tab(url, None, None, Some(space)) else {
+            return vec![];
+        };
+        // `place_new_tab` put it last; Chromium inserts it at the context tab's index + 1
+        let dest = match place {
+            Place::Pinned(_) => Dest::Normal { space, index: 0 },
+            Place::Normal(i) => Dest::Normal {
+                space,
+                index: i + 1,
+            },
+            Place::Folder(folder, i) => Dest::Folder {
+                folder,
+                index: i + 1,
+            },
+        };
+        self.detach(id);
+        self.attach(id, dest, si);
+        self.spaces[si].active = Some(id);
+        vec![create, Effect::ActivateTab(id)]
     }
 
     fn extension_tab(
@@ -1769,10 +1836,19 @@ impl Model {
         let Some(focused) = self.spaces[si].active.filter(|&f| f != tab) else {
             return vec![];
         };
+        // a split shows one built-in page at most (the shell draws one of each per window)
+        let joined = match self.spaces[si].split.as_ref() {
+            Some(g) if g.tabs.contains(&focused) => g.tabs.clone(),
+            _ => vec![focused],
+        };
+        let built_in = joined
+            .iter()
+            .chain([&tab])
+            .filter(|&&t| self.is_internal(t))
+            .count();
         if !self.order_idx(si).contains(&tab)
             || !self.order_idx(si).contains(&focused)
-            || self.is_internal(tab)
-            || self.is_internal(focused)
+            || built_in > 1
             || self.windowed(tab).is_some()
             || self.windowed(focused).is_some()
             || self.pip_tab().is_some_and(|p| p == tab || p == focused)
@@ -2104,7 +2180,8 @@ impl Model {
         vec![]
     }
 
-    /// Whether the tab shows an internal page (no web view; never a split pane).
+    /// Whether the tab shows an internal page (no web view: the shell draws it, alone or as the
+    /// one built-in pane of a split).
     pub fn is_internal(&self, tab: TabId) -> bool {
         self.tabs
             .get(&tab)
@@ -2166,6 +2243,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             container,
             opener,
         } => m.new_tab(url, container, opener),
+        Command::NewTabBelow { tab, url } => m.new_tab_below(tab, url),
         Command::BackgroundTab { url, opener } => m
             .place_new_tab(url, None, Some(opener), None)
             .map(|(_, _, create)| create)

@@ -1247,6 +1247,13 @@ pub trait CefSurfaceProducer {
         0
     }
 
+    /// wubble change (66): whether the newest frame was dropped because every OS buffer was in
+    /// use and no frame came after it (cleared by the call). The host asks CEF to paint again.
+    /// false without OS buffers. macOS only.
+    fn take_os_buffers_lost(&mut self) -> bool {
+        false
+    }
+
     /// CPU `OnPaint` frames CEF delivered instead of a shared texture, since
     /// the producer was created. `None` when this producer does not count them
     /// (never a made-up 0). wubble change, see `WUBBLE_CHANGES.md`.
@@ -2386,6 +2393,8 @@ pub enum NavigationEvent {
         id: DownloadId,
         bytes_received: u64,
         total_bytes_expected: Option<u64>,
+        /// wubble change: CEF's `current_speed`, when it reports one.
+        bytes_per_second: Option<u64>,
     },
     /// A download ended. `error` is `Some` when it failed, in which case the
     /// file may be partial or absent. Host-driven cancellation arrives as

@@ -11,17 +11,18 @@ use std::time::{Duration, Instant};
 use slint::ComponentHandle;
 use wubble_core::autofill::{MenuRow, SaveKind, View};
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Action as StoreAction, Kind, Layer};
 use wubble_engine::page::{JsDialogKind, PermissionKind, RequestId};
 use wubble_ui::{AppWindow, AutofillView};
 
 use super::Host;
 use super::autofill::shell_view;
+use super::layers::Content;
 use crate::gallery_smoke::{self, Action, Event, Ground, Long, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
-use crate::page_error::PageError;
+use crate::page_error::{PageError, Retry};
 use crate::prompt::{Ask, PermissionPrompt, PermissionRequest};
-use crate::surface::{Dialog, FindBar, OpenDialog, Surfaces};
+use crate::surface::{DialogContent, FindBar, OpenDialog, Surfaces};
 use crate::{quit, shot, with_host};
 
 /// How long a scene settles (springs, fades, the command bar's results) before it is shot.
@@ -184,15 +185,22 @@ impl Host {
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
         }
-        // The bookmark and print sheets are the host's own state, not the tab's: closed too.
+        // The bookmark and print sheets close through their owners first, which draw them
+        // closed (a store close alone leaves their views open).
         self.bookmark_sheet_answered(false, false, "", -1);
+        self.print_event(wubble_core::print::Event::Cancel);
+        // every other overlay the store holds open here closes as its owner would close it: a
+        // scene is the store's actions from nothing (the machines with state of their own are
+        // reset below)
+        let w = self.w.id;
+        let open = self.ui.stack(&self.env(), w).layers;
+        for layer in open {
+            self.act(StoreAction::Close { w, layer });
+        }
         // A waiting notice goes; a new one replaces it by itself (hiding it in the same turn as
         // showing one races the toast's two serials).
         if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
             self.toast_hide();
-        }
-        if !matches!(self.print, wubble_core::print::Sheet::Closed) {
-            self.print_event(wubble_core::print::Event::Cancel);
         }
         // an agent session of the last scene ends (its sheet, its Space)
         self.agents_stop();
@@ -228,6 +236,8 @@ impl Host {
         self.gallery_orbs(window, scene.overlay, scene.ground);
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
+        // the scene's store overlay, opened through the store with its content
+        let mut layer: Option<(Layer, Content)> = None;
         let mut autofill = View::default();
         let page_url = shown
             .and_then(|t| self.model.tabs.get(&t))
@@ -237,11 +247,12 @@ impl Host {
         match scene.overlay {
             Overlay::TabMenu | Overlay::Long(Long::TabMenu) => {
                 if let Some(tab) = shown {
-                    let facts = wubble_core::tabmenu::Facts { muted: false };
-                    surfaces.menu = Menu::Shell {
+                    let facts = wubble_core::tabmenu::Facts::default();
+                    let menu = Menu::Shell {
                         at: at(TAB_MENU_AT),
                         entries: menu::tab_entries(&self.model, tab, facts, &self.keymap),
                     };
+                    layer = Some((Layer::new(Kind::Menu, None), Content::Menu { tab, menu }));
                 }
             }
             Overlay::PageMenu => {
@@ -253,11 +264,13 @@ impl Host {
                     back: true,
                     ..menu::NavFlags::default()
                 };
-                surfaces.menu = Menu::Open {
+                let menu = Menu::Open {
                     id: FAKE,
                     at: at(PAGE_MENU_AT),
                     entries: menu::entries(&menu, nav),
                 };
+                layer =
+                    shown.map(|tab| (Layer::new(Kind::Menu, None), Content::Menu { tab, menu }));
             }
             Overlay::Tooltip => {
                 let (x, top, bottom) = RELOAD_TIP;
@@ -271,7 +284,7 @@ impl Host {
                     &host,
                     wubble_core::pagetheme::PageTheme::Auto,
                 ));
-                surfaces.menu = Menu::Shell {
+                let menu = Menu::Shell {
                     at: at(if scene.overlay == Overlay::SiteMenu {
                         SITE_MENU_AT
                     } else {
@@ -279,17 +292,20 @@ impl Host {
                     }),
                     entries,
                 };
+                layer =
+                    shown.map(|tab| (Layer::new(Kind::Menu, None), Content::Menu { tab, menu }));
             }
             Overlay::Find => {
-                surfaces.find = FindBar::Open {
+                let bar = FindBar {
                     query: "wubble".into(),
                     matches: 7,
                     active: 2,
                     done: true,
-                }
+                };
+                layer = shown.map(|tab| (Layer::new(Kind::Find, Some(tab)), Content::Find(bar)));
             }
             Overlay::Permission => {
-                surfaces.permission = PermissionPrompt::Open {
+                let prompt = PermissionPrompt {
                     shown: PermissionRequest {
                         origin: origin.clone(),
                         ask: Ask::Engine {
@@ -298,25 +314,31 @@ impl Host {
                         },
                     },
                     queued: VecDeque::new(),
-                }
+                };
+                layer = shown.map(|tab| {
+                    let l = Layer::new(Kind::Permission, Some(tab));
+                    (l, Content::Permission(prompt))
+                });
             }
             Overlay::Dialog => {
-                surfaces.dialog = Dialog::Open(OpenDialog {
+                let js = OpenDialog {
                     id: FAKE,
                     kind: JsDialogKind::Confirm,
                     origin: origin.clone(),
                     message: "Discard the changes to this page?".into(),
                     default_text: String::new(),
-                })
+                };
+                layer = shown.map(|tab| gallery_dialog(tab, js));
             }
             Overlay::Prompt => {
-                surfaces.dialog = Dialog::Open(OpenDialog {
+                let js = OpenDialog {
                     id: FAKE_2,
                     kind: JsDialogKind::Prompt,
                     origin: origin.clone(),
                     message: "Name this list".into(),
                     default_text: "Groceries".into(),
-                })
+                };
+                layer = shown.map(|tab| gallery_dialog(tab, js));
             }
             Overlay::Bookmark => self.gallery_bookmark_sheet(),
             Overlay::Print => {
@@ -340,6 +362,7 @@ impl Host {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
                     code: -105,
+                    retry: Retry::Never,
                 }
             }
             Overlay::CertError => {
@@ -406,9 +429,21 @@ impl Host {
             }
         }
         if let Some(tab) = shown {
+            let error = surfaces.error != PageError::None;
             self.surfaces.insert(tab, surfaces);
+            self.layer_is(Kind::ErrorPanel, tab, error);
+        }
+        if let Some((layer, content)) = layer {
+            self.content_after(self.w.id, layer, Some(content), false);
         }
         self.render_surfaces(window);
+        // the autofill parts open through the store, as the machine's view opens them
+        if let Some(tab) = shown {
+            let parts = wubble_core::autofill::open_parts(&autofill);
+            for (kind, on) in wubble_core::autofill::PARTS.into_iter().zip(parts) {
+                self.layer_is(kind, tab, on);
+            }
+        }
         window.set_autofill(if autofill == View::default() {
             AutofillView::default()
         } else {
@@ -696,4 +731,16 @@ fn gallery_point(window: &AppWindow, scene: &Scene) {
         };
         window.window().dispatch_event(event);
     });
+}
+
+/// A dialog scene's overlay: the tab's dialog layer holding `js`.
+fn gallery_dialog(tab: wubble_core::tab::TabId, js: OpenDialog) -> (Layer, Content) {
+    let content = DialogContent {
+        js: Some(js),
+        auth: None,
+    };
+    (
+        Layer::new(Kind::Dialog, Some(tab)),
+        Content::Dialog(content),
+    )
 }

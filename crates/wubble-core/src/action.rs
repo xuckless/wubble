@@ -19,20 +19,36 @@ pub enum Action {
     NewPrivateWindow,
     /// Close the focused window (the last Main window quits).
     CloseWindow,
+    /// Minimize the focused window (Cmd+M on macOS, Chromium `IDC_MINIMIZE_WINDOW`).
+    MinimizeWindow,
+    /// Focus the next or previous of wubble's windows (Cmd+` and Cmd+Shift+` on macOS).
+    NextWindow,
+    PrevWindow,
     /// Move the focused page into a new window.
     MoveTabToNewWindow,
+    /// Mod+Shift+A: the command bar on every open and recently closed tab (Chrome's Tab Search).
+    SearchTabs,
     FocusAddress,
+    /// Ctrl+E: the command bar on the visible tab, every query a search (Chromium
+    /// `IDC_FOCUS_SEARCH`, the omnibox's `?` prefix).
+    FocusSearch,
     /// F6: keyboard focus to the next region of the window (`region`).
     NextRegion,
     /// Shift+F6: keyboard focus to the region before.
     PrevRegion,
     Reload,
     HardReload,
+    /// DevTools' "Empty cache and hard reload": the cache cleared, then a hard reload.
+    EmptyCacheHardReload,
     Stop,
     Back,
     Forward,
     NextTab,
     PrevTab,
+    /// Move the visible tab one place up or down, inside its pinned row, its folder or the
+    /// unpinned list (Chromium `IDC_MOVE_TAB_PREVIOUS` / `IDC_MOVE_TAB_NEXT`).
+    MoveTabUp,
+    MoveTabDown,
     SelectTab(u8),
     SelectLastTab,
     SelectSpace(u8),
@@ -47,12 +63,23 @@ pub enum Action {
     ZoomOut,
     ZoomReset,
     DevTools,
+    /// DevTools on its Console panel (Chromium `IDC_DEV_TOOLS_CONSOLE`).
+    DevToolsConsole,
     ViewSource,
     Fullscreen,
     TogglePinTab,
     CopyUrl,
+    /// Load the clipboard's text in the visible tab, as typed in the address (Chromium
+    /// `IDC_PASTE_AND_GO`, the omnibox menu's "Paste and go"); Chrome binds no key to it.
+    PasteAndGo,
     /// Save the visible page as a PDF in the downloads folder.
     Print,
+    /// Save Page As: download the visible page, asking where (Chromium `IDC_SAVE_PAGE`).
+    SavePage,
+    /// Open File: local files chosen in the OS dialog, each in a new tab (`IDC_OPEN_FILE`).
+    OpenFile,
+    /// F7: caret browsing on or off (Chromium `IDC_CARET_BROWSING_TOGGLE`).
+    ToggleCaretBrowsing,
     /// Mute or unmute the visible tab (also the sidebar's speaker glyph).
     ToggleMute,
     /// Put the next tab down beside the focused page, or open a page beside it.
@@ -105,6 +132,8 @@ pub enum Action {
     Cut,
     Copy,
     Paste,
+    /// Paste as plain text (Chromium `IDC_PASTE_AND_MATCH_STYLE`, CEF `PasteAndMatchStyle`).
+    PasteAndMatchStyle,
     SelectAll,
     /// Widen or narrow the docked DevTools panel a step (its seam's keyboard nudge).
     DockWider,
@@ -117,7 +146,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 69] = [
+const FIXED: [(&str, Action); 83] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("duplicate-tab", Action::DuplicateTab),
@@ -126,17 +155,25 @@ const FIXED: [(&str, Action); 69] = [
     ("new-window", Action::NewWindow),
     ("new-private-window", Action::NewPrivateWindow),
     ("close-window", Action::CloseWindow),
+    ("minimize-window", Action::MinimizeWindow),
+    ("next-window", Action::NextWindow),
+    ("prev-window", Action::PrevWindow),
     ("move-tab-to-new-window", Action::MoveTabToNewWindow),
+    ("search-tabs", Action::SearchTabs),
     ("focus-address", Action::FocusAddress),
+    ("focus-search", Action::FocusSearch),
     ("next-region", Action::NextRegion),
     ("prev-region", Action::PrevRegion),
     ("reload", Action::Reload),
     ("hard-reload", Action::HardReload),
+    ("empty-cache-hard-reload", Action::EmptyCacheHardReload),
     ("stop", Action::Stop),
     ("back", Action::Back),
     ("forward", Action::Forward),
     ("next-tab", Action::NextTab),
     ("prev-tab", Action::PrevTab),
+    ("move-tab-up", Action::MoveTabUp),
+    ("move-tab-down", Action::MoveTabDown),
     ("select-last-tab", Action::SelectLastTab),
     ("new-space", Action::NewSpace),
     ("next-space", Action::NextSpace),
@@ -149,11 +186,16 @@ const FIXED: [(&str, Action); 69] = [
     ("zoom-out", Action::ZoomOut),
     ("zoom-reset", Action::ZoomReset),
     ("dev-tools", Action::DevTools),
+    ("dev-tools-console", Action::DevToolsConsole),
     ("view-source", Action::ViewSource),
     ("fullscreen", Action::Fullscreen),
     ("toggle-pin-tab", Action::TogglePinTab),
     ("copy-url", Action::CopyUrl),
+    ("paste-and-go", Action::PasteAndGo),
     ("print", Action::Print),
+    ("save-page", Action::SavePage),
+    ("open-file", Action::OpenFile),
+    ("toggle-caret-browsing", Action::ToggleCaretBrowsing),
     ("toggle-mute", Action::ToggleMute),
     ("split-next", Action::SplitNext),
     ("unsplit", Action::Unsplit),
@@ -182,6 +224,7 @@ const FIXED: [(&str, Action); 69] = [
     ("cut", Action::Cut),
     ("copy", Action::Copy),
     ("paste", Action::Paste),
+    ("paste-and-match-style", Action::PasteAndMatchStyle),
     ("select-all", Action::SelectAll),
     ("dock-wider", Action::DockWider),
     ("dock-narrower", Action::DockNarrower),
@@ -261,6 +304,7 @@ impl Action {
                 | Action::Cut
                 | Action::Copy
                 | Action::Paste
+                | Action::PasteAndMatchStyle
                 | Action::SelectAll
         )
     }
@@ -283,7 +327,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 32] = [
+pub const PALETTE: [ActionInfo; 45] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -308,6 +352,11 @@ pub const PALETTE: [ActionInfo; 32] = [
         action: Action::ReopenClosedTab,
         title: "Reopen closed tab",
         keywords: "undo restore",
+    },
+    ActionInfo {
+        action: Action::SearchTabs,
+        title: "Search tabs",
+        keywords: "find switch open closed recent tabs list",
     },
     ActionInfo {
         action: Action::UndoCloseTab,
@@ -445,6 +494,67 @@ pub const PALETTE: [ActionInfo; 32] = [
         title: "Clear browsing data",
         keywords: "cookies cache site storage logins forget privacy delete container history browsing",
     },
+    // Chromium's menu items for the chords `keys::DEFAULTS` took from its accelerator table
+    ActionInfo {
+        action: Action::SavePage,
+        title: "Save page as",
+        keywords: "download html file keep offline",
+    },
+    ActionInfo {
+        action: Action::OpenFile,
+        title: "Open file",
+        keywords: "local disk html pdf image browse",
+    },
+    ActionInfo {
+        action: Action::MoveTabUp,
+        title: "Move tab up",
+        keywords: "reorder order earlier previous",
+    },
+    ActionInfo {
+        action: Action::MoveTabDown,
+        title: "Move tab down",
+        keywords: "reorder order later next",
+    },
+    ActionInfo {
+        action: Action::DevToolsConsole,
+        title: "Console in developer tools",
+        keywords: "devtools developer tools log errors inspect",
+    },
+    ActionInfo {
+        action: Action::ToggleCaretBrowsing,
+        title: "Caret browsing",
+        keywords: "cursor keyboard arrow keys select text accessibility a11y",
+    },
+    ActionInfo {
+        action: Action::NextWindow,
+        title: "Next window",
+        keywords: "switch cycle windows focus",
+    },
+    ActionInfo {
+        action: Action::PrevWindow,
+        title: "Previous window",
+        keywords: "switch cycle windows focus back",
+    },
+    ActionInfo {
+        action: Action::PasteAndMatchStyle,
+        title: "Paste as plain text",
+        keywords: "unformatted match style clipboard",
+    },
+    ActionInfo {
+        action: Action::MinimizeWindow,
+        title: "Minimize window",
+        keywords: "hide dock taskbar",
+    },
+    ActionInfo {
+        action: Action::PasteAndGo,
+        title: "Paste and go",
+        keywords: "clipboard open address search",
+    },
+    ActionInfo {
+        action: Action::EmptyCacheHardReload,
+        title: "Empty cache and hard reload",
+        keywords: "refresh clear cache devtools",
+    },
 ];
 
 #[cfg(test)]
@@ -454,7 +564,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 87);
+        assert_eq!(all.len(), 101);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -476,6 +586,7 @@ mod tests {
                 Action::Cut,
                 Action::Copy,
                 Action::Paste,
+                Action::PasteAndMatchStyle,
                 Action::SelectAll
             ]
         );
@@ -486,7 +597,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 87);
+        assert_eq!(ids.len(), 101);
     }
 
     #[test]

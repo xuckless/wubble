@@ -43,6 +43,8 @@ pub struct TabRow {
     pub in_split: bool,
     /// An agent session drives the tab (`host/agent.rs` marks it).
     pub agent: bool,
+    /// The tab has no view and its site is muted (`host/surfaces.rs` marks it).
+    pub site_muted: bool,
 }
 
 /// Whether a tab's page is muted, as its view last reported (`PageEvent::MutedChanged`). Gone
@@ -50,6 +52,8 @@ pub struct TabRow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Audio {
     pub muted: bool,
+    /// Why it is muted: the user's own mute or its site's rule (`sitesound`).
+    pub why: wubble_core::sitesound::Mute,
 }
 
 pub type AudioMap = BTreeMap<TabId, Audio>;
@@ -110,6 +114,7 @@ pub fn view_model(
     window: WindowId,
     audio: &AudioMap,
     blocked: &BlockedMap,
+    full_urls: bool,
 ) -> ShellView {
     let space_id = window_space(model, window);
     let space = model.spaces.iter().find(|s| s.id == space_id);
@@ -180,7 +185,7 @@ pub fn view_model(
     let address = visible
         .and_then(|t| model.tabs.get(&t))
         .map_or("", |t| t.url.as_str());
-    let (host, path) = wubble_core::chrome::address_parts(address);
+    let (host, path) = wubble_core::chrome::address_parts(address, full_urls);
     ShellView {
         pinned,
         tabs,
@@ -365,6 +370,7 @@ mod tests {
             wubble_core::window::WindowId(0),
             &AudioMap::new(),
             &BlockedMap::new(),
+            false,
         );
         assert_eq!((v.pinned.len(), v.tabs.len()), (0, 0));
         assert_eq!(v.active_tab, -1);
@@ -403,7 +409,7 @@ mod tests {
                 to: Dest::Folder { folder, index: 0 },
             },
         );
-        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false);
         assert_eq!(titles(&v.pinned), ["a.test"]);
         assert_eq!(titles(&v.tabs), ["c.test", "f", "b.test"]);
         let kinds: Vec<_> = v.tabs.iter().map(|r| (r.kind, r.depth)).collect();
@@ -422,7 +428,7 @@ mod tests {
                 collapsed: true,
             },
         );
-        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false);
         assert_eq!(titles(&v.tabs), ["c.test", "f"]);
         assert!(v.tabs[1].collapsed);
         assert_eq!((v.host.as_str(), v.path.as_str()), ("c.test", "/"));
@@ -441,7 +447,7 @@ mod tests {
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
         let (m, _) = new_tab(m, "https://w.test/");
-        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false);
         assert_eq!(titles(&v.tabs), ["w.test"]);
         assert_eq!(v.tabs[0].url, "https://w.test/");
         assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
@@ -458,7 +464,7 @@ mod tests {
         let (m, _) = apply(m, Command::ActivateTab(a));
         let (m, _) = apply(m, Command::SplitWith(b));
         let split = |m: &Model| -> Vec<bool> {
-            view_model(m, m.focused(), &AudioMap::new(), &BlockedMap::new())
+            view_model(m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false)
                 .tabs
                 .iter()
                 .map(|r| r.in_split)
@@ -481,14 +487,20 @@ mod tests {
                 on: true,
             },
         );
-        let audio = AudioMap::from([(b, Audio { muted: true })]);
-        let v = view_model(&m, m.focused(), &audio, &BlockedMap::new());
+        let audio = AudioMap::from([(
+            b,
+            Audio {
+                muted: true,
+                ..Audio::default()
+            },
+        )]);
+        let v = view_model(&m, m.focused(), &audio, &BlockedMap::new(), false);
         let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
         assert_eq!(sound, [(true, false), (false, true)]);
         let empty = Model::new(std::time::Instant::now());
-        let quiet = view_model(&empty, empty.focused(), &audio, &BlockedMap::new());
+        let quiet = view_model(&empty, empty.focused(), &audio, &BlockedMap::new(), false);
         assert!(quiet.tabs.is_empty());
-        let unmuted = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        let unmuted = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false);
         assert!(unmuted.tabs.iter().all(|r| !r.muted));
     }
 
@@ -501,6 +513,7 @@ mod tests {
             m.focused(),
             &AudioMap::new(),
             &BlockedMap::from([(a, 4)]),
+            false,
         );
         let counts: Vec<_> = v.tabs.iter().map(|r| r.blocked).collect();
         assert_eq!(counts, [4, 0]);
@@ -513,7 +526,7 @@ mod tests {
             "https://example.com/x",
         );
         assert_eq!(
-            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false).tabs[0].title,
             "example.com"
         );
         let (m, _) = apply(
@@ -524,12 +537,12 @@ mod tests {
             },
         );
         assert_eq!(
-            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false).tabs[0].title,
             "Example"
         );
         let (m, _) = new_tab(m, "");
         assert_eq!(
-            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false).tabs[1].title,
             InternalPage::Start.title()
         );
     }
@@ -573,7 +586,7 @@ mod tests {
             .0;
         }
         let (m, _) = apply(m, Command::PinTab(p));
-        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false);
         assert_eq!(
             titles(&v.tabs),
             ["a.test", "b.test", "c.test", "f", "d.test", "e.test"]
@@ -584,7 +597,7 @@ mod tests {
     fn moved(m: Model, tab: TabId, to: usize) -> Vec<String> {
         let dest = move_dest(&m, tab, to).expect("a row");
         let (m, _) = apply(m, Command::MoveTab { tab, to: dest });
-        view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new())
+        view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new(), false)
             .tabs
             .into_iter()
             .map(|r| r.title)

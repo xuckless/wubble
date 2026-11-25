@@ -2290,9 +2290,15 @@ fn open_internal_focuses_the_tab_already_on_it() {
         let (m, fx) = run(m, Command::OpenInternal(page));
         assert_eq!(fx, [Effect::ActivateTab(shown)], "{page:?}");
         assert_eq!(m.tabs.len(), 2);
-        // A split refuses every internal page.
-        let (m2, fx) = run(m.clone(), Command::SplitWith(shown));
-        assert!(fx.is_empty() && m2.shown_split().is_none(), "{page:?}");
+        // Every internal page is a split pane beside a web page.
+        let (m2, _) = run(m.clone(), Command::ActivateTab(ids[0]));
+        let (m2, fx) = run(m2, Command::SplitWith(shown));
+        assert_eq!(fx, [Effect::ActivateTab(shown)], "{page:?}");
+        assert_eq!(
+            m2.shown_split().map(|g| g.tabs.clone()),
+            Some(vec![ids[0], shown]),
+            "{page:?}"
+        );
     }
 }
 
@@ -2324,16 +2330,49 @@ fn an_internal_page_typed_into_a_web_tab_opens_its_own_tab() {
     assert!(fx.is_empty());
 }
 
+/// Built-in pages are split panes, the shell drawing one per split: beside web pages, from
+/// either side, but never two in one split.
 #[test]
-fn an_internal_tab_never_joins_a_split() {
-    let (m, ids) = with_tabs(1);
+fn a_split_holds_one_internal_page() {
+    let (m, ids) = with_tabs(2);
     let (m, _) = run(m, Command::OpenInternal(InternalPage::Settings));
     let settings = m.visible_tab().unwrap();
-    let (m2, fx) = run(m.clone(), Command::SplitWith(ids[0]));
-    assert!(fx.is_empty() && m2.shown_split().is_none());
     let (m, _) = run(m, Command::ActivateTab(ids[0]));
-    let (m, fx) = run(m, Command::SplitWith(settings));
-    assert!(fx.is_empty() && m.shown_split().is_none());
+    let (m, _) = run(m, Command::OpenInternal(InternalPage::History));
+    let history = m.visible_tab().unwrap();
+    /// (name, focused, split with, the split's panes after: none, refused)
+    type Row = (&'static str, TabId, TabId, Option<Vec<TabId>>);
+    let rows: [Row; 4] = [
+        (
+            "the focused page is internal",
+            settings,
+            ids[0],
+            Some(vec![settings, ids[0]]),
+        ),
+        (
+            "the page split with is",
+            ids[0],
+            settings,
+            Some(vec![ids[0], settings]),
+        ),
+        ("both are", settings, history, None),
+        ("two web pages", ids[0], ids[1], Some(vec![ids[0], ids[1]])),
+    ];
+    for (name, focus, with, panes) in rows {
+        let (m, _) = run(m.clone(), Command::ActivateTab(focus));
+        let (m, fx) = run(m, Command::SplitWith(with));
+        assert_eq!(m.shown_split().map(|g| g.tabs.clone()), panes, "{name}");
+        assert_eq!(fx.is_empty(), panes.is_none(), "{name}");
+    }
+    // a second internal page joining a split that holds one is refused; a web page is not
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(settings));
+    let (m2, fx) = run(m.clone(), Command::SplitWith(history));
+    assert!(fx.is_empty());
+    assert_eq!(m2.shown_split().map(|g| g.tabs.len()), Some(2));
+    let (m, fx) = run(m, Command::SplitWith(ids[1]));
+    assert_eq!(fx, [Effect::ActivateTab(ids[1])]);
+    assert_eq!(m.shown_split().map(|g| g.tabs.len()), Some(3));
 }
 
 #[test]
@@ -3366,7 +3405,7 @@ fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
 }
 
 #[test]
-fn a_split_pane_never_goes_to_pip_and_the_pip_tab_never_splits() {
+fn a_split_pane_on_screen_never_goes_to_pip_and_the_pip_tab_never_splits() {
     let (m, t) = with_tabs(3);
     let main = m.focused();
     let (m, _) = run(m, Command::SplitWith(t[1]));
@@ -3380,6 +3419,18 @@ fn a_split_pane_never_goes_to_pip_and_the_pip_tab_never_splits() {
         assert_eq!(m2, before);
     }
     assert!(m.can_pip(t[0]), "not in the split");
+    // The split left for another tab: each of its panes may go (a tab switch's auto
+    // picture-in-picture), and the split coming back with it out is a model that holds (the
+    // host returns it then).
+    let (m, _) = run(m, Command::ActivateTab(t[0]));
+    for pane in [t[1], t[2]] {
+        assert!(m.can_pip(pane), "{pane:?} of a split not shown");
+    }
+    let (m, _) = pip(m, t[1]);
+    assert_eq!(m.pip_tab(), Some(t[1]));
+    let (m, _) = run(m, Command::ActivateTab(t[2]));
+    assert_eq!(m.window_tabs(main), [t[2]], "the pane out is left out");
+    assert_eq!(m.pip_tab(), Some(t[1]));
     // The tab in picture-in-picture is not split with, nor split beside.
     let (m, t) = with_tabs(3);
     let (m, _) = pip(m, t[2]);
@@ -3409,13 +3460,8 @@ fn check_holds_one_pip_window_of_a_placed_tab() {
     );
     two.next_window = 10;
     assert!(two.check().is_err(), "two Pip windows");
-    let mut split = m.clone();
-    split.spaces[0].split = Some(SplitGroup {
-        tabs: vec![t[0], t[1]],
-        stops: even(2),
-    });
-    let err = split.check().expect_err("a split pane");
-    assert!(err.contains("Pip window"), "{err}");
+    // (A split holding the Pip tab holds since the auto picture-in-picture from a split,
+    // decisions.md 2026-11-25: `a_split_pane_on_screen_never_goes_to_pip_...` runs it.)
     m.windows[0].shown = Shown::Pip(TabId(99));
     assert!(m.check().is_err(), "an unknown tab");
 }

@@ -1192,10 +1192,13 @@ cef::wrap_download_handler! {
             let canceled = item.is_canceled() != 0;
 
             if complete || canceled || downloads.due_for_progress(id, std::time::Instant::now()) {
+                // wubble change: the speed rides along (`current_speed`, bytes per second)
+                let speed = item.current_speed();
                 push(&self.events, NavigationEvent::DownloadProgress {
                     id,
                     bytes_received: received,
                     total_bytes_expected,
+                    bytes_per_second: u64::try_from(speed).ok(),
                 });
             }
             if canceled {

@@ -101,6 +101,31 @@ impl Store {
         tx.commit().await?;
         Ok(Some(tab))
     }
+
+    /// Remove and return the entry closed at `closed_at_ms` from `url`, the newest such: tab
+    /// search reopening one entry of the list (Chromium `TabRestoreService::RestoreEntryById`).
+    pub async fn take_closed(&mut self, url: &str, closed_at_ms: i64) -> Result<Option<ClosedTab>> {
+        let tx = self.conn.transaction().await?;
+        let mut rows = tx
+            .query(
+                format!(
+                    "SELECT id, {COLUMNS} FROM recently_closed \
+                     WHERE url = ?1 AND closed_at = ?2 ORDER BY id DESC LIMIT 1"
+                ),
+                (url, closed_at_ms),
+            )
+            .await?;
+        let Some(r) = rows.next().await? else {
+            return Ok(None);
+        };
+        let id: i64 = r.get(0)?;
+        let tab = read(&r, 1)?;
+        drop(rows);
+        tx.execute("DELETE FROM recently_closed WHERE id = ?1", (id,))
+            .await?;
+        tx.commit().await?;
+        Ok(Some(tab))
+    }
 }
 
 #[cfg(test)]

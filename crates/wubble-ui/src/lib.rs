@@ -80,6 +80,7 @@ mod tests {
             subtitle: "".into(),
             shortcut: "".into(),
             icon: Default::default(),
+            closable: false,
         }
     }
 
@@ -179,7 +180,9 @@ mod tests {
     }
 
     /// The context menu, the dialog sheet, the find bar and page
-    /// fullscreen: each reports its intents once and takes the keyboard.
+    /// fullscreen: each reports its intents once and takes the keyboard
+    /// when the host's store names it the key owner (`focus-owner`, set
+    /// here as the host does).
     fn page_surfaces(app: &AppWindow) {
         let chosen = Rc::new(std::cell::RefCell::new(vec![]));
         let c = chosen.clone();
@@ -205,6 +208,7 @@ mod tests {
                 y: 40.0,
                 entries: ModelRc::from(entries.as_slice()),
             });
+            app.set_focus_owner(FocusOwner::Menu);
             settle();
         };
         open_menu(40.0);
@@ -224,6 +228,7 @@ mod tests {
         open_menu(width - 40.0);
         assert!(app.get_menu_panel_x() + 236.0 <= width);
         app.set_menu(MenuView::default());
+        app.set_focus_owner(FocusOwner::Page);
         settle();
         assert!(
             app.get_web_focused(),
@@ -250,6 +255,7 @@ mod tests {
             serial,
         };
         app.set_dialog(dialog(false, 1));
+        app.set_focus_owner(FocusOwner::Dialog);
         settle();
         assert!(!app.get_web_focused());
         click(
@@ -287,6 +293,7 @@ mod tests {
             ]
         );
         app.set_dialog(DialogView::default());
+        app.set_focus_owner(FocusOwner::Page);
         settle();
         assert!(app.get_web_focused());
 
@@ -301,11 +308,13 @@ mod tests {
             cert: true,
             ..Default::default()
         });
+        app.set_focus_owner(FocusOwner::Error);
         settle();
         assert!(!app.get_web_focused());
         press(app, Key::Return);
         assert_eq!(primaries.get(), 1);
         app.set_page_error(ErrorView::default());
+        app.set_focus_owner(FocusOwner::Page);
         settle();
         assert!(app.get_web_focused());
 

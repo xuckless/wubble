@@ -118,6 +118,8 @@ export enum CommandKind {
     bookmark,
     search,
     action,
+    // wubble: a recently closed tab (tab search)
+    closed-tab,
 }
 
 export struct CommandResult {
@@ -127,6 +129,26 @@ export struct CommandResult {
     shortcut: string,
     // wubble: the site's favicon (history rows); an empty image shows the kind's glyph.
     icon: image,
+    // wubble: the row has a close button (an open tab in tab search); Shift+Delete closes it too.
+    closable: bool,
+}
+
+// Who holds the keys, by the host's surface store (`wubble_core::overlay::Ui::key_owner`): the
+// overlay whose field takes them, the page (its web view or built-in page), or an overlay that
+// takes them itself (the command bar's input, the region picker).
+export enum FocusOwner {
+    page,
+    menu,
+    downloads,
+    extensions,
+    extension-sheet,
+    spaces,
+    dialog,
+    error,
+    bookmark-sheet,
+    print-sheet,
+    agent-sheet,
+    own,
 }
 
 // The command bar's life (mirrors wubble_core::chrome::CommandBar; the driver writes it).
@@ -143,11 +165,22 @@ export enum CommandPlacement {
     in-page,
 }
 
+// wubble: what the address field's menu does to the command bar's field (the host's menu rows,
+// Chromium's omnibox menu); Delete is the host's own edit of the text.
+export enum FieldEdit {
+    cut,
+    copy,
+    paste,
+    select-all,
+}
+
 // What the command bar opens for (mirrors wubble_core::chrome::CommandMode).
 export enum CommandMode {
     here,
     new,
     split,
+    // wubble: tab search (Mod+Shift+A)
+    tabs,
 }
 
 // Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.
@@ -386,9 +419,10 @@ export struct FindView {
 // What of each surface the kit still draws (open, or leaving: its exit not yet over), as
 // AppWindow's `mounted` reports it (the kit components' own `mounted` or `visible`): the host
 // reads it when it derives what covers a page (`wubble_core::overlay::Stack::leaving`), so the
-// end of an exit is the kit's to tell, timed by nobody else. The command bar is not here: its
-// exit is the driver's (`CommandBarState::Closing`).
+// end of an exit is the kit's to tell, timed by nobody else. The command bar's is the driver's
+// state (`CommandBarState::Closing`), over the page only (the overlay, not the start page's capsule).
 export struct Mounted {
+    command-bar: bool,
     permission: bool,
     find: bool,
     dialog: bool,

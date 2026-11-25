@@ -188,6 +188,8 @@ pub enum Count {
     CefFrame,
     /// ... of which only CEF's damage was written, in place (`FramePresenter::present_damaged`).
     CefFrameDamaged,
+    /// ... of a page whose content is calm (`pacing::ContentRate::Calm`: painted at 60 at most).
+    CefFrameCalm,
     SlintRender,
     /// A frame of the wgpu scene (the glass backdrop).
     SceneRender,
@@ -229,9 +231,10 @@ pub enum Count {
 }
 
 impl Count {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::CefFrame,
         Self::CefFrameDamaged,
+        Self::CefFrameCalm,
         Self::SlintRender,
         Self::SceneRender,
         Self::Pump,
@@ -272,6 +275,7 @@ impl Count {
             Self::MeasureTick => "measure_ticks",
             Self::RunChange => "run_state_changes",
             Self::CefFrameDamaged => "cef_frames_damaged",
+            Self::CefFrameCalm => "cef_frames_calm",
             Self::WakePointer => "scene_wake_pointer",
             Self::WakeEntered => "scene_wake_entered",
             Self::WakeKey => "scene_wake_key",

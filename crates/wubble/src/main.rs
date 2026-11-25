@@ -33,6 +33,7 @@ mod nav_smoke;
 mod net_audit;
 mod orbs;
 mod os_motion;
+mod os_online;
 mod os_scope;
 mod overlay_smoke;
 mod page_error;
@@ -164,12 +165,14 @@ use wubble_core::window::{WindowId, WindowKind};
 /// window.
 static PACING: std::sync::OnceLock<Pacing> = std::sync::OnceLock::new();
 
-/// This run's pacing: the command line's, else the platform's.
+/// This run's pacing: the command line's, else the platform's for where this run's pages are
+/// drawn (on their own layer under the shell, or by it): read once the page layer mode is set.
 pub fn pacing() -> Pacing {
+    let layered = page_layer().row().order == wubble_core::page_layer::Order::Below;
     PACING
         .get()
         .copied()
-        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
+        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS, layered))
 }
 
 /// This run's page layer mode: the command line's `--page-layer`, else the run's own default
@@ -522,7 +525,10 @@ fn install_shell_driver(
             // Queued: the render may run while the host is busy (snapshots). This window's
             // driver: each window paces the pages it shows.
             let _ = slint::invoke_from_event_loop(move || {
-                with_host_in(id, |host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+                with_host_in(id, |host| {
+                    host.pace(wubble_gfx::pacing::PaceEvent::Vsync);
+                    host.skia_cache(wubble_core::skia_cache::Event::Rendered(Instant::now()));
+                })
             });
         },
     )?;
@@ -594,8 +600,15 @@ fn browse(
     // The one instance, before anything starts: a staged update applies or a failing version
     // rolls back, by starting the other version in this process's place.
     updater::on_launch();
+    // a profile a harness marked throwaway never asks the OS's secret store (`is_smoke_profile`)
+    let kind = if is_smoke_profile(&profile.dir) {
+        ProfileKind::Throwaway
+    } else {
+        ProfileKind::User
+    };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
+        profile: kind,
         ..config
     });
     let downloads = profile::downloads_dir(downloads);
@@ -697,7 +710,8 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
-/// `--smoke passwords`: the file its phases keep the vault key in, on the temporary profile.
+/// The file the vault key is kept in on a throwaway profile: `--smoke passwords`' phases, and a
+/// browser run with `--profile` on a marked one.
 const SMOKE_KEYRING: &str = "smoke-keyring";
 
 /// `--smoke passwords`: its four processes on one temporary profile (`passwords_smoke.rs`).
@@ -746,9 +760,15 @@ fn mark_smoke_profile(dir: &Path) -> std::io::Result<()> {
     std::fs::write(dir.join(SMOKE_PROFILE_MARKER), b"")
 }
 
+/// Whether `dir` is a throwaway profile: a smoke marked it (or a harness, for `--profile DIR`:
+/// CEF's mock keychain and the vault's key in a file there, never the OS's secret store).
+fn is_smoke_profile(dir: &Path) -> bool {
+    dir.join(SMOKE_PROFILE_MARKER).is_file()
+}
+
 /// Whether a phase run may use `dir`: only a profile its parent smoke marked.
 fn smoke_profile(dir: &Path) -> Result<(), String> {
-    if dir.join(SMOKE_PROFILE_MARKER).is_file() {
+    if is_smoke_profile(dir) {
         Ok(())
     } else {
         Err(format!(
@@ -1162,6 +1182,7 @@ impl WindowFactory {
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
+        window.set_popup_min_side(wubble_core::window::MIN_POPUP_SIDE as f32);
         // the page hole's image (kit `PageHole`), when the mode's layers sit under the shell
         if page_layer().row().order == wubble_core::page_layer::Order::Below {
             window
@@ -1250,13 +1271,37 @@ fn quit_asked() {
 pub fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Option<u32> {
     window
         .current_monitor()
-        .and_then(|m| m.refresh_rate_millihertz())
+        .and_then(|m| monitor_refresh_mhz(&m))
         .or_else(|| {
             window
                 .available_monitors()
-                .filter_map(|m| m.refresh_rate_millihertz())
+                .filter_map(|m| monitor_refresh_mhz(&m))
                 .max()
         })
+}
+
+/// A monitor's refresh rate in millihertz. macOS: the screen's `maximumFramesPerSecond`
+/// (macOS 12+), because winit's `CGDisplayModeGetRefreshRate` reads a ProMotion display's
+/// 120 Hz as 60 (the owner's MacBook Pro: `CEF frame rate 60 (display Some(60000) mHz)`).
+/// Everywhere else, and when the screen is not found, winit's.
+fn monitor_refresh_mhz(monitor: &slint::winit_030::winit::monitor::MonitorHandle) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        use slint::winit_030::winit::platform::macos::MonitorHandleExtMacOS;
+        // SAFETY: winit's pointer to the monitor's live `NSScreen`, read on the main thread
+        // (every caller runs in the event loop); retained for the call.
+        let screen = monitor.ns_screen().and_then(|screen| unsafe {
+            objc2::rc::Retained::retain(screen.cast::<objc2_app_kit::NSScreen>())
+        });
+        if let Some(fps) = screen
+            .map(|screen| screen.maximumFramesPerSecond())
+            .and_then(|fps| u32::try_from(fps).ok())
+            .filter(|&fps| fps > 0)
+        {
+            return Some(fps.saturating_mul(1000));
+        }
+    }
+    monitor.refresh_rate_millihertz()
 }
 
 pub fn slint_int(pixels: u32) -> i32 {
@@ -1428,6 +1473,9 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
         }
     });
     window.on_command_result_chosen(move |index| with_host_in(win, |host| host.bar_chosen(index)));
+    window.on_command_result_closed(move |index| {
+        with_host_in(win, |host| host.bar_result_closed(index))
+    });
     window.on_tab_hovered(move |id, on, y| with_host_in(win, |host| host.tab_hovered(id, on, y)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
     window.on_sidebar_context(move |x, y| with_host_in(win, |host| host.sidebar_context(x, y)));
@@ -1435,10 +1483,17 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.tab_track(id, kind, x, y))
     });
     window.on_command_dismissed(move || with_host_in(win, |host| host.bar_closed()));
+    window.on_command_bar_changed(move || with_host_in(win, |host| host.bar_state_changed()));
     let weak = window.as_weak();
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {
             with_host_in(win, |host| host.bar_for_beside(&window));
+        }
+    });
+    let weak = window.as_weak();
+    window.on_tab_search_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host_in(win, |host| host.bar_for_tabs(&window));
         }
     });
     window.on_tab_mute_toggled(move |id| {
@@ -1448,8 +1503,13 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     });
     // The sidebar's buttons name their action; it runs like its shortcut.
     window.on_shell_action(move |id| match wubble_core::action::Action::from_id(&id) {
-        Some(action) => with_host_in(win, |host| host.perform(action)),
+        Some(action) => with_host_in(win, |host| host.shell_clicked(action)),
         None => eprintln!("wubble: the shell asked for an unknown action {id:?}"),
+    });
+    window.on_shell_action_menu(move |id, x, y| {
+        if let Some(action) = wubble_core::action::Action::from_id(&id) {
+            with_host_in(win, |host| host.shell_action_menu(action, x, y));
+        }
     });
 }
 
@@ -1685,6 +1745,17 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         })
     });
     window.on_address_bookmark_requested(move || with_host_in(win, Host::bookmark_page));
+    window.on_address_zoom_requested(move |x, y| with_host_in(win, |host| host.zoom_popover(x, y)));
+    window.on_command_field_context(move |x, y| {
+        with_host_in(win, |host| {
+            host.address_context(menu::AddressField::Bar, x, y)
+        })
+    });
+    window.on_address_context(move |x, y| {
+        with_host_in(win, |host| {
+            host.address_context(menu::AddressField::Pill, x, y)
+        })
+    });
     window.on_address_blocker_requested(move |x, y| {
         with_host_in(win, |host| host.blocker_menu_requested(x, y))
     });
@@ -1810,6 +1881,10 @@ fn run(
     // profile first, its vault key going into the fake keyring the store
     // thread then gets.
     let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
+        // a throwaway profile's key in a file there, as `--smoke passwords` keeps it
+        Mode::Browse { .. } if is_smoke_profile(profile) => Box::new(
+            wubble_vault::FileKeyRing::new(profile.join(SMOKE_KEYRING), false),
+        ),
         Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
         Mode::Pages | Mode::Gallery => {
             let keyring = wubble_vault::FakeKeyRing::default();
@@ -1894,7 +1969,6 @@ fn run(
         mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
-        begin_frames: pacing() == Pacing::Shell,
     };
     let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);
@@ -2404,6 +2478,10 @@ fn run(
             measure::count(measure::Count::AudibleProbe);
             with_host(Host::probe_audible)
         });
+        // a page that failed for want of a network reloads once it is back
+        os_online::watch(Box::new(|| {
+            let _ = slint::invoke_from_event_loop(|| with_host(Host::network_online));
+        }));
     }
     let measure_timer = slint::Timer::default();
     if measuring {

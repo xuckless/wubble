@@ -438,6 +438,7 @@ mod tests {
                 state: wubble_core::download::DownloadState::Running,
                 started_ms: 0,
                 container: wubble_core::space::ContainerId::DEFAULT,
+                speed: None,
             }))
             .unwrap();
         }

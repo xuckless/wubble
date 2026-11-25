@@ -1,16 +1,19 @@
 //! The print sheet's host side: it runs `wubble_core::print::Sheet`'s effects
-//! (CEF's PDF, `lp`, the downloads list) and shows the sheet. Printers come
+//! (CEF's PDF, `lp`, the downloads list) and shows the sheet, a store overlay whose content
+//! (the sheet, its job) is the content map's (`layers::Content::Print`). Printers come
 //! from the CUPS command line (`lpstat`), on a thread; a system without it
 //! (Windows) offers Save as PDF only.
 
 use std::path::Path;
 use std::process::Command as Process;
 
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_core::print::{self, Destination, Effect, Event, Margins, Paper, PrintSettings, Sheet};
 use wubble_core::tab::TabId;
 use wubble_ui::{AppWindow, PrintSheetView};
 
 use super::Host;
+use super::layers::Content;
 
 /// The sheet's first destination.
 const SAVE_AS_PDF: &str = "Save as PDF";
@@ -90,10 +93,12 @@ pub(super) fn edited_settings(
     }
 }
 
-/// What the sheet shows for `sheet`.
-fn view(sheet: &Sheet, serial: i32) -> PrintSheetView {
+/// What the sheet shows for `sheet` (`None`: closed).
+fn view(sheet: Option<&Sheet>, serial: i32) -> PrintSheetView {
+    let Some(sheet) = sheet else {
+        return PrintSheetView::default();
+    };
     let (settings, printers, error, busy) = match sheet {
-        Sheet::Closed => return PrintSheetView::default(),
         Sheet::Open {
             settings,
             printers,
@@ -148,7 +153,7 @@ impl Host {
             }
             return;
         }
-        if self.print != Sheet::Closed {
+        if self.print_sheet(false).is_some() {
             return;
         }
         let id = self.w.id;
@@ -188,11 +193,11 @@ impl Host {
         background: bool,
         copies: i32,
     ) {
-        let Sheet::Open { printers, .. } = &self.print else {
+        let Some(Sheet::Open { printers, .. }) = self.print_sheet(false) else {
             return;
         };
         let settings = edited_settings(
-            printers,
+            &printers,
             destination,
             pages,
             landscape,
@@ -210,7 +215,7 @@ impl Host {
         if !accept {
             return self.print_event(Event::Cancel);
         }
-        let Sheet::Open { tab, settings, .. } = &self.print else {
+        let Some(Sheet::Open { tab, settings, .. }) = self.print_sheet(false) else {
             return;
         };
         let path = match &settings.destination {
@@ -218,7 +223,7 @@ impl Host {
                 let title = self
                     .model
                     .tabs
-                    .get(tab)
+                    .get(&tab)
                     .map(crate::shell::tab_title)
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| "page".into());
@@ -257,8 +262,8 @@ impl Host {
 
     /// CEF finished the PDF at `path`: the sheet's, or false when the sheet did not ask.
     pub(super) fn print_rendered(&mut self, path: &Path, ok: bool) -> bool {
-        match &self.print {
-            Sheet::Working { path: p, .. } if p == path => {
+        match self.print_sheet(false) {
+            Some(Sheet::Working { path: p, .. }) if p == path => {
                 self.print_event(Event::Rendered { ok });
                 true
             }
@@ -266,42 +271,64 @@ impl Host {
         }
     }
 
-    /// The tab closed: a sheet for it closes.
+    /// The tab closed (before its overlays go with its view): a sheet for it closes.
     pub(super) fn print_tab_closed(&mut self, tab: TabId) {
-        if self.print != Sheet::Closed {
-            self.print_event(Event::TabClosed(tab));
-        }
+        self.print_event(Event::TabClosed(tab));
     }
 
     /// The sheet is open (`--smoke parity`).
     pub(super) fn print_open(&self) -> bool {
-        matches!(self.print, Sheet::Open { .. })
+        matches!(self.print_sheet(false), Some(Sheet::Open { .. }))
+    }
+
+    /// The print sheet held (one at a time, app-wide): while its overlay is open, or (`cancel`)
+    /// while a rule that just closed it has it answer.
+    fn print_sheet(&self, cancel: bool) -> Option<Sheet> {
+        self.contents
+            .of(Kind::PrintSheet)
+            .find(|&(_, l, _)| cancel || self.ui.phase(self.w.id, l) == Some(Phase::Open))
+            .and_then(|(_, _, c)| match c {
+                Content::Print(sheet) => Some(sheet.clone()),
+                _ => None,
+            })
     }
 
     pub(crate) fn print_event(&mut self, event: Event) {
-        let opening = matches!(event, Event::Open { .. });
-        // the sheet takes the place of another overlay, or waits for a page's dialog
-        // (wubble_core::overlay)
-        if let Event::Open { tab, .. } = &event {
-            if !self.views.contains_key(tab) {
-                return;
-            }
-            if self.print == Sheet::Closed
-                && !self.overlay_open(wubble_core::overlay::Kind::PrintSheet, Some(*tab))
-            {
-                return;
-            }
+        if let Event::Open { tab, .. } = &event
+            && !self.views.contains_key(tab)
+        {
+            return;
         }
-        let printed = match &self.print {
-            Sheet::Open { tab, .. } | Sheet::Working { tab, .. } => Some(*tab),
-            Sheet::Closed => None,
+        self.print_step(event, false);
+    }
+
+    /// One print event on the sheet held (`cancel`: the one a rule just closed). A sheet back
+    /// opens its overlay, or stays in it; a printing sheet a rule closed opens again (no rule
+    /// stops a job). A sheet the overlays refuse (another tab shows now) ends as its tab closing.
+    pub(super) fn print_step(&mut self, event: Event, cancel: bool) {
+        let opening = matches!(event, Event::Open { .. });
+        let sheet = self.print_sheet(cancel);
+        let printed = match &sheet {
+            Some(Sheet::Open { tab, .. } | Sheet::Working { tab, .. }) => Some(*tab),
+            None => match &event {
+                Event::Open { tab, .. } => Some(*tab),
+                _ => None,
+            },
         };
-        let url = printed.and_then(|tab| self.committed.get(&tab).cloned());
-        let (next, effects) = print::transition(std::mem::take(&mut self.print), event);
-        if opening && matches!(next, Sheet::Open { .. }) {
+        let Some(tab) = printed else {
+            return;
+        };
+        let url = self.committed.get(&tab).cloned();
+        let (next, mut effects) = print::transition(sheet, event);
+        if opening && matches!(next, Some(Sheet::Open { .. })) {
             self.print_serial += 1;
         }
-        self.print = next;
+        let layer = Layer::new(Kind::PrintSheet, Some(tab));
+        let refused = self.content_after(self.w.id, layer, next.map(Content::Print), false);
+        if let Some(Content::Print(sheet)) = refused {
+            effects.extend(print::transition(Some(sheet), Event::TabClosed(tab)).1);
+        }
+        let printed = Some(tab);
         for effect in effects {
             self.print_effect(effect, url.as_deref(), printed);
         }
@@ -355,7 +382,8 @@ impl Host {
     }
 
     fn render_print(&self, window: &AppWindow) {
-        window.set_print_sheet_view(view(&self.print, self.print_serial));
+        let sheet = self.print_sheet(false);
+        window.set_print_sheet_view(view(sheet.as_ref(), self.print_serial));
     }
 }
 
@@ -392,13 +420,13 @@ mod tests {
             printers: vec!["A".into(), "B".into()],
             error: Some("x".into()),
         };
-        let v = view(&open, 3);
+        let v = view(Some(&open), 3);
         assert!(v.open && !v.busy);
         assert_eq!(v.destination, 2);
         assert_eq!(v.error, "x");
         assert_eq!(v.serial, 3);
         use slint::Model as _;
         assert_eq!(v.destinations.row_data(0).as_deref(), Some(SAVE_AS_PDF));
-        assert!(!view(&Sheet::Closed, 3).open);
+        assert!(!view(None, 3).open);
     }
 }

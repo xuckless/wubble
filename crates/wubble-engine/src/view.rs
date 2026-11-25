@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cef::{ImplBrowser, ImplBrowserHost, ImplFrame, ImplPreferenceManager, ImplValue};
+use cef::{
+    ImplBrowser, ImplBrowserHost, ImplFrame, ImplPreferenceManager, ImplRequestContext, ImplValue,
+};
 use welding::{
     CefRuntime, CefSurfaceEvent, CefSurfaceProducer, HostWgpuContext, NavigationEvent,
     PlatformCefProducer, WeldError,
@@ -48,6 +50,11 @@ use crate::page::{
 use crate::pinch::{self, Pinch, TouchKind};
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
+
+/// Chrome's caret browsing preferences (`chrome/common/pref_names.h` `kCaretBrowsingEnabled`
+/// and `kShowCaretBrowsingDialog`); `wubble_core::caret` says what they mean.
+const CARET_BROWSING: &str = "settings.a11y.caret_browsing.enabled";
+const CARET_DIALOG: &str = "settings.a11y.caretbrowsing.show_dialog";
 
 /// Where a view sits in the host window (both physical pixels), and where the window and its
 /// monitor are on the desktop: what the page reads as `screen.*`, `window.screenX/Y`,
@@ -914,6 +921,12 @@ impl View {
         self.producer.take_os_buffers_busy()
     }
 
+    /// Whether this view's newest frame was dropped for a busy pool with none after it, since
+    /// the last call: what the layer shows is a frame behind until the page paints again.
+    pub fn take_os_buffers_lost(&mut self) -> bool {
+        self.producer.take_os_buffers_lost()
+    }
+
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
     /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
     /// set on this view's request context; Chromium pushes it to the profile's open pages.
@@ -940,12 +953,105 @@ impl View {
         result
     }
 
+    /// Chromium's sound content setting (`ContentSettingsType::SOUND`, what Chrome's "Mute
+    /// site" writes) for each of `urls` (`wubble_core::sitesound::origins`) on this view's
+    /// request context, its container's profile: blocked, or back to the default. Chrome's
+    /// `SoundContentSettingObserver` then mutes the profile's pages of the site on their next
+    /// commit; the host mutes the open ones itself (`set_muted`). `Err` when the view is not
+    /// open yet.
+    pub fn set_sound_blocked(&mut self, urls: &[String], blocked: bool) -> Result<(), String> {
+        let value = if blocked {
+            cef::ContentSettingValues::BLOCK
+        } else {
+            cef::ContentSettingValues::DEFAULT
+        };
+        let mut result = Err("sound setting: the view is not open".to_string());
+        self.send(|host| {
+            result = match host.request_context() {
+                Some(context) => {
+                    for url in urls {
+                        let url = cef::CefString::from(url.as_str());
+                        context.set_content_setting(
+                            Some(&url),
+                            Some(&url),
+                            cef::ContentSettingTypes::SOUND,
+                            value,
+                        );
+                    }
+                    Ok(())
+                }
+                None => Err("sound setting: no request context".to_string()),
+            };
+        });
+        result
+    }
+
+    /// Caret browsing in this view's profile (Chrome's `settings.a11y.caret_browsing.enabled`)
+    /// and whether Chrome asks before turning it on (`settings.a11y.caretbrowsing.show_dialog`,
+    /// on when unset). `None` when the view is not open or Chromium registers no such
+    /// preference in this build: F7 then does nothing.
+    pub fn caret_browsing(&mut self) -> Option<(bool, bool)> {
+        let mut out = None;
+        self.send(|host| {
+            out = (|| {
+                let context = host.request_context()?;
+                let read = |pref: &str| {
+                    let name = cef::CefString::from(pref);
+                    if context.has_preference(Some(&name)) == 0 {
+                        return None;
+                    }
+                    context.preference(Some(&name)).map(|v| v.bool() != 0)
+                };
+                let enabled = read(CARET_BROWSING)?;
+                Some((enabled, read(CARET_DIALOG).unwrap_or(true)))
+            })();
+        });
+        out
+    }
+
+    /// Writes both caret browsing preferences ([`View::caret_browsing`]) on this view's request
+    /// context; Chromium pushes the change to the profile's open pages. `Err` when the view is
+    /// not open or CEF refuses (the preference is missing or managed).
+    pub fn set_caret_browsing(&mut self, enabled: bool, ask: bool) -> Result<(), String> {
+        let mut result = Err(format!("{CARET_BROWSING}: the view is not open"));
+        self.send(|host| {
+            result = (|| {
+                let context = host.request_context().ok_or("no request context")?;
+                for (pref, on) in [(CARET_BROWSING, enabled), (CARET_DIALOG, ask)] {
+                    let name = cef::CefString::from(pref);
+                    if context.can_set_preference(Some(&name)) == 0 {
+                        // the dialog's preference is a nicety: a build without it still toggles
+                        if pref == CARET_DIALOG {
+                            continue;
+                        }
+                        return Err(format!("{pref}: not settable"));
+                    }
+                    let mut value = cef::value_create().ok_or("CEF made no value")?;
+                    value.set_bool(i32::from(on));
+                    // a non-null `error`, as in `set_minimum_font_size`
+                    let mut error = cef::CefString::from("");
+                    if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0
+                    {
+                        return Err(format!("{pref}: {error}"));
+                    }
+                }
+                Ok(())
+            })();
+        });
+        result
+    }
+
     /// The frame-rate ceiling, for a window that moved to a display with another refresh
     /// rate. CEF is told the rate the page's content has under it (`SetWindowlessFrameRate`).
     pub fn set_frame_rate(&mut self, frame_rate: u32) {
         self.ceiling = frame_rate;
         let rate = self.content.frame_rate(frame_rate);
         self.send(|host| host.set_windowless_frame_rate(rate as i32));
+    }
+
+    /// How lively the page's content is now (`--measure`'s calm frames).
+    pub fn content_rate(&self) -> ContentRate {
+        self.content
     }
 
     /// Input or a frame: the page's frame rate follows what changes in it
@@ -2275,11 +2381,13 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             id,
             bytes_received,
             total_bytes_expected,
+            bytes_per_second,
         } => one(Route::Download(
             DownloadId(id),
             DownloadInput::Progress {
                 received: bytes_received,
                 total: total_bytes_expected,
+                speed: bytes_per_second,
             },
         )),
         E::DownloadFinished {
@@ -3198,12 +3306,14 @@ mod tests {
                 id: 11,
                 bytes_received: 5,
                 total_bytes_expected: Some(9),
+                bytes_per_second: Some(3),
             }),
             Route::Download(
                 DownloadId(11),
                 DownloadInput::Progress {
                     received: 5,
-                    total: Some(9)
+                    total: Some(9),
+                    speed: Some(3)
                 }
             )
         );

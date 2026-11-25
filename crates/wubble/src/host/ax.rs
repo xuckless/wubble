@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 
 use slint::platform::PointerEventButton;
+use wubble_ax::lazy::{Lazy, Push, Settle};
 use wubble_ax::{AxItem, AxValue, Bounds, Kind, PageTree, Reach, value};
 use wubble_core::apply::web_accessibility;
 use wubble_core::motion::Calm;
@@ -50,6 +51,9 @@ pub(super) struct WebAx {
     /// What the views were last told.
     on: bool,
     trees: BTreeMap<TabId, PageTree>,
+    /// An agent session's tabs while pages' accessibility is off: their events wait unparsed
+    /// until a call reads the tree (`Host::ax_settle`).
+    lazy: BTreeMap<TabId, Lazy>,
     waiting: Option<Waiting>,
 }
 
@@ -60,6 +64,7 @@ impl Default for WebAx {
             reader: screen_reader::source(),
             on: false,
             trees: BTreeMap::new(),
+            lazy: BTreeMap::new(),
             waiting: None,
         }
     }
@@ -93,6 +98,19 @@ fn view_of(index: usize, item: &AxItem, pane_x: f32) -> AxItemView {
     }
 }
 
+/// One of CEF's events (`location`: a location change) applied to `tree`; JSON that does not
+/// parse changes nothing.
+fn apply_event(tree: &mut PageTree, json: &str, location: bool) {
+    let Some(v) = AxValue::from_json(json) else {
+        return;
+    };
+    if location {
+        tree.move_nodes(&value::parse_locations(&v));
+    } else {
+        tree.apply(&value::parse_updates(&v));
+    }
+}
+
 /// A page script that scrolls by `(dx, dy)` CSS px and answers with how far it went
 /// (`[dx, dy]`, clamped at the page's ends).
 pub(super) fn scroll_script(dx: f64, dy: f64) -> String {
@@ -120,9 +138,34 @@ pub(super) fn reach_after(
 }
 
 impl Host {
-    /// `tab`'s mirrored tree, while one is kept (pages' accessibility on, or an agent's tab).
+    /// `tab`'s mirrored tree, while one is kept (pages' accessibility on, or an agent's tab, as
+    /// of the last [`Self::ax_settle`]).
     pub(super) fn ax_tree(&self, tab: TabId) -> Option<&PageTree> {
         self.ax.trees.get(&tab)
+    }
+
+    /// A call is about to read `tab`'s tree: the events that waited are applied first; a queue
+    /// that overflowed turns CEF's tree on again (a whole tree comes, the call waits for it).
+    pub(super) fn ax_settle(&mut self, tab: TabId) {
+        let Some(lazy) = self.ax.lazy.get_mut(&tab) else {
+            return;
+        };
+        match lazy.settle() {
+            Settle::Apply(events) => {
+                if events.is_empty() {
+                    return;
+                }
+                let tree = self.ax.trees.entry(tab).or_default();
+                for (json, location) in events {
+                    apply_event(tree, &json, location);
+                }
+            }
+            Settle::Reopen => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.set_accessibility(true);
+                }
+            }
+        }
     }
 
     pub(super) fn set_web_ax(&mut self, setting: Calm) {
@@ -142,12 +185,21 @@ impl Host {
         }
         self.ax.on = on;
         self.ax.waiting = None;
+        // on: what waited is applied, and every event from now on as it comes
+        if on {
+            let lazy: Vec<TabId> = self.ax.lazy.keys().copied().collect();
+            for tab in lazy {
+                self.ax_settle(tab);
+            }
+            self.ax.lazy.clear();
+        }
         // an agent session's tabs keep theirs (`host/agent.rs`)
         let views: Vec<_> = self.views.iter().map(|(&t, &id)| (t, id)).collect();
         for (tab, id) in views {
             let wanted = on || self.agent_drives(tab);
             if !wanted {
                 self.ax.trees.remove(&tab);
+                self.ax.lazy.remove(&tab);
             }
             if let Some(view) = self.engine.view(id) {
                 view.set_accessibility(wanted);
@@ -167,22 +219,27 @@ impl Host {
 
     pub(super) fn ax_view_gone(&mut self, tab: TabId) {
         self.ax.trees.remove(&tab);
+        self.ax.lazy.remove(&tab);
     }
 
-    /// A tree or location change of `tab`'s page; its window shows it again.
+    /// A tree or location change of `tab`'s page; its window shows it again. Only an agent's
+    /// (no screen reader): kept unparsed until a call reads it (`ax_settle`); too many, the
+    /// mirror goes and CEF's tree with it until then.
     pub(super) fn ax_event(&mut self, tab: TabId, json: &str, location: bool) {
-        if !self.ax.on && !self.agent_drives(tab) {
+        if !self.ax.on {
+            if !self.agent_drives(tab) {
+                return;
+            }
+            let lazy = self.ax.lazy.entry(tab).or_default();
+            if lazy.push(json, location) == Push::Overflowed {
+                self.ax.trees.remove(&tab);
+                if let Some(view) = self.tab_view(tab) {
+                    view.set_accessibility(false);
+                }
+            }
             return;
         }
-        let Some(v) = AxValue::from_json(json) else {
-            return;
-        };
-        let tree = self.ax.trees.entry(tab).or_default();
-        if location {
-            tree.move_nodes(&value::parse_locations(&v));
-        } else {
-            tree.apply(&value::parse_updates(&v));
-        }
+        apply_event(self.ax.trees.entry(tab).or_default(), json, location);
         let here = self.w.id;
         if self.ax.on
             && let Some(w) = self.model.window_of(tab)

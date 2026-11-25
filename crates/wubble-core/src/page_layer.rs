@@ -123,8 +123,9 @@ pub enum Need {
     /// The shell draws the page's own pixels under its UI: an entrance moving it, a mask cutting
     /// it (`overlay::covers` is [`Coverage::Pixels`]; [`Needs::covered`]).
     Sampled,
-    /// The tab has no pane of its own in the shell (the peek's page, an extension's popup, a start
-    /// page): there is no place for a layer.
+    /// The tab has no pane of its own in the shell (the peek's page, an extension's popup), or its
+    /// pane is a built-in page the shell draws (Settings, a start page, alone or in a split): there
+    /// is no place for a layer.
     Unplaced,
     /// Glass over the page blurs it (`overlay::covers` is [`Coverage::Glass`]): a snapshot of the
     /// page will do.
@@ -232,7 +233,8 @@ pub struct Owners {
     pub page_fullscreen: bool,
     /// The window is the picture-in-picture window.
     pub pip_window: bool,
-    /// The tab is one of the shell's panes (a `SplitPane`).
+    /// The tab is one of the shell's panes with a page of its own: a `SplitPane` whose page is a
+    /// web view's (a built-in page's pane, a start page's, is the shell's own drawing).
     pub placed: bool,
     /// What the shell draws over the pane (`overlay::covers`).
     pub coverage: Coverage,
@@ -275,6 +277,9 @@ pub enum Effect {
     PresentLatest,
     /// The shell renders and presents the page's area once more (no new frame may come).
     Redraw,
+    /// The page paints its frame again (CEF's invalidate): it may go on its layer now, and only a
+    /// frame in an OS buffer takes it there, which a still page never sends by itself.
+    Repaint,
     /// The layer's latest frame copied into the shell's texture of the pane, which only its glass
     /// reads (the pane is a hole): the glass blurs it, nothing else is drawn again.
     Snapshot,
@@ -303,7 +308,10 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
         (Unsupported, Frame { .. }) => (route, vec![Present]),
         // a layer to use: the copy goes to OS buffers once nothing holds the page on the shell
         (Unsupported | Composited, Capable(true) | Changed) if held => (Composited, vec![]),
-        (Unsupported | Composited, Capable(true) | Changed) => (entering, vec![Buffers(true)]),
+        // and the page paints once into them: a still page sends no frame by itself
+        (Unsupported | Composited, Capable(true) | Changed) => {
+            (entering, vec![Buffers(true), Repaint])
+        }
         (Composited, Capable(false)) => (Unsupported, vec![]),
         (Composited, Frame { .. }) => (route, vec![Present]),
         // nothing is on the layer to fail
@@ -311,6 +319,10 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
 
         (Entering { .. }, Capable(false)) => (Unsupported, vec![Buffers(false)]),
         (Entering { .. }, Capable(true) | Changed) if lasting => (Composited, vec![Buffers(false)]),
+        // a brief hold ended: the page paints again for its way back to the layer
+        (Entering { expires: Some(_) }, Capable(true) | Changed | Presenting { .. }) if !held => {
+            (entering, vec![Repaint])
+        }
         (Entering { .. }, Capable(true) | Changed | Presenting { .. }) => (entering, vec![]),
         (Entering { .. }, Frame { os: true, .. }) if lasting => {
             (Composited, vec![Buffers(false), Present])
@@ -371,8 +383,14 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
         (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until && lasting => {
             (Composited, vec![Hide, Buffers(false)])
         }
-        // held briefly or not at all: the next frame free of it goes back to the layer
-        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until => (entering, vec![Hide]),
+        // held briefly: the next frame free of it goes back to the layer
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until && held => {
+            (entering, vec![Hide])
+        }
+        // free: back to the layer at the page's next frame, which it paints for that
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until => {
+            (entering, vec![Hide, Repaint])
+        }
         // the shell has not drawn it yet: once more, the layer stays
         (Leaving { .. }, Presenting { .. }) => (route, vec![Redraw]),
     }
@@ -616,7 +634,7 @@ mod tests {
         let rows: &[RouteRow] = &[
             // Unsupported: the shell draws every frame, nothing else happens
             ("unsupported: stays without a layer", Unsupported, false, Capable(false), Unsupported, &[]),
-            ("unsupported: a layer, nothing needs the shell", Unsupported, false, Capable(true), IN, &[Buffers(true)]),
+            ("unsupported: a layer, nothing needs the shell: buffers, and a frame into them", Unsupported, false, Capable(true), IN, &[Buffers(true), Repaint]),
             ("unsupported: a layer, the shell is needed", Unsupported, true, Capable(true), Composited, &[]),
             ("unsupported: needs ignored", Unsupported, false, Changed, Unsupported, &[]),
             ("unsupported: needs ignored (holding)", Unsupported, true, Changed, Unsupported, &[]),
@@ -626,9 +644,9 @@ mod tests {
             ("unsupported: a failure ignored", Unsupported, false, Failed, Unsupported, &[]),
             // Composited
             ("composited: loses the layer", Composited, false, Capable(false), Unsupported, &[]),
-            ("composited: capable again, clear", Composited, false, Capable(true), IN, &[Buffers(true)]),
+            ("composited: capable again, clear", Composited, false, Capable(true), IN, &[Buffers(true), Repaint]),
             ("composited: capable again, needed", Composited, true, Capable(true), Composited, &[]),
-            ("composited: the needs clear", Composited, false, Changed, IN, &[Buffers(true)]),
+            ("composited: the needs clear", Composited, false, Changed, IN, &[Buffers(true), Repaint]),
             ("composited: still needed", Composited, true, Changed, Composited, &[]),
             ("composited: a frame to the shell", Composited, false, copied(7), Composited, &[Present]),
             ("composited: a late os frame to the shell", Composited, true, os(7), Composited, &[Present]),
@@ -667,8 +685,8 @@ mod tests {
             ("leaving: a render of an older frame: once more", FOR7, false, drew(5), FOR7, &[Redraw]),
             ("leaving: one short, still needed", FOR7, true, drew(6), FOR7, &[Redraw]),
             ("leaving: drawn, still needed", FOR5, true, drew(5), Composited, &[Hide, Buffers(false)]),
-            ("leaving: drawn, nothing needs the shell", FOR5, false, drew(5), IN, &[Hide]),
-            ("leaving: a newer one drawn", FOR5, false, drew(7), IN, &[Hide]),
+            ("leaving: drawn, nothing needs the shell: the page paints for its return", FOR5, false, drew(5), IN, &[Hide, Repaint]),
+            ("leaving: a newer one drawn", FOR5, false, drew(7), IN, &[Hide, Repaint]),
             ("leaving: fails", FOR7, false, Failed, Unsupported, &[Buffers(false), Hide]),
         ];
         for &(name, route, blocked, event, next, effects) in rows {
@@ -757,12 +775,17 @@ mod tests {
             ("past it, at a frame", due, Hold::Brief, T + 500, os(7), Composited, &[Buffers(false), Present]),
             ("past it, a render: the deadline kept for the next read", due, Hold::Brief, T + 500, BLANK, due, &[]),
             ("past it, a frame copied without buffers", due, Hold::Brief, T + 500, copied(7), due, &[Present]),
-            ("the hold ended late: nothing expired", due, Hold::Free, T + 500, Changed, IN, &[]),
+            ("the hold ended late: nothing expired, the page paints", due, Hold::Free, T + 500, Changed, IN, &[Repaint]),
+            ("the hold ended: a still page paints for its way back", HELD, Hold::Free, T + 1, Changed, IN, &[Repaint]),
+            ("the hold ended at a render", HELD, Hold::Free, T + 1, BLANK, IN, &[Repaint]),
+            ("the hold ended, capable again", HELD, Hold::Free, T + 1, Capable(true), IN, &[Repaint]),
+            ("the hold ended, only glass left", HELD, Hold::Frost, T + 1, Changed, IN, &[Repaint]),
+            ("asked once: entering with no hold asks no more", IN, Hold::Free, T + 1, Changed, IN, &[]),
             ("the hold ended late, a frame: on the layer", due, Hold::Free, T + 500, os(7), ON7, &[Show]),
             ("only glass left: on the layer with a snapshot", due, Hold::Frost, T, os(7), snapped(7, 7, T), &[Show, Snapshot]),
             ("a long hold needs no deadline", due, Hold::Long, T - 1, Changed, Composited, &[Buffers(false)]),
             ("expired and composited: stays while held", Composited, Hold::Brief, T, Changed, Composited, &[]),
-            ("free again: the buffers asked for", Composited, Hold::Free, T, Changed, IN, &[Buffers(true)]),
+            ("free again: the buffers asked for", Composited, Hold::Free, T, Changed, IN, &[Buffers(true), Repaint]),
             ("a new brief hold gets a new deadline", IN, Hold::Brief, T, Changed, HELD, &[]),
         ];
         for &(name, route, hold, now, event, next, effects) in rows {
@@ -806,8 +829,8 @@ mod tests {
             ("the tab leaves under glass", snapped(5, 5, T), Hold::Frost, T, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
             ("entering under glass: stays for its frame", IN, Hold::Frost, T, Changed, IN, &[]),
             ("entering under glass: on the layer with a snapshot", IN, Hold::Frost, T, os(6), snapped(6, 6, T), &[Show, Snapshot]),
-            ("composited under glass: the buffers asked for", Composited, Hold::Frost, T, Changed, IN, &[Buffers(true)]),
-            ("leaving under glass: back to it when drawn", FOR5, Hold::Frost, T, drew(5), IN, &[Hide]),
+            ("composited under glass: the buffers asked for", Composited, Hold::Frost, T, Changed, IN, &[Buffers(true), Repaint]),
+            ("leaving under glass: back to it when drawn", FOR5, Hold::Frost, T, drew(5), IN, &[Hide, Repaint]),
         ];
         for &(name, route, hold, now, event, next, effects) in rows {
             assert_eq!(
@@ -863,7 +886,7 @@ mod tests {
                     }
                     Present => self.given = painted.max(self.given),
                     PresentLatest => self.given = self.layer.max(self.given),
-                    Redraw => {}
+                    Redraw | Repaint => {}
                     // the layer's frame into the shell's texture, for its glass
                     Snapshot => {
                         assert!(
@@ -1068,6 +1091,16 @@ mod tests {
                 ],
             ),
             (
+                "a still page enters: its first frame copied, the one it repaints on the layer",
+                16,
+                &[
+                    (free, Capable(true)),
+                    (free, copied(1)),
+                    (free, os(2)),
+                    (free, drew(1)),
+                ],
+            ),
+            (
                 "a resize that holds for more than a second lets the buffers go",
                 300,
                 &[
@@ -1256,6 +1289,8 @@ mod tests {
             (Unsupported, Needs::from_place(false, true), Fullscreen, true),
             (Unsupported, Needs::from_place(false, true), Window, false),
             (Unsupported, Needs::from_place(false, false), Window, true),
+            // a built-in page's split pane has no page of its own: never a layer, in any mode
+            (Unsupported, Needs::from_place(false, false), Fullscreen, true),
         ];
         for &(route, needs, mode, gone) in rows {
             assert_eq!(

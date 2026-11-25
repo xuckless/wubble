@@ -319,6 +319,14 @@ pub fn sample(
                 memreport::mib(reserved)
             );
         }
+        // the frame rings alive and Skia's caches: a cache stays level over open-close runs, a
+        // leak climbs
+        let _ = writeln!(
+            r.report,
+            "gpu_targets {}, skia cache {} MiB",
+            wubble_gfx::import::live_targets(),
+            memreport::mib(i_slint_renderer_skia::cache::bytes() as u64)
+        );
         if let Some(line) = crate::alloc_count::line() {
             let _ = writeln!(r.report, "{line}");
         }

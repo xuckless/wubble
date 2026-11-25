@@ -134,20 +134,30 @@ impl Pacing {
     }
 }
 
-/// The pacing each platform ships, by `std::env::consts::OS`. macOS: the shell's (the owner's
-/// Mac, measurements.md "frame runs in Low Power Mode": 58 to 59 page frames a second against
-/// 35 to 56 on CEF's timer); elsewhere CEF's timer, which measured as well or better on Linux.
-pub const PLATFORM_PACING: &[(&str, Pacing)] = &[
-    ("macos", Pacing::Shell),
-    ("linux", Pacing::CefTimer),
-    ("windows", Pacing::CefTimer),
+/// The pacing each platform ships, by `std::env::consts::OS`: with the shell drawing its pages,
+/// and with them on their own layer under it (`wubble_core::page_layer`, `Order::Below`). macOS
+/// composited: the shell's (the owner's Mac, measurements.md "frame runs in Low Power Mode": 58
+/// to 59 page frames a second against 35 to 56 on CEF's timer). macOS on the layer: CEF's own
+/// begin-frame source, since no shell render paces a page there and the shell's fallback timer
+/// would be the clock (one main-thread timer per frame, not locked to the display); elsewhere
+/// CEF's timer, which measured as well or better on Linux. CEF fixes a view's source when it
+/// opens, so a run keeps one.
+#[rustfmt::skip]
+pub const PLATFORM_PACING: &[(&str, Pacing, Pacing)] = &[
+    // (os, composited, on the layer)
+    ("macos", Pacing::Shell, Pacing::CefTimer),
+    ("linux", Pacing::CefTimer, Pacing::CefTimer),
+    ("windows", Pacing::CefTimer, Pacing::CefTimer),
 ];
 
-/// The shipped pacing of platform `os` (CEF's timer for one the table does not name).
-pub fn platform_pacing(os: &str) -> Pacing {
+/// The shipped pacing of platform `os`, its pages on their layer (`layered`) or not (CEF's timer
+/// for a platform the table does not name).
+pub fn platform_pacing(os: &str, layered: bool) -> Pacing {
     PLATFORM_PACING
         .iter()
-        .find_map(|&(name, pacing)| (name == os).then_some(pacing))
+        .find_map(|&(name, composited, on_layer)| {
+            (name == os).then_some(if layered { on_layer } else { composited })
+        })
         .unwrap_or(Pacing::CefTimer)
 }
 
@@ -445,10 +455,17 @@ mod tests {
 
     #[test]
     fn the_mac_ships_shell_pacing_and_the_rest_cefs_timer() {
-        assert_eq!(platform_pacing("macos"), Pacing::Shell);
-        assert_eq!(platform_pacing("linux"), Pacing::CefTimer);
-        assert_eq!(platform_pacing("windows"), Pacing::CefTimer);
-        assert_eq!(platform_pacing("freebsd"), Pacing::CefTimer);
+        for (os, layered, pacing) in [
+            ("macos", false, Pacing::Shell),
+            ("macos", true, Pacing::CefTimer),
+            ("linux", false, Pacing::CefTimer),
+            ("linux", true, Pacing::CefTimer),
+            ("windows", false, Pacing::CefTimer),
+            ("freebsd", false, Pacing::CefTimer),
+            ("freebsd", true, Pacing::CefTimer),
+        ] {
+            assert_eq!(platform_pacing(os, layered), pacing, "{os} {layered}");
+        }
     }
 
     #[test]

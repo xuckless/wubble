@@ -131,6 +131,8 @@ pub enum Applied {
     Keymap(Vec<String>),
     Sleep(SleepPolicy),
     NeverSleepSites(Vec<String>),
+    /// The sites whose pages are muted (`sitesound`).
+    MutedSites(Vec<String>),
     ArchiveAfter(ArchiveAfter),
     /// The stored link-routing rules, as typed (`routing::Rule::parse`).
     RoutingRules(Vec<String>),
@@ -179,6 +181,8 @@ pub enum Applied {
     TouchSizing(crate::touch::Sizing),
     /// Shift+click opens a peek.
     Glance(bool),
+    /// The address pill shows whole URLs.
+    FullUrls(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
     /// Whether wubble hosts its MCP server (`agent::hosting`), switched at once.
@@ -268,6 +272,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
             ))
         }
         k if k == s::SLEEP_NEVER_SITES.key => Applied::NeverSleepSites(list(def, stored)),
+        k if k == s::SOUND_MUTED_SITES.key => Applied::MutedSites(list(def, stored)),
         k if k == s::ARCHIVE_AFTER.key => Applied::ArchiveAfter(ArchiveAfter::from_id(v)?),
         k if k == s::ROUTING_RULES.key => Applied::RoutingRules(list(def, stored)),
         k if k == s::GLASS_QUALITY.key => Applied::Glass(GlassSetting::from_id(v)?),
@@ -341,6 +346,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
+        k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
@@ -492,6 +498,29 @@ mod tests {
                 web_accessibility(setting, reader),
                 on,
                 "{setting:?} {reader}"
+            );
+        }
+    }
+
+    /// A profile seeded before start (the Mac hand checks) turns picture-in-picture on tab switch
+    /// on only with the row `pip.on_tab_switch` = `1`; start-up replays it as stored.
+    #[test]
+    fn picture_in_picture_on_tab_switch_reads_its_row() {
+        for (name, rows, on) in [
+            ("seeded on", &[("pip.on_tab_switch", "1")][..], true),
+            ("seeded off", &[("pip.on_tab_switch", "0")], false),
+            ("no row: the default", &[], false),
+            (
+                "not a Bool's text: the default",
+                &[("pip.on_tab_switch", "true")],
+                false,
+            ),
+            ("another key", &[("pip.auto", "1")], false),
+        ] {
+            assert_eq!(
+                effect_of("pip.on_tab_switch", &stored(rows)),
+                Some(Applied::PipOnTabSwitch(on)),
+                "{name}"
             );
         }
     }
@@ -688,6 +717,13 @@ mod tests {
             Some(Applied::NeverSleepSites(vec!["a.test".into()]))
         );
         assert_eq!(
+            effect_of(
+                "sound.muted_sites",
+                &stored(&[("sound.muted_sites", r#"["a.test"]"#)])
+            ),
+            Some(Applied::MutedSites(vec!["a.test".into()]))
+        );
+        assert_eq!(
             effect_of("routing.rules", &empty),
             Some(Applied::RoutingRules(vec![]))
         );
@@ -879,6 +915,14 @@ mod tests {
             Some(Applied::PipOnTabSwitch(false))
         );
         assert_eq!(effect_of("media.keys", &s), Some(Applied::MediaKeys(true)));
+        assert_eq!(
+            effect_of("ui.full_urls", &s),
+            Some(Applied::FullUrls(false))
+        );
+        assert_eq!(
+            effect_of("ui.full_urls", &stored(&[("ui.full_urls", "1")])),
+            Some(Applied::FullUrls(true))
+        );
         assert_eq!(
             effect_of("a11y.web", &s),
             Some(Applied::WebAccessibility(crate::motion::Calm::Auto))

@@ -16,8 +16,6 @@ struct T {
     shown: BTreeMap<WindowId, Option<TabId>>,
     kinds: BTreeMap<WindowId, WindowKind>,
     page_keys: bool,
-    others: Vec<Layer>,
-    machine: Vec<Kind>,
     peeked: Option<TabId>,
 }
 
@@ -37,12 +35,6 @@ impl Env for T {
     fn page_has_keys(&self, _: WindowId) -> bool {
         self.page_keys
     }
-    fn others(&self, _: WindowId) -> Vec<Layer> {
-        self.others.clone()
-    }
-    fn machine(&self, kind: Kind) -> bool {
-        self.machine.contains(&kind)
-    }
     fn peeked(&self, _: WindowId) -> Option<TabId> {
         self.peeked
     }
@@ -54,8 +46,6 @@ fn env(tab: TabId) -> T {
         shown: [(W1, Some(tab))].into(),
         kinds: BTreeMap::new(),
         page_keys: false,
-        others: vec![],
-        machine: vec![],
         peeked: None,
     }
 }
@@ -68,6 +58,9 @@ fn win(kind: Kind) -> Layer {
 }
 fn open(layer: Layer) -> Action {
     Action::Open { w: W1, layer }
+}
+fn ask(layer: Layer) -> Action {
+    Action::Ask { w: W1, layer }
 }
 fn close(layer: Layer) -> Action {
     Action::Close { w: W1, layer }
@@ -214,6 +207,11 @@ fn store_table() {
         ("a menu refused under a dialog", A, false, vec![open(on(Dialog, A))], open(menu), vec![], vec![on(Dialog, A)]),
         ("an agent's sheet waits for the user's", A, false, vec![open(on(PrintSheet, A))], open(agent), vec![], vec![on(PrintSheet, A)]),
         ("the user's overlays wait for an agent's sheet", A, false, vec![open(agent)], open(ds), vec![], vec![agent]),
+        // the app's own question: refused by nothing, otherwise an open
+        ("a question over a dialog shows", A, false, vec![open(on(Dialog, A))], ask(menu),
+            vec![Mount(menu), focus(Some(menu))], vec![menu, on(Dialog, A)]),
+        ("a question replaces the user's popover", A, false, vec![open(dl)], ask(menu), vec![Cancel(dl), Mount(menu), focus(Some(menu))], vec![menu]),
+        ("a question over an open menu is that menu's", A, false, vec![open(menu)], ask(menu), vec![], vec![menu]),
         ("boost refused under a dialog", A, false, vec![open(on(Dialog, A))], open(on(Boost, A)), vec![], vec![on(Dialog, A)]),
         ("a dialog is never refused, nor closes an agent's sheet", A, false, vec![open(agent)], open(on(Dialog, A)),
             vec![Mount(on(Dialog, A)), focus(Some(on(Dialog, A)))], vec![agent, on(Dialog, A)]),
@@ -223,6 +221,10 @@ fn store_table() {
         ("Spaces replaces downloads", A, false, vec![open(dl)], open(ds), vec![Cancel(dl), Mount(ds), focus(Some(ds))], vec![ds]),
         ("a menu replaces extensions", A, false, vec![open(ext)], open(menu), vec![Cancel(ext), Mount(menu), focus(Some(menu))], vec![menu]),
         ("find replaces a menu", A, false, vec![open(menu)], open(on(Find, A)), vec![Cancel(menu), Mount(on(Find, A)), focus(None)], vec![on(Find, A)]),
+        ("a menu over the command bar keeps it: its field's menu", A, false, vec![open(win(CommandBar))], open(menu),
+            vec![Mount(menu), focus(Some(menu))], vec![menu, win(CommandBar)]),
+        ("the command bar replaces a menu", A, false, vec![open(menu)], open(win(CommandBar)),
+            vec![Cancel(menu), Mount(win(CommandBar)), focus(Some(win(CommandBar)))], vec![win(CommandBar)]),
         ("a menu over find keeps it", A, false, vec![open(on(Find, A))], open(menu), vec![Mount(menu), focus(Some(menu))], vec![menu, on(Find, A)]),
         ("a dialog replaces the user's sheet, keeps find", A, false, vec![open(on(Find, A)), open(on(BookmarkSheet, A))], open(on(Dialog, A)),
             vec![Cancel(on(BookmarkSheet, A)), Mount(on(Dialog, A)), focus(Some(on(Dialog, A)))], vec![on(Find, A), on(Dialog, A)]),
@@ -330,29 +332,6 @@ fn store_table() {
     }
 }
 
-/// Until each kind moves into the store, its machine owns it: the rules see it (`others`), a
-/// rule cancels it, an admitted open is a Mount the store keeps no entry for.
-#[test]
-#[rustfmt::skip]
-fn a_machine_s_overlay_meets_the_rules() {
-    let with = |others: Vec<Layer>, machine: Vec<Kind>| T { others, machine, ..env(A) };
-    // name, env, action, effects, what the store holds after
-    type MachineRow = (&'static str, T, Action, Vec<Effect>, Vec<Layer>);
-    let rows: Vec<MachineRow> = vec![
-        ("its dialog refuses Spaces", with(vec![on(Dialog, A)], vec![Dialog]), open(win(Spaces)), vec![], vec![]),
-        ("downloads replaces its menu", with(vec![win(Menu)], vec![Menu]), open(win(Downloads)),
-            vec![Cancel(win(Menu)), Mount(win(Downloads)), focus(Some(win(Downloads)))], vec![win(Downloads)]),
-        ("its kind admitted", with(vec![], vec![Find]), open(on(Find, A)), vec![Mount(on(Find, A))], vec![]),
-        ("its kind already open", with(vec![on(Find, A)], vec![Find]), open(on(Find, A)), vec![], vec![]),
-        ("Escape cancels it", with(vec![on(Find, A)], vec![Find]), ESC, vec![Cancel(on(Find, A))], vec![]),
-    ];
-    for (name, e, action, fx, held) in rows {
-        let (ui, got) = reduce(Ui::default(), &e, action);
-        let own = T { others: vec![], ..e };
-        assert_eq!((got, ui.stack(&own, W1).layers), (fx, held), "{name}");
-    }
-}
-
 #[test]
 fn tab_keeps_find_across_windows() {
     let (ui, _) = run(&env(A), &[open(on(Find, A))]);
@@ -366,6 +345,28 @@ fn tab_keeps_find_across_windows() {
     assert_eq!(ui.stack(&moved, W2).layers, [on(Find, A)]);
     assert_eq!(ui.escape_target(&moved, W2), Some(on(Find, A)));
     assert_eq!(ui.escape_target(&moved, W1), None);
+}
+
+/// The window each action's overlays act in (a window overlay's content is keyed by it).
+#[test]
+#[rustfmt::skip]
+fn the_window_an_action_acts_in() {
+    let two = T { shown: [(W1, Some(A)), (W2, Some(B))].into(), ..env(A) };
+    type ActingRow = (&'static str, Action, Option<WindowId>);
+    let rows: Vec<ActingRow> = vec![
+        ("a window's overlay: its own window", Action::Open { w: W2, layer: win(Menu) }, Some(W2)),
+        ("a tab's: the window showing the tab", Action::Open { w: W2, layer: on(Dialog, A) }, Some(W1)),
+        ("a hidden tab's: where it was asked", Action::Ask { w: W2, layer: on(Dialog, C) }, Some(W2)),
+        ("a close of a shown tab's", Action::Close { w: W2, layer: on(Find, A) }, Some(W1)),
+        ("a navigation: its tab's window", Action::Navigated { w: W2, tab: A }, Some(W1)),
+        ("Escape: its window", Action::Escape { w: W2 }, Some(W2)),
+        ("a window gone", Action::WindowGone(W2), Some(W2)),
+        ("a view gone names none", Action::ViewGone(A), None),
+        ("nor the timer", tick(5), None),
+    ];
+    for (name, action, want) in rows {
+        assert_eq!(acting(&two, action), want, "{name}");
+    }
 }
 
 #[test]
@@ -391,9 +392,17 @@ fn window_entries_are_per_window() {
             Effect::Focus(W2, KeyOwner::Layer(win(Spaces)))
         ]
     );
+    assert_eq!(
+        ui.windows_with(Spaces),
+        [(W1, Phase::Open), (W2, Phase::Open)]
+    );
     let (ui, fx) = reduce(ui, &two, Action::WindowGone(W2));
     assert_eq!(fx, [Cancel(win(Spaces)), Unmount(win(Spaces))]);
     assert_eq!(ui.phase(W1, win(Spaces)), Some(Phase::Open));
+    // a window that closed its own holds it leaving; no tab's entry is a window's
+    let (ui, _) = reduce(ui, &two, close(win(Spaces)));
+    assert_eq!(ui.windows_with(Spaces), [(W1, Phase::Leaving)]);
+    assert!(ui.windows_with(Find).is_empty());
     // one notice per window: window 2's leaves window 1's alone
     let (ui, _) = reduce(ui, &two, open(on(Notice, A)));
     let (_, fx) = reduce(
@@ -1241,7 +1250,7 @@ fn one_grab_per_window() {
     alphabet.extend([ESC, Action::Lost { w: W1 }, Action::WindowGone(W1)]);
     let e = env(A);
     let grabs = |ui: &Ui| {
-        ui.live(&e, W1)
+        ui.live(W1)
             .into_iter()
             .filter(|l| l.kind.row().pointer == Pointer::Grab)
             .count()
@@ -1284,7 +1293,7 @@ fn window_lost_table() {
         let (ui, _) = run(&e, &[open(l)]);
         let (ui, fx) = reduce(ui, &e, Action::Lost { w: W1 });
         assert!(fx.contains(&Cancel(l)), "{kind:?} cancelled: {fx:?}");
-        assert_eq!(ui.live(&e, W1), vec![], "{kind:?} gone");
+        assert_eq!(ui.live(W1), vec![], "{kind:?} gone");
     }
 }
 

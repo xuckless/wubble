@@ -24,6 +24,7 @@ use wubble_engine::nav::WebEvent;
 use wubble_engine::page::PageEvent;
 use wubble_ui::{AppWindow, Palette};
 
+use super::layers::Content;
 use super::{Host, new_tab};
 use crate::builtin_smoke as smoke;
 use crate::clipboard::Bridge as _;
@@ -51,8 +52,7 @@ pub(super) struct Builtins {
     /// Tabs showing a PDF in Chromium's viewer, and the content-type questions in flight.
     pdf: BTreeSet<TabId>,
     kind_probes: BTreeMap<u64, TabId>,
-    /// Hint mode and the tab whose page shows it; `None`: off.
-    hints: Option<(TabId, Hints)>,
+    /// (Hint mode and the tab whose page shows it are the content map's, `Content::Hints`.)
     alphabet: &'static str,
     /// The screenshot in flight and the tab it is of; `None`: idle.
     shot: Option<(TabId, Shot)>,
@@ -74,7 +74,6 @@ impl Default for Builtins {
             reader_prefs: ReaderPrefs::default(),
             pdf: BTreeSet::new(),
             kind_probes: BTreeMap::new(),
-            hints: None,
             alphabet: hints::alphabet(""),
             shot: None,
             output: ShotOutput::Both,
@@ -103,14 +102,10 @@ impl Host {
         };
         match action {
             Builtin::CyclePageTheme => self.cycle_page_theme(tab),
-            // hints and the region picker take the page: overlays first (wubble_core::overlay)
-            Builtin::LinkHints => {
-                if self.hints_tab().is_some() || self.overlay_open(Kind::Hints, Some(tab)) {
-                    self.hint_event(tab, HintEvent::Toggle)
-                }
-            }
+            // hints and the region picker take the page: each opens its store overlay as it
+            // shows, which the overlays may refuse (`hint_step`, `shot_event`)
+            Builtin::LinkHints => self.hint_event(tab, HintEvent::Toggle),
             Builtin::ToggleReader => self.reader_event(tab, ReaderEvent::Toggle),
-            Builtin::Shot(ShotRequest::Region) if !self.overlay_open(Kind::Region, Some(tab)) => {}
             Builtin::Shot(request) => self.shot_event(tab, ShotEvent::Request(request)),
             Builtin::NewBoost => self.new_boost(),
             Builtin::ClearData => self.clear_data_menu(tab),
@@ -204,9 +199,6 @@ impl Host {
         self.builtins.applied.remove(&tab);
         self.builtins.pdf.remove(&tab);
         self.builtins.reader.remove(&tab);
-        if self.hints_tab() == Some(tab) {
-            self.builtins.hints = None;
-        }
         self.shot_page_gone(tab);
         self.boosts_view_gone(tab);
         self.media_view_gone(tab);
@@ -317,7 +309,7 @@ impl Host {
                     }
                     _ => {}
                 }
-                if matches!(&self.builtins.hints, Some((_, Hints::Collecting(want))) if *want == id)
+                if matches!(self.hints_held(false), Some((_, Hints::Collecting(want))) if want == id)
                 {
                     let targets = text.map(hints::targets_from_json).unwrap_or_default();
                     self.hint_event(tab, HintEvent::Targets(id, targets));
@@ -502,30 +494,48 @@ impl Host {
 
     /// The tab whose page shows hints.
     pub(super) fn hints_tab(&self) -> Option<TabId> {
-        self.builtins.hints.as_ref().map(|(t, _)| *t)
+        self.hints_held(false).map(|(t, _)| t)
     }
 
-    /// Hint mode ends wherever it is.
-    pub(super) fn hints_cancel(&mut self) {
-        if let Some(tab) = self.hints_tab() {
-            self.hint_event(tab, HintEvent::Cancel);
-        }
+    /// Hint mode and its tab (one page at a time): while its overlay is open, or (`cancel`)
+    /// while a rule that just closed it has it end.
+    fn hints_held(&self, cancel: bool) -> Option<(TabId, Hints)> {
+        self.contents
+            .of(Kind::Hints)
+            .find(|&(_, l, _)| cancel || self.ui.phase(self.w.id, l) == Some(Phase::Open))
+            .and_then(|(_, l, c)| match (l.tab, c) {
+                (Some(t), Content::Hints(h)) => Some((t, h.clone())),
+                _ => None,
+            })
     }
 
     fn hint_event(&mut self, tab: TabId, event: HintEvent) {
-        // Hints live on one page; anything for another first clears that one.
-        let state = match self.builtins.hints.take() {
-            Some((on, state)) if on == tab => state,
-            Some((other, state)) => {
-                let (_, effects) =
-                    hints::transition(state, HintEvent::Cancel, self.builtins.alphabet);
-                self.hint_effects(other, effects);
-                Hints::Off
-            }
-            None => Hints::Off,
+        self.hint_step(tab, event, false);
+    }
+
+    /// One hint event for `tab`'s page (`cancel`: on the mode a rule just closed). Hints live
+    /// on one page; anything for another first clears that one. Hint mode on is its overlay
+    /// open; a mode the overlays refuse ends unseen (its page answers into nothing).
+    pub(super) fn hint_step(&mut self, tab: TabId, event: HintEvent, cancel: bool) {
+        let alphabet = self.builtins.alphabet;
+        if let Some((other, state)) = self.hints_held(false).filter(|&(t, _)| t != tab) {
+            let (_, effects) = hints::transition(state, HintEvent::Cancel, alphabet);
+            self.content_after(self.w.id, Layer::new(Kind::Hints, Some(other)), None, false);
+            self.hint_effects(other, effects);
+        }
+        let layer = Layer::new(Kind::Hints, Some(tab));
+        let state = match self.live(self.w.id, layer, cancel) {
+            Some(Content::Hints(h)) => h,
+            _ => Hints::Off,
         };
-        let (next, effects) = hints::transition(state, event, self.builtins.alphabet);
-        self.builtins.hints = (next != Hints::Off).then_some((tab, next));
+        let (next, effects) = hints::transition(state, event, alphabet);
+        let content = (next != Hints::Off).then_some(Content::Hints(next));
+        if self
+            .content_after(self.w.id, layer, content, false)
+            .is_some()
+        {
+            return;
+        }
         self.hint_effects(tab, effects);
     }
 
@@ -638,13 +648,6 @@ impl Host {
         self.builtins.shot.map(|(t, _)| t)
     }
 
-    /// The tab whose page the region picker is over.
-    pub(super) fn region_tab(&self) -> Option<TabId> {
-        self.builtins
-            .shot
-            .and_then(|(t, s)| (s == Shot::Picking).then_some(t))
-    }
-
     fn shot_state(&self) -> Shot {
         self.builtins.shot.map(|(_, s)| s).unwrap_or_default()
     }
@@ -656,7 +659,19 @@ impl Host {
         self.builtins.shot = (next != Shot::Idle).then_some((tab, next));
         for effect in effects {
             match effect {
-                ShotEffect::ShowOverlay | ShotEffect::HideOverlay => self.redraw_builtins(),
+                // the region picker is a store overlay: the overlays may refuse it (it ends)
+                ShotEffect::ShowOverlay => {
+                    self.layer_is(Kind::Region, tab, true);
+                    let region = Layer::new(Kind::Region, Some(tab));
+                    if self.ui.phase(self.w.id, region) != Some(Phase::Open) {
+                        self.shot_event(tab, ShotEvent::Cancel);
+                    }
+                    self.redraw_builtins();
+                }
+                ShotEffect::HideOverlay => {
+                    self.layer_is(Kind::Region, tab, false);
+                    self.redraw_builtins();
+                }
                 ShotEffect::Measure { at, rect } => {
                     let id = self
                         .tab_view(tab)
@@ -912,12 +927,7 @@ impl Host {
             reader: tab
                 .and_then(|t| self.builtins.reader.get(&t).copied())
                 .unwrap_or_default(),
-            hints: self
-                .builtins
-                .hints
-                .as_ref()
-                .map(|(_, h)| h.clone())
-                .unwrap_or_default(),
+            hints: self.hints_held(false).map(|(_, h)| h).unwrap_or_default(),
             scale,
             view,
         }
@@ -997,7 +1007,9 @@ impl Host {
         window.set_reader_width(p.width as i32);
         window.set_reader_font(p.font as i32);
         window.set_reader_theme(p.theme as i32);
-        window.set_shot_picking(self.shot_state() == Shot::Picking);
+        window.set_shot_picking(tab.is_some_and(|t| {
+            self.ui.phase(self.w.id, Layer::new(Kind::Region, Some(t))) == Some(Phase::Open)
+        }));
         let (x, _) = self.content_origin(window);
         let width = tab.map_or(0.0, |t| {
             self.pane_layout(window, t).size.width as f32 / window.window().scale_factor()

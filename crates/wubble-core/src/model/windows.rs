@@ -71,6 +71,18 @@ impl Model {
         }
     }
 
+    /// The panes window `id` shows (one tab, or its Space's split), its tab in
+    /// picture-in-picture counted (the window shows a card for it, or its split comes back for
+    /// it) and its peek not: what a tab switch leaves and comes to.
+    pub fn window_panes(&self, id: WindowId) -> Vec<TabId> {
+        match self.window(id).map(|w| w.shown) {
+            Some(Shown::Space(s)) => self
+                .space_idx(s)
+                .map_or_else(Vec::new, |si| self.space_tabs(si)),
+            _ => self.window_tabs(id),
+        }
+    }
+
     /// The page of window `id` that gets keys: its own tab, or its Space's active tab.
     pub fn window_tab(&self, id: WindowId) -> Option<TabId> {
         self.window(id).and_then(|w| self.focused_tab(w))
@@ -110,13 +122,22 @@ impl Model {
         })
     }
 
-    /// Whether `tab` can be shown in a Pip window: a known tab that is not a peek, not a Little
-    /// or Popup window's and not a split pane (its pane would leave a hole in the split).
+    /// Whether `tab` can go to a Pip window now: [`Model::pip_shows`], and not a pane of a split
+    /// a window shows (its pane would leave a hole in the split). A split left for another tab
+    /// lends its playing pane, which comes back when the split does (the host's return).
     pub fn can_pip(&self, tab: TabId) -> bool {
-        self.tabs.contains_key(&tab)
-            && !self.is_glance(tab)
-            && self.windowed(tab).is_none()
-            && self.split_of(tab).is_none()
+        let split_on_screen = self.place_of(tab).is_some_and(|(si, _)| {
+            self.shown_by(self.spaces[si].id).is_some()
+                && self.space_split(si).is_some_and(|g| g.tabs.contains(&tab))
+        });
+        self.pip_shows(tab) && !split_on_screen
+    }
+
+    /// Whether a Pip window may show `tab` at all: a known tab that is not a peek, nor a Little
+    /// or Popup window's. Its split coming back on screen is the moment it returns, not a
+    /// broken model.
+    fn pip_shows(&self, tab: TabId) -> bool {
+        self.tabs.contains_key(&tab) && !self.is_glance(tab) && self.windowed(tab).is_none()
     }
 
     /// The Pip window, if one is open.
@@ -245,6 +266,22 @@ impl Model {
     /// The Main window showing `space`, if one does.
     pub fn space_window(&self, space: SpaceId) -> Option<WindowId> {
         self.shown_by(space).map(|i| self.windows[i].id)
+    }
+
+    /// The window `delta` steps from the focused one in the order they were opened, wrapping:
+    /// what Cmd+` and Cmd+Shift+` focus (macOS cycles an app's windows in a fixed order, so
+    /// two presses do not just swap the last two). The Pip window takes no focus and is
+    /// skipped; `None` when no other window is there.
+    pub fn window_step(&self, delta: isize) -> Option<WindowId> {
+        let mut ids: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|w| w.kind() != WindowKind::Pip)
+            .map(|w| w.id)
+            .collect();
+        ids.sort();
+        let focused = self.focused();
+        super::cycle(&ids, Some(focused), delta).filter(|&w| w != focused)
     }
 
     /// The index of the focused Main window.
@@ -791,7 +828,7 @@ impl Model {
                     {
                         return Err("two Pip windows".into());
                     }
-                    if !self.can_pip(t) {
+                    if !self.pip_shows(t) {
                         return Err(format!("Pip window {:?} shows {t:?}", w.id));
                     }
                 }

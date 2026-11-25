@@ -32,10 +32,11 @@ use wubble_core::agent::upload::{self, Stage};
 use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
 use wubble_core::agent::{MoreAnswer, Refusal, StopReason, Token};
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Kind, Layer, Phase as Shown};
 use wubble_core::secret::Secret;
 use wubble_core::space::{ContainerId, SpaceId, SpaceKind};
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowId;
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
 use wubble_engine::nav::{Phase, WebEvent};
 use wubble_engine::page::{EditCommand, PageEvent, RequestId};
@@ -45,6 +46,7 @@ use wubble_mcp::{
 use wubble_ui::{AgentLogItem, AgentSheetView, AppWindow};
 use wubble_vault::RecordId;
 
+use super::layers::Content;
 use super::{Host, now_ms};
 use crate::mcp::{ConnId, Event as McpEvent, Outbox};
 use crate::with_host;
@@ -559,8 +561,6 @@ pub(super) struct Agents {
     /// any does; and how many beats it has sent.
     beat: slint::Timer,
     beats: u64,
-    /// The window the sheet shows in and the session it shows, while it does.
-    sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
     /// Each session tab's last address its grant allowed: where a tab that got somewhere else
@@ -1285,10 +1285,8 @@ impl Host {
             }
             Effect::DismissApprovalSheet => {
                 if self
-                    .agents
-                    .sheet
-                    .as_ref()
-                    .is_some_and(|(_, shown)| shown == id)
+                    .agent_shown(true)
+                    .is_some_and(|(_, shown)| &shown == id)
                 {
                     self.agent_sheet_clear();
                 }
@@ -1540,7 +1538,7 @@ impl Host {
     /// a page's dialog or the user's sheet makes it wait; the pump asks again).
     pub(super) fn agent_sheet_pump(&mut self) {
         self.agent_beat_arm();
-        if self.agents.sheet.is_some() {
+        if self.agent_shown(false).is_some() {
             return;
         }
         // the session that has waited longest (the session table is the one owner of who waits)
@@ -1557,12 +1555,13 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        if !self.overlay_open(Kind::AgentSheet, None) {
+        let layer = Layer::new(Kind::AgentSheet, None);
+        let refused = self.content_after(self.w.id, layer, Some(Content::Agent(id)), false);
+        if refused.is_some() {
             return;
         }
         self.agents.sheets += 1;
         self.agents.answer = (0, "");
-        self.agents.sheet = Some((window.as_weak(), id));
         // the login pickers need the vault's list (nothing while it is locked)
         if !lists.secrets.is_empty() {
             self.agent_sheet_vault(wubble_vault::VaultCommand::List);
@@ -1574,17 +1573,41 @@ impl Host {
         }
     }
 
-    /// The sheet leaves (answered, or its session ended).
+    /// The window the approval sheet is in and the session it asks for: while it is open, or
+    /// (`held`) while its content is there (a rule closed it, or it is leaving).
+    fn agent_shown(&self, held: bool) -> Option<(WindowId, SessionId)> {
+        self.contents
+            .of(Kind::AgentSheet)
+            .find_map(|(w, l, c)| match (w, c) {
+                (Some(w), Content::Agent(id))
+                    if held || self.ui.phase(w, l) == Some(Shown::Open) =>
+                {
+                    Some((w, id.clone()))
+                }
+                _ => None,
+            })
+    }
+
+    /// The sheet leaves (answered, or its session ended): its overlay closes in its window.
     fn agent_sheet_clear(&mut self) {
-        if let Some(window) = self.agents.sheet.take().and_then(|(w, _)| w.upgrade()) {
-            window.set_agent_sheet_view(AgentSheetView::default());
+        let Some((w, _)) = self.agent_shown(true) else {
+            return;
+        };
+        self.window_closed(w, Kind::AgentSheet);
+        if let Some(x) = self.window_host(w) {
+            x.handle.set_agent_sheet_view(AgentSheetView::default());
         }
     }
 
-    /// The sheet's own answer: Allow or Deny (Escape and a click on Deny), with its window
-    /// choice. It answers the session the sheet shows.
+    /// The sheet's own answer: Allow or Deny (a click on Deny), with its window choice.
     pub(crate) fn agent_sheet_answered(&mut self, allow: bool, headless: bool) {
-        let Some((_, id)) = self.agents.sheet.clone() else {
+        self.agent_sheet_answer(allow, headless, false);
+    }
+
+    /// The sheet answers the session it shows (`held`: the sheet a rule just closed, Escape's
+    /// Deny).
+    pub(super) fn agent_sheet_answer(&mut self, allow: bool, headless: bool, held: bool) {
+        let Some((_, id)) = self.agent_shown(held) else {
             return;
         };
         let Some(s) = self.agents.sessions.get(&id) else {
@@ -1641,10 +1664,10 @@ impl Host {
 
     /// One edit of the shown session's lists (`agent::Lists::edit`).
     fn agent_sheet_edit(&mut self, edit: agent::ListEdit) -> Result<(), agent::ListRefusal> {
-        let Some((_, id)) = &self.agents.sheet else {
+        let Some((_, id)) = self.agent_shown(false) else {
             return Ok(());
         };
-        let Some(s) = self.agents.sessions.get_mut(id) else {
+        let Some(s) = self.agents.sessions.get_mut(&id) else {
             return Ok(());
         };
         s.lists.edit(edit)
@@ -1652,12 +1675,13 @@ impl Host {
 
     /// The shown sheet's view again, after an edit (same serial: the window choice stays).
     fn agent_sheet_render(&mut self) {
-        let Some((window, id)) = &self.agents.sheet else {
+        let Some((w, id)) = self.agent_shown(false) else {
             return;
         };
-        let (Some(window), Some(s)) = (window.upgrade(), self.agents.sessions.get(id)) else {
+        let (Some(x), Some(s)) = (self.window_host(w), self.agents.sessions.get(&id)) else {
             return;
         };
+        let window = x.handle.clone_strong();
         let Some(ask) = asking(s) else {
             return;
         };
@@ -1693,13 +1717,13 @@ impl Host {
 
     /// A secret name's picker: option `index` (0: none) of the logins the sheet lists.
     pub(crate) fn agent_sheet_bound(&mut self, name: &str, index: i32) {
-        let Some((_, id)) = &self.agents.sheet else {
+        let Some((_, id)) = self.agent_shown(false) else {
             return;
         };
         let sites = self
             .agents
             .sessions
-            .get(id)
+            .get(&id)
             .map(|s| s.lists.sites.clone())
             .unwrap_or_default();
         let binding = match (&self.agents.sheet_vault, usize::try_from(index)) {
@@ -1767,7 +1791,7 @@ impl Host {
 
     /// The sheet is showing (the overlay stack's read).
     pub(super) fn agent_sheet_open(&self) -> bool {
-        self.agents.sheet.is_some()
+        self.agent_shown(false).is_some()
     }
 
     /// `--smoke gallery`: a session as a client would make it, asking for approval, or (when
@@ -2179,6 +2203,8 @@ impl Host {
             Some(wubble_core::autofill::web_origin(url).unwrap_or_else(|| url.clone()))
         });
         let tab = tab.unwrap_or(TabId(u64::MAX));
+        // the page's accessibility events waited unparsed for a call (`Host::ax_settle`)
+        self.ax_settle(tab);
         match call {
             AgentCall::StartSession { .. } => {}
             AgentCall::StopSession { keep_tabs, .. } => {
@@ -4677,7 +4703,12 @@ impl Host {
             | Wait::Started { tab, .. }
             | Wait::Chooser { tab, .. }
             | Wait::Uploaded { tab, .. }
-            | Wait::Tree { tab, .. } => *tab,
+            | Wait::Tree { tab, .. } => {
+                // what it waits for may be in the events that came meanwhile
+                let tab = *tab;
+                self.ax_settle(tab);
+                tab
+            }
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
                 return None;
@@ -4884,7 +4915,10 @@ impl Host {
     /// opens must be in the mode the sheet showed (`agent_open_space`).
     pub(crate) fn mcp_smoke_answer(&mut self) {
         use crate::mcp_smoke::{Press, SHEETS, sheet};
-        let Some(window) = self.agents.sheet.as_ref().and_then(|(w, _)| w.upgrade()) else {
+        let shown = self.agent_shown(false);
+        let Some(window) =
+            shown.and_then(|(w, _)| self.window_host(w).map(|x| x.handle.clone_strong()))
+        else {
             return self.fail("the approval sheet is not up".into());
         };
         let view = window.get_agent_sheet_view();

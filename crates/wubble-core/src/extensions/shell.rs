@@ -159,15 +159,10 @@ pub fn prompt_text(ext: &Extension) -> (String, String) {
     )
 }
 
-/// The install prompt: the extension that waits for the user's answer. Nothing is installed
-/// before Allow (`Chromium: ExtensionInstallPrompt`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum Prompt {
-    #[default]
-    Closed,
-    Asking(Extension),
-}
-
+/// The install prompt's content: the extension that waits for the user's answer (`None`: nothing
+/// asked). Nothing is installed before Allow (`Chromium: ExtensionInstallPrompt`). Whether the
+/// sheet is open is the overlays' store's (`overlay::Kind::ExtensionSheet`); a result of `None`
+/// for a live prompt is its owner closing it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PromptEvent {
     /// An extension was read from the file the user picked.
@@ -184,19 +179,20 @@ pub enum PromptEffect {
     Install(Extension),
 }
 
-pub fn prompt_transition(state: Prompt, event: PromptEvent) -> (Prompt, Vec<PromptEffect>) {
+pub fn prompt_transition(
+    state: Option<Extension>,
+    event: PromptEvent,
+) -> (Option<Extension>, Vec<PromptEffect>) {
     match (state, event) {
         // a second pick replaces the first: only the last is asked
-        (_, PromptEvent::Ask(ext)) => (Prompt::Asking(ext), vec![]),
-        (Prompt::Asking(ext), PromptEvent::Allow) => {
-            (Prompt::Closed, vec![PromptEffect::Install(ext)])
-        }
-        (Prompt::Asking(mut ext), PromptEvent::AllowPrivate(on)) => {
+        (_, PromptEvent::Ask(ext)) => (Some(ext), vec![]),
+        (Some(ext), PromptEvent::Allow) => (None, vec![PromptEffect::Install(ext)]),
+        (Some(mut ext), PromptEvent::AllowPrivate(on)) => {
             ext.private = on;
-            (Prompt::Asking(ext), vec![])
+            (Some(ext), vec![])
         }
-        (Prompt::Closed, PromptEvent::AllowPrivate(_)) => (Prompt::Closed, vec![]),
-        (_, PromptEvent::Allow | PromptEvent::Cancel) => (Prompt::Closed, vec![]),
+        (None, PromptEvent::AllowPrivate(_)) => (None, vec![]),
+        (_, PromptEvent::Allow | PromptEvent::Cancel) => (None, vec![]),
     }
 }
 
@@ -212,11 +208,11 @@ pub enum Clicked {
     Popup(String),
 }
 
-/// The footer button's panel: the list of actions, or one action's popup.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The footer button's panel: the list of actions, or one action's popup in its place. Whether it
+/// is open is the overlays' store's (`overlay::Kind::Extensions`, one row for both): the host
+/// opens it on the list; a result of `None` for a live panel is its owner closing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Panel {
-    #[default]
-    Closed,
     List,
     Popup {
         /// Its page's size once known, between [`POPUP_MIN`] and [`POPUP_MAX`].
@@ -226,13 +222,11 @@ pub enum Panel {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PanelEvent {
-    /// The footer button.
-    Toggle,
     /// A press on `extension`'s action in the list, and what it did.
     Clicked(ExtensionId, Clicked),
     /// The popup page's content size.
     Sized(u32, u32),
-    /// Escape, a press outside, a tab switch.
+    /// The footer button on the open panel, Escape, a press outside, a tab switch.
     Dismiss,
     /// The popup page closed itself (`window.close()`).
     PageClosed,
@@ -248,34 +242,47 @@ pub enum PanelEffect {
     ClosePopup,
 }
 
-pub fn panel_transition(state: Panel, event: PanelEvent) -> (Panel, Vec<PanelEffect>) {
+pub fn panel_transition(
+    state: Option<Panel>,
+    event: PanelEvent,
+) -> (Option<Panel>, Vec<PanelEffect>) {
     let close = |state: &Panel| match state {
         Panel::Popup { .. } => vec![PanelEffect::ClosePopup],
-        _ => vec![],
+        Panel::List => vec![],
     };
     match (state, event) {
-        (Panel::Closed, PanelEvent::Toggle) => (Panel::List, vec![]),
-        (state, PanelEvent::Toggle | PanelEvent::Dismiss) => {
+        (Some(state), PanelEvent::Dismiss) => {
             let effects = close(&state);
-            (Panel::Closed, effects)
+            (None, effects)
         }
-        (Panel::List, PanelEvent::Clicked(extension, Clicked::Popup(url))) => (
-            Panel::Popup { size: None },
+        (Some(Panel::List), PanelEvent::Clicked(extension, Clicked::Popup(url))) => (
+            Some(Panel::Popup { size: None }),
             vec![PanelEffect::OpenPopup { extension, url }],
         ),
         // the click ran the extension's code: the list has done its work
-        (Panel::List, PanelEvent::Clicked(_, Clicked::Ran)) => (Panel::Closed, vec![]),
-        (Panel::Popup { .. }, PanelEvent::Sized(w, h)) => (
-            Panel::Popup {
+        (Some(Panel::List), PanelEvent::Clicked(_, Clicked::Ran)) => (None, vec![]),
+        (Some(Panel::Popup { .. }), PanelEvent::Sized(w, h)) => (
+            Some(Panel::Popup {
                 size: Some(popup_size((w, h))),
-            },
+            }),
             vec![],
         ),
-        (state @ Panel::Popup { .. }, PanelEvent::PageClosed) => {
+        (Some(state @ Panel::Popup { .. }), PanelEvent::PageClosed) => {
             let effects = close(&state);
-            (Panel::Closed, effects)
+            (None, effects)
         }
         (state, _) => (state, vec![]),
+    }
+}
+
+/// What the window draws of an open (`open`: the store's phase is Open in this window) panel:
+/// the popover for the list only, never behind the action's popup that replaced it; the popup
+/// card once its page has a size. `(popover, popup card)`.
+pub fn panel_drawn(open: bool, panel: Option<&Panel>) -> (bool, bool) {
+    match panel.filter(|_| open) {
+        Some(Panel::List) => (true, false),
+        Some(Panel::Popup { size }) => (false, size.is_some()),
+        None => (false, false),
     }
 }
 
@@ -435,16 +442,16 @@ mod tests {
     #[test]
     fn nothing_is_installed_before_allow() {
         let e = ext(&manifest(""));
-        let (p, fx) = prompt_transition(Prompt::Closed, PromptEvent::Ask(e.clone()));
-        assert_eq!((&p, fx.len()), (&Prompt::Asking(e.clone()), 0));
+        let (p, fx) = prompt_transition(None, PromptEvent::Ask(e.clone()));
+        assert_eq!((&p, fx.len()), (&Some(e.clone()), 0));
         let (p2, fx) = prompt_transition(p.clone(), PromptEvent::Cancel);
-        assert_eq!((p2, fx.len()), (Prompt::Closed, 0));
+        assert_eq!((p2, fx.len()), (None, 0));
         let (p2, fx) = prompt_transition(p, PromptEvent::Allow);
-        assert_eq!(p2, Prompt::Closed);
+        assert_eq!(p2, None);
         assert_eq!(fx, [PromptEffect::Install(e)]);
         // an answer with nothing asked does nothing
-        let (p, fx) = prompt_transition(Prompt::Closed, PromptEvent::Allow);
-        assert_eq!((p, fx.len()), (Prompt::Closed, 0));
+        let (p, fx) = prompt_transition(None, PromptEvent::Allow);
+        assert_eq!((p, fx.len()), (None, 0));
     }
 
     #[test]
@@ -461,23 +468,20 @@ mod tests {
             (vec![true, false], e.clone()),
             (vec![false, true], allowed.clone()),
         ] {
-            let mut p = prompt_transition(Prompt::Closed, PromptEvent::Ask(e.clone())).0;
+            let mut p = prompt_transition(None, PromptEvent::Ask(e.clone())).0;
             for on in &ticks {
                 let (next, fx) = prompt_transition(p, PromptEvent::AllowPrivate(*on));
                 assert!(fx.is_empty());
                 p = next;
             }
             let (p, fx) = prompt_transition(p, PromptEvent::Allow);
-            assert_eq!(
-                (p, fx),
-                (Prompt::Closed, vec![PromptEffect::Install(installs)])
-            );
+            assert_eq!((p, fx), (None, vec![PromptEffect::Install(installs)]));
         }
         // a new pick starts unticked; a tick with nothing asked does nothing
-        let p = prompt_transition(Prompt::Asking(allowed), PromptEvent::Ask(e.clone())).0;
-        assert_eq!(p, Prompt::Asking(e));
-        let (p, fx) = prompt_transition(Prompt::Closed, PromptEvent::AllowPrivate(true));
-        assert_eq!((p, fx.len()), (Prompt::Closed, 0));
+        let p = prompt_transition(Some(allowed), PromptEvent::Ask(e.clone())).0;
+        assert_eq!(p, Some(e));
+        let (p, fx) = prompt_transition(None, PromptEvent::AllowPrivate(true));
+        assert_eq!((p, fx.len()), (None, 0));
     }
 
     #[test]
@@ -486,67 +490,67 @@ mod tests {
             ext(&manifest("")),
             ext(&manifest("").replace("\"E\"", "\"F\"")),
         );
-        let (p, _) = prompt_transition(Prompt::Asking(a), PromptEvent::Ask(b.clone()));
-        assert_eq!(p, Prompt::Asking(b));
+        let (p, _) = prompt_transition(Some(a), PromptEvent::Ask(b.clone()));
+        assert_eq!(p, Some(b));
     }
 
+    /// The panel's machine over every (content, event): its result, and the effects. `None` in
+    /// is no live panel (closed, or leaving): nothing happens to it.
     #[test]
-    fn the_button_opens_and_closes_the_list() {
-        let (p, fx) = panel_transition(Panel::Closed, PanelEvent::Toggle);
-        assert_eq!((&p, fx.len()), (&Panel::List, 0));
-        let (p, fx) = panel_transition(p, PanelEvent::Toggle);
-        assert_eq!((p, fx.len()), (Panel::Closed, 0));
-        let (p, _) = panel_transition(Panel::List, PanelEvent::Dismiss);
-        assert_eq!(p, Panel::Closed);
-    }
-
-    #[test]
-    fn an_action_without_a_popup_fires_and_closes_the_list() {
-        let (p, fx) = panel_transition(Panel::List, PanelEvent::Clicked(id(), Clicked::Ran));
-        assert_eq!((p, fx.len()), (Panel::Closed, 0));
-        // a click that ran nothing leaves the list as it was
-        let (p, fx) = panel_transition(Panel::List, PanelEvent::Clicked(id(), Clicked::Nothing));
-        assert_eq!((p, fx.len()), (Panel::List, 0));
-    }
-
-    #[test]
-    fn a_popup_opens_sizes_and_closes_with_its_view() {
+    fn the_panel_through_its_events() {
         let url = "chrome-extension://x/p.html".to_owned();
-        let (p, fx) = panel_transition(
-            Panel::List,
-            PanelEvent::Clicked(id(), Clicked::Popup(url.clone())),
+        let popup = |size| Some(Panel::Popup { size });
+        let open = PanelEffect::OpenPopup {
+            extension: id(),
+            url: url.clone(),
+        };
+        type PanelRow = (
+            &'static str,
+            Option<Panel>,
+            PanelEvent,
+            Option<Panel>,
+            Vec<PanelEffect>,
         );
-        assert_eq!(
-            fx,
-            [PanelEffect::OpenPopup {
-                extension: id(),
-                url: url.clone()
-            }]
-        );
-        assert_eq!(p, Panel::Popup { size: None });
-        let (p, fx) = panel_transition(p, PanelEvent::Sized(5000, 10));
-        assert!(fx.is_empty());
-        assert_eq!(
-            p,
-            Panel::Popup {
-                size: Some((800, 25))
-            }
-        );
-        for event in [
-            PanelEvent::Dismiss,
-            PanelEvent::Toggle,
-            PanelEvent::PageClosed,
-        ] {
-            let (closed, fx) = panel_transition(p.clone(), event);
-            assert_eq!((closed, fx), (Panel::Closed, vec![PanelEffect::ClosePopup]));
+        #[rustfmt::skip]
+        let rows: Vec<PanelRow> = vec![
+            ("the button or a dismissal closes the list", Some(Panel::List), PanelEvent::Dismiss, None, vec![]),
+            ("and the popup with its view", popup(None), PanelEvent::Dismiss, None, vec![PanelEffect::ClosePopup]),
+            ("an action without a popup fires and closes the list", Some(Panel::List), PanelEvent::Clicked(id(), Clicked::Ran), None, vec![]),
+            ("a click that ran nothing leaves the list", Some(Panel::List), PanelEvent::Clicked(id(), Clicked::Nothing), Some(Panel::List), vec![]),
+            ("an action's popup replaces the list", Some(Panel::List), PanelEvent::Clicked(id(), Clicked::Popup(url.clone())), popup(None), vec![open]),
+            ("its page's size, within the limits", popup(None), PanelEvent::Sized(5000, 10), popup(Some((800, 25))), vec![]),
+            ("its page closing closes it", popup(Some((30, 30))), PanelEvent::PageClosed, None, vec![PanelEffect::ClosePopup]),
+            ("a size outside a popup is ignored", Some(Panel::List), PanelEvent::Sized(100, 100), Some(Panel::List), vec![]),
+            ("no live panel: a size", None, PanelEvent::Sized(100, 100), None, vec![]),
+            ("no live panel: a dismissal", None, PanelEvent::Dismiss, None, vec![]),
+            ("no live panel: a click", None, PanelEvent::Clicked(id(), Clicked::Ran), None, vec![]),
+            ("no live panel: its page closed", None, PanelEvent::PageClosed, None, vec![]),
+        ];
+        for (name, state, event, want, effects) in rows {
+            assert_eq!(panel_transition(state, event), (want, effects), "{name}");
         }
     }
 
+    /// The popover shows for the list only, never behind the popup that replaced it; nothing
+    /// shows while the panel is not open in the window (leaving, or another window's).
     #[test]
-    fn a_size_outside_a_popup_is_ignored() {
-        for state in [Panel::Closed, Panel::List] {
-            let (p, fx) = panel_transition(state.clone(), PanelEvent::Sized(100, 100));
-            assert_eq!((p, fx.len()), (state, 0));
+    fn the_popover_shows_for_the_list_only() {
+        let sized = Panel::Popup {
+            size: Some((30, 30)),
+        };
+        let waiting = Panel::Popup { size: None };
+        #[rustfmt::skip]
+        let rows: [(bool, Option<&Panel>, (bool, bool)); 7] = [
+            (true, Some(&Panel::List), (true, false)),
+            (true, Some(&waiting), (false, false)),
+            (true, Some(&sized), (false, true)),
+            (false, Some(&Panel::List), (false, false)),
+            (false, Some(&sized), (false, false)),
+            (true, None, (false, false)),
+            (false, None, (false, false)),
+        ];
+        for (open, panel, want) in rows {
+            assert_eq!(panel_drawn(open, panel), want, "{open} {panel:?}");
         }
     }
 }

@@ -8,6 +8,9 @@
 // selection (`.wb-cmd-sel`: 44 high, radius 12, white .08, gliding .18 s ease-out to the selected
 // row, gone with no rows); the pointer selects a row, `step` moves the selection and stops at
 // the ends, `choose` picks it; no rows: the empty line (`.wb-cmd-empty`, 13 mist, margin 8 12 6).
+// wubble's tab search (`scrolls`): every row is reachable, the seven shown sliding with the
+// selection as it steps past either end; a row's close button and `close-current` report the
+// row (derived: docs/fidelity/derived-review.md).
 
 import { Tsx } from "../gen/tokens.slint";
 import { BrowserCss, WubbleCss } from "../gen/css.slint";
@@ -49,11 +52,27 @@ export component CommandList inherits Rectangle {
     in property <bool> shown;
     // a row was picked (Enter or a click)
     callback chosen(int);
+    // wubble: a row's close button, or Shift+Delete on the selected row (`close-current`)
+    callback close-requested(int);
+    // wubble: every row can be selected, the shown ones following it (tab search)
+    in property <bool> scrolls: false;
 
     // the selection; `current` is it inside the list
     in-out property <int> selected: 0;
     out property <int> count: min(root.results.length, Tsx.cmd-rows);
-    out property <int> current: max(0, min(root.selected, root.count - 1));
+    // the rows the selection may reach: all of them when the list scrolls
+    out property <int> reach: root.scrolls ? root.results.length : root.count;
+    out property <int> current: max(0, min(root.selected, root.reach - 1));
+    // the first row shown; `first` keeps it inside the list as the rows change
+    property <int> top: 0;
+    property <int> first: max(0, min(root.top, root.reach - root.count));
+    changed current => {
+        if root.current < root.first {
+            root.top = root.current;
+        } else if root.current >= root.first + root.count {
+            root.top = root.current - root.count + 1;
+        }
+    }
     out property <bool> empty-shown: root.count == 0;
     property <length> pitch: BrowserCss.wb-cmd-row--height;
     // `.wb-cmd-empty`: its line box and margins
@@ -62,7 +81,13 @@ export component CommandList inherits Rectangle {
     // Up (-1) / Down (+1): clamped at both ends (`Math.min` / `Math.max`), no wrap
     public function step(d: int) {
         if root.count > 0 {
-            root.selected = max(0, min(root.count - 1, root.current + d));
+            root.selected = max(0, min(root.reach - 1, root.current + d));
+        }
+    }
+    // wubble: Shift+Delete, the selected row's close (a closable row only)
+    public function close-current() {
+        if root.count > 0 && root.results[root.current].closable {
+            root.close-requested(root.current);
         }
     }
     // Enter: the selected row, if there is one
@@ -77,7 +102,7 @@ export component CommandList inherits Rectangle {
     // `.wb-cmd-sel`
     Rectangle {
         x: BrowserCss.wb-cmd-sel--left;
-        y: BrowserCss.wb-cmd-sel--top + root.current * root.pitch;
+        y: BrowserCss.wb-cmd-sel--top + (root.current - root.first) * root.pitch;
         width: parent.width - BrowserCss.wb-cmd-sel--left - BrowserCss.wb-cmd-sel--right;
         height: BrowserCss.wb-cmd-sel--height;
         border-radius: BrowserCss.wb-cmd-sel--border-radius;
@@ -93,8 +118,8 @@ export component CommandList inherits Rectangle {
         }
     }
     for r[i] in root.results: CommandRow {
-        visible: i < root.count;
-        y: BrowserCss.wb-cmd-list--padding-top + i * root.pitch;
+        visible: i >= root.first && i < root.first + root.count;
+        y: BrowserCss.wb-cmd-list--padding-top + (i - root.first) * root.pitch;
         width: parent.width;
         item: r;
         index: i;
@@ -104,9 +129,12 @@ export component CommandList inherits Rectangle {
             root.selected = i;
         }
         activated => {
-            if i < root.count {
+            if i < root.reach {
                 root.chosen(i);
             }
+        }
+        close-requested => {
+            root.close-requested(i);
         }
     }
     if root.empty-shown: KitText {

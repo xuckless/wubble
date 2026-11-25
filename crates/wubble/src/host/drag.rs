@@ -20,7 +20,7 @@ use slint::winit_030::winit::event::WindowEvent;
 use wubble_core::drag::{self, Drag, Effect, Input};
 use wubble_core::model::Command;
 use wubble_core::omnibox::{self, Intent};
-use wubble_core::overlay::{Kind, Layer, Phase};
+use wubble_core::overlay::{Kind, Layer, Phase, Pointer, PointerOwner};
 use wubble_core::pagedrag::{self, DragOps, Over, PageDrag, Shell};
 use wubble_core::tab::TabId;
 use wubble_core::tabdrag;
@@ -155,10 +155,12 @@ impl Host {
     }
 
     /// Pointer input during a page drag goes to the drag, not to the page as mouse input;
-    /// false when no drag runs. The pointer is the window's (`Input::pointer`): the pane that
-    /// reported it may not be the source's (a rest on a tab row showed another tab).
+    /// false when no drag holds the pointer (none runs, or its drop waits for the page past
+    /// the button: the click after a drop is the page's, `PageDrag::takes_pointer`). The pointer
+    /// is the window's (`Input::pointer`): the pane that reported it may not be the source's (a
+    /// rest on a tab row showed another tab).
     pub(super) fn drag_pointer(&mut self, point: Point, released: bool) -> bool {
-        let Some(drag) = self.drag.page() else {
+        let Some(drag) = self.drag.page().filter(|d| d.takes_pointer()) else {
             return false;
         };
         let source = drag.source();
@@ -216,12 +218,7 @@ impl Host {
         let id = self.w.id;
         let _ = slint::invoke_from_event_loop(move || {
             crate::with_host_in(id, |host| {
-                let ends = match host.drag.page() {
-                    Some(PageDrag::Dragging(d)) => !d.dropping,
-                    Some(PageDrag::Outside { .. }) => true,
-                    None => false,
-                };
-                if ends {
+                if host.drag.page().is_some_and(PageDrag::takes_pointer) {
                     crate::trace("drag: the window's release ends it");
                     host.drag_pointer(Point { x: 0.0, y: 0.0 }, true);
                 }
@@ -260,9 +257,9 @@ impl Host {
         if let Some(input) = drag::window_lost_actions(&self.drag, id, self.drag_window, closed) {
             self.run_drag(input);
         }
-        if !closed && let Some(window) = self.w.window.upgrade() {
+        if !closed {
             let w = self.w.id;
-            self.act(&window, wubble_core::overlay::Action::Lost { w });
+            self.act(wubble_core::overlay::Action::Lost { w });
         }
     }
 
@@ -434,6 +431,16 @@ impl Host {
                     self.os_drag_ended(DragOps::NONE);
                 }
             }
+            // Slint still holds the pressed pane's grab (it never saw the button come up): the
+            // pointer leaving the window lets it go (the pane hears a cancel, the page a capture
+            // lost), on the next turn, outside Slint's own dispatch.
+            E::LetGo => {
+                let _ = self.w.window.upgrade_in_event_loop(|window| {
+                    window
+                        .window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerExited);
+                });
+            }
         }
     }
 
@@ -509,10 +516,25 @@ impl Host {
     }
 
     /// A page on screen under `at` that may take a drop: a model tab's with a web view (not the
-    /// DevTools panel or an extension popup, nor one of wubble's own pages, which are the shell's). An agent's drag reaches no other page: [`pagedrag`] confines it.
+    /// DevTools panel or an extension popup, nor one of wubble's own pages, which are the
+    /// shell's), where the store gives the pointer to the page (`Ui::pointer_at`: not under a
+    /// surface that takes it over itself, as the peek's card or an autofill part, nor under a
+    /// sheet's scrim; a drag's own grab is the drag's). An agent's drag reaches no other page:
+    /// [`pagedrag`] confines it.
     fn page_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
-        self.pane_under(window, at)
-            .filter(|t| self.model.tabs.contains_key(t) && self.views.contains_key(t))
+        let tab = self
+            .pane_under(window, at)
+            .filter(|t| self.model.tabs.contains_key(t) && self.views.contains_key(t))?;
+        let (_, facts) = self.page_covers(window, tab);
+        let p = tabdrag::Point {
+            x: f64::from(at.0),
+            y: f64::from(at.1),
+        };
+        let page = match self.ui.pointer_at(&self.env(), &facts, self.w.id, p) {
+            PointerOwner::Page => true,
+            PointerOwner::Layer(l) => l.kind.row().pointer == Pointer::Grab,
+        };
+        page.then_some(tab)
     }
 
     /// The shell's drop target under `at`, while the sidebar shows.
@@ -531,9 +553,11 @@ impl Host {
         {
             return Some(Shell::Bar);
         }
-        // the bookmarks page, a folder row on it
+        // the bookmarks page, a folder row on it (its pane, in a split)
         let bookmarks = self.shown_page() == Some(wubble_core::pages::InternalPage::Bookmarks)
-            && self.pane_under(window, at).is_some();
+            && self
+                .pane_under(window, at)
+                .is_some_and(|t| Some(t) == self.page_tab());
         self.bookmarks_drop_point(window, bookmarks.then_some(at));
         if bookmarks {
             return Some(Shell::Bookmarks {

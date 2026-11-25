@@ -43,8 +43,9 @@ pub(super) struct GlanceRect {
 
 use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
+use crate::clipboard::Bridge as _;
 use crate::measure;
-use crate::menu::{self, MenuEvent};
+use crate::menu;
 use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
@@ -660,7 +661,7 @@ impl Host {
             .filter(|r| !self.start_page(r.tab))
             .map(|r| r.tab)
             .collect();
-        self.panes_gone(window, &live);
+        self.panes_gone(&live);
         let fullscreen = matches!(self.w.screen, Screen::Page { .. });
         let seams: Vec<SplitSeam> = if fullscreen {
             vec![]
@@ -706,6 +707,12 @@ impl Host {
         } else {
             self.w.panes.ring(focused, height)
         };
+        // a built-in page draws over its pane of a split; alone, over the whole content
+        let page = rects
+            .iter()
+            .find(|r| !fill && Some(r.tab) == self.page_tab());
+        window.set_page_x(page.map_or(0.0, |r| r.x as f32));
+        window.set_page_width(page.map_or(0.0, |r| r.width as f32));
         crate::bind::sync_by(window.get_panes(), panes, same_pane, |m| {
             window.set_panes(m)
         });
@@ -796,6 +803,7 @@ impl Host {
             view.set_layout(layout);
             let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
+            let calm = view.content_rate() == wubble_gfx::pacing::ContentRate::Calm;
             // The popup's placement comes from its events (`render_surfaces`).
             let popup = (Some(tab) == keys)
                 .then(|| view.take_popup_frame())
@@ -812,6 +820,9 @@ impl Host {
                 continue;
             };
             measure::count(measure::Count::CefFrame);
+            if calm {
+                measure::count(measure::Count::CefFrameCalm);
+            }
             self.pace(PaceEvent::FrameArrived);
             if let Some(refresh) = self.refresh() {
                 let timer = self.engine.page_painted(refresh).timer;
@@ -1065,9 +1076,13 @@ impl Host {
         let entries = if let Some(folder) = crate::shell::folder_of_row(id) {
             menu::folder_entries(&self.model, folder)
         } else if let Some(tab) = crate::shell::tab_id(id) {
-            let facts = wubble_core::tabmenu::Facts {
-                muted: self.audio.get(&tab).is_some_and(|a| a.muted),
-            };
+            let facts =
+                wubble_core::tabmenu::Facts {
+                    muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+                    site_muted: self.model.tabs.get(&tab).is_some_and(|t| {
+                        wubble_core::sitesound::is_muted(&self.muted_sites, &t.url)
+                    }),
+                };
             menu::tab_entries(&self.model, tab, facts, &self.keymap)
         } else {
             return;
@@ -1078,6 +1093,64 @@ impl Host {
     /// A right click on the sidebar's empty glass at `x, y` (window, logical): its own menu.
     pub fn sidebar_context(&mut self, x: f32, y: f32) {
         let entries = menu::sidebar_entries(&self.model, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// A right click in the command bar's field or on the address pill at `x, y` (window,
+    /// logical): the address menu, its paste row named for what the clipboard holds.
+    pub fn address_context(&mut self, field: menu::AddressField, x: f32, y: f32) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let clipboard = self
+            .clipboard
+            .load(window.window(), crate::clipboard::Buffer::Clipboard)
+            .unwrap_or_default();
+        let bar = field == menu::AddressField::Bar;
+        let facts = menu::FieldFacts {
+            field,
+            selected: bar
+                && window.get_command_selection_start() < window.get_command_selection_end(),
+            text: bar && !window.get_command_query().is_empty(),
+            clipboard: &clipboard,
+            full_urls: self.full_urls,
+        };
+        let entries = menu::address_entries(facts, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// A shell button's click: its action, or the one a held Shift, Ctrl or Cmd makes of it
+    /// (`perform::clicked`: a hard reload).
+    pub fn shell_clicked(&mut self, action: wubble_core::action::Action) {
+        let keys = self.input.keys;
+        let held = keys.shift_key() || keys.control_key() || keys.super_key();
+        self.perform(crate::perform::clicked(action, held));
+    }
+
+    /// A right click on a shell button at `x, y` (window, logical): the reload button's menu,
+    /// with the empty-cache row while DevTools inspects the page. Other buttons have none.
+    pub fn shell_action_menu(&mut self, action: wubble_core::action::Action, x: f32, y: f32) {
+        use wubble_core::action::Action;
+        if !matches!(action, Action::Reload | Action::Stop) {
+            return;
+        }
+        let devtools = self.shown().is_some() && self.devtools.dock.tab() == self.shown();
+        let entries = menu::reload_entries(devtools, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// The zoom chip's click at `x, y` (window, logical): its popover, the percent with −, +
+    /// and Reset (`menu::zoom_entries`); a step reopens it there (`MenuCommand::ZoomStep`).
+    pub fn zoom_popover(&mut self, x: f32, y: f32) {
+        let Some(tab) = self.shown() else {
+            return;
+        };
+        let default = self.zoom_default;
+        let Some(percent) = self.tab_view(tab).map(|v| v.zoom_percent()) else {
+            return;
+        };
+        self.zoom_at = Some((x, y));
+        let entries = menu::zoom_entries(percent, default, &self.keymap);
         self.sidebar_menu(entries, x, y);
     }
 
@@ -1092,11 +1165,7 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
-        if !self.overlay_open(wubble_core::overlay::Kind::Menu, None) {
-            return;
-        }
-        self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(focused, at, entries, false);
     }
 }
 

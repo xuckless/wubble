@@ -5,16 +5,21 @@
 //! The design has only a demo of this menu (`pages/touch.tsx` `MENU_ROWS`: Duplicate, Move to
 //! Space, Copy link, Close tab, with icons, shortcuts and a danger row); the rows here are the
 //! roadmap's (pin, duplicate, move to Space, split with, move to a window, mute, never sleep,
-//! never sleep for the Space or site, close others, close), written new. "Close other tabs" keeps pinned tabs, as Chromium's `CloseOtherTabs` does.
+//! never sleep for the Space or site, close others, close), written new, with Chromium's
+//! "New Tab to the Right" (as "New Tab Below": the sidebar is vertical) and "Mute Site". "Close other tabs" keeps pinned tabs, as Chromium's `CloseOtherTabs` does.
 
 use crate::busy::Reason;
 use crate::model::{Command, Dest, Model, Place};
+use crate::pages::InternalPage;
+use crate::sitesound;
 use crate::space::{FolderId, Item, Side, SpaceKind};
 use crate::tab::TabId;
 
 /// One kind of row. Order in [`ROWS`] is the menu's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
+    /// Chromium's "New Tab to the Right": a start tab right under this one.
+    NewTabBelow,
     Reload,
     Pin,
     Duplicate,
@@ -29,6 +34,8 @@ pub enum Row {
     /// The host's move-to-window entries (a new window, each other Main window).
     Windows,
     Mute,
+    /// Chromium's "Mute Site": the tab's site on `sound.muted_sites` (`sitesound`), or off it.
+    MuteSite,
     NeverSleep,
     /// The host's never-sleep switches for the tab's Space and site.
     SleepScopes,
@@ -62,6 +69,8 @@ const SEPARATOR: MenuRow = MenuRow {
 };
 
 pub const ROWS: &[MenuRow] = &[
+    row(Row::NewTabBelow, "plus", false),
+    SEPARATOR,
     row(Row::Reload, "reload", false),
     row(Row::Pin, "pin", false),
     row(Row::Duplicate, "duplicate", false),
@@ -73,6 +82,7 @@ pub const ROWS: &[MenuRow] = &[
     row(Row::Windows, "move", false),
     SEPARATOR,
     row(Row::Mute, "mute", false),
+    row(Row::MuteSite, "mute", false),
     row(Row::NeverSleep, "awake", false),
     row(Row::SleepScopes, "awake", false),
     SEPARATOR,
@@ -93,6 +103,9 @@ pub enum Run {
     RenameFolder(FolderId),
     /// Flip the tab's mute (the engine owns it).
     ToggleMute(TabId),
+    /// Put the tab's site on the muted list, or take the entry covering it off (the host owns
+    /// the list).
+    ToggleMuteSite(TabId),
     /// Stands for the host's split entries of this tab, spliced in its place.
     SplitEntries(TabId),
     /// Stands for the host's move-to-window entries of this tab.
@@ -114,6 +127,8 @@ pub struct Entry {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     pub muted: bool,
+    /// The tab's site is on `sound.muted_sites` (`sitesound::is_muted`).
+    pub site_muted: bool,
 }
 
 /// The entries of `tab`'s row menu. Rows that do not apply are left out; separators never
@@ -149,6 +164,27 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                 Run::Model(Command::DuplicateTab(tab)),
             )),
             Some(Row::Reload) => out.push(mk("Reload".into(), Run::Reload(tab))),
+            Some(Row::NewTabBelow) => out.push(mk(
+                "New Tab Below".into(),
+                Run::Model(Command::NewTabBelow {
+                    tab,
+                    url: InternalPage::Start.url().into(),
+                }),
+            )),
+            // a web page only: Chromium's sound exception names a site
+            Some(Row::MuteSite) => {
+                if sitesound::web_host(&model.tabs[&tab].url).is_some() {
+                    out.push(mk(
+                        if facts.site_muted {
+                            "Unmute Site"
+                        } else {
+                            "Mute Site"
+                        }
+                        .into(),
+                        Run::ToggleMuteSite(tab),
+                    ));
+                }
+            }
             Some(Row::CopyLink) => {
                 let url = &model.tabs[&tab].url;
                 if !url.is_empty() {
@@ -397,6 +433,11 @@ mod tests {
         assert_eq!(
             runs(&m, t),
             vec![
+                Run::Model(Command::NewTabBelow {
+                    tab: t,
+                    url: "wubble://start".into(),
+                }),
+                Run::Separator,
                 Run::Reload(t),
                 Run::Model(Command::PinTab(t)),
                 Run::Model(Command::DuplicateTab(t)),
@@ -410,6 +451,7 @@ mod tests {
                 Run::WindowEntries(t),
                 Run::Separator,
                 Run::ToggleMute(t),
+                Run::ToggleMuteSite(t),
                 Run::Model(Command::Busy {
                     tab: t,
                     reason: Reason::NeverSleep,
@@ -439,10 +481,18 @@ mod tests {
                 on: true,
             },
         );
-        let e = entries(&m, t, Facts { muted: true });
+        let e = entries(
+            &m,
+            t,
+            Facts {
+                muted: true,
+                site_muted: true,
+            },
+        );
         let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
         assert!(labels.contains(&"Unpin Tab"));
         assert!(labels.contains(&"Unmute Tab"));
+        assert!(labels.contains(&"Unmute Site"));
         assert!(labels.contains(&"Allow Sleep"));
         assert!(e.iter().any(|e| e.danger));
     }

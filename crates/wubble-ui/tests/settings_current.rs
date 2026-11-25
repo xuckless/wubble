@@ -55,7 +55,7 @@ fn listed(app: &AppWindow) -> Vec<String> {
 /// them: the finder skips what the page's scroller clips away).
 fn heads(app: &AppWindow, wired: &Wired) -> Vec<String> {
     let size = app.window().size().to_logical(1.0);
-    app.window().set_size(LogicalSize::new(size.width, 12000.0));
+    app.window().set_size(LogicalSize::new(size.width, 16000.0));
     frames(app, wired, 30);
     let mut heads: Vec<(f32, String)> =
         ElementHandle::find_by_element_type_name(app, "SectionHeader")

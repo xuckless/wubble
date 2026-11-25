@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
 use wubble_core::model::Command;
-use wubble_core::overlay::Kind;
+use wubble_core::overlay::{Kind, Layer};
 use wubble_core::pages::{
     self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
 };
@@ -23,10 +23,10 @@ use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
 use wubble_vault::{RecordId, VaultAnswer, VaultCommand};
 use zeroize::Zeroizing;
 
+use super::layers::Content;
 use super::{Host, now_ms};
 use crate::bind::favicon_image;
 use crate::clipboard::{Bridge, Buffer};
-use crate::menu::MenuEvent;
 use crate::persist::{BookmarksPage, HistoryClear, VisitsPage};
 use crate::with_host;
 
@@ -98,10 +98,8 @@ struct Bookmarks {
     icons: HashMap<String, Favicon>,
     expanded: HashSet<i64>,
     query: String,
-    /// The open sheet, and the tab it was opened over (`wubble_core::overlay`: it closes with
-    /// that tab).
-    sheet: Option<(Option<TabId>, SheetKind)>,
-    /// Bumped per opening, so the sheet restarts from its own fields.
+    /// Bumped per opening (the open sheet is the content map's, `Content::Bookmark`, over the
+    /// tab it was opened on), so the sheet restarts from its own fields.
     serial: i32,
     loaded: bool,
 }
@@ -423,9 +421,18 @@ fn utc_offset_min() -> i32 {
 }
 
 impl Host {
-    /// The internal page the visible tab shows.
-    pub(super) fn shown_page(&self) -> Option<InternalPage> {
+    /// The tab whose built-in page the window draws: the visible tab's, else the one pane of
+    /// the shown split that is one (a split holds one, `Model::split_with`).
+    pub(super) fn page_tab(&self) -> Option<TabId> {
+        let internal = |t: &TabId| self.model.is_internal(*t);
         self.shown()
+            .filter(internal)
+            .or_else(|| self.model.window_tabs(self.w.id).into_iter().find(internal))
+    }
+
+    /// The built-in page the window draws ([`Host::page_tab`]).
+    pub(super) fn shown_page(&self) -> Option<InternalPage> {
+        self.page_tab()
             .and_then(|t| self.model.tabs.get(&t))
             .and_then(|t| InternalPage::from_url(&t.url))
     }
@@ -526,8 +533,7 @@ impl Host {
             self.site_view(tab).theme(&url),
         ));
         entries.extend(self.boost_entries(&url));
-        self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     // ----- history and archive
@@ -760,10 +766,10 @@ impl Host {
 
     fn render_bookmark_sheet(&self, window: &AppWindow) {
         let b = &self.pages.bookmarks;
-        match &b.sheet {
+        match self.bookmark_sheet(false) {
             Some((_, kind)) => {
-                window.set_bookmark_sheet_view(sheet_view(kind, &b.rows, b.serial));
-                let moving = match kind {
+                window.set_bookmark_sheet_view(sheet_view(&kind, &b.rows, b.serial));
+                let moving = match &kind {
                     SheetKind::Move { id } => Some(*id),
                     _ => None,
                 };
@@ -799,23 +805,35 @@ impl Host {
         self.bookmarks_request(Some(BookmarkEdit::Delete { id: i64::from(id) }));
     }
 
-    /// The tab the open sheet belongs to.
-    pub(super) fn bookmark_sheet_tab(&self) -> Option<TabId> {
-        self.pages
-            .bookmarks
-            .sheet
-            .as_ref()
-            .and_then(|(tab, _)| *tab)
+    /// The sheet over the visible tab and what it is for: while it is open, or (`cancel`) while
+    /// a rule that just closed it has it answer.
+    fn bookmark_sheet(&self, cancel: bool) -> Option<(TabId, SheetKind)> {
+        let tab = self.shown()?;
+        match self.live(
+            self.w.id,
+            Layer::new(Kind::BookmarkSheet, Some(tab)),
+            cancel,
+        ) {
+            Some(Content::Bookmark(kind)) => Some((tab, kind)),
+            _ => None,
+        }
     }
 
-    /// Opens the sheet over the visible tab, unless an overlay that may not be replaced is up.
+    /// Opens the sheet over the visible tab, unless an overlay that may not be replaced is up
+    /// (an open one is filled again).
     fn open_sheet(&mut self, kind: SheetKind) {
-        let tab = self.shown();
-        if !self.overlay_open(Kind::BookmarkSheet, tab) {
+        let Some(tab) = self.shown() else {
+            return;
+        };
+        let layer = Layer::new(Kind::BookmarkSheet, Some(tab));
+        let content = Some(Content::Bookmark(kind));
+        if self
+            .content_after(self.w.id, layer, content, false)
+            .is_some()
+        {
             return;
         }
         let b = &mut self.pages.bookmarks;
-        b.sheet = Some((tab, kind));
         b.serial = b.serial.wrapping_add(1);
         self.render_bookmarks();
     }
@@ -892,7 +910,7 @@ impl Host {
 
     /// Whether the bookmark sheet is open (`--smoke parity`).
     pub(super) fn bookmark_sheet_open(&self) -> bool {
-        self.pages.bookmarks.sheet.is_some()
+        self.bookmark_sheet(false).is_some()
     }
 
     /// Every bookmark's and folder's name, as the store last said (`--smoke parity`).
@@ -912,10 +930,27 @@ impl Host {
         name: &str,
         folder: i32,
     ) {
-        let b = &mut self.pages.bookmarks;
-        let Some((_, kind)) = b.sheet.take() else {
+        if let Some(tab) = self.shown() {
+            self.sheet_answer(tab, false, accept, remove, name, folder);
+        }
+    }
+
+    /// The sheet over `tab` answered (`cancel`: a rule closed it, which is a Cancel): it closes,
+    /// then its answer is carried out.
+    pub(super) fn sheet_answer(
+        &mut self,
+        tab: TabId,
+        cancel: bool,
+        accept: bool,
+        remove: bool,
+        name: &str,
+        folder: i32,
+    ) {
+        let layer = Layer::new(Kind::BookmarkSheet, Some(tab));
+        let Some(Content::Bookmark(kind)) = self.live(self.w.id, layer, cancel) else {
             return;
         };
+        self.content_after(self.w.id, layer, None, false);
         if let SheetKind::TabFolder { folder, .. } = kind {
             let name = name.trim();
             if accept && !name.is_empty() {
@@ -928,7 +963,15 @@ impl Host {
             return;
         }
         let folder = (folder >= 0).then(|| i64::from(folder));
-        for edit in sheet_edits(&kind, &b.rows, accept, remove, name, folder) {
+        let edits = sheet_edits(
+            &kind,
+            &self.pages.bookmarks.rows,
+            accept,
+            remove,
+            name,
+            folder,
+        );
+        for edit in edits {
             self.bookmarks_request(Some(edit));
         }
         self.render_bookmarks();

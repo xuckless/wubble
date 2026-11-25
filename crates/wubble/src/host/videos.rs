@@ -153,6 +153,8 @@ pub(super) struct Videos {
     /// Whether each tab's main video played at its last snapshot.
     playing: BTreeMap<TabId, bool>,
     last_visible: Option<TabId>,
+    /// The Main window's panes at the last change (`Model::window_panes`).
+    last_panes: Vec<TabId>,
     // SponsorBlock
     sponsor_on: bool,
     sponsor_asked: bool,
@@ -192,6 +194,7 @@ impl Default for Videos {
             collapsed: false,
             playing: BTreeMap::new(),
             last_visible: None,
+            last_panes: Vec::new(),
             sponsor_on: false,
             sponsor_asked: false,
             acts: ActTable::new(),
@@ -745,29 +748,41 @@ impl Host {
         self.redraw_video();
     }
 
-    /// After every change to the model: a tab switch is picture-in-picture's cue.
+    /// After every change to the model: a tab switch is picture-in-picture's cue, for every pane
+    /// of a split left (`pip::switched`).
     pub(super) fn media_after_change(&mut self) {
-        // the focused Main window's tab: the Pip window's own is no switch
-        let visible = self.model.window_tab(self.model.main_window());
-        let last = std::mem::replace(&mut self.videos.last_visible, visible);
-        if last == visible {
+        // the focused Main window's: the Pip window's own is no switch
+        let main = self.model.main_window();
+        let visible = self.model.window_tab(main);
+        if std::mem::replace(&mut self.videos.last_visible, visible) != visible {
+            self.videos.over_video = false;
+            self.videos.over_controls = false;
+        }
+        let panes = self.model.window_panes(main);
+        let before = std::mem::replace(&mut self.videos.last_panes, panes.clone());
+        if before == panes {
             return;
         }
-        self.videos.over_video = false;
-        self.videos.over_controls = false;
-        if let Some(from) = last {
-            // Playing with sound the tab makes: not a muted or silent clip.
-            let playing = self.videos.playing.get(&from).copied().unwrap_or(false)
-                && self.audible_tabs().any(|t| t == from);
-            let auto = self.videos.pip_auto;
-            self.pip_event(PipInput::TabSwitched {
-                from,
-                auto,
-                playing,
-            });
-        }
-        if let Some(to) = visible {
-            self.pip_event(PipInput::TabActivated(to));
+        let audible: Vec<TabId> = self.audible_tabs().collect();
+        // Playing with sound the tab makes: not a muted or silent clip.
+        let inputs = pip::switched(&before, &panes, self.videos.pip_auto, |t| {
+            audible.contains(&t) && self.videos.playing.get(&t) == Some(&true)
+        });
+        for input in inputs {
+            // Leaving a tab that plays sound says what decided its picture-in-picture: the
+            // setting, the page's last video snapshot (None: never answered) and the machine.
+            if let PipInput::TabSwitched { from, auto, .. } = input
+                && audible.contains(&from)
+            {
+                eprintln!(
+                    "wubble: pip: left tab {} playing sound: on tab switch {auto}, its video \
+                     aloud {:?}, {:?}",
+                    from.0,
+                    self.videos.playing.get(&from),
+                    self.videos.pip
+                );
+            }
+            self.pip_event(input);
         }
     }
 
@@ -1064,7 +1079,7 @@ impl Host {
 
     pub(crate) fn toast_acted(&mut self) {
         self.toast_hide();
-        match self.videos.toast.take() {
+        match self.toast_taken() {
             Some(ToastAct::Undo(tab)) => self.sponsor_undo(tab),
             Some(ToastAct::AskSponsor(_)) => {
                 self.videos.asking = false;
@@ -1078,7 +1093,7 @@ impl Host {
 
     pub(crate) fn toast_closed(&mut self) {
         self.toast_hide();
-        if let Some(ToastAct::AskSponsor(_)) = self.videos.toast.take() {
+        if let Some(ToastAct::AskSponsor(_)) = self.toast_taken() {
             self.videos.asking = false;
             self.write_setting(defs::SPONSOR_ASKED.key, "1");
         }
@@ -1087,36 +1102,40 @@ impl Host {
     /// Another notice replaced whatever the toast's button was for. An unanswered question is
     /// not asked again in this run (`asking` stays), only in the next.
     pub(super) fn toast_replaced(&mut self) {
-        self.videos.toast = None;
+        self.toast_taken();
     }
 
-    /// The tab the question is asked over, while it waits.
-    pub(super) fn notice_tab(&self) -> Option<TabId> {
-        match self.videos.toast {
-            Some(ToastAct::AskSponsor(tab)) => Some(tab),
-            _ => None,
+    /// The toast's button is done with (answered, closed or replaced): what it was for. The
+    /// question's store overlay closes with it.
+    fn toast_taken(&mut self) -> Option<ToastAct> {
+        let act = self.videos.toast.take();
+        if let Some(ToastAct::AskSponsor(tab)) = act {
+            self.layer_is(Kind::Notice, tab, false);
         }
+        act
     }
 
-    /// The question goes unanswered (its page went): as replaced, not asked again this run.
+    /// The question goes unanswered (a rule closed its overlay: its page went): as replaced,
+    /// not asked again this run.
     pub(super) fn notice_close(&mut self) {
-        if self.notice_tab().is_some() {
+        if matches!(self.videos.toast, Some(ToastAct::AskSponsor(_))) {
             self.toast_replaced();
             self.toast_hide();
         }
     }
 
-    /// Its tab left (false) or came back (true): the question hides or shows again, waiting.
+    /// Its tab left (false) or came back (true): the question hides or shows again, waiting
+    /// (its overlay stays open: the toast is taken off it only while it shows).
     pub(super) fn notice_shown(&mut self, shown: bool) {
-        let Some(act @ ToastAct::AskSponsor(tab)) = self.videos.toast else {
+        let Some(act @ ToastAct::AskSponsor(tab)) = self.videos.toast.take() else {
             return;
         };
         if shown {
             self.toast_notice(tab, ASK_SPONSOR.0, ASK_SPONSOR.1);
-            self.videos.toast = Some(act);
         } else {
             self.toast_hide();
         }
+        self.videos.toast = Some(act);
     }
 
     /// The update is ready: a notice with "Restart" that runs `updates_restart`.
@@ -1371,9 +1390,11 @@ impl Host {
             collapsed: up && overlay.is_some_and(Overlay::collapsed),
             speeds: up && overlay.is_some_and(Overlay::speeds_open),
             menu: tab.is_some_and(|t| {
-                self.surfaces
-                    .get(&t)
-                    .is_some_and(|s| s.menu != crate::menu::Menu::Closed)
+                let menu = wubble_core::overlay::Layer::new(Kind::Menu, None);
+                matches!(
+                    self.open_content(self.w.id, menu),
+                    Some(super::layers::Content::Menu { tab, .. }) if *tab == t
+                )
             }),
             toast,
             save: tab.map(|t| self.video_save_state(t)),

@@ -2,7 +2,9 @@
 // The command bar's head (`.wb-cmd-head`): a bare row in the thick panel, no glass of its own:
 // padding 0 4 0 12, gap 10, the search icon (18, mist), and the input (`.wb-cmd-in`) 52 high at
 // 17 px in ink, its placeholder haze. The design's microphone and "Show code" buttons are not
-// wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape.
+// wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape, and
+// wubble's Shift+Delete (Delete in an empty field) to remove the selected row; Shift+Insert
+// pastes, and a right click asks for the host's address menu (its rows run `edit`).
 
 import { BrowserCss } from "../gen/css.slint";
 import { Tsx } from "../gen/tokens.slint";
@@ -10,6 +12,7 @@ import { Role } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
 import { KitText } from "../text.slint";
 import { Icon, Glyph } from "../controls/icon.slint";
+import { FieldEdit } from "../../components/model.slint";
 
 export component CommandHead inherits Rectangle {
     in-out property <string> text <=> input.text;
@@ -20,6 +23,34 @@ export component CommandHead inherits Rectangle {
     // Up (-1) / Down (+1)
     callback step(int);
     callback escaped();
+    // wubble: Shift+Delete, or Delete in an empty field: remove the selected row (tab search
+    // closes its tab, Chromium's omnibox removes a suggestion on Shift+Delete)
+    callback removed();
+    // wubble: a right click in the field at x, y (window coordinates)
+    callback context(length, length);
+    // the selection, as byte offsets into `text`, start first (equal: none)
+    out property <int> selection-start: min(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
+    out property <int> selection-end: max(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
+    // the address menu's rows on the field
+    public function edit(op: FieldEdit) {
+        if op == FieldEdit.cut {
+            input.cut();
+        } else if op == FieldEdit.copy {
+            input.copy();
+        } else if op == FieldEdit.paste {
+            input.paste();
+        } else if op == FieldEdit.select-all {
+            input.select-all();
+        }
+    }
+    // the caret at byte offset `at`, nothing selected (after the host's Delete)
+    public function caret(at: int) {
+        input.set-selection-offsets(at, at);
+    }
+    // the keys back after a menu over the field, its selection kept
+    public function refocus() {
+        input.focus();
+    }
     public function take-focus() {
         input.focus();
         input.select-all();
@@ -45,6 +76,15 @@ export component CommandHead inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             min-width: BrowserCss.wb-cmd-in--min-width;
+            // under the input: the right click it leaves (it takes the left and middle ones)
+            TouchArea {
+                mouse-cursor: MouseCursor.text;
+                pointer-event(e) => {
+                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                        root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                    }
+                }
+            }
             input := TextInput {
                 accessible-label: "Search or type an address";
                 height: parent.height;
@@ -73,6 +113,15 @@ export component CommandHead inherits Rectangle {
                     }
                     if (event.text == Key.Escape) {
                         root.escaped();
+                        return accept;
+                    }
+                    // Shift+Insert: paste, as GTK's and Windows' fields do
+                    if (event.text == Key.Insert && event.modifiers.shift) {
+                        self.paste();
+                        return accept;
+                    }
+                    if (event.text == Key.Delete && (event.modifiers.shift || self.text == "")) {
+                        root.removed();
                         return accept;
                     }
                     return reject;

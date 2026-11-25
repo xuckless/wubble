@@ -139,6 +139,11 @@ impl Host {
                 self.never_sleep_sites = sites;
                 self.run_site_lists();
             }
+            Applied::MutedSites(sites) => {
+                if sites != self.muted_sites {
+                    self.set_muted_sites(sites);
+                }
+            }
             Applied::ArchiveAfter(after) => self.archive_after = after,
             Applied::RoutingRules(rules) => self.routing_rules = rules,
             Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),
@@ -172,6 +177,10 @@ impl Host {
             Applied::WebAccessibility(setting) => self.set_web_ax(setting),
             Applied::TouchSizing(sizing) => self.set_touch_sizing(sizing),
             Applied::Glance(on) => self.glance_enabled = on,
+            Applied::FullUrls(on) => {
+                self.full_urls = on;
+                self.after_change();
+            }
             Applied::McpHosting(on) => self.mcp_switch(on),
             Applied::RestartOnly => {}
         }

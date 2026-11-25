@@ -1,6 +1,2 @@
 # The surface lock's recorded violations (tests/surface_lock.rs): file, rule, token, count.
 # Counts only go down: a step that moves a surface into the store lowers them here.
-components/downloads-popover.slint	hover-shown	has-hover	1
-components/extensions-popover.slint	escape	Key.Escape	1
-components/extensions-popover.slint	hover-shown	has-hover	1
-components/settings.slint	open-write	root.notices-open	1

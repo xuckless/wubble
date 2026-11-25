@@ -15,7 +15,7 @@ import { PageHoleSource } from "kit/material/page-hole.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, FieldEdit, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -68,7 +68,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
+export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
 
 export component AppWindow inherits Window {
     // A private window's title says so (Chrome's "(Incognito)" suffix).
@@ -76,8 +76,10 @@ export component AppWindow inherits Window {
     icon: @image-url("../../../assets/icons/linux/hicolor/128x128/apps/wubble.png");
     preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
     preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
-    min-width: root.pip ? Shell.pip-min-width : Chrome.windowMin-w;
-    min-height: root.pip ? Shell.pip-min-height : Chrome.windowMin-h;
+    min-width: root.pip ? Shell.pip-min-width
+        : root.popup-window ? root.popup-min-side : Chrome.windowMin-w;
+    min-height: root.pip ? Shell.pip-min-height
+        : root.popup-window ? root.popup-min-side : Chrome.windowMin-h;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
@@ -85,9 +87,14 @@ export component AppWindow inherits Window {
     // What the window is (wubble_core::window::WindowKind::index): 0 Main, 1 Little, 2 Popup,
     // 3 Pip.
     in property <int> window-kind: 0;
+    // A pop-up window's least side, from Rust (wubble_core::window::MIN_POPUP_SIDE, Blink's least
+    // window.open size).
+    in property <length> popup-min-side;
     // Picture-in-picture: the page alone, edge to edge, over other windows (a hint Wayland
     // ignores), with its own controls on hover.
     out property <bool> pip: root.window-kind == 3;
+    // A page's pop-up window (`window.open` with a size): as small as Blink lets the page ask.
+    out property <bool> popup-window: root.window-kind == 2;
     always-on-top: root.pip;
     no-frame: !root.native-frame;
     // A Main window's tab plays in the picture-in-picture window: a card stands in for it.
@@ -184,6 +191,7 @@ export component AppWindow inherits Window {
     in property <bool> can-go-forward <=> sidebar.can-go-forward;
     // A shell button asks for a wubble `Action`, by its id (wubble-core action.rs).
     callback shell-action <=> sidebar.action;
+    callback shell-action-menu <=> sidebar.action-menu;
     // The platform can show a transparent window background (window.rs `Platform`).
     in property <bool> rounded-corners: false;
     // Square when full screen or maximised, or when the platform cannot show the corners.
@@ -207,8 +215,11 @@ export component AppWindow inherits Window {
     in property <bool> address-blocker-visible <=> sidebar.address-blocker-visible;
     in property <bool> address-blocker-allowed <=> sidebar.address-blocker-allowed;
     in property <int> address-blocked <=> sidebar.address-blocked;
+    in property <int> address-zoom <=> sidebar.address-zoom;
+    callback address-zoom-requested <=> sidebar.address-zoom-requested;
     callback address-bookmark-requested <=> sidebar.address-bookmark-requested;
     callback address-blocker-requested <=> sidebar.address-blocker-requested;
+    callback address-context <=> sidebar.address-context;
     in property <int> address-popups-blocked <=> sidebar.address-popups-blocked;
     callback address-popups-requested <=> sidebar.address-popups-requested;
     in property <bool> address-media-visible <=> sidebar.address-media-visible;
@@ -391,6 +402,11 @@ export component AppWindow inherits Window {
     // (`command-placement`), the start page's capsule is its field and the overlay stays shut.
     in property <CommandBarState> command-bar-state;
     in property <CommandPlacement> command-placement;
+    // The driver moved the bar: the host's store follows (a bar the driver closed is closed there).
+    callback command-bar-changed();
+    changed command-bar-state => {
+        root.command-bar-changed();
+    }
     // The OS window has the keyboard (the host, from winit, before Slint sees the change): a
     // text field loses its focus while the window is inactive, which is not leaving it.
     in property <bool> window-active: true;
@@ -425,6 +441,19 @@ export component AppWindow inherits Window {
     in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
     callback command-result-chosen(int);
+    // tab search closed the tab of a row; the bar stays open on the new rows
+    callback command-result-closed(int);
+    // the address menu (the host's): a right click in the bar's field or on the pill, and its
+    // rows' edits of the field
+    callback command-field-context <=> bar.field-context;
+    out property <int> command-selection-start: bar.field-selection-start;
+    out property <int> command-selection-end: bar.field-selection-end;
+    public function command-field-edit(op: FieldEdit) {
+        bar.field-edit(op);
+    }
+    public function command-caret(at: int) {
+        bar.field-caret(at);
+    }
     callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
@@ -454,6 +483,13 @@ export component AppWindow inherits Window {
     public function request-beside() {
         root.command-open(CommandMode.split, sidebar.address-origin);
         root.beside-requested();
+    }
+
+    // Tab search (Mod+Shift+A): the bar opens on every open and recently closed tab.
+    callback tab-search-requested();
+    public function request-tab-search() {
+        root.command-open(CommandMode.tabs, sidebar.address-origin);
+        root.tab-search-requested();
     }
 
     // F6 and Shift+F6 (wubble_core::region, run by the host): keyboard focus to a region. The
@@ -500,8 +536,12 @@ export component AppWindow inherits Window {
     in property <ErrorView> page-error;
     // The settings page (wubble://settings), shown while the visible tab is on it; the host fills
     // it from the settings table and takes every change through these callbacks.
-    // Which native page shows (the visible tab's internal page; none for a web page).
+    // Which native page shows (the visible tab's internal page, else the one pane of the shown
+    // split that is one; none for web pages).
     in property <InternalPageKind> page: InternalPageKind.none;
+    // Where it shows in the content area: its pane of a split; `page-width` 0, the whole of it.
+    in property <length> page-x;
+    in property <length> page-width;
     out property <bool> settings-open: root.page == InternalPageKind.settings;
     in property <[SettingItem]> settings-rows <=> settings-ui.rows;
     in property <bool> settings-searching <=> settings-ui.searching;
@@ -645,8 +685,9 @@ export component AppWindow inherits Window {
     callback downloads-dismissed();
     // The sidebar footer's extensions button (shown once an extension is installed), its popover
     // (the enabled extensions' actions) and the open action's popup, which replaces the list;
-    // the host owns which is open (`wubble_core::extensions::shell::Panel`): `extensions-open`
-    // is the list, `extension-popup.open` the popup (once its page has a size).
+    // the store owns whether the panel is open (`overlay::Kind::Extensions`), the host what it
+    // shows (`extensions::shell::panel_drawn`): `extensions-open` is the list, `extension-popup.open`
+    // the popup (once its page has a size).
     in property <bool> has-extensions: false;
     in property <[ExtensionAction]> extension-actions;
     in property <bool> extensions-open: false;
@@ -696,6 +737,7 @@ export component AppWindow inherits Window {
     // What of each surface the kit still draws, open or leaving (`Mounted`): the host reads it
     // as it derives what covers a page. `mounted-changed` says one began or ended its exit.
     out property <Mounted> mounted: {
+        command-bar: root.overlay-state != CommandBarState.closed,
         permission: permission-ui.visible,
         find: find-ui.visible,
         dialog: sheet.visible,
@@ -779,42 +821,41 @@ export component AppWindow inherits Window {
         clip.text = "";
     }
 
-    // One overlay holds the keyboard at a time: the menu, else the downloads popover, else the
-    // dialog (or sign-in), else the error panel, else the page. The permission prompt never takes
-    // it: a key meant for the page must not answer it (keyjacking), as Chromium's bubble. The
-    // find bar takes it only when asked (Mod+F), and gives it back to the page when it closes.
-    property <bool> menu-open: root.menu.open;
-    property <bool> dialog-open: root.dialog.open;
-    property <bool> error-open: root.page-error.open;
-    property <bool> bookmark-open: root.bookmark-sheet-view.open;
-    property <bool> print-open: root.print-sheet-view.open;
-    property <bool> extension-prompt-open: root.extension-prompt.open;
-    property <bool> agent-sheet-open: root.agent-sheet-view.open;
+    // One holder of the keyboard at a time, the host's surface store's (`focus-owner`): an
+    // overlay's field, else the page. The permission prompt never takes it (a key meant for the
+    // page must not answer it: keyjacking, as Chromium's bubble); the find bar takes it only when
+    // asked (Mod+F), and gives it back to the page when it closes.
+    in property <FocusOwner> focus-owner: FocusOwner.page;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
-    property <bool> overlay-open: root.menu.open || root.downloads-open || root.extensions-open || root.extension-popup.open || root.extension-prompt.open || root.spaces-open || root.dialog.open || root.page-error.open || root.bookmark-open || root.print-open || root.agent-sheet-open;
     function settle-focus() {
         root.sidebar-focused = false;
-        if root.menu.open {
+        if root.focus-owner == FocusOwner.menu {
             menu-ui.take-focus();
-        } else if root.downloads-open {
+        } else if root.focus-owner == FocusOwner.downloads {
             downloads-ui.take-focus();
-        } else if root.extensions-open {
+        } else if root.focus-owner == FocusOwner.extensions {
             extensions-ui.take-focus();
-        } else if root.extension-prompt.open {
+        } else if root.focus-owner == FocusOwner.extension-sheet {
             extension-sheet.focus-sheet();
-        } else if root.spaces-open {
+        } else if root.focus-owner == FocusOwner.spaces {
             spaces-ui.take-focus();
-        } else if root.dialog.open {
+        } else if root.focus-owner == FocusOwner.dialog {
             sheet.focus-sheet();
-        } else if root.page-error.open {
+        } else if root.focus-owner == FocusOwner.error {
             error-ui.take-focus();
-        } else if bookmark-sheet.open {
+        } else if root.focus-owner == FocusOwner.bookmark-sheet {
             bookmark-sheet.focus-sheet();
-        } else if print-sheet.open {
+        } else if root.focus-owner == FocusOwner.print-sheet {
             print-sheet.focus-sheet();
-        } else if agent-sheet.open {
+        } else if root.focus-owner == FocusOwner.agent-sheet {
             agent-sheet.focus-sheet();
+        } else if root.focus-owner == FocusOwner.own {
+            // the command bar's input and the region picker take the keys themselves as they
+            // open; the bar's field takes them back after the address menu over it
+            if root.command-bar-state == CommandBarState.open {
+                bar.refocus-input();
+            }
         } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {
@@ -838,13 +879,7 @@ export component AppWindow inherits Window {
             web-focus.focus();
         }
     }
-    changed menu-open => {
-        root.settle-focus();
-    }
-    changed dialog-open => {
-        root.settle-focus();
-    }
-    changed error-open => {
+    changed focus-owner => {
         root.settle-focus();
     }
     changed page => {
@@ -854,40 +889,13 @@ export component AppWindow inherits Window {
         }
         root.settle-focus();
     }
-    changed bookmark-open => {
-        root.settle-focus();
-    }
-    changed print-open => {
-        root.settle-focus();
-    }
-    changed extension-prompt-open => {
-        root.settle-focus();
-    }
-    changed extensions-open => {
-        root.settle-focus();
-    }
-    changed agent-sheet-open => {
-        root.settle-focus();
-    }
-    changed downloads-open => {
-        root.settle-focus();
-    }
-    changed spaces-open => {
-        root.settle-focus();
-    }
-    // The screenshot overlay took the keys; closed, they go back.
-    changed shot-picking => {
-        if !root.shot-picking {
-            root.settle-focus();
-        }
-    }
     changed find-focus => {
-        if root.find.open && !root.overlay-open {
+        if root.find.open && root.focus-owner == FocusOwner.page {
             find-ui.take-focus();
         }
     }
     changed find-open => {
-        if !root.find-open && !root.overlay-open && bar.state == CommandBarState.closed {
+        if !root.find-open && root.focus-owner == FocusOwner.page && bar.state == CommandBarState.closed {
             root.settle-focus();
         }
     }
@@ -1128,222 +1136,229 @@ export component AppWindow inherits Window {
                     root.ax-action(id, name, value);
                 }
             }
-            // The settings page fills the content area of its tab (no web view under it).
-            settings-ui := SettingsPage {
-                open: root.settings-open;
-                accent: root.space-accent;
-                // a built-in page's link: the page's own action
-                page-requested(id) => {
-                    root.shell-action(id);
-                }
-            }
-            // start page (L7): the new-tab page's front over the scene's living layer
-            if root.page == InternalPageKind.start: StartPage {
-                sites: StartBridge.sites;
-                shortcut: StartBridge.shortcut;
-                grabbing: StartBridge.grabbing;
-                // the command bar in the page: the capsule is its field (the host gives it the tab)
-                state: root.in-page-state;
-                query <=> root.command-query;
-                results: root.command-results;
-                focus-serial: StartBridge.focus-serial;
-                release-serial: StartBridge.release-serial;
-                query-changed(q) => {
-                    root.command-query-changed(q);
-                }
-                result-chosen(i) => {
-                    root.command-result-chosen(i);
-                    root.command-pick();
-                }
-                // the capsule taking the keys opens the bar in it; losing them closes it
-                focus-changed(on) => {
-                    if on || root.window-active {
-                        StartBridge.search-focused = on;
-                    }
-                    if on && root.in-page-state != CommandBarState.open {
-                        root.request-address-focus();
-                    } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
-                        root.command-dismissed();
-                        root.command-close();
+            // The built-in pages over their pane: the content area, or their pane of a split (no
+            // web view under them; the pane's card is drawn under, and takes a press on bare page
+            // to focus the pane).
+            Rectangle {
+                x: root.page-width > 0 ? root.page-x : 0px;
+                width: root.page-width > 0 ? root.page-width : parent.width;
+                // The settings page fills its pane.
+                settings-ui := SettingsPage {
+                    open: root.settings-open;
+                    accent: root.space-accent;
+                    // a built-in page's link: the page's own action
+                    page-requested(id) => {
+                        root.shell-action(id);
                     }
                 }
-                site-activated(url) => {
-                    StartBridge.site-activated(url);
+                // start page (L7): the new-tab page's front over the scene's living layer
+                if root.page == InternalPageKind.start: StartPage {
+                    sites: StartBridge.sites;
+                    shortcut: StartBridge.shortcut;
+                    grabbing: StartBridge.grabbing;
+                    // the command bar in the page: the capsule is its field (the host gives it the tab)
+                    state: root.in-page-state;
+                    query <=> root.command-query;
+                    results: root.command-results;
+                    focus-serial: StartBridge.focus-serial;
+                    release-serial: StartBridge.release-serial;
+                    query-changed(q) => {
+                        root.command-query-changed(q);
+                    }
+                    result-chosen(i) => {
+                        root.command-result-chosen(i);
+                        root.command-pick();
+                    }
+                    // the capsule taking the keys opens the bar in it; losing them closes it
+                    focus-changed(on) => {
+                        if on || root.window-active {
+                            StartBridge.search-focused = on;
+                        }
+                        if on && root.in-page-state != CommandBarState.open {
+                            root.request-address-focus();
+                        } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
+                            root.command-dismissed();
+                            root.command-close();
+                        }
+                    }
+                    site-activated(url) => {
+                        StartBridge.site-activated(url);
+                    }
+                    stage-down(x, y) => {
+                        StartBridge.stage-down(x, y);
+                    }
+                    stage-move(x, y) => {
+                        StartBridge.stage-move(x, y);
+                    }
+                    stage-up => {
+                        StartBridge.stage-up();
+                    }
+                    stage-leave => {
+                        StartBridge.stage-leave();
+                    }
+                    init => {
+                        // a start page shown: its capsule takes the keys
+                        StartBridge.focus-serial += 1;
+                        StartBridge.search-x = self.search-x;
+                        StartBridge.search-y = self.search-y;
+                    }
+                    changed search-x => {
+                        StartBridge.search-x = self.search-x;
+                    }
+                    changed search-y => {
+                        StartBridge.search-y = self.search-y;
+                    }
                 }
-                stage-down(x, y) => {
-                    StartBridge.stage-down(x, y);
+                history-ui := HistoryPage {
+                    open: root.page == InternalPageKind.history;
+                    lines: root.history-lines;
+                    searching: root.history-searching;
+                    has-more: root.history-has-more;
+                    query-changed(q) => {
+                        root.history-query-changed(q);
+                    }
+                    opened(u, k) => {
+                        root.page-opened(u);
+                    }
+                    opened-new-tab(u, k) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    deleted(u, k) => {
+                        root.history-deleted(u);
+                    }
+                    more => {
+                        root.history-more();
+                    }
+                    cleared(range) => {
+                        root.history-cleared(range);
+                    }
                 }
-                stage-move(x, y) => {
-                    StartBridge.stage-move(x, y);
+                // Click restores the tab (and takes it off the list); middle-click opens it and keeps it.
+                archive-ui := HistoryPage {
+                    open: root.page == InternalPageKind.archive;
+                    title: "Archive";
+                    placeholder: "Search archived tabs";
+                    empty-text: "Nothing archived yet. Tabs you have not visited for a while end up here.";
+                    empty-search-text: "No archived tab matches";
+                    clearable: false;
+                    lines: root.archive-lines;
+                    searching: root.archive-searching;
+                    has-more: root.archive-has-more;
+                    query-changed(q) => {
+                        root.archive-query-changed(q);
+                    }
+                    opened(u, k) => {
+                        root.archive-restored(k);
+                    }
+                    opened-new-tab(u, k) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    deleted(u, k) => {
+                        root.archive-deleted(k);
+                    }
+                    more => {
+                        root.archive-more();
+                    }
                 }
-                stage-up => {
-                    StartBridge.stage-up();
+                bookmarks-ui := BookmarksPage {
+                    open: root.page == InternalPageKind.bookmarks;
+                    lines: root.bookmark-lines;
+                    searching: root.bookmarks-searching;
+                    query-changed(q) => {
+                        root.bookmarks-query-changed(q);
+                    }
+                    opened(u) => {
+                        root.page-opened(u);
+                    }
+                    opened-new-tab(u) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    toggled(id) => {
+                        root.bookmark-toggled(id);
+                    }
+                    rename-requested(id) => {
+                        root.bookmark-rename-requested(id);
+                    }
+                    move-requested(id) => {
+                        root.bookmark-move-requested(id);
+                    }
+                    deleted(id) => {
+                        root.bookmark-deleted(id);
+                    }
+                    folder-requested => {
+                        root.bookmark-folder-requested();
+                    }
+                    drop-on: root.bookmarks-drop.on;
+                    drop-x: root.bookmarks-drop.x;
+                    drop-y: root.bookmarks-drop.y;
+                    drop-folder-on: root.bookmarks-drop.folder-on;
+                    drop-folder: root.bookmarks-drop.folder;
+                    drop-hovered(id, on) => {
+                        root.bookmark-drop-hovered(id, on);
+                    }
                 }
-                stage-leave => {
-                    StartBridge.stage-leave();
+                downloads-page-ui := DownloadsPage {
+                    open: root.page == InternalPageKind.downloads;
+                    items: root.downloads-page-items;
+                    searching: root.downloads-searching;
+                    has-finished: root.downloads-has-finished;
+                    query-changed(q) => {
+                        root.downloads-query-changed(q);
+                    }
+                    action(id, a) => {
+                        root.download-action(id, a);
+                    }
+                    clear-finished => {
+                        root.downloads-cleared();
+                    }
                 }
-                init => {
-                    // a start page shown: its capsule takes the keys
-                    StartBridge.focus-serial += 1;
-                    StartBridge.search-x = self.search-x;
-                    StartBridge.search-y = self.search-y;
+                tasks-ui := TasksPage {
+                    open: root.page == InternalPageKind.tasks;
+                    items: root.tasks;
+                    total: root.tasks-total;
+                    action(tab, pid, a) => {
+                        root.task-action(tab, pid, a);
+                    }
                 }
-                changed search-x => {
-                    StartBridge.search-x = self.search-x;
+                agent-log-ui := AgentLogPage {
+                    open: root.page == InternalPageKind.agent-log;
+                    items: root.agent-log;
                 }
-                changed search-y => {
-                    StartBridge.search-y = self.search-y;
-                }
-            }
-            history-ui := HistoryPage {
-                open: root.page == InternalPageKind.history;
-                lines: root.history-lines;
-                searching: root.history-searching;
-                has-more: root.history-has-more;
-                query-changed(q) => {
-                    root.history-query-changed(q);
-                }
-                opened(u, k) => {
-                    root.page-opened(u);
-                }
-                opened-new-tab(u, k) => {
-                    root.page-opened-new-tab(u);
-                }
-                deleted(u, k) => {
-                    root.history-deleted(u);
-                }
-                more => {
-                    root.history-more();
-                }
-                cleared(range) => {
-                    root.history-cleared(range);
-                }
-            }
-            // Click restores the tab (and takes it off the list); middle-click opens it and keeps it.
-            archive-ui := HistoryPage {
-                open: root.page == InternalPageKind.archive;
-                title: "Archive";
-                placeholder: "Search archived tabs";
-                empty-text: "Nothing archived yet. Tabs you have not visited for a while end up here.";
-                empty-search-text: "No archived tab matches";
-                clearable: false;
-                lines: root.archive-lines;
-                searching: root.archive-searching;
-                has-more: root.archive-has-more;
-                query-changed(q) => {
-                    root.archive-query-changed(q);
-                }
-                opened(u, k) => {
-                    root.archive-restored(k);
-                }
-                opened-new-tab(u, k) => {
-                    root.page-opened-new-tab(u);
-                }
-                deleted(u, k) => {
-                    root.archive-deleted(k);
-                }
-                more => {
-                    root.archive-more();
-                }
-            }
-            bookmarks-ui := BookmarksPage {
-                open: root.page == InternalPageKind.bookmarks;
-                lines: root.bookmark-lines;
-                searching: root.bookmarks-searching;
-                query-changed(q) => {
-                    root.bookmarks-query-changed(q);
-                }
-                opened(u) => {
-                    root.page-opened(u);
-                }
-                opened-new-tab(u) => {
-                    root.page-opened-new-tab(u);
-                }
-                toggled(id) => {
-                    root.bookmark-toggled(id);
-                }
-                rename-requested(id) => {
-                    root.bookmark-rename-requested(id);
-                }
-                move-requested(id) => {
-                    root.bookmark-move-requested(id);
-                }
-                deleted(id) => {
-                    root.bookmark-deleted(id);
-                }
-                folder-requested => {
-                    root.bookmark-folder-requested();
-                }
-                drop-on: root.bookmarks-drop.on;
-                drop-x: root.bookmarks-drop.x;
-                drop-y: root.bookmarks-drop.y;
-                drop-folder-on: root.bookmarks-drop.folder-on;
-                drop-folder: root.bookmarks-drop.folder;
-                drop-hovered(id, on) => {
-                    root.bookmark-drop-hovered(id, on);
-                }
-            }
-            downloads-page-ui := DownloadsPage {
-                open: root.page == InternalPageKind.downloads;
-                items: root.downloads-page-items;
-                searching: root.downloads-searching;
-                has-finished: root.downloads-has-finished;
-                query-changed(q) => {
-                    root.downloads-query-changed(q);
-                }
-                action(id, a) => {
-                    root.download-action(id, a);
-                }
-                clear-finished => {
-                    root.downloads-cleared();
-                }
-            }
-            tasks-ui := TasksPage {
-                open: root.page == InternalPageKind.tasks;
-                items: root.tasks;
-                total: root.tasks-total;
-                action(tab, pid, a) => {
-                    root.task-action(tab, pid, a);
-                }
-            }
-            agent-log-ui := AgentLogPage {
-                open: root.page == InternalPageKind.agent-log;
-                items: root.agent-log;
-            }
-            passwords-ui := PasswordsPage {
-                open: root.page == InternalPageKind.passwords;
-                view: root.passwords-view;
-                logins: root.logins;
-                searching: root.passwords-searching;
-                query-changed(q) => {
-                    root.passwords-query-changed(q);
-                }
-                unlock => {
-                    root.passwords-unlock();
-                }
-                reveal(id) => {
-                    root.login-reveal(id);
-                }
-                hide() => {
-                    root.login-hide();
-                }
-                copy(id) => {
-                    root.login-copy(id);
-                }
-                deleted(id) => {
-                    root.login-deleted(id);
-                }
-                added(site, user, password) => {
-                    root.login-added(site, user, password);
-                }
-                edited(id, site, user, password) => {
-                    root.login-edited(id, site, user, password);
-                }
-                import-requested => {
-                    root.passwords-import-requested();
-                }
-                start-over => {
-                    root.passwords-start-over();
+                passwords-ui := PasswordsPage {
+                    open: root.page == InternalPageKind.passwords;
+                    view: root.passwords-view;
+                    logins: root.logins;
+                    searching: root.passwords-searching;
+                    query-changed(q) => {
+                        root.passwords-query-changed(q);
+                    }
+                    unlock => {
+                        root.passwords-unlock();
+                    }
+                    reveal(id) => {
+                        root.login-reveal(id);
+                    }
+                    hide() => {
+                        root.login-hide();
+                    }
+                    copy(id) => {
+                        root.login-copy(id);
+                    }
+                    deleted(id) => {
+                        root.login-deleted(id);
+                    }
+                    added(site, user, password) => {
+                        root.login-added(site, user, password);
+                    }
+                    edited(id, site, user, password) => {
+                        root.login-edited(id, site, user, password);
+                    }
+                    import-requested => {
+                        root.passwords-import-requested();
+                    }
+                    start-over => {
+                        root.passwords-start-over();
+                    }
                 }
             }
             // The scene's glass of the overlays in the card (GlassOver.card), above the pages and
@@ -1611,6 +1626,9 @@ export component AppWindow inherits Window {
                     root.command-result-chosen(i);
                     root.command-pick();
                 }
+                result-closed(i) => {
+                    root.command-result-closed(i);
+                }
                 dismissed => {
                     root.command-dismissed();
                     root.command-close();
@@ -1652,6 +1670,7 @@ export component AppWindow inherits Window {
             window-height: root.height;
 
             sidebar := Sidebar {
+                loading: root.address-loading;
                 x: Chrome.inset;
                 y: Chrome.inset;
                 width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-width;

@@ -672,6 +672,10 @@ impl SceneHost {
         match self.renderer.page_verdict(now) {
             PageBlur::Build => true,
             PageBlur::Skip => false,
+            PageBlur::Free => {
+                self.renderer.free_page();
+                false
+            }
             PageBlur::After(d) => {
                 if !self.page_wake.running() {
                     let w = window.as_weak();

@@ -9,8 +9,10 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
-    self, Bookmark, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchEngine, Target,
+    self, Bookmark, Candidates, Disposition, HistoryEntry, Kind, OmniResult, OpenTab, SearchClosed,
+    SearchEngine, SearchTab, Target,
 };
+use wubble_core::space::SpaceKind;
 use wubble_core::tab::TabId;
 use wubble_ui::CommandKind;
 
@@ -20,6 +22,9 @@ use crate::shell::tab_title;
 pub const MAX_ROWS: usize = 12;
 /// History hits asked of the store per query.
 pub const HISTORY_HITS: usize = 20;
+/// Rows tab search lists at most (its list scrolls): every open tab of a heavy session and the
+/// whole recently-closed list.
+pub const TAB_SEARCH_ROWS: usize = 500;
 
 /// What Enter on the query does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +35,8 @@ pub enum BarMode {
     Navigate(TabId),
     /// Split view: the page chosen goes beside the focused one.
     Beside,
+    /// Mod+Shift+A, tab search: the rows are every open and recently closed tab.
+    Tabs,
 }
 
 /// What a row stands for: an omnibox result, or (first run only) a search
@@ -58,6 +65,7 @@ impl BarRow {
             (RowTarget::Omni(Target::Url(u)), CommandKind::History | CommandKind::Bookmark) => {
                 Some(u)
             }
+            (RowTarget::Omni(Target::ClosedTab { url, .. }), _) => Some(url),
             _ => None,
         }
     }
@@ -92,6 +100,13 @@ pub enum Choice {
     Perform(Action),
     /// Store the search engine (first run).
     SetEngine(SearchEngine),
+    /// Take this entry off the recently-closed list and open it (tab search).
+    ReopenClosed {
+        url: String,
+        closed_at_ms: i64,
+    },
+    /// Shift+Enter: a new window, then this URL in a new tab there.
+    NewWindow(String),
 }
 
 /// The open tabs, active Space first, each Space in sidebar order. A private window lists its
@@ -115,6 +130,47 @@ pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
         .collect()
 }
 
+/// The open tabs tab search lists, in sidebar order (`omnibox::tab_search` orders them): every
+/// listed Space's (a private window its own only, as `open_tabs`) but an agent Space's, without
+/// a peek's and without the tabs `left_out` names (the host's: those an agent session drives).
+/// A tab on screen counts as active now.
+pub fn search_tabs(model: &Model, left_out: impl Fn(TabId) -> bool) -> Vec<SearchTab> {
+    let active = model.active_space();
+    model
+        .listed_spaces(active)
+        .filter(|s| s.kind != SpaceKind::Agent)
+        .flat_map(|s| model.order(s.id).into_iter().map(move |id| (s, id)))
+        .filter(|&(_, id)| !model.is_glance(id) && !left_out(id))
+        .filter_map(|(s, id)| model.tabs.get(&id).map(|t| (s, t)))
+        .map(|(s, t)| SearchTab {
+            id: t.id,
+            title: tab_title(t),
+            url: t.url.clone(),
+            space: s.name.clone(),
+            active_space: s.id == active,
+            last_active_ms: if model.window_of(t.id).is_some() {
+                i64::MAX
+            } else {
+                t.last_active_ms
+            },
+        })
+        .collect()
+}
+
+/// Tab search's rows for `query` (`omnibox::tab_search`).
+pub fn tab_search_rows(tabs: &[SearchTab], closed: &[SearchClosed], query: &str) -> Vec<BarRow> {
+    omnibox::tab_search(query, tabs, closed, TAB_SEARCH_ROWS)
+        .into_iter()
+        .map(|r| BarRow {
+            kind: kind(r.kind),
+            title: r.title,
+            subtitle: r.subtitle,
+            shortcut: String::new(),
+            target: RowTarget::Omni(r.target),
+        })
+        .collect()
+}
+
 fn kind(k: Kind) -> CommandKind {
     match k {
         Kind::OpenTab => CommandKind::OpenTab,
@@ -122,6 +178,7 @@ fn kind(k: Kind) -> CommandKind {
         Kind::Bookmark => CommandKind::Bookmark,
         Kind::Search => CommandKind::Search,
         Kind::Action => CommandKind::Action,
+        Kind::ClosedTab => CommandKind::ClosedTab,
     }
 }
 
@@ -182,34 +239,54 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
     rows
 }
 
-/// What choosing `target` in a bar opened in `mode` does. A search needs an
-/// engine: without one it is `None` (the first-run rows replace it).
-pub fn target_command(
+/// What choosing `target` in a bar opened in `mode` does, with the keys Enter was pressed with
+/// (`omnibox::disposition`): Alt+Enter loads in a new tab, Shift+Enter in a new window, whatever
+/// the bar was opened for. A bar choosing a page beside the focused one keeps doing that; a switch
+/// to an open tab and an action are what they are. A search needs an engine: without one it is
+/// `None` (the first-run rows replace it).
+pub fn target_command_as(
     target: &RowTarget,
     mode: BarMode,
     engine: Option<SearchEngine>,
+    disposition: Disposition,
 ) -> Option<Choice> {
-    let load = |url: String| match mode {
-        BarMode::NewTab => Command::NewTab {
+    let load = |url: String| match (mode, disposition) {
+        (BarMode::Beside, _) => Choice::Model(Command::OpenBeside { url }),
+        (_, Disposition::NewWindow) => Choice::NewWindow(url),
+        (BarMode::Navigate(tab), Disposition::NewTab) => Choice::Model(Command::NewTab {
+            url,
+            container: None,
+            opener: Some(tab),
+        }),
+        (_, _) => Choice::Model(load_as_opened(mode, url)),
+    };
+    Some(match target {
+        RowTarget::Omni(Target::Url(url)) => load(url.clone()),
+        RowTarget::Omni(Target::Search(q)) => load(omnibox::fill(engine?.info().search, q)),
+        RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(match mode {
+            BarMode::Beside => Command::SplitWith(*tab),
+            _ => Command::ActivateTab(*tab),
+        }),
+        RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
+        RowTarget::Omni(Target::ClosedTab { url, closed_at_ms }) => Choice::ReopenClosed {
+            url: url.clone(),
+            closed_at_ms: *closed_at_ms,
+        },
+        RowTarget::PickEngine(e) => Choice::SetEngine(*e),
+    })
+}
+
+/// A load where the bar was opened for it.
+fn load_as_opened(mode: BarMode, url: String) -> Command {
+    match mode {
+        BarMode::NewTab | BarMode::Tabs => Command::NewTab {
             url,
             container: None,
             opener: None,
         },
         BarMode::Navigate(tab) => Command::Navigate { tab, url },
         BarMode::Beside => Command::OpenBeside { url },
-    };
-    Some(match target {
-        RowTarget::Omni(Target::Url(url)) => Choice::Model(load(url.clone())),
-        RowTarget::Omni(Target::Search(q)) => {
-            Choice::Model(load(omnibox::fill(engine?.info().search, q)))
-        }
-        RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(match mode {
-            BarMode::Beside => Command::SplitWith(*tab),
-            _ => Command::ActivateTab(*tab),
-        }),
-        RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
-        RowTarget::PickEngine(e) => Choice::SetEngine(*e),
-    })
+    }
 }
 
 /// Whether choosing `target` loads something the user typed or picked from
@@ -553,7 +630,7 @@ mod tests {
         ];
         for (target, mode, engine, want) in cases {
             assert_eq!(
-                target_command(target, mode, engine),
+                target_command_as(target, mode, engine, Disposition::AsOpened),
                 want,
                 "{target:?} {mode:?} {engine:?}"
             );

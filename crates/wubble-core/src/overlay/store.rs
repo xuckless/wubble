@@ -115,11 +115,6 @@ pub trait Env {
     fn kind(&self, w: WindowId) -> WindowKind;
     /// The page has the keys (the shell's focus): its Escape never answers a `ShellOnly` row.
     fn page_has_keys(&self, w: WindowId) -> bool;
-    /// TRANSITIONAL (until each kind moves into the store): the overlays open in `w` whose
-    /// machine still owns their openness, read from it.
-    fn others(&self, w: WindowId) -> Vec<Layer>;
-    /// TRANSITIONAL: `kind`'s openness is still its machine's.
-    fn machine(&self, kind: Kind) -> bool;
     /// The window's peek tab, drawn over its shown one.
     fn peeked(&self, _: WindowId) -> Option<TabId> {
         None
@@ -130,6 +125,9 @@ pub trait Env {
 pub enum Action {
     /// The user, a key or the page asks for an overlay.
     Open { w: WindowId, layer: Layer },
+    /// The app's own question (the private downloads a close would cancel): an open no overlay
+    /// refuses, whatever holds the window (it closes the user's overlays as an open does).
+    Ask { w: WindowId, layer: Layer },
     /// Its owner closed it (answered, picked, dismissed): nothing to cancel.
     Close { w: WindowId, layer: Layer },
     /// The kit drew its exit to the end.
@@ -218,6 +216,18 @@ impl Ui {
         self.entries.get(&(home(w, layer), layer.kind)).copied()
     }
 
+    /// The windows holding a window overlay of `kind` (open or leaving): where an app-wide
+    /// content (the extensions panel, the install prompt, an agent's sheet) is drawn.
+    pub fn windows_with(&self, kind: Kind) -> Vec<(WindowId, Phase)> {
+        self.entries
+            .iter()
+            .filter_map(|(&(h, k), &p)| match h {
+                Home::Window(w) if k == kind => Some((w, p)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The entries window `w` can show: its own and every tab's.
     fn in_window(&self, w: WindowId) -> impl Iterator<Item = (Layer, Phase)> + '_ {
         self.entries
@@ -229,19 +239,18 @@ impl Ui {
             })
     }
 
-    /// The open overlays in `w`, the store's and the machines' (`Env::others`).
-    fn live(&self, env: &impl Env, w: WindowId) -> Vec<Layer> {
+    /// The open overlays in `w`: its own and every tab's.
+    fn live(&self, w: WindowId) -> Vec<Layer> {
         self.in_window(w)
             .filter(|&(_, p)| p == Phase::Open)
             .map(|(l, _)| l)
-            .chain(env.others(w))
             .collect()
     }
 
     /// The open overlays drawn in `w` now (a hidden tab's are not).
     fn visible(&self, env: &impl Env, w: WindowId) -> Vec<Layer> {
         let (shown, peeked) = (env.shown(w), env.peeked(w));
-        let mut v = self.live(env, w);
+        let mut v = self.live(w);
         v.retain(|l| {
             l.kind.scope() == Scope::Pane || l.tab.is_none() || l.tab == shown || l.tab == peeked
         });
@@ -254,7 +263,7 @@ impl Ui {
         Stack {
             shown: env.shown(w),
             peeked: env.peeked(w),
-            layers: self.live(env, w),
+            layers: self.live(w),
             leaving: self
                 .in_window(w)
                 .filter(|&(_, p)| p == Phase::Leaving)
@@ -552,16 +561,14 @@ struct Step<'a, E> {
 
 impl<E: Env> Step<'_, E> {
     /// Closes `l` (`cancel`: by a rule, so its owner answers): leaving while its kit draws the
-    /// exit, else gone. A machine's overlay is only cancelled (its machine closes it).
+    /// exit, else gone. Only an open one closes.
     fn close(&mut self, l: Layer, cancel: bool) {
         let key = (home(self.w, l), l.kind);
-        let open = self.ui.entries.get(&key) == Some(&Phase::Open);
-        // a rule closes only live overlays: the store's open ones, or a machine's
-        if cancel && (open || self.env.machine(l.kind)) {
-            self.fx.push(Effect::Cancel(l));
-        }
-        if !open {
+        if self.ui.entries.get(&key) != Some(&Phase::Open) {
             return;
+        }
+        if cancel {
+            self.fx.push(Effect::Cancel(l));
         }
         let row = l.kind.row();
         if row.tail
@@ -576,13 +583,14 @@ impl<E: Env> Step<'_, E> {
         self.focus |= row.keys != Keys::Never;
     }
 
-    fn open(&mut self, l: Layer) {
+    /// Opens `l` (`ask`: the app's question, refused by no overlay).
+    fn open(&mut self, l: Layer, ask: bool) {
         let (w, env) = (self.w, self.env);
         let row = l.kind.row();
         let key = (home(w, l), l.kind);
         let was = self.ui.entries.get(&key).copied();
         // already open: its owner takes the request (a second permission queues, Mod+F selects)
-        if was == Some(Phase::Open) || env.others(w).contains(&l) {
+        if was == Some(Phase::Open) {
             return;
         }
         if !row.windows.contains(&env.kind(w)) {
@@ -594,18 +602,19 @@ impl<E: Env> Step<'_, E> {
         } else {
             vec![]
         };
-        if seen
-            .iter()
-            .any(|o| row.refused_under.contains(&o.kind.row().group))
+        if !ask
+            && seen
+                .iter()
+                .any(|o| row.refused_under.contains(&o.kind.row().group))
         {
             return;
         }
         let mut gone: Vec<Layer> = seen
             .into_iter()
-            .filter(|o| row.closes.contains(&o.kind.row().group))
+            .filter(|o| row.closes.contains(&o.kind.row().group) && !row.spares.contains(&o.kind))
             .collect();
         // what it ends is closed wherever it is; another grab it does not end refuses it
-        let live = self.ui.live(env, w);
+        let live = self.ui.live(w);
         let held = |o: &&Layer| o.kind != l.kind && o.kind.row().pointer == Pointer::Grab;
         if row.pointer == Pointer::Grab
             && live
@@ -625,7 +634,7 @@ impl<E: Env> Step<'_, E> {
             let here = |o: &Layer| o.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
             let same: Vec<Layer> = self
                 .ui
-                .live(env, w)
+                .live(w)
                 .into_iter()
                 .filter(|o| o.kind == l.kind && here(o) && !gone.contains(o))
                 .collect();
@@ -633,11 +642,6 @@ impl<E: Env> Step<'_, E> {
         }
         for g in gone {
             self.close(g, true);
-        }
-        if env.machine(l.kind) {
-            // admitted: its machine opens it
-            self.fx.push(Effect::Mount(l));
-            return;
         }
         // a surface whose content its owner rewrites in place keeps what it drew
         let again = was == Some(Phase::Leaving) && !row.remount;
@@ -705,20 +709,34 @@ pub fn reduce(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
     (ui, fx)
 }
 
+/// The window an action's overlays act in: a tab's overlay acts in the window that shows its tab,
+/// wherever it was asked (a dialog asked from another window meets that window's overlays), a
+/// window's in its own. None for a tab's view gone and the hover slots' cues and ticks: their
+/// effects name no window overlay. The host keys a window overlay's content by it.
+pub fn acting(env: &impl Env, action: Action) -> Option<WindowId> {
+    let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
+    match action {
+        Action::Open { w, layer }
+        | Action::Ask { w, layer }
+        | Action::Close { w, layer }
+        | Action::Exited { w, layer }
+        | Action::Placed { w, layer, .. } => Some(at(w, layer.tab)),
+        Action::Navigated { w, tab } => Some(at(w, Some(tab))),
+        Action::Escape { w }
+        | Action::Switched { w, .. }
+        | Action::Lost { w }
+        | Action::PaneGone { w, .. }
+        | Action::WindowGone(w) => Some(w),
+        Action::ViewGone(_) | Action::Hover { .. } | Action::Tick { .. } => None,
+    }
+}
+
 /// One step of the overlays: every (phase, action) cell is decided here (absent, Open,
 /// Leaving), each by the acting row's data. A refused open changes nothing; an action on a
 /// leaving overlay is ignored but its reopening (fresh content: Unmount, Mount) and its
 /// `Exited`. Add behaviour as a [`super::Row`] field, not a branch on a kind.
 fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
-    // a tab's overlay meets the overlays of the window that shows its tab, wherever it was asked
-    let at = |w: WindowId, tab: Option<TabId>| tab.and_then(|t| env.showing(t)).unwrap_or(w);
     let w = match action {
-        Action::Open { w, layer }
-        | Action::Close { w, layer }
-        | Action::Exited { w, layer }
-        | Action::Placed { w, layer, .. } => at(w, layer.tab),
-        Action::Navigated { w, tab } => at(w, Some(tab)),
-        Action::Escape { w } | Action::Switched { w, .. } | Action::Lost { w } => w,
         Action::ViewGone(tab) => {
             let fx = ui.drop_home(Home::Tab(tab), false);
             return (ui, fx);
@@ -744,6 +762,10 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             return (ui, fx);
         }
         Action::Hover { .. } | Action::Tick { .. } => return (ui, vec![]),
+        _ => match acting(env, action) {
+            Some(w) => w,
+            None => return (ui, vec![]),
+        },
     };
     let mut s = Step {
         ui,
@@ -753,7 +775,8 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         focus: false,
     };
     match action {
-        Action::Open { layer, .. } => s.open(Layer::new(layer.kind, layer.tab)),
+        Action::Open { layer, .. } => s.open(Layer::new(layer.kind, layer.tab), false),
+        Action::Ask { layer, .. } => s.open(Layer::new(layer.kind, layer.tab), true),
         Action::Close { layer, .. } => s.close(Layer::new(layer.kind, layer.tab), false),
         Action::Exited { layer, .. } => {
             let key = (home(w, layer), layer.kind);
@@ -776,7 +799,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         }
         Action::Switched { from, to, .. } => {
             let mut stays = vec![];
-            for l in s.ui.live(env, w).into_iter().filter(|_| from != to) {
+            for l in s.ui.live(w).into_iter().filter(|_| from != to) {
                 let mine = l.tab.is_some() && l.tab == from;
                 if l.kind.row().on_leave && (mine || l.tab.is_none()) {
                     s.close(l, true);
@@ -789,7 +812,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             s.fx.extend(stays);
         }
         Action::Navigated { tab, .. } => {
-            for l in s.ui.live(env, w) {
+            for l in s.ui.live(w) {
                 if l.tab == Some(tab) && l.kind.row().on_nav {
                     s.close(l, true);
                 }
@@ -798,7 +821,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         Action::Lost { .. } => {
             // this window's: its own, its tab's and the hidden tabs' (another window's stay)
             let here = |l: &Layer| l.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
-            for l in s.ui.live(env, w) {
+            for l in s.ui.live(w) {
                 if l.kind.row().on_lost && here(&l) {
                     s.close(l, true);
                 }
@@ -813,10 +836,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         }
     }
     if s.focus {
-        // a machine's overlay cancelled here is still in `others` until its machine closes it
-        let mut still = s.ui.visible(env, w);
-        still.retain(|l| !s.fx.contains(&Effect::Cancel(*l)));
-        s.fx.push(Effect::Focus(w, keys_among(still)));
+        s.fx.push(Effect::Focus(w, keys_among(s.ui.visible(env, w))));
     }
     (s.ui, s.fx)
 }

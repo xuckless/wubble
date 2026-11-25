@@ -305,6 +305,8 @@ pub enum Kind {
     Bookmark,
     Search,
     Action,
+    /// A recently closed tab (tab search only, `tab_search`).
+    ClosedTab,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,6 +315,12 @@ pub enum Target {
     Url(String),
     Search(String),
     Action(Action),
+    /// An entry of the recently-closed list (tab search only): its URL and close time name it,
+    /// as they name it to the store and to `closed`.
+    ClosedTab {
+        url: String,
+        closed_at_ms: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,17 +359,7 @@ pub fn rank(
             Target::Search(q.clone()),
         )),
     }
-    let terms: Vec<String> = query
-        .trim()
-        .trim_start_matches('?')
-        .split_whitespace()
-        .map(|t| {
-            let t = t.to_lowercase();
-            let t = t.split_once("://").map_or(t.as_str(), |(_, r)| r);
-            t.strip_prefix("www.").unwrap_or(t).to_owned()
-        })
-        .filter(|t| !t.is_empty())
-        .collect();
+    let terms = query_terms(query);
 
     let mut scored: Vec<(u32, OmniResult)> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
@@ -439,6 +437,121 @@ pub fn rank(
     }
     out.truncate(limit);
     out
+}
+
+/// The query's words as the matcher takes them: lower case, without a scheme or a leading
+/// `www.`.
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .trim()
+        .trim_start_matches('?')
+        .split_whitespace()
+        .map(|t| {
+            let t = t.to_lowercase();
+            let t = t.split_once("://").map_or(t.as_str(), |(_, r)| r);
+            t.strip_prefix("www.").unwrap_or(t).to_owned()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+// ------------------------------------------------------------- tab search
+
+/// An open tab as tab search (Mod+Shift+A) lists it. The caller leaves out what the list must
+/// not show (an agent's tabs, a peek's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchTab {
+    pub id: TabId,
+    pub title: String,
+    pub url: String,
+    /// Its Space's name, shown on the row and matched as the row's group (Chrome matches a
+    /// tab's group title).
+    pub space: String,
+    /// It is in the Space the focused window shows: those rows come first.
+    pub active_space: bool,
+    /// When it was last on screen, unix ms; `i64::MAX` while it is on screen.
+    pub last_active_ms: i64,
+}
+
+/// A recently closed tab as tab search lists it (the store's list, newest first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchClosed {
+    pub title: String,
+    pub url: String,
+    pub closed_at_ms: i64,
+}
+
+/// What the closed rows say beside their site (Chrome's Tab Search section title).
+pub const RECENTLY_CLOSED: &str = "Recently closed";
+
+/// Tab search's rows: every open tab, the active Space's first and then the most recently on
+/// screen (Chrome's Tab Search orders by last active time), each named with its Space and site;
+/// then the recently closed tabs, newest first. A query keeps the rows the command bar's
+/// matcher matches (every word on the site, the title or the Space's name), best class first and
+/// in that order within a class, open tabs still before closed ones. Pure; `limit` caps the rows.
+///
+/// Chromium `chrome/browser/resources/tab_search/` (BSD-3-Clause) is the behaviour followed: one
+/// list of open tabs by recency, then a "Recently closed" section; no code copied, and the
+/// matching is the omnibox's own rather than Chromium's fuse.js scoring.
+pub fn tab_search(
+    query: &str,
+    tabs: &[SearchTab],
+    closed: &[SearchClosed],
+    limit: usize,
+) -> Vec<OmniResult> {
+    let terms = query_terms(query);
+    let mut open: Vec<&SearchTab> = tabs.iter().collect();
+    // stable: equal keys keep the caller's (sidebar) order
+    open.sort_by_key(|t| (!t.active_space, std::cmp::Reverse(t.last_active_ms)));
+    let open = open.into_iter().map(|t| {
+        let site = host_text(&t.url);
+        let subtitle = if t.space.is_empty() {
+            site.to_owned()
+        } else {
+            format!("{} \u{b7} {site}", t.space)
+        };
+        let class = match_class(&terms, site_text(&t.url), &t.title, &t.space);
+        (
+            class,
+            row(Kind::OpenTab, &t.title, &subtitle, Target::OpenTab(t.id)),
+        )
+    });
+    let closed = closed.iter().map(|c| {
+        let site = host_text(&c.url);
+        let title = if c.title.is_empty() {
+            site
+        } else {
+            c.title.as_str()
+        };
+        let class = match_class(&terms, site_text(&c.url), title, "");
+        let target = Target::ClosedTab {
+            url: c.url.clone(),
+            closed_at_ms: c.closed_at_ms,
+        };
+        let subtitle = format!("{RECENTLY_CLOSED} \u{b7} {site}");
+        (class, row(Kind::ClosedTab, title, &subtitle, target))
+    });
+    let filter = |rows: Vec<(Option<u32>, OmniResult)>| -> Vec<OmniResult> {
+        if terms.is_empty() {
+            return rows.into_iter().map(|(_, r)| r).collect();
+        }
+        let mut hits: Vec<(u32, OmniResult)> = rows
+            .into_iter()
+            .filter_map(|(class, r)| Some((class?, r)))
+            .collect();
+        hits.sort_by_key(|h| std::cmp::Reverse(h.0));
+        hits.into_iter().map(|(_, r)| r).collect()
+    };
+    let mut out = filter(open.collect());
+    out.extend(filter(closed.collect()));
+    out.truncate(limit);
+    out
+}
+
+/// The host of `url`, without scheme, userinfo and a leading `www.`.
+fn host_text(url: &str) -> &str {
+    let site = site_text(url);
+    site.split(['/', '?', '#']).next().unwrap_or(site)
 }
 
 /// Every term starts a word of `title` (case-insensitive): the query names it.
@@ -519,6 +632,76 @@ fn history_bonus(h: &HistoryEntry, now_ms: i64) -> u32 {
     };
     let points = u64::from(h.typed_count) * 2 + u64::from(h.visit_count);
     (points * weight).min(u64::from(MAX_HISTORY_BONUS)) as u32
+}
+
+// ------------------------------------------------------------- Enter keys
+
+/// Where Enter in the command bar opens what it chose: Chromium's `WindowOpenDisposition` for
+/// the omnibox (`OmniboxEditModel::AcceptInput`, `ui::DispositionFromEventFlags`), BSD-3-Clause;
+/// behaviour only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// As the bar was opened for: this tab (Ctrl+L) or a new one (Ctrl+T).
+    AsOpened,
+    /// Alt+Enter (Cmd+Enter on macOS): a new tab, shown.
+    NewTab,
+    /// Shift+Enter: a new window.
+    NewWindow,
+}
+
+/// The modifiers held when the bar's row was chosen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnterMods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub cmd: bool,
+}
+
+/// What Enter does on `platform` with `mods` held. Ctrl alone never changes the disposition:
+/// it is the `www.`/`.com` completion ([`with_desired_tld`]).
+pub fn disposition(mods: EnterMods, platform: crate::keys::Platform) -> Disposition {
+    let new_tab = match platform {
+        crate::keys::Platform::Mac => mods.cmd || mods.alt,
+        _ => mods.alt,
+    };
+    if mods.shift {
+        Disposition::NewWindow
+    } else if new_tab {
+        Disposition::NewTab
+    } else {
+        Disposition::AsOpened
+    }
+}
+
+/// Ctrl+Enter: `www.` and `.com` around a bare name (`example` opens `https://www.example.com/`),
+/// Chromium's desired TLD (`AutocompleteInput` with `desired_tld` "com", `url_formatter::FixupURL`
+/// adding the TLD to a host without one and `www.` before it). `None` when the text is not one
+/// bare host name, which then opens as typed.
+pub fn with_desired_tld(query: &str) -> Option<String> {
+    let s = query.trim();
+    let end = s.find(['/', '?', '#']).unwrap_or(s.len());
+    let (host, rest) = s.split_at(end);
+    let bare = !host.is_empty()
+        && !host.contains('.')
+        && host.chars().all(|c| c.is_alphanumeric() || c == '-')
+        && !host.starts_with('-');
+    if !bare {
+        return None;
+    }
+    let url = Url::parse(&format!("https://www.{host}.com{rest}")).ok()?;
+    url.host()?;
+    Some(url.into())
+}
+
+/// Ctrl+E (Chromium's `IDC_FOCUS_SEARCH`): what the bar ranks and opens for `typed`, a search
+/// whatever it looks like, as the omnibox's `?` prefix makes it ([`classify`]).
+pub fn as_search(typed: &str) -> String {
+    if typed.trim().is_empty() || typed.trim_start().starts_with('?') {
+        typed.to_owned()
+    } else {
+        format!("?{typed}")
+    }
 }
 
 #[cfg(test)]

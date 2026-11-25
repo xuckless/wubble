@@ -56,13 +56,20 @@ pub(super) fn pick_slot(
     i
 }
 
-/// Frees the slots of tabs no longer framed, so the page slots held count the pages on screen.
-pub(super) fn free_slots(slots: &mut [Option<TabId>; SLOTS], framed: &[TabId]) {
-    for s in slots.iter_mut() {
-        if s.is_some_and(|t| !framed.contains(&t)) {
+/// Frees the slots of the tabs `gone` names (no longer framed, so the page slots held count the
+/// pages on screen; the panel's or the peek's view closed), and says which.
+pub(super) fn free_slots(
+    slots: &mut [Option<TabId>; SLOTS],
+    gone: impl Fn(TabId) -> bool,
+) -> Vec<usize> {
+    let mut freed = vec![];
+    for (i, s) in slots.iter_mut().enumerate() {
+        if s.is_some_and(&gone) {
             *s = None;
+            freed.push(i);
         }
     }
+    freed
 }
 
 /// How many pages the slots present (not the panel, not the peek).
@@ -126,6 +133,14 @@ pub(crate) struct WindowHost {
 }
 
 impl WindowHost {
+    /// Frees the slots of the tabs `gone` names, and lets their presenters' textures go
+    /// (`hidden-tabs-free-gpu`): a pane that comes back makes a new ring at its first frame.
+    pub(super) fn release_slots(&mut self, gone: impl Fn(TabId) -> bool) {
+        for i in free_slots(&mut self.slots, gone) {
+            self.presenters[i].release();
+        }
+    }
+
     /// Another handle on the window.
     pub(crate) fn handle(&self) -> AppWindow {
         self.handle.clone_strong()
@@ -200,7 +215,10 @@ mod tests {
         pick_slot(&mut slots, t(9), Some(PEEK_SLOT), &framed);
         assert_eq!(page_panes(&slots), 2);
         // unsplit, peek closed
-        free_slots(&mut slots, &[t(1)]);
+        assert_eq!(
+            free_slots(&mut slots, |tab| tab != t(1)),
+            vec![1, PEEK_SLOT]
+        );
         assert_eq!(page_panes(&slots), 1);
         assert_eq!(slots[PEEK_SLOT], None);
     }

@@ -49,6 +49,7 @@ mod popups;
 mod preview;
 mod print;
 mod settings;
+mod shortcuts;
 mod snapshots;
 pub(crate) mod start;
 mod status;
@@ -96,6 +97,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, Stored};
+use wubble_core::skia_cache;
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::{FingerInput, InputEvent};
@@ -286,6 +288,10 @@ struct Bar {
     suggestions: Vec<String>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
+    /// Tab search's recently closed tabs, newest first, as the store last listed them.
+    closed: Vec<omnibox::SearchClosed>,
+    /// Opened by Ctrl+E: every query is a search (`omnibox::as_search`).
+    search: bool,
 }
 
 /// What a windowed run is for, as far as the host cares.
@@ -329,8 +335,6 @@ pub struct Checks {
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
-    /// Views paint on external begin frames from [`Host::pace`].
-    pub begin_frames: bool,
 }
 
 /// The last frame shown in a pane: the image, the part of it to show, and what the pane shows
@@ -383,6 +387,9 @@ pub struct Host {
     /// The one owner of which overlays are open or leaving, and of the hover and timed
     /// surfaces (`wubble_core::overlay::Ui`).
     ui: wubble_core::overlay::Ui,
+    /// What the store's open and leaving overlays show (`layers::Contents`): written only by
+    /// the store's `Mount` and `Unmount` executors.
+    contents: layers::Contents,
     /// The store's one clock: the zero of every `now` its actions carry (`Host::surface_now`).
     ui_epoch: Instant,
     /// The store's one timer, armed by its `Effect::Arm` (`host/layers.rs`).
@@ -456,9 +463,7 @@ pub struct Host {
     external_drag: Option<drag::ExternalDrag>,
     /// Touchpad pinch and history swipe (`gesture.rs`).
     gestures: gesture::Gestures,
-    /// The print sheet (`print.rs`).
-    print: wubble_core::print::Sheet,
-    /// Opened print sheets: the pages field restarts with each.
+    /// Opened print sheets (`print.rs`; the sheet is the content map's): the pages field restarts with each.
     print_serial: i32,
     /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
     print_dir: Option<tempfile::TempDir>,
@@ -491,6 +496,8 @@ pub struct Host {
     ime: Ime,
     /// Sound per live tab, as its view reported it.
     audio: AudioMap,
+    /// Sites whose pages are muted (`settings::SOUND_MUTED_SITES`); applied on each commit.
+    muted_sites: Vec<String>,
     /// Each tab's page icon: the store's at start, then as its view last downloaded it (and
     /// filed in the store); shown on its row.
     favicons: BTreeMap<TabId, slint::Image>,
@@ -538,6 +545,10 @@ pub struct Host {
     /// `Pacing::Shell`: the begin frames of agent pages no window shows, at
     /// [`pacing::UNSHOWN_FRAME_RATE`], running while there is one.
     unshown: slint::Timer,
+    /// Pages on a layer whose newest frame was dropped for a busy pool, to paint again.
+    lost_frames: page_layer::LostFrames,
+    /// The shell's Skia caches (`wubble_core::skia_cache`): when they are cleaned.
+    skia_cache: wubble_core::skia_cache::Cache,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
     /// When each tab's page's clipboard read started, until it is answered; one past
@@ -590,6 +601,10 @@ pub struct Host {
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
+    /// The pill shows whole URLs (`settings::UI_FULL_URLS`).
+    full_urls: bool,
+    /// Where the zoom chip last opened its popover (window, logical): a step reopens it there.
+    zoom_at: Option<(f32, f32)>,
     /// The extensions' shell: the list, the footer popover, the popup, the install prompt
     /// (`host/ext_ui.rs`).
     ext_ui: ext_ui::ExtUi,
@@ -653,7 +668,9 @@ impl Host {
         let mut engine = engine;
         let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
         engine.set_request_mode(RequestMode::AskHost);
-        let begin_frames = checks.begin_frames;
+        // views paint on external begin frames from `Host::pace` (read here: the run's page
+        // layer mode, which picks it, is known once the store loaded)
+        let begin_frames = crate::pacing() == Pacing::Shell;
         let videos = match checks.sponsor_endpoint.clone() {
             Some(endpoint) => {
                 videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
@@ -687,6 +704,8 @@ impl Host {
                 bookmarks: vec![],
                 suggestions: vec![],
                 generation: 0,
+                closed: vec![],
+                search: false,
             },
             focus_view: None,
             key_pane: None,
@@ -728,7 +747,6 @@ impl Host {
             bookmark_drop: None,
             external_drag: None,
             gestures: Default::default(),
-            print: Default::default(),
             print_serial: 0,
             print_dir: None,
             search_engine: None,
@@ -749,6 +767,7 @@ impl Host {
             drag_timer: slint::Timer::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
+            muted_sites: Vec::new(),
             favicons,
             site_zoom: ZoomTable::new(),
             zoom_default: wubble_core::zoom::DEFAULT_PERCENT,
@@ -775,6 +794,8 @@ impl Host {
                 Pacing::CefTimer
             },
             unshown: slint::Timer::default(),
+            lost_frames: Default::default(),
+            skia_cache: Default::default(),
             clipboard,
             clipboard_reads: Default::default(),
             archive_after: ArchiveAfter::Off,
@@ -809,9 +830,12 @@ impl Host {
             overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
+            full_urls: false,
+            zoom_at: None,
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
             ui: Default::default(),
+            contents: Default::default(),
             ui_epoch: Instant::now(),
             ui_timer: slint::Timer::default(),
         };
@@ -903,10 +927,8 @@ impl Host {
         self.window_lost(id, true);
         // its overlays go with it
         let here = self.w.id;
-        if self.enter(id)
-            && let Some(window) = self.w.window.upgrade()
-        {
-            self.act(&window, wubble_core::overlay::Action::WindowGone(id));
+        if self.enter(id) {
+            self.act(wubble_core::overlay::Action::WindowGone(id));
         }
         self.enter(here);
         // its pages' layers go while it is still a window (none with `--page-layer=off`)
@@ -1211,6 +1233,13 @@ impl Host {
                         view.set_frame_rate(pacing::view_frame_rate(frame_rate, visible));
                     }
                 }
+                // a failed page reloads on its own only while it is on screen
+                let news = if visible {
+                    ErrorEvent::Shown(surfaces::wall_ms())
+                } else {
+                    ErrorEvent::Hidden
+                };
+                self.error_news(tab, news);
                 // the driver of the window that shows it
                 let back = self.w.id;
                 if let Some(id) = self.model.window_of(tab) {
@@ -1291,7 +1320,7 @@ impl Host {
         self.layers_gone(&window, |_, t| !kept.contains(&t));
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
-        window::free_slots(&mut self.w.slots, &kept);
+        self.w.release_slots(|t| !kept.contains(&t));
         if self.w.frames.len() != before {
             self.set_page_cursor(&window, Cursor::Default);
             for tab in self.shown_tabs() {
@@ -1309,8 +1338,15 @@ impl Host {
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
         let blocked = self.blocked_counts();
-        let mut view = crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked);
+        let mut view = crate::shell::view_model(
+            &self.model,
+            self.w.id,
+            &self.audio,
+            &blocked,
+            self.full_urls,
+        );
         self.agent_marks(&mut view);
+        self.site_sound_marks(&mut view);
         crate::bind::render(&window, &view, &self.favicons);
         crate::bind::render_spaces_menu(
             &window,
@@ -1332,6 +1368,15 @@ impl Host {
         self.render_pip(&window);
         self.render_ax(&window);
         self.render_boost(&window);
+        self.render_nav(&window);
+        window.set_address_zoom(self.address_zoom());
+        self.render_pages();
+        self.render_extensions_in(&window);
+    }
+
+    /// Back, forward and Reload or Stop from the shown view's navigation: with the shell, and
+    /// whenever its loading changes (a load that ends changes nothing in the model).
+    fn render_nav(&mut self, window: &AppWindow) {
         let nav = self.view().map(|view| {
             (
                 view.nav().page.clone(),
@@ -1339,12 +1384,10 @@ impl Host {
             )
         });
         crate::bind::render_history(
-            &window,
+            window,
             nav.as_ref().map(|n| &n.0),
             nav.as_ref().is_some_and(|n| n.1),
         );
-        self.render_pages();
-        self.render_extensions_in(&window);
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -1515,6 +1558,8 @@ impl Host {
             let timer = self.engine.page_painted(period).timer;
             self.arm_pump(timer);
         }
+        // a frame CEF painted in this work may have been dropped for a busy pool
+        self.layer_frames_lost();
         measure::count(measure::Count::PumpWorked);
         for (view, event) in events {
             if let Some(window) = self.enter_view(view) {
@@ -1651,7 +1696,7 @@ impl Host {
                 return Ok(());
             };
             let frame_rate = pacing::frame_rate_for(refresh);
-            eprintln!("wubble: CEF frame rate {frame_rate} (display {refresh:?} mHz)");
+            log_frame_rate(frame_rate, refresh);
             self.frame_rate = Some(frame_rate);
             let follow = self.flush();
             for command in follow {
@@ -1808,6 +1853,7 @@ impl Host {
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
                 self.restore_zoom(tab, &url);
+                self.restore_site_sound(tab, &url);
                 self.dispatch(Command::UrlChanged { tab, url });
             }
             WebEvent::TitleChanged(title) => {
@@ -1826,8 +1872,10 @@ impl Host {
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
                     self.typed_nav.ended(tab);
+                    self.error_news(tab, ErrorEvent::LoadEnded);
                 }
                 self.report_busy(tab);
+                self.render_nav(window);
             }
             WebEvent::RendererGone => {
                 self.apply_error(tab, ErrorEvent::Crashed);
@@ -2027,9 +2075,8 @@ impl Host {
         };
         let size = window.window().size();
         let at = ((size.width / 2) as i32, (size.height / 5) as i32);
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
-        true
+        // the app's own question: no overlay refuses it (a page's dialog waiting keeps it asked)
+        self.open_shell_menu(tab, at, entries, true)
     }
 
     /// Deletes what the clear menu's row named, then says so.
@@ -2088,8 +2135,7 @@ impl Host {
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
         let entries = crate::menu::popup_entries(count, self.site_of(tab).as_deref());
-        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
-        self.render_surfaces(&window);
+        self.open_shell_menu(tab, at, entries, false);
     }
 
     // ----- command bar
@@ -2126,10 +2172,70 @@ impl Host {
         }
     }
 
+    /// Mod+Shift+A (tab search): the bar on every open tab, the recently closed ones following
+    /// once the store has listed them. A Little or Popup window has no bar.
+    pub fn bar_for_tabs(&mut self, window: &AppWindow) {
+        if self.w.kind != wubble_core::window::WindowKind::Main {
+            return;
+        }
+        self.bar.closed.clear();
+        self.open_bar(window, BarMode::Tabs, String::new());
+        self.list_closed();
+    }
+
+    /// Asks the store for the recently-closed list; tab search re-renders when it arrives.
+    fn list_closed(&mut self) {
+        self.store.recently_closed(move |list| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.closed_arrived(list));
+            });
+        });
+    }
+
+    fn closed_arrived(&mut self, list: persist::ClosedList) {
+        if self.bar.mode != BarMode::Tabs {
+            return;
+        }
+        self.bar.closed = list
+            .entries
+            .into_iter()
+            .map(|c| omnibox::SearchClosed {
+                title: c.title,
+                url: c.url,
+                closed_at_ms: c.closed_at_ms,
+            })
+            .collect();
+        self.bar.icons = list.icons;
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_bar(&window);
+        }
+    }
+
+    /// Tab search's close button or Shift+Delete on row `index`: its tab closes (onto the
+    /// recently-closed list, which is listed again) and the bar stays open on the rows left.
+    pub fn bar_result_closed(&mut self, index: i32) {
+        if self.bar.mode != BarMode::Tabs {
+            return;
+        }
+        let tab = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.bar.rows.get(i))
+            .and_then(BarRow::icon_tab);
+        let Some(tab) = tab else {
+            return;
+        };
+        self.dispatch(Command::CloseTab(tab));
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_bar(&window);
+        }
+        self.list_closed();
+    }
+
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
-        // the bar takes the place of another overlay, or goes again while a page's dialog waits
-        // (wubble_core::overlay)
-        if !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
+        // over the page the bar takes the place of another overlay, or goes again while a page's
+        // dialog waits (wubble_core::overlay); the start page's capsule is the page's own field
+        let over = window.get_command_placement() == wubble_ui::CommandPlacement::Overlay;
+        if over && !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
             let _ = self
                 .w
                 .window
@@ -2137,6 +2243,7 @@ impl Host {
             return;
         }
         self.bar.mode = mode;
+        self.bar.search = false;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
         self.bar_query(window, &query);
@@ -2145,8 +2252,17 @@ impl Host {
     /// Renders the rows for `query` at once from what is at hand, and asks
     /// the store for its history hits, which re-render when they arrive.
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
-        self.bar.query = query.into();
+        self.bar.query = if self.bar.search {
+            omnibox::as_search(query)
+        } else {
+            query.into()
+        };
         self.bar.generation += 1;
+        // tab search matches what is at hand: no history, no engine suggestions
+        if self.bar.mode == BarMode::Tabs {
+            self.render_bar(window);
+            return;
+        }
         self.suggest_event(wubble_core::suggest::FetchEvent::Typed(query.into()));
         self.render_bar(window);
         if query.trim().is_empty() {
@@ -2199,6 +2315,18 @@ impl Host {
     }
 
     fn render_bar(&mut self, window: &AppWindow) {
+        if self.bar.mode == BarMode::Tabs {
+            let tabs = bar::search_tabs(&self.model, |t| self.agent_drives(t));
+            self.bar.rows = bar::tab_search_rows(&tabs, &self.bar.closed, &self.bar.query);
+            crate::bind::render_bar(
+                window,
+                &self.bar.rows,
+                &self.bar.icons,
+                &self.favicons,
+                true,
+            );
+            return;
+        }
         let tabs = bar::open_tabs(&self.model);
         let inputs = BarInputs {
             tabs: &tabs,
@@ -2210,12 +2338,113 @@ impl Host {
             now_ms: now_ms(),
         };
         self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
-        crate::bind::render_bar(window, &self.bar.rows, &self.bar.icons, &self.favicons);
+        crate::bind::render_bar(
+            window,
+            &self.bar.rows,
+            &self.bar.icons,
+            &self.favicons,
+            false,
+        );
     }
 
     /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.
     pub fn bar_closed(&mut self) {
+        self.bar.search = false;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
+    }
+
+    /// The address menu's edit of the bar's field. The field's own edits run later, outside
+    /// the host, as the field then reports its text back into it; Delete is done here.
+    pub(super) fn field_edit(&mut self, edit: crate::menu::FieldEdit) {
+        use crate::menu::FieldEdit as E;
+        let op = match edit {
+            E::Cut => wubble_ui::FieldEdit::Cut,
+            E::Copy => wubble_ui::FieldEdit::Copy,
+            E::Paste => wubble_ui::FieldEdit::Paste,
+            E::SelectAll => wubble_ui::FieldEdit::SelectAll,
+            E::Delete => {
+                self.field_delete();
+                return;
+            }
+        };
+        let _ = self
+            .w
+            .window
+            .upgrade_in_event_loop(move |window| window.invoke_command_field_edit(op));
+    }
+
+    /// The menu's Delete: the selected text leaves the bar's field, the caret where it began.
+    fn field_delete(&mut self) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let text = window.get_command_query().to_string();
+        let (start, end) = (
+            window.get_command_selection_start(),
+            window.get_command_selection_end(),
+        );
+        let range = usize::try_from(start)
+            .ok()
+            .zip(usize::try_from(end).ok())
+            .filter(|&(a, b)| a < b && text.get(a..b).is_some());
+        let Some((a, b)) = range else {
+            return;
+        };
+        let left = format!("{}{}", &text[..a], &text[b..]);
+        window.set_command_query(left.as_str().into());
+        self.bar_query(&window, &left);
+        let _ = self
+            .w
+            .window
+            .upgrade_in_event_loop(move |window| window.invoke_command_caret(start));
+    }
+
+    /// Paste and Go (the address menu's row, `Action::PasteAndGo`): `text` loads as if typed in
+    /// `field`. In the bar, as its mode loads a typed row, and the bar goes as after Enter; from
+    /// the pill, in the visible tab (a new tab without one).
+    pub(super) fn paste_and_go(&mut self, field: crate::menu::AddressField, text: &str) {
+        let target = RowTarget::Omni(match omnibox::classify(text) {
+            omnibox::Intent::Url(url) => Target::Url(url),
+            omnibox::Intent::Search(q) => Target::Search(q),
+        });
+        if field == crate::menu::AddressField::Pill {
+            self.bar.mode = self.shown().map_or(BarMode::NewTab, BarMode::Navigate);
+        }
+        self.choose(&target);
+        if field == crate::menu::AddressField::Bar {
+            self.bar_closed();
+            // later, outside the host: the bar's close calls back into it
+            let _ = self
+                .w
+                .window
+                .upgrade_in_event_loop(|window| window.invoke_command_pick());
+        }
+    }
+
+    /// Ctrl+E, once the bar is open on the visible tab (`Plan::FocusSearch`): the field empties
+    /// and what is typed in it from now on is searched, never opened as an address.
+    pub(crate) fn bar_for_search(&mut self, window: &AppWindow) {
+        // a Little or Popup window's address is read-only: no bar opened there
+        if self.w.kind != WindowKind::Main {
+            return;
+        }
+        self.bar.search = true;
+        window.set_command_query("".into());
+        self.bar_query(window, "");
+    }
+
+    /// The keys held as a row is chosen: where it opens (`omnibox::disposition`), and whether
+    /// Ctrl asks for `www.` and `.com` around the typed name.
+    fn enter_keys(&self) -> (omnibox::Disposition, bool) {
+        let keys = self.input.keys;
+        let mods = omnibox::EnterMods {
+            ctrl: keys.control_key(),
+            alt: keys.alt_key(),
+            shift: keys.shift_key(),
+            cmd: keys.super_key(),
+        };
+        let platform = wubble_core::keys::Platform::current();
+        (omnibox::disposition(mods, platform), mods.ctrl)
     }
 
     pub fn bar_chosen(&mut self, index: i32) {
@@ -2223,15 +2452,28 @@ impl Host {
             .ok()
             .and_then(|i| self.bar.rows.get(i));
         if let Some(row) = row {
-            let target = row.target.clone();
-            self.choose(&target);
+            let (disposition, complete) = self.enter_keys();
+            // Ctrl+Enter on the typed name: www. and .com around it (Chromium's desired TLD)
+            let completed = (complete && !self.bar.search && index == 0)
+                .then(|| omnibox::with_desired_tld(&self.bar.query))
+                .flatten();
+            let target = match completed {
+                Some(url) => RowTarget::Omni(Target::Url(url)),
+                None => row.target.clone(),
+            };
+            self.choose_as(&target, disposition);
         }
         // after reading the row: clearing the suggestions re-renders the rows
         self.bar_closed();
     }
 
     fn choose(&mut self, target: &RowTarget) {
-        match bar::target_command(target, self.bar.mode, self.search_engine) {
+        self.choose_as(target, omnibox::Disposition::AsOpened);
+    }
+
+    fn choose_as(&mut self, target: &RowTarget, disposition: omnibox::Disposition) {
+        let choice = bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
+        match choice {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
                 if bar::is_typed(target) {
@@ -2239,6 +2481,20 @@ impl Host {
                 }
             }
             Some(Choice::Perform(action)) => self.perform(action),
+            Some(Choice::ReopenClosed { url, closed_at_ms }) => {
+                self.store.take_closed(&url, closed_at_ms, |entry| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.restore_closed(closed::Event::Taken, entry));
+                    });
+                });
+            }
+            Some(Choice::NewWindow(url)) => {
+                self.dispatch(Command::NewWindow { space: None });
+                self.dispatch(new_tab(url, None));
+                if bar::is_typed(target) {
+                    self.typed_nav.started(self.shown());
+                }
+            }
             Some(Choice::SetEngine(engine)) => {
                 self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
                 // The text that offered the choice is searched with it.
@@ -2270,6 +2526,14 @@ impl Host {
                     return;
                 };
                 self.typed_nav.ended(tab);
+                // a stopped page is not reloaded on its own
+                if matches!(op, ViewOp::Stop) {
+                    self.error_news(tab, ErrorEvent::UserStopped);
+                }
+                if matches!(op, ViewOp::ToggleMute) {
+                    self.toggle_mute(tab);
+                    return;
+                }
                 let zoom_default = self.zoom_default;
                 let Some(view) = self.tab_view(tab) else {
                     return;
@@ -2277,6 +2541,11 @@ impl Host {
                 match op {
                     ViewOp::Reload => view.reload(),
                     ViewOp::HardReload => view.hard_reload(),
+                    // DevTools' empty-cache reload: the clear goes to the browser first
+                    ViewOp::EmptyCacheHardReload => {
+                        view.cdp("Network.clearBrowserCache", &serde_json::json!({}));
+                        view.hard_reload();
+                    }
                     ViewOp::Stop => view.stop(),
                     ViewOp::Back => view.back(),
                     ViewOp::Forward => view.forward(),
@@ -2284,10 +2553,8 @@ impl Host {
                     ViewOp::ZoomOut => view.zoom_out(),
                     // To the user's default, which CEF's own reset (always 100 %) ignores.
                     ViewOp::ZoomReset => view.set_zoom_percent(zoom_default),
-                    ViewOp::ToggleMute => {
-                        let muted = view.is_muted();
-                        view.set_muted(!muted);
-                    }
+                    // the user's mute: `toggle_mute` above
+                    ViewOp::ToggleMute => {}
                     ViewOp::Edit(command) => view.edit(command),
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
@@ -2309,6 +2576,29 @@ impl Host {
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
+            Plan::DevToolsConsole => self.devtools_console(),
+            Plan::PasteAndGo => {
+                let text = self.w.window.upgrade().and_then(|window| {
+                    self.clipboard
+                        .load(window.window(), crate::clipboard::Buffer::Clipboard)
+                });
+                if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+                    self.paste_and_go(crate::menu::AddressField::Pill, &text);
+                }
+            }
+            Plan::FocusSearch => self.focus_search(),
+            Plan::SavePage { tab, url } => self.save_as(tab, url),
+            Plan::OpenFile => self.open_file(),
+            Plan::CaretBrowsing => self.caret_event(wubble_core::caret::Event::Toggle),
+            Plan::RaiseWindow(window) => {
+                self.dispatch(Command::FocusWindow(window));
+                self.raise_window(window);
+            }
+            Plan::Minimize => {
+                if let Some(window) = self.w.window.upgrade() {
+                    window.window().set_minimized(true);
+                }
+            }
             Plan::DockNudge(dir) => self.source_nudge(f64::from(dir)),
             Plan::OpenBeside => self.open_beside(),
             Plan::Builtin(builtin) => self.builtin(builtin),
@@ -2318,6 +2608,13 @@ impl Host {
                     .w
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_address_focus());
+            }
+            // Later, outside the host, as FocusAddress: the bar opens itself, then calls back.
+            Plan::SearchTabs => {
+                let _ = self
+                    .w
+                    .window
+                    .upgrade_in_event_loop(|window| window.invoke_request_tab_search());
             }
             // Later, outside the host, as FocusAddress: the address region opens the bar.
             Plan::CycleRegion(back) => {
@@ -2374,16 +2671,16 @@ impl Host {
     }
 
     /// Steps the closed-tab machine and runs its effects. The restores are returned: they
-    /// need the entry the store popped (`reopen_closed`).
+    /// need the entry the store popped (`restore_closed`).
     fn close_undo(&mut self, event: closed::Event) -> Vec<closed::Effect> {
         let (state, effects) = closed::transition(std::mem::take(&mut self.close_undo), event);
         self.close_undo = state;
         let mut restores = vec![];
         for effect in effects {
             match effect {
-                closed::Effect::Pop => self.store.pop_closed(|closed| {
+                closed::Effect::Pop => self.store.pop_closed(|entry| {
                     let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.reopen_closed(closed));
+                        with_host(|host| host.restore_closed(closed::Event::Popped, entry));
                     });
                 }),
                 closed::Effect::FieldUndo => self.perform(Action::Undo),
@@ -2398,12 +2695,18 @@ impl Host {
         restores
     }
 
-    /// The store's newest recently-closed entry, popped: a close of this run back in its Space
-    /// at its place (pinned, in its folder), an older one in the active Space; in its container
-    /// if that still exists. The one restore of a closed tab, for Mod+Shift+T and Mod+Z alike.
-    fn reopen_closed(&mut self, closed: Option<ClosedTab>) {
+    /// A recently-closed entry the store took off its list (the newest, popped, or the one tab
+    /// search chose, taken; `event` tells the machine which): a close of this run back in its
+    /// Space at its place (pinned, in its folder), an older one in the active Space; in its
+    /// container if that still exists. The one restore of a closed tab, for Mod+Shift+T, Mod+Z
+    /// and tab search alike.
+    fn restore_closed(
+        &mut self,
+        event: fn(Option<(String, i64)>) -> closed::Event,
+        closed: Option<ClosedTab>,
+    ) {
         let popped = closed.as_ref().map(|c| (c.url.clone(), c.closed_at_ms));
-        let restores = self.close_undo(closed::Event::Popped(popped));
+        let restores = self.close_undo(event(popped));
         let Some(closed) = closed else {
             return;
         };
@@ -2650,10 +2953,21 @@ impl Host {
 
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
-        self.follow_frame_rate();
         self.follow_desktop();
         self.devtools_tick();
         let pressure = self.read_pressure();
+        self.skia_cache(skia_cache::Event::Pressure(pressure));
+        self.skia_cache(skia_cache::Event::Tick(now));
+        // each window's cache bounded for the largest window (setting the same does nothing)
+        let px = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .map(|w| {
+                let size = w.handle.window().size();
+                u64::from(size.width) * u64::from(size.height)
+            })
+            .max()
+            .unwrap_or(0);
+        i_slint_renderer_skia::cache::set_limit(skia_cache::limit(px));
         let wall_ms = now_ms();
         self.dispatch(Command::Tick {
             now,
@@ -2661,6 +2975,7 @@ impl Host {
             pressure,
         });
         self.archive_tick(wall_ms);
+        self.errors_news(ErrorEvent::Tick(surfaces::wall_ms()));
         self.save = self.save.ticked();
         if persist::should_save(self.save) {
             self.save_now();
@@ -2670,6 +2985,20 @@ impl Host {
         self.gpu_check();
         self.look_tick();
         self.ax_tick();
+    }
+
+    /// The Skia caches' policy hears `event`; its cleanup runs on every window's cache.
+    pub(crate) fn skia_cache(&mut self, event: skia_cache::Event) {
+        use i_slint_renderer_skia::cache::{self, CacheCleanup};
+        let (state, cleanup) = skia_cache::next(self.skia_cache, event);
+        self.skia_cache = state;
+        match cleanup {
+            Some(skia_cache::Cleanup::Deferred(unused)) => {
+                cache::cleanup(CacheCleanup::Deferred(unused));
+            }
+            Some(skia_cache::Cleanup::PurgeAll) => cache::cleanup(CacheCleanup::PurgeAll),
+            None => {}
+        }
     }
 
     // ----- smokes
@@ -3479,10 +3808,9 @@ impl Host {
                     page_smoke::Cancel::Press => {}
                 },
                 page_smoke::Action::MenuGone => {
-                    let open = self
-                        .shown()
-                        .and_then(|t| self.surfaces.get(&t))
-                        .is_some_and(|s| s.menu != crate::menu::Menu::Closed);
+                    let menu =
+                        wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+                    let open = self.open_content(self.w.id, menu).is_some();
                     if open || self.menu_dismissed() != 0 {
                         self.fail(
                             "CEF closed the context menu but the shell still answered it".into(),
@@ -3591,10 +3919,13 @@ impl Host {
             self.focus_view = target;
         }
         // The page's own context menu takes the shell's focus but not the page's.
-        let page_menu = target
-            .and(self.key_page())
-            .and_then(|t| self.surfaces.get(&t))
-            .is_some_and(|s| s.menu.keeps_page_focus());
+        let menu = wubble_core::overlay::Layer::new(wubble_core::overlay::Kind::Menu, None);
+        let page_menu = target.and(self.key_page()).is_some_and(|key| {
+            matches!(
+                self.open_content(self.w.id, menu),
+                Some(layers::Content::Menu { tab, menu }) if *tab == key && menu.keeps_page_focus()
+            )
+        });
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
         let view_open = self.focused_view().is_some();
         if let Some(focused) = self.input.focus_change(focused, view_open)
@@ -3617,6 +3948,10 @@ impl Host {
     /// would be suspended) and an agent's (screenshots) keep painting.
     fn occlusion(&mut self, hidden: bool) {
         self.w.hidden = hidden;
+        // every window hidden: the shell draws nothing, its caches go
+        if hidden && self.parked.values().all(|w| w.hidden) {
+            self.skia_cache(skia_cache::Event::Hidden);
+        }
         if hidden {
             for tab in self.shown_tabs() {
                 let audible = self
@@ -3939,21 +4274,22 @@ impl Host {
     }
 
     /// Tells every view the frame rate if the window is now on a display
-    /// with another refresh rate. Polled from the lifecycle tick: winit has
-    /// no event for a move to another monitor at the same scale, and on
-    /// Wayland the first rate comes from the fastest monitor because the
-    /// surface has not entered an output yet.
+    /// with another refresh rate (`follow_desktop`: a scale change, a move once it settles, the
+    /// lifecycle tick, since winit has no event for a move to another monitor at the same scale,
+    /// and on Wayland the first rate comes from the fastest monitor because the surface has not
+    /// entered an output yet).
     fn follow_frame_rate(&mut self) {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let rate = window
-            .window()
-            .with_winit_window(display_refresh_mhz)
-            .map(pacing::frame_rate_for);
-        if let (Some(current), Some(rate)) = (self.frame_rate, rate)
+        let Some(refresh) = window.window().with_winit_window(display_refresh_mhz) else {
+            return;
+        };
+        let rate = pacing::frame_rate_for(refresh);
+        if let Some(current) = self.frame_rate
             && rate != current
         {
+            log_frame_rate(rate, refresh);
             self.frame_rate = Some(rate);
             let shown = self.shown_tabs();
             for (tab, id) in self.views.iter().map(|(t, v)| (*t, *v)).collect::<Vec<_>>() {
@@ -3962,15 +4298,27 @@ impl Host {
                     view.set_frame_rate(pacing::view_frame_rate(rate, shown));
                 }
             }
+            // the views of no tab (an extension's popup, the DevTools panel) follow too: they
+            // kept the rate they opened with
+            for id in [self.ext_ui.popup, self.devtools.view]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(view) = self.engine.view(id) {
+                    view.set_frame_rate(rate);
+                }
+            }
         }
     }
 
     /// Tells every view on screen where the window and its monitor are on the desktop when that
-    /// changed (the page's `screen.*` and `window.screenX`). Winit's `Moved` and
+    /// changed (the page's `screen.*` and `window.screenX`), and the display's frame rate
+    /// (`follow_frame_rate`). Winit's `Moved` and
     /// `ScaleFactorChanged` say the window moved or its scale changed; the lifecycle tick
     /// finds the rest (the window dragged to another monitor at the same scale, the first
     /// output a Wayland surface enters).
     fn follow_desktop(&mut self) {
+        self.follow_frame_rate();
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
@@ -4610,6 +4958,11 @@ fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
     };
     let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);
     external.then_some((opener, url.as_str()))
+}
+
+/// The run's CEF frame rate and the display refresh it comes from, as it is set or changes.
+fn log_frame_rate(rate: u32, refresh: Option<u32>) {
+    eprintln!("wubble: CEF frame rate {rate} (display {refresh:?} mHz)");
 }
 
 fn new_tab(url: String, opener: Option<TabId>) -> Command {

@@ -15,11 +15,12 @@ use wubble_core::clipboard::{self, Ask, Asker, Payload, Reader};
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::dnd;
 use wubble_core::model::Command;
-use wubble_core::overlay::{self, Cue, Key, Kind};
+use wubble_core::overlay::{self, Cue, Key, Kind, Layer, Phase};
 use wubble_core::site::{Decision, Permission, SiteChange};
+use wubble_core::sitesound::{self, Mute, MuteEvent, Toggle};
 use wubble_core::space::Side;
 use wubble_core::tab::TabId;
-use wubble_core::window::WindowTarget;
+use wubble_core::window::{WindowId, WindowTarget};
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
 use wubble_engine::page::{ClipboardRequest, EditCommand, PageEvent, PasteFrom, Rect, RequestId};
@@ -27,24 +28,27 @@ use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
 
+use super::layers::Content;
 use super::{Host, new_tab};
 use crate::chooser::{self, DialogSpec};
 use crate::clipboard::{Bridge as _, Buffer};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
-use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Reply, Secret};
+use crate::prompt::{self, AuthEvent, PermissionEvent, PermissionPrompt, Reply, Secret};
 use crate::screen::{self, Screen, ScreenEffect, ScreenEvent};
-use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed};
+use crate::surface::{
+    self, DialogContent, DialogEvent, FindBar, FindEffect, FindEvent, OpenDialog, Routed,
+};
 
-/// What the shell last drew: the tab, and its menu. Slint skips setting a
-/// property to an equal value, but a menu's rows are a fresh `ModelRc`
+/// What the shell last drew: the tab, and its menu and prompt (a render cache, not state).
+/// Slint skips setting a property to an equal value, but a menu's rows are a fresh `ModelRc`
 /// (equal only by pointer), and a rewritten model restarts the rows' motion.
 #[derive(Default)]
 pub(super) struct Drawn {
     tab: Option<TabId>,
-    menu: Menu,
-    permission: PermissionPrompt,
+    menu: Option<Menu>,
+    permission: Option<PermissionPrompt>,
 }
 
 impl Host {
@@ -105,15 +109,7 @@ impl Host {
         {
             self.dispatch(Command::ActivateTab(tab));
         }
-        // A page's question closes the user's overlays over its tab (wubble_core::overlay).
-        if !driven
-            && matches!(
-                routed,
-                Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
-            )
-        {
-            self.overlay_open(Kind::Dialog, Some(tab));
-        }
+        // (a page's question opens its overlay, which closes the user's over its tab: `apply_dialog`)
         match routed {
             Routed::Dialog(e) => {
                 self.apply_dialog(tab, e);
@@ -127,6 +123,7 @@ impl Host {
                         ..NavFlags::default()
                     });
                 let nav = NavFlags {
+                    zoomed: self.zoomed(tab),
                     search: self.search_engine.map(|e| e.info().name),
                     image: self.search_engine.and_then(|e| e.info().image),
                     private: self.model.side_of_tab(tab) == Side::Private,
@@ -135,7 +132,7 @@ impl Host {
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
                     crate::menu::window_page_entries(&self.model, w)
                 });
-                let allowed = self.overlay_open(Kind::Menu, None);
+                // refused (a page's dialog waits): the request is answered at once
                 self.apply_menu(
                     tab,
                     MenuEvent::Requested {
@@ -145,10 +142,6 @@ impl Host {
                         extra,
                     },
                 );
-                // refused (a page's dialog waits): the request is answered at once
-                if !allowed {
-                    self.apply_menu(tab, MenuEvent::Dismiss);
-                }
             }
             Routed::Menu(e) => {
                 self.apply_menu(tab, e);
@@ -177,7 +170,13 @@ impl Host {
                 self.page_left(tab);
             }
             Routed::Muted(muted) => {
-                self.audio.entry(tab).or_default().muted = muted;
+                let audio = self.audio.entry(tab).or_default();
+                audio.muted = muted;
+                // muted or unmuted from elsewhere (CEF's own sound content setting, a page
+                // restored muted): the reason follows what the view says
+                if muted != audio.why.muted() {
+                    audio.why = if muted { Mute::ByUser } else { Mute::Unmuted };
+                }
                 self.after_change();
             }
             Routed::Audible(audible) => {
@@ -193,7 +192,7 @@ impl Host {
                     self.fling(wubble_core::fling::FlingInput::Interrupt);
                 }
                 let w = self.w.id;
-                self.act(window, overlay::Action::Navigated { w, tab });
+                self.act(overlay::Action::Navigated { w, tab });
                 self.apply_permission(tab, PermissionEvent::PageChanged);
                 self.busy_page_started(tab);
             }
@@ -209,7 +208,17 @@ impl Host {
             Routed::Auth(e) => self.apply_auth(tab, e),
             Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
-            Routed::Error(e) => self.apply_error(tab, e),
+            Routed::Zoomed => window.set_address_zoom(self.address_zoom()),
+            Routed::LoadFailed { url, code } => {
+                let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
+                let event = ErrorEvent::LoadFailed {
+                    url,
+                    code,
+                    now_ms: wall_ms(),
+                    shown,
+                };
+                self.apply_error(tab, event);
+            }
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => {
                 if std::env::var_os("WUBBLE_PARITY_TRACE").is_some() {
@@ -280,17 +289,65 @@ impl Host {
             }
             return None;
         }
-        let s = self.surfaces.entry(tab).or_default();
-        let (next, answer) = surface::dialog(std::mem::take(&mut s.dialog), event);
-        s.dialog = next;
+        self.dialog_step(tab, event, false)
+    }
+
+    /// The tab's dialog overlay's content (its JS dialog and sign-in sheet): while it is open,
+    /// or (`cancel`) while a rule closing it has it answer.
+    fn dialog_content(&self, tab: TabId, cancel: bool) -> DialogContent {
+        let layer = Layer::new(Kind::Dialog, Some(tab));
+        match self.live(self.w.id, layer, cancel) {
+            Some(Content::Dialog(c)) => c,
+            _ => DialogContent::default(),
+        }
+    }
+
+    /// The dialog overlay holds `next` now: opened, rewritten or closed by it. A page's question
+    /// is refused by no overlay (`Row::refused_under` is empty, every window kind shows it).
+    fn dialog_after(&mut self, tab: TabId, next: DialogContent) {
+        let layer = Layer::new(Kind::Dialog, Some(tab));
+        let refused = self.content_after(self.w.id, layer, next.live().map(Content::Dialog), false);
+        debug_assert!(refused.is_none(), "a page's dialog is never refused");
+    }
+
+    /// One JS dialog event on the tab's content; whether an answer reached the engine.
+    fn dialog_step(&mut self, tab: TabId, event: DialogEvent, cancel: bool) -> Option<bool> {
+        let c = self.dialog_content(tab, cancel);
+        let (js, answer) = surface::dialog(c.js, event);
+        self.dialog_after(tab, DialogContent { js, auth: c.auth });
         let answer = answer?;
         let view = self.tab_view(tab)?;
         Some(view.answer_dialog(answer.id, answer.accept, &answer.text))
     }
 
+    /// A rule closed the tab's dialog overlay (Escape): the sign-in sheet over it is cancelled
+    /// first, else the dialog; a dialog left behind the sheet opens it again.
+    pub(super) fn dialog_cancelled(&mut self, tab: TabId) {
+        if self.dialog_content(tab, true).auth.is_some() {
+            self.auth_step(tab, AuthEvent::Cancel, true);
+        } else {
+            self.dialog_step(tab, DialogEvent::Cancel, true);
+        }
+    }
+
     /// Runs one permission event: remembered decisions are stored, every
     /// answer goes to the engine.
     pub(super) fn apply_permission(&mut self, tab: TabId, event: PermissionEvent) {
+        self.permission_step(tab, event, false);
+    }
+
+    /// A rule closed the tab's prompt (Escape): the shown request is denied, not remembered,
+    /// and a waiting one opens it again.
+    pub(super) fn permission_cancelled(&mut self, tab: TabId) {
+        let deny = PermissionEvent::Answer {
+            allow: false,
+            remember: false,
+        };
+        self.permission_step(tab, deny, true);
+    }
+
+    /// One permission event on the tab's prompt (`cancel`: on the content a rule just closed).
+    fn permission_step(&mut self, tab: TabId, event: PermissionEvent, cancel: bool) {
         if self.agent_drives(tab) {
             if let PermissionEvent::Requested(req) = event
                 && let crate::prompt::Ask::Engine { id, .. } = req.ask
@@ -303,9 +360,14 @@ impl Host {
         // a private window's tab reads its own choices over the stored ones, and remembers
         // only in memory (`site_view`, `write_site`)
         let table = self.site_view(tab).permissions().into_owned();
-        let s = self.surfaces.entry(tab).or_default();
-        let (next, answers) = prompt::permission(std::mem::take(&mut s.permission), event, &table);
-        s.permission = next;
+        let layer = Layer::new(Kind::Permission, Some(tab));
+        let live = match self.live(self.w.id, layer, cancel) {
+            Some(Content::Permission(p)) => Some(p),
+            _ => None,
+        };
+        let (next, answers) = prompt::permission(live, event, &table);
+        // a prompt is refused by no overlay (`Row::refused_under` is empty)
+        self.content_after(self.w.id, layer, next.map(Content::Permission), false);
         for answer in answers {
             if let Some((site, kinds, decision)) = &answer.remember {
                 for &kind in kinds {
@@ -328,6 +390,11 @@ impl Host {
     }
 
     pub(super) fn apply_auth(&mut self, tab: TabId, event: AuthEvent) {
+        self.auth_step(tab, event, false);
+    }
+
+    /// One sign-in event on the tab's dialog overlay (`cancel`: on the content a rule closed).
+    fn auth_step(&mut self, tab: TabId, event: AuthEvent, cancel: bool) {
         if self.agent_unseen(tab) {
             if let AuthEvent::Requested(req) = event {
                 if let Some((session, _)) = self.agent_grant_of(tab) {
@@ -344,9 +411,9 @@ impl Host {
             }
             return;
         }
-        let s = self.surfaces.entry(tab).or_default();
-        let (next, answer) = prompt::auth(std::mem::take(&mut s.auth), event);
-        s.auth = next;
+        let c = self.dialog_content(tab, cancel);
+        let (auth, answer) = prompt::auth(c.auth, event);
+        self.dialog_after(tab, DialogContent { js: c.js, auth });
         if let Some(answer) = answer
             && let Some(view) = self.tab_view(tab)
         {
@@ -392,7 +459,10 @@ impl Host {
     pub(super) fn apply_error(&mut self, tab: TabId, event: ErrorEvent) {
         let s = self.surfaces.entry(tab).or_default();
         let (next, effects) = page_error::transition(std::mem::take(&mut s.error), event);
+        let open = next != PageError::None;
         s.error = next;
+        // the panel is the tab's store overlay while its machine holds an error
+        self.layer_is(Kind::ErrorPanel, tab, open);
         for effect in effects {
             if let ErrorEffect::Allow { host, code } = &effect {
                 self.cert_exceptions.allow(host, *code);
@@ -402,7 +472,7 @@ impl Host {
                 continue;
             };
             match effect {
-                ErrorEffect::Reload => view.reload(),
+                ErrorEffect::Reload { .. } => view.reload(),
                 ErrorEffect::Back => view.back(),
                 ErrorEffect::Blank => view.load("about:blank"),
                 ErrorEffect::AnswerCert { request, proceed } => {
@@ -411,6 +481,37 @@ impl Host {
                 ErrorEffect::Allow { .. } => {}
             }
         }
+    }
+
+    /// `event` for `tab`'s error panel, when it has one: the schedule's and the page's news
+    /// that only a panel cares about (its tab shown or hidden, a stop, a load's end).
+    pub(super) fn error_news(&mut self, tab: TabId, event: ErrorEvent) {
+        let Some(before) = self
+            .surfaces
+            .get(&tab)
+            .map(|s| s.error.clone())
+            .filter(|e| *e != PageError::None)
+        else {
+            return;
+        };
+        self.apply_error(tab, event);
+        // a tick that changes nothing draws nothing
+        if self.surfaces.get(&tab).map(|s| &s.error) != Some(&before) {
+            self.redraw_surfaces();
+        }
+    }
+
+    /// `event` for every tab's error panel: the tick, the network back.
+    pub(super) fn errors_news(&mut self, event: ErrorEvent) {
+        let tabs: Vec<TabId> = self.surfaces.keys().copied().collect();
+        for tab in tabs {
+            self.error_news(tab, event.clone());
+        }
+    }
+
+    /// The system came back online (`os_online`): a failed page reloads at once.
+    pub fn network_online(&mut self) {
+        self.errors_news(ErrorEvent::Online);
     }
 
     /// Shows the OS file dialog; its answer comes back on the event loop.
@@ -435,11 +536,78 @@ impl Host {
         }
     }
 
-    /// Runs one menu event; how many answers reached the engine.
+    /// Runs one menu event from `tab`'s page (or the user's, on this window's menu); how many
+    /// answers reached the engine.
     pub(super) fn apply_menu(&mut self, tab: TabId, event: MenuEvent) -> usize {
-        let s = self.surfaces.entry(tab).or_default();
-        let (next, effects) = menu::transition(std::mem::take(&mut s.menu), event);
-        s.menu = next;
+        self.menu_step(tab, event, false)
+    }
+
+    /// The shell's own menu over `tab`'s page (a tab row's, the pill's, a question): the one way
+    /// a shell menu opens. `ask`: the app's own question, which no overlay refuses (the private
+    /// downloads a close would cancel, over a page's dialog). Whether it shows.
+    pub(super) fn open_shell_menu(
+        &mut self,
+        tab: TabId,
+        at: (i32, i32),
+        entries: Vec<menu::Entry>,
+        ask: bool,
+    ) -> bool {
+        self.menu_step(tab, MenuEvent::ShellRequested { at, entries }, ask);
+        let shown = self.ui.phase(self.w.id, Layer::new(Kind::Menu, None)) == Some(Phase::Open);
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_surfaces(&window);
+        }
+        shown
+    }
+
+    /// A rule closed window `w`'s menu (Escape, a switch, another overlay, its window gone): a
+    /// page's menu is dismissed to its page; a shell's runs nothing.
+    pub(super) fn menu_cancelled(&mut self, w: WindowId) {
+        if let Some(Content::Menu { tab, menu }) = self.live(w, Layer::new(Kind::Menu, None), true)
+        {
+            let (_, effects) = menu::transition(Some(menu), MenuEvent::Dismiss);
+            self.menu_effects(tab, effects);
+        }
+    }
+
+    /// One menu event on this window's menu (`ask`: an open is the app's question). A menu of
+    /// another tab's page that a new one replaces is dismissed to that page; CEF closing another
+    /// tab's menu is not this one's.
+    fn menu_step(&mut self, tab: TabId, event: MenuEvent, ask: bool) -> usize {
+        let (w, layer) = (self.w.id, Layer::new(Kind::Menu, None));
+        let held = match self.live(w, layer, false) {
+            Some(Content::Menu { tab, menu }) => Some((tab, menu)),
+            _ => None,
+        };
+        let fresh = matches!(
+            event,
+            MenuEvent::Requested { .. } | MenuEvent::ShellRequested { .. }
+        );
+        let mut answered = 0;
+        let (tab, live) = match held {
+            Some((t, menu)) if t != tab && fresh => {
+                let (_, effects) = menu::transition(Some(menu), MenuEvent::Dismiss);
+                answered += self.menu_effects(t, effects);
+                (tab, None)
+            }
+            Some((t, _)) if t != tab && event == MenuEvent::Reset => return 0,
+            Some((t, menu)) => (t, Some(menu)),
+            None => (tab, None),
+        };
+        let (next, effects) = menu::transition(live, event);
+        let next = next.map(|menu| Content::Menu { tab, menu });
+        let refused = self.content_after(w, layer, next, ask);
+        answered += self.menu_effects(tab, effects);
+        // refused (a page's dialog holds the window): the page's request is answered at once
+        if let Some(Content::Menu { tab, menu }) = refused {
+            let (_, effects) = menu::transition(Some(menu), MenuEvent::Dismiss);
+            answered += self.menu_effects(tab, effects);
+        }
+        answered
+    }
+
+    /// Carries out a menu's effects for `tab`'s page; how many answers reached the engine.
+    fn menu_effects(&mut self, tab: TabId, effects: Vec<MenuEffect>) -> usize {
         let mut answered = 0;
         for effect in effects {
             match effect {
@@ -500,6 +668,22 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::Model(command)) => self.dispatch(command.0),
                 MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
+                MenuEffect::Run(MenuCommand::ToggleMuteSite(t)) => self.toggle_mute_site(t),
+                MenuEffect::Run(MenuCommand::FieldEdit(edit)) => self.field_edit(edit),
+                MenuEffect::Run(MenuCommand::ZoomStep(action)) => {
+                    self.perform(action);
+                    // the popover again, on the new percent, where the chip opened it
+                    if let Some((x, y)) = self.zoom_at {
+                        self.zoom_popover(x, y);
+                    }
+                }
+                MenuEffect::Run(MenuCommand::PasteAndGo(field, text)) => {
+                    self.paste_and_go(field, &text);
+                }
+                MenuEffect::Run(MenuCommand::SetFullUrls(on)) => {
+                    let key = wubble_core::settings::UI_FULL_URLS.key;
+                    self.write_setting(key, if on { "1" } else { "0" });
+                }
                 MenuEffect::Run(MenuCommand::ReloadTab(t)) => {
                     if let Some(view) = self.tab_view(t) {
                         view.reload();
@@ -552,6 +736,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
                 MenuEffect::Run(MenuCommand::EditBoost(id)) => self.edit_boost(id),
                 MenuEffect::Run(MenuCommand::ClearData(what)) => self.clear_data(tab, what),
+                MenuEffect::Run(MenuCommand::CaretBrowsing { dont_ask }) => {
+                    self.caret_event(wubble_core::caret::Event::Confirm { dont_ask });
+                }
             }
         }
         answered
@@ -580,9 +767,39 @@ impl Host {
     }
 
     pub(super) fn apply_find(&mut self, tab: TabId, event: FindEvent) {
-        let s = self.surfaces.entry(tab).or_default();
-        let (next, effects) = surface::find(std::mem::take(&mut s.find), event);
-        s.find = next;
+        self.find_step(tab, event, false);
+    }
+
+    /// A rule closed the tab's find bar (Escape, a navigation, another overlay): its search
+    /// stops.
+    pub(super) fn find_cancelled(&mut self, tab: TabId) {
+        self.find_step(tab, FindEvent::Close, true);
+    }
+
+    /// One find event on the tab's bar (`cancel`: on the content a rule just closed). The last
+    /// query outlives the bar (`Surfaces::find_last`); refused (a modal sheet over the page),
+    /// Mod+F does nothing.
+    fn find_step(&mut self, tab: TabId, event: FindEvent, cancel: bool) {
+        let layer = Layer::new(Kind::Find, Some(tab));
+        let live = match self.live(self.w.id, layer, cancel) {
+            Some(Content::Find(f)) => Some(f),
+            _ => None,
+        };
+        let last = self
+            .surfaces
+            .get(&tab)
+            .map(|s| s.find_last.clone())
+            .unwrap_or_default();
+        let (next, effects) = surface::find(live, &last, event);
+        if let Some(bar) = &next {
+            self.surfaces.entry(tab).or_default().find_last = bar.query.clone();
+        }
+        if self
+            .content_after(self.w.id, layer, next.map(Content::Find), false)
+            .is_some()
+        {
+            return;
+        }
         for effect in effects {
             if effect == FindEffect::Focus {
                 self.find_focus = self.find_focus.wrapping_add(1);
@@ -637,14 +854,34 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
-        // its hover slots (a page tooltip, a card, its video strip) and its overlays go
-        let window = self.w.handle();
-        self.act(&window, overlay::Action::ViewGone(tab));
-        self.ax_view_gone(tab);
-        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
+        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it (its
+        // sheet's job ends before the overlays take the sheet).
         self.print_tab_closed(tab);
-        if let Some(s) = self.surfaces.remove(&tab) {
-            self.surfaces.insert(tab, s.view_gone());
+        // its hover slots (a page tooltip, a card, its video strip) and its overlays go, with no
+        // answer (welding answered every request the view held)
+        self.act(overlay::Action::ViewGone(tab));
+        // a window's menu of its page closes too, unanswered
+        let menu = Layer::new(Kind::Menu, None);
+        let menus: Vec<WindowId> = self
+            .ui
+            .windows_with(Kind::Menu)
+            .into_iter()
+            .filter(|&(w, p)| {
+                p == Phase::Open
+                    && matches!(self.contents.get(w, menu), Some(Content::Menu { tab: t, .. }) if *t == tab)
+            })
+            .map(|(w, _)| w)
+            .collect();
+        for w in menus {
+            self.window_closed(w, Kind::Menu);
+        }
+        self.ax_view_gone(tab);
+        if let Some(s) = self.surfaces.get_mut(&tab) {
+            s.popup = None;
+            let (error, fx) =
+                page_error::transition(std::mem::take(&mut s.error), ErrorEvent::ViewGone);
+            debug_assert!(fx.is_empty(), "welding answered the panel's request");
+            s.error = error;
         }
         self.downloads_lost(tab);
         self.autofill_gone(tab);
@@ -676,16 +913,13 @@ impl Host {
     /// The tab stopped being the visible one: the overlays follow their rules (menus and
     /// sheets close; dialogs, the find bar and a notice wait for the tab's return,
     /// wubble_core::overlay), its page leaves fullscreen.
-    fn left_visible(&mut self, window: &AppWindow, tab: TabId, now: Option<TabId>) {
+    fn left_visible(&mut self, tab: TabId, now: Option<TabId>) {
         let w = self.w.id;
-        self.act(
-            window,
-            overlay::Action::Switched {
-                w,
-                from: Some(tab),
-                to: now,
-            },
-        );
+        self.act(overlay::Action::Switched {
+            w,
+            from: Some(tab),
+            to: now,
+        });
         if matches!(self.w.screen, Screen::Page { tab: t, .. } if t == tab) {
             if let Some(v) = self.tab_view(tab) {
                 v.exit_fullscreen();
@@ -702,24 +936,43 @@ impl Host {
             && let Some(old) = self.w.drawn.tab
         {
             self.w.drawn.tab = tab;
-            self.left_visible(window, old, tab);
+            self.left_visible(old, tab);
         }
         let current = tab
             .and_then(|t| self.surfaces.get(&t))
             .cloned()
             .unwrap_or_default();
-        if self.w.drawn.tab != tab || self.w.drawn.menu != current.menu {
+        // the store's overlays: each drawn open from its content while the store has it open
+        let w = self.w.id;
+        let shown_content =
+            |kind| tab.and_then(|t| self.open_content(w, Layer::new(kind, Some(t))));
+        let shown_open = |kind| {
+            tab.is_some_and(|t| self.ui.phase(w, Layer::new(kind, Some(t))) == Some(Phase::Open))
+        };
+        let menu = match self.open_content(w, Layer::new(Kind::Menu, None)) {
+            Some(Content::Menu { menu, .. }) => Some(menu.clone()),
+            _ => None,
+        };
+        let permission = match shown_content(Kind::Permission) {
+            Some(Content::Permission(p)) => Some(p.clone()),
+            _ => None,
+        };
+        let dialog_content = match shown_content(Kind::Dialog) {
+            Some(Content::Dialog(c)) => c.clone(),
+            _ => DialogContent::default(),
+        };
+        if self.w.drawn.tab != tab || self.w.drawn.menu != menu {
             let scale = window.window().scale_factor();
-            window.set_menu(menu_view(&current.menu, scale, self.focus_origin(window)));
+            window.set_menu(menu_view(menu.as_ref(), scale, self.focus_origin(window)));
         }
-        if self.w.drawn.tab != tab || self.w.drawn.permission != current.permission {
-            window.set_permission(permission_view(&current.permission));
+        if self.w.drawn.tab != tab || self.w.drawn.permission != permission {
+            window.set_permission(permission_view(permission.as_ref()));
         }
         // The sign-in sheet blocks the load; a JS dialog waits behind it. A sheet or panel that
         // closes keeps its text while it leaves; the closed dialog's serial resets its fields.
-        let dialog = match &current.auth {
-            Auth::Open(r) => auth_view(r),
-            Auth::None => dialog_view(&current.dialog),
+        let dialog = match (&dialog_content.auth, &dialog_content.js) {
+            (Some(r), _) => auth_view(r),
+            (None, js) => dialog_view(js.as_ref()),
         };
         window.set_dialog(if dialog.open {
             dialog
@@ -730,7 +983,10 @@ impl Host {
                 ..window.get_dialog()
             }
         });
-        let error = error_view(&current.error);
+        let error = match shown_open(Kind::ErrorPanel) {
+            true => error_view(&current.error),
+            false => ErrorView::default(),
+        };
         window.set_page_error(if error.open {
             error
         } else {
@@ -739,14 +995,19 @@ impl Host {
                 ..window.get_page_error()
             }
         });
-        // the find bar and popup are the key page's: the peek's while it has the keys
+        // the find bar and popup are the key page's: the peek's while it has the keys; a closed
+        // bar keeps the last query
         let keys = self.key_page();
-        let find = keys
-            .or(tab)
+        let bar_tab = keys.or(tab);
+        let find = match bar_tab.and_then(|t| self.open_content(w, Layer::new(Kind::Find, Some(t))))
+        {
+            Some(Content::Find(f)) => Some(f),
+            _ => None,
+        };
+        let last = bar_tab
             .and_then(|t| self.surfaces.get(&t))
-            .map(|s| &s.find)
-            .unwrap_or(&current.find);
-        window.set_find(find_view(find, self.find_focus));
+            .map_or("", |s| s.find_last.as_str());
+        window.set_find(find_view(find, last, self.find_focus));
         let up = keys.filter(|&t| {
             self.ui
                 .phase(self.w.id, overlay::Layer::new(Kind::Popup, Some(t)))
@@ -767,14 +1028,18 @@ impl Host {
                 };
                 self.layer_placed(Kind::Popup, tab, rect);
             }
-            _ => window.set_popup_frame(slint::Image::default()),
+            // no popup: its ring goes with it
+            _ => {
+                window.set_popup_frame(slint::Image::default());
+                self.w.popup_presenter.release();
+            }
         }
         window.set_page_fullscreen(matches!(self.w.screen, Screen::Page { .. }));
         self.render_autofill(window, tab);
         self.w.drawn = Drawn {
             tab,
-            menu: current.menu,
-            permission: current.permission,
+            menu,
+            permission,
         };
     }
 
@@ -786,11 +1051,7 @@ impl Host {
         let Some(tab) = self.shown() else {
             return;
         };
-        let signing_in = matches!(
-            self.surfaces.get(&tab).map(|s| &s.auth),
-            Some(Auth::Open(_))
-        );
-        if signing_in {
+        if self.dialog_content(tab, false).auth.is_some() {
             let event = if accept {
                 AuthEvent::Submit {
                     user: text.into(),
@@ -862,20 +1123,15 @@ impl Host {
 
     pub fn find_event(&mut self, event: FindEvent) {
         if let Some(tab) = self.key_page().or_else(|| self.shown()) {
-            if event == FindEvent::Open && !self.overlay_open(Kind::Find, Some(tab)) {
-                return;
-            }
             self.apply_find(tab, event);
             self.redraw_surfaces();
         }
     }
 
-    /// The sidebar's speaker glyph.
+    /// The sidebar's speaker glyph, the tab menu's row and the key: the user's own mute, which
+    /// a site rule leaves alone (`sitesound::transition`).
     pub fn toggle_mute(&mut self, tab: TabId) {
-        if let Some(view) = self.tab_view(tab) {
-            let muted = view.is_muted();
-            view.set_muted(!muted);
-        }
+        self.site_sound(tab, MuteEvent::Toggled);
     }
 
     fn redraw_surfaces(&mut self) {
@@ -893,6 +1149,20 @@ impl Host {
     /// a load, the shell's corrections) are never stored, nor is a private
     /// window's zoom: it is kept in memory over the stored levels
     /// (`write_site`), as Chrome's off-the-record zoom map is.
+    /// `tab`'s zoom while it is not the user's default (`zoom::indicator`).
+    pub(super) fn zoomed(&mut self, tab: TabId) -> Option<u32> {
+        let default = self.zoom_default;
+        let percent = self.tab_view(tab)?.zoom_percent();
+        zoom::indicator(percent, default)
+    }
+
+    /// The address pill's zoom chip: the shown tab's zoom when it is not the default, else 0.
+    pub(super) fn address_zoom(&mut self) -> i32 {
+        self.shown()
+            .and_then(|tab| self.zoomed(tab))
+            .map_or(0, |p| i32::try_from(p).unwrap_or(i32::MAX))
+    }
+
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
         if let Some(page) = self.model.tabs.get(&tab).map(|t| t.url.clone()) {
             self.write_site(tab, SiteChange::Zoom { page, percent });
@@ -914,6 +1184,86 @@ impl Host {
     }
 
     // ----- sound
+
+    /// Runs one mute event for a tab with a view: its reason moves (`sitesound::transition`)
+    /// and the view's mute follows when it says so.
+    fn site_sound(&mut self, tab: TabId, event: MuteEvent) {
+        if self.tab_view(tab).is_none() {
+            return;
+        }
+        let why = self.audio.get(&tab).map(|a| a.why).unwrap_or_default();
+        let (next, set) = sitesound::transition(why, event);
+        self.audio.entry(tab).or_default().why = next;
+        if let (Some(muted), Some(view)) = (set, self.tab_view(tab)) {
+            view.set_muted(muted);
+        }
+    }
+
+    /// A tab committed `url`: Chrome's `SoundContentSettingObserver::MuteOrUnmuteIfNecessary`.
+    /// The site's sound content setting on the tab's profile is written to match the list
+    /// first, so Chromium's own observer agrees with it.
+    pub(super) fn restore_site_sound(&mut self, tab: TabId, url: &str) {
+        let muted = sitesound::is_muted(&self.muted_sites, url);
+        if let Some(host) = sitesound::web_host(url)
+            && let Some(view) = self.tab_view(tab)
+            && let Err(e) = view.set_sound_blocked(&sitesound::origins(&host), muted)
+        {
+            eprintln!("wubble: sound setting for {host}: {e}");
+        }
+        self.site_sound(tab, MuteEvent::Site(muted));
+    }
+
+    /// The `sound.muted_sites` setting changed (or was read at start): each container's sound
+    /// content setting follows the entries that came and went, and every live page of a site
+    /// whose rule changed is muted or unmuted (Chrome's observer on `OnContentSettingChanged`).
+    pub(super) fn set_muted_sites(&mut self, sites: Vec<String>) {
+        let (added, removed) = sitesound::diff(&self.muted_sites, &sites);
+        self.muted_sites = sites;
+        let tabs: Vec<TabId> = self.views.keys().copied().collect();
+        // a container's profile is shared by its views: written through each, as CEF names
+        // no context without one
+        for &tab in &tabs {
+            if let Some(view) = self.tab_view(tab) {
+                for (list, blocked) in [(&added, true), (&removed, false)] {
+                    for site in list.iter() {
+                        if let Err(e) = view.set_sound_blocked(&sitesound::origins(site), blocked) {
+                            eprintln!("wubble: sound setting for {site}: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        for tab in tabs {
+            if let Some(url) = self.committed.get(&tab).cloned() {
+                self.restore_site_sound(tab, &url);
+            }
+        }
+        self.after_change();
+    }
+
+    /// The tab menu's "Mute Site" switch: the tab's site joins the list, or the entry covering
+    /// it leaves (the stored setting Settings > Privacy shows; applied through it).
+    pub(super) fn toggle_mute_site(&mut self, tab: TabId) {
+        let Some(url) = self.model.tabs.get(&tab).map(|t| t.url.clone()) else {
+            return;
+        };
+        let key = wubble_core::settings::SOUND_MUTED_SITES.key;
+        match sitesound::toggle(&self.muted_sites, &url) {
+            Some(Toggle::Remove(site)) => self.setting_entry_removed(key, &site),
+            Some(Toggle::Add(host)) => self.setting_entry_added(key, &host),
+            None => {}
+        }
+    }
+
+    /// Rows of tabs with no view (asleep, not loaded yet) whose site is muted show muted: their
+    /// page will be when it loads. A tab with a view shows what the view reports.
+    pub(super) fn site_sound_marks(&self, view: &mut crate::shell::ShellView) {
+        for row in view.pinned.iter_mut().chain(view.tabs.iter_mut()) {
+            row.site_muted = row.kind == crate::shell::RowKind::Tab
+                && crate::shell::tab_id(row.id).is_some_and(|t| !self.audio.contains_key(&t))
+                && sitesound::is_muted(&self.muted_sites, &row.url);
+        }
+    }
 
     /// Asks every live tab's page whether it plays sound.
     pub fn probe_audible(&mut self) {
@@ -1209,11 +1559,11 @@ pub(super) fn model<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
 
 /// The menu in window coordinates: a page's is placed from its view's top left (`origin`), the
 /// shell's is already in the window's.
-fn menu_view(menu: &Menu, scale: f32, origin: (f32, f32)) -> MenuView {
+fn menu_view(menu: Option<&Menu>, scale: f32, origin: (f32, f32)) -> MenuView {
     let (at, entries, origin) = match menu {
-        Menu::Closed => return MenuView::default(),
-        Menu::Open { at, entries, .. } => (at, entries, origin),
-        Menu::Shell { at, entries } => (at, entries, (0.0, 0.0)),
+        None => return MenuView::default(),
+        Some(Menu::Open { at, entries, .. }) => (at, entries, origin),
+        Some(Menu::Shell { at, entries }) => (at, entries, (0.0, 0.0)),
     };
     MenuView {
         open: true,
@@ -1236,10 +1586,10 @@ fn menu_view(menu: &Menu, scale: f32, origin: (f32, f32)) -> MenuView {
     }
 }
 
-fn dialog_view(dialog: &Dialog) -> DialogView {
+fn dialog_view(dialog: Option<&OpenDialog>) -> DialogView {
     match dialog {
-        Dialog::None => DialogView::default(),
-        Dialog::Open(d) => {
+        None => DialogView::default(),
+        Some(d) => {
             let text = surface::dialog_text(d);
             DialogView {
                 open: true,
@@ -1272,10 +1622,10 @@ fn auth_view(r: &prompt::AuthRequest) -> DialogView {
     }
 }
 
-fn permission_view(p: &PermissionPrompt) -> PermissionView {
+fn permission_view(p: Option<&PermissionPrompt>) -> PermissionView {
     match p {
-        PermissionPrompt::None => PermissionView::default(),
-        PermissionPrompt::Open { shown: r, .. } => {
+        None => PermissionView::default(),
+        Some(PermissionPrompt { shown: r, .. }) => {
             let t = prompt::permission_text(r);
             PermissionView {
                 open: true,
@@ -1306,12 +1656,13 @@ fn error_view(e: &PageError) -> ErrorView {
     }
 }
 
-fn find_view(find: &FindBar, focus: i32) -> FindView {
+/// The find bar: the open one's, or a closed one keeping the `last` query.
+fn find_view(find: Option<&FindBar>, last: &str, focus: i32) -> FindView {
     FindView {
-        open: matches!(find, FindBar::Open { .. }),
-        query: find.query().into(),
-        counter: find.counter().into(),
-        none: find.none(),
+        open: find.is_some(),
+        query: find.map_or(last, |f| f.query.as_str()).into(),
+        counter: find.map(FindBar::counter).unwrap_or_default().into(),
+        none: find.is_some_and(FindBar::none),
         focus_serial: focus,
     }
 }
@@ -1349,4 +1700,9 @@ fn popup_view(window: &AppWindow, view: (f32, f32), popup: Option<Rect>) -> Popu
         origin_x: origin.x as f32 / scale,
         origin_y: origin.y as f32 / scale,
     }
+}
+
+/// The wall clock in ms, as the error panel's schedule counts it.
+pub(super) fn wall_ms() -> u64 {
+    u64::try_from(super::now_ms()).unwrap_or(0)
 }

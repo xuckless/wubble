@@ -115,6 +115,8 @@ pub enum Command {
     Model(TabCommand),
     /// Flip this tab's mute.
     ToggleMute(TabId),
+    /// Mute this tab's site, or unmute it (`sound.muted_sites`).
+    ToggleMuteSite(TabId),
     /// Reload this tab's page.
     ReloadTab(TabId),
     /// Ask for a sidebar folder's new name.
@@ -151,6 +153,17 @@ pub enum Command {
     CancelDownloadsAndClose(Closing),
     /// A question's "keep" answer: the menu closes, nothing else happens.
     Dismiss,
+    /// Turn caret browsing on, and stop asking first when `dont_ask` (`caret_entries`).
+    CaretBrowsing { dont_ask: bool },
+    /// An edit of the command bar's field (`address_entries`).
+    FieldEdit(FieldEdit),
+    /// Load this clipboard text from the address field it was pasted in, as typed there.
+    PasteAndGo(AddressField, String),
+    /// Turn Always Show Full URLs on or off (`settings::UI_FULL_URLS`).
+    SetFullUrls(bool),
+    /// A zoom row of the zoom chip's popover: the action, then the popover again on the new
+    /// percent (Chrome's zoom bubble stays while its buttons are pressed).
+    ZoomStep(Action),
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -182,6 +195,9 @@ pub struct NavFlags {
     /// The page is a private window's: "Open Link in Private Window" is not offered there
     /// (Chrome's incognito window has no "Open link in incognito window").
     pub private: bool,
+    /// The page's zoom while it is not the default (`zoom::indicator`): the page menu offers
+    /// to reset it.
+    pub zoomed: Option<u32>,
 }
 
 /// The context a row's predicates read.
@@ -275,6 +291,15 @@ const SEARCH_LABEL_CHARS: usize = 50;
 
 /// `Search <engine> for “<selection>”`, the selection shortened and on one line.
 pub fn search_label(engine: Option<&str>, text: &str) -> String {
+    format!(
+        "Search {} for \u{201c}{}\u{201d}",
+        engine.unwrap_or("the Web"),
+        short_text(text)
+    )
+}
+
+/// `text` on one line, cut to [`SEARCH_LABEL_CHARS`] with an ellipsis.
+fn short_text(text: &str) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let short: String = flat.chars().take(SEARCH_LABEL_CHARS).collect();
     let more = if flat.chars().count() > SEARCH_LABEL_CHARS {
@@ -282,10 +307,7 @@ pub fn search_label(engine: Option<&str>, text: &str) -> String {
     } else {
         ""
     };
-    format!(
-        "Search {} for \u{201c}{short}{more}\u{201d}",
-        engine.unwrap_or("the Web")
-    )
+    format!("{short}{more}")
 }
 
 /// How many characters of a host a menu row names (QA CRIT-05, HIGH-03): a longer one is cut in
@@ -580,6 +602,14 @@ const ROWS: &[Row] = &[
     row!(9, "Print\u{2026}", |c| c.page(), always, |_| {
         Command::Perform(Action::Print)
     }),
+    // wubble: the zoom chip's Reset, where Chrome's app menu has its Zoom row
+    Row {
+        group: 9,
+        label: |c| format!("Reset Zoom ({}%)", c.nav.zoomed.unwrap_or_default()),
+        show: |c| c.page() && c.nav.zoomed.is_some(),
+        enabled: always,
+        command: |_| Command::Perform(Action::ZoomReset),
+    },
     row!(10, "View Page Source", |c| c.page(), always, |_| {
         Command::Perform(Action::ViewSource)
     }),
@@ -659,9 +689,14 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
             },
         )
     });
+    grouped(suggestions.chain(fixed))
+}
+
+/// Entries in table order with a divider wherever the group changes.
+fn grouped(rows: impl Iterator<Item = (u8, Entry)>) -> Vec<Entry> {
     let mut out: Vec<Entry> = vec![];
     let mut last = None;
-    for (group, entry) in suggestions.chain(fixed) {
+    for (group, entry) in rows {
         if last.is_some_and(|g| g != group) {
             out.push(Entry {
                 label: String::new(),
@@ -678,16 +713,244 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
     out
 }
 
+/// Which address field a menu is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressField {
+    /// The command bar's field: its text rows act on what is typed.
+    Bar,
+    /// The address pill: the page's address.
+    Pill,
+}
+
+/// An edit of the command bar's field from its menu. All but Delete are the field's own
+/// (`FieldEdit` in model.slint); Delete is the host's edit of the text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldEdit {
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    SelectAll,
+}
+
+/// What the address menu needs to know when it opens.
+#[derive(Clone, Copy, Debug)]
+pub struct FieldFacts<'a> {
+    pub field: AddressField,
+    /// Text is selected in the bar's field.
+    pub selected: bool,
+    /// The bar's field holds text.
+    pub text: bool,
+    /// The clipboard's text; empty when it holds none (or cannot be read here).
+    pub clipboard: &'a str,
+    /// Always Show Full URLs is on.
+    pub full_urls: bool,
+}
+
+impl FieldFacts<'_> {
+    fn bar(&self) -> bool {
+        self.field == AddressField::Bar
+    }
+    fn pill(&self) -> bool {
+        self.field == AddressField::Pill
+    }
+    fn pasteable(&self) -> bool {
+        !self.clipboard.trim().is_empty()
+    }
+}
+
+/// One row of the address menu: its group (a divider between groups), when it shows and is
+/// enabled, its label, what it runs and the action whose key does the same.
+struct FieldRow {
+    group: u8,
+    show: fn(&FieldFacts) -> bool,
+    enabled: fn(&FieldFacts) -> bool,
+    label: fn(&FieldFacts) -> String,
+    command: fn(&FieldFacts) -> Command,
+    key: Option<Action>,
+}
+
+/// The address field's menu, in order: Chromium's omnibox menu
+/// (`chrome/browser/ui/views/omnibox/omnibox_view_views.cc` `UpdateContextMenu`, BSD-3-Clause;
+/// rows and labels only). The bar's field has the text rows and Paste and Go; the pill has
+/// Copy and Edit Address and Paste and Go; both end in Always Show Full URLs. Undo is left out:
+/// Slint's field has no undo the host can run.
+const FIELD_ROWS: &[FieldRow] = &[
+    FieldRow {
+        group: 0,
+        show: |f| f.bar(),
+        enabled: |f| f.selected,
+        label: |_| "Cut".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Cut),
+        key: Some(Action::Cut),
+    },
+    FieldRow {
+        group: 0,
+        show: |f| f.bar(),
+        enabled: |f| f.selected,
+        label: |_| "Copy".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Copy),
+        key: Some(Action::Copy),
+    },
+    FieldRow {
+        group: 0,
+        show: |f| f.bar(),
+        enabled: |f| f.pasteable(),
+        label: |_| "Paste".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Paste),
+        key: Some(Action::Paste),
+    },
+    FieldRow {
+        group: 0,
+        show: |_| true,
+        enabled: |f| f.pasteable(),
+        label: |f| paste_label(f.clipboard),
+        command: |f| Command::PasteAndGo(f.field, f.clipboard.trim().to_owned()),
+        key: None,
+    },
+    FieldRow {
+        group: 0,
+        show: |f| f.bar(),
+        enabled: |f| f.selected,
+        label: |_| "Delete".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Delete),
+        key: None,
+    },
+    FieldRow {
+        group: 1,
+        show: |f| f.bar(),
+        enabled: |f| f.text,
+        label: |_| "Select All".into(),
+        command: |_| Command::FieldEdit(FieldEdit::SelectAll),
+        key: Some(Action::SelectAll),
+    },
+    FieldRow {
+        group: 1,
+        show: |f| f.pill(),
+        enabled: |_| true,
+        label: |_| "Copy Address".into(),
+        command: |_| Command::Perform(Action::CopyUrl),
+        key: Some(Action::CopyUrl),
+    },
+    FieldRow {
+        group: 1,
+        show: |f| f.pill(),
+        enabled: |_| true,
+        label: |_| "Edit Address".into(),
+        command: |_| Command::Perform(Action::FocusAddress),
+        key: Some(Action::FocusAddress),
+    },
+    FieldRow {
+        group: 2,
+        show: |_| true,
+        enabled: |_| true,
+        label: |_| "Always Show Full URLs".into(),
+        command: |f| Command::SetFullUrls(!f.full_urls),
+        key: None,
+    },
+];
+
+/// The key that runs `action`, as the keymap prints it; empty for none.
+fn key_text(keymap: &Keymap, action: Action) -> String {
+    keymap
+        .shortcut_for(action)
+        .map(|c| c.to_string())
+        .unwrap_or_default()
+}
+
+/// The reload button's menu (its right click): Chrome's `ReloadButton` menu
+/// (`chrome/browser/ui/views/toolbar/reload_button.cc`, `IDS_RELOAD_MENU_*`, BSD-3-Clause; rows
+/// and labels only), Normal and Hard Reload, and Empty Cache and Hard Reload while DevTools
+/// inspects the tab (`devtools`), each with its key.
+pub fn reload_entries(devtools: bool, keymap: &Keymap) -> Vec<Entry> {
+    [
+        (Action::Reload, "Normal Reload"),
+        (Action::HardReload, "Hard Reload"),
+        (Action::EmptyCacheHardReload, "Empty Cache and Hard Reload"),
+    ]
+    .into_iter()
+    .filter(|&(action, _)| devtools || action != Action::EmptyCacheHardReload)
+    .map(|(action, label)| Entry {
+        label: label.into(),
+        command: Command::Perform(action),
+        enabled: true,
+        icon: "",
+        shortcut: key_text(keymap, action),
+        danger: false,
+    })
+    .collect()
+}
+
+/// The zoom chip's popover for a page at `percent` (Chrome's omnibox zoom bubble,
+/// `chrome/browser/ui/views/location_bar/zoom_bubble_view.cc`, BSD-3-Clause; rows only): the
+/// percent, then −, + and Reset to the user's `default`, each with its key.
+pub fn zoom_entries(percent: u32, default: u32, keymap: &Keymap) -> Vec<Entry> {
+    let row = |label: String, action| Entry {
+        label,
+        command: Command::ZoomStep(action),
+        enabled: true,
+        icon: "",
+        shortcut: key_text(keymap, action),
+        danger: false,
+    };
+    vec![
+        Entry {
+            label: format!("Zoom {percent}%"),
+            command: Command::Info,
+            enabled: false,
+            icon: "",
+            shortcut: String::new(),
+            danger: false,
+        },
+        row("Zoom Out".into(), Action::ZoomOut),
+        row("Zoom In".into(), Action::ZoomIn),
+        row(format!("Reset to {default}%"), Action::ZoomReset),
+    ]
+}
+
+/// The address field's menu (`FIELD_ROWS`), each row's shortcut from the keymap.
+pub fn address_entries(facts: FieldFacts, keymap: &Keymap) -> Vec<Entry> {
+    let rows = FIELD_ROWS.iter().filter(|r| (r.show)(&facts)).map(|r| {
+        let command = (r.command)(&facts);
+        let on = command == Command::SetFullUrls(false);
+        let entry = Entry {
+            label: (r.label)(&facts),
+            command,
+            enabled: (r.enabled)(&facts),
+            // the switch's state, as a check
+            icon: if on { "check" } else { "" },
+            shortcut: r.key.map(|a| key_text(keymap, a)).unwrap_or_default(),
+            danger: false,
+        };
+        (r.group, entry)
+    });
+    grouped(rows)
+}
+
+/// The paste row's label, from what the clipboard's text would do as typed
+/// (`omnibox::classify`): Chromium's `IDS_PASTE_AND_GO` "Paste and go to <url>" and
+/// `IDS_PASTE_AND_SEARCH` "Paste and search for “<text>”", the text cut as the page menu's
+/// search row; plain "Paste and Go" when the clipboard holds no text.
+pub fn paste_label(clipboard: &str) -> String {
+    if clipboard.trim().is_empty() {
+        return "Paste and Go".into();
+    }
+    match omnibox::classify(clipboard) {
+        omnibox::Intent::Url(url) => format!(
+            "Paste and Go to {}",
+            wubble_core::url::elide_middle(&url, SEARCH_LABEL_CHARS)
+        ),
+        omnibox::Intent::Search(q) => {
+            format!("Paste and Search for \u{201c}{}\u{201d}", short_text(&q))
+        }
+    }
+}
+
 /// The tab row's menu: the rows of `wubble_core::tabmenu::ROWS` that apply to `tab`, in table
 /// order, with the split entries in the table's split slot and each row's shortcut from the
 /// keymap where an action does the same.
 pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> Vec<Entry> {
-    let key = |a: Action| {
-        keymap
-            .shortcut_for(a)
-            .map(|c| c.to_string())
-            .unwrap_or_default()
-    };
+    let key = |a: Action| key_text(keymap, a);
     let visible = model.visible_tab() == Some(tab);
     let mut out = vec![];
     for e in tabmenu::entries(model, tab, facts) {
@@ -723,6 +986,7 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
                     String::new()
                 },
             ),
+            Run::ToggleMuteSite(t) => (Command::ToggleMuteSite(t), String::new()),
             Run::Model(c) => {
                 let shortcut = match &c {
                     ModelCommand::CloseTab(_) if visible => key(Action::CloseTab),
@@ -752,12 +1016,7 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
 /// The sidebar's own menu, a right click on its empty glass (QA LOW-02): what the sidebar
 /// already offers, a tab, a Space and a folder in the active Space, with their keys.
 pub fn sidebar_entries(model: &Model, keymap: &Keymap) -> Vec<Entry> {
-    let key = |a: Action| {
-        keymap
-            .shortcut_for(a)
-            .map(|c| c.to_string())
-            .unwrap_or_default()
-    };
+    let key = |a: Action| key_text(keymap, a);
     let entry = |label: &str, command, shortcut| Entry {
         label: label.into(),
         command,
@@ -1175,6 +1434,35 @@ pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Ent
     out
 }
 
+/// F7's question before caret browsing turns on (`wubble_core::caret`): Chrome's dialog
+/// (`chrome/browser/ui/views/accessibility/caret_browsing_dialog_delegate.cc`, its strings
+/// `IDS_CARET_BROWSING_*`, BSD-3-Clause; strings only) as a menu, whose rows are its "Turn on"
+/// button with and without "Don't ask again"; dismissing it is Cancel.
+pub fn caret_entries() -> Vec<Entry> {
+    let line = |label: &str, command, enabled| Entry {
+        label: label.into(),
+        command,
+        enabled,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
+    };
+    vec![
+        line("Turn on caret browsing?", Command::Info, false),
+        line(
+            "Move through the text of pages with the arrow keys; F7 turns it off",
+            Command::Info,
+            false,
+        ),
+        line("Turn On", Command::CaretBrowsing { dont_ask: false }, true),
+        line(
+            "Turn On, Don\u{2019}t Ask Again",
+            Command::CaretBrowsing { dont_ask: true },
+            true,
+        ),
+    ]
+}
+
 /// One stream of the media menu: its id, its title, and what is known of it.
 pub struct MediaRow<'a> {
     pub item: u32,
@@ -1282,11 +1570,10 @@ pub fn page_theme_entries(host: &str, current: PageTheme) -> Vec<Entry> {
     out
 }
 
-/// The menu of one tab, or one the shell opened.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The open menu's content (`overlay::Kind::Menu` says whether it is open): a page's, or one the
+/// shell opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Menu {
-    #[default]
-    Closed,
     Open {
         id: RequestId,
         /// The pointer, physical pixels relative to the view.
@@ -1328,8 +1615,6 @@ pub enum MenuEvent {
     Dismiss,
     /// CEF closed the menu itself (it already answered).
     Reset,
-    /// The view closed: welding answered every held request.
-    ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1342,9 +1627,16 @@ pub enum MenuEffect {
     Run(Command),
 }
 
-pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
+/// One menu event on the open menu (`None`: none open; the view gone is the overlays' store's,
+/// no event comes here); the menu back, `None` when it closes.
+pub fn transition(state: Option<Menu>, event: MenuEvent) -> (Option<Menu>, Vec<MenuEffect>) {
     use MenuEvent::*;
     let dismiss = |id| MenuEffect::Answer { id, command: None };
+    // CEF holds one menu at a time; a newer one replaces the old, which is dismissed
+    let replaced = |state: &Option<Menu>| match state {
+        Some(Menu::Open { id, .. }) => vec![dismiss(*id)],
+        Some(Menu::Shell { .. }) | None => vec![],
+    };
     match (state, event) {
         (
             state,
@@ -1355,11 +1647,7 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
                 extra,
             },
         ) => {
-            // CEF holds one menu at a time; a newer one replaces the old.
-            let mut effects = match state {
-                Menu::Open { id: old, .. } => vec![dismiss(old)],
-                Menu::Closed | Menu::Shell { .. } => vec![],
-            };
+            let mut effects = replaced(&state);
             let mut entries = entries(&menu, nav);
             if !entries.is_empty() && !extra.is_empty() {
                 entries.push(Entry {
@@ -1374,52 +1662,44 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
             entries.extend(extra);
             if entries.is_empty() {
                 effects.push(dismiss(id));
-                return (Menu::Closed, effects);
+                return (None, effects);
             }
             let open = Menu::Open {
                 id,
                 at: (menu.x, menu.y),
                 entries,
             };
-            (open, effects)
+            (Some(open), effects)
         }
-        (Menu::Open { id, at, entries }, Chosen(i)) => {
+        (Some(Menu::Open { id, at, entries }), Chosen(i)) => {
             match entries.get(i).filter(|e| e.enabled).map(|e| &e.command) {
-                None | Some(Command::Separator) => (Menu::Open { id, at, entries }, vec![]),
+                None | Some(Command::Separator) => (Some(Menu::Open { id, at, entries }), vec![]),
                 Some(Command::Engine(command)) => (
-                    Menu::Closed,
+                    None,
                     vec![MenuEffect::Answer {
                         id,
                         command: Some(*command),
                     }],
                 ),
-                Some(command) => (
-                    Menu::Closed,
-                    vec![dismiss(id), MenuEffect::Run(command.clone())],
-                ),
+                Some(command) => (None, vec![dismiss(id), MenuEffect::Run(command.clone())]),
             }
         }
-        (Menu::Open { id, .. }, Dismiss) => (Menu::Closed, vec![dismiss(id)]),
+        (Some(Menu::Open { id, .. }), Dismiss) => (None, vec![dismiss(id)]),
         (state, ShellRequested { at, entries }) => {
-            let effects = match state {
-                Menu::Open { id, .. } => vec![dismiss(id)],
-                Menu::Closed | Menu::Shell { .. } => vec![],
-            };
+            let effects = replaced(&state);
             if entries.is_empty() {
-                return (Menu::Closed, effects);
+                return (None, effects);
             }
-            (Menu::Shell { at, entries }, effects)
+            (Some(Menu::Shell { at, entries }), effects)
         }
-        (Menu::Shell { at, entries }, Chosen(i)) => {
+        (Some(Menu::Shell { at, entries }), Chosen(i)) => {
             match entries.get(i).filter(|e| e.enabled).map(|e| &e.command) {
-                None | Some(Command::Separator) => (Menu::Shell { at, entries }, vec![]),
-                Some(command) => (Menu::Closed, vec![MenuEffect::Run(command.clone())]),
+                None | Some(Command::Separator) => (Some(Menu::Shell { at, entries }), vec![]),
+                Some(command) => (None, vec![MenuEffect::Run(command.clone())]),
             }
         }
-        (_, Reset | ViewGone) => (Menu::Closed, vec![]),
-        (Menu::Closed | Menu::Shell { .. }, Dismiss) | (Menu::Closed, Chosen(_)) => {
-            (Menu::Closed, vec![])
-        }
+        (_, Reset) => (None, vec![]),
+        (Some(Menu::Shell { .. }) | None, Dismiss) | (None, Chosen(_)) => (None, vec![]),
     }
 }
 
@@ -1739,6 +2019,161 @@ mod tests {
             assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
             assert_eq!(e[2].command, Command::Dismiss);
         }
+    }
+
+    #[test]
+    fn the_zoom_popover_names_the_percent_and_steps() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        let e = zoom_entries(125, 100, &km);
+        assert_eq!(
+            labels(&e),
+            ["Zoom 125%", "Zoom Out", "Zoom In", "Reset to 100%"]
+        );
+        assert!(!e[0].enabled);
+        assert_eq!(e[2].command, Command::ZoomStep(Action::ZoomIn));
+        assert_eq!(e[3].command, Command::ZoomStep(Action::ZoomReset));
+        // the page menu offers the reset only while the page is zoomed
+        let zoomed = NavFlags {
+            zoomed: Some(125),
+            ..NavFlags::default()
+        };
+        let reset = |nav| {
+            entries(&page(), nav)
+                .into_iter()
+                .find(|e| e.command == Command::Perform(Action::ZoomReset))
+                .map(|e| e.label)
+        };
+        assert_eq!(reset(zoomed), Some("Reset Zoom (125%)".into()));
+        assert_eq!(reset(NavFlags::default()), None);
+    }
+
+    #[test]
+    fn the_reload_menu_offers_the_empty_cache_reload_with_devtools() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        for (devtools, want) in [
+            (false, vec!["Normal Reload", "Hard Reload"]),
+            (
+                true,
+                vec![
+                    "Normal Reload",
+                    "Hard Reload",
+                    "Empty Cache and Hard Reload",
+                ],
+            ),
+        ] {
+            let e = reload_entries(devtools, &km);
+            assert_eq!(labels(&e), want, "devtools {devtools}");
+            assert_eq!(e[1].command, Command::Perform(Action::HardReload));
+            assert_eq!(e[0].shortcut, "Ctrl+R");
+        }
+    }
+
+    #[test]
+    fn address_menus_follow_the_field_and_the_clipboard() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        let facts = |field, selected, text, clipboard| FieldFacts {
+            field,
+            selected,
+            text,
+            clipboard,
+            full_urls: false,
+        };
+        let bar = address_entries(facts(AddressField::Bar, true, true, " example.com "), &km);
+        assert_eq!(
+            labels(&bar),
+            [
+                "Cut",
+                "Copy",
+                "Paste",
+                "Paste and Go to https://example.com/",
+                "Delete",
+                "-",
+                "Select All",
+                "-",
+                "Always Show Full URLs"
+            ]
+        );
+        let paste = bar.iter().find(|e| e.label.starts_with("Paste and"));
+        assert_eq!(
+            paste.map(|e| &e.command),
+            Some(&Command::PasteAndGo(
+                AddressField::Bar,
+                "example.com".into()
+            ))
+        );
+        let cut = bar.iter().find(|e| e.label == "Cut");
+        assert_eq!(cut.map(|e| e.shortcut.as_str()), Some("Ctrl+X"));
+        let pill = address_entries(facts(AddressField::Pill, false, false, "two\nwords"), &km);
+        assert_eq!(
+            labels(&pill),
+            [
+                "Paste and Search for \u{201c}two words\u{201d}",
+                "-",
+                "Copy Address",
+                "Edit Address",
+                "-",
+                "Always Show Full URLs"
+            ]
+        );
+        // what is enabled: (name, facts, the rows that are)
+        for (name, f, want) in [
+            (
+                "nothing selected, empty clipboard",
+                facts(AddressField::Bar, false, true, ""),
+                vec!["Select All", "Always Show Full URLs"],
+            ),
+            (
+                "an empty field",
+                facts(AddressField::Bar, false, false, "  "),
+                vec!["Always Show Full URLs"],
+            ),
+            (
+                "a selection",
+                facts(AddressField::Bar, true, true, ""),
+                vec![
+                    "Cut",
+                    "Copy",
+                    "Delete",
+                    "Select All",
+                    "Always Show Full URLs",
+                ],
+            ),
+            (
+                "the pill, nothing to paste",
+                facts(AddressField::Pill, false, false, ""),
+                vec!["Copy Address", "Edit Address", "Always Show Full URLs"],
+            ),
+        ] {
+            let entries = address_entries(f, &km);
+            let on: Vec<&str> = entries
+                .iter()
+                .filter(|e| e.enabled)
+                .map(|e| e.label.as_str())
+                .collect();
+            assert_eq!(on, want, "{name}");
+        }
+        // the empty clipboard's row says so; the switch shows its state and flips it
+        let empty = address_entries(facts(AddressField::Pill, false, false, ""), &km);
+        assert_eq!(empty[0].label, "Paste and Go");
+        let full = |on| {
+            let f = FieldFacts {
+                full_urls: on,
+                ..facts(AddressField::Pill, false, false, "")
+            };
+            let e = address_entries(f, &km);
+            let last = e.last().expect("rows");
+            (last.icon, last.command.clone())
+        };
+        assert_eq!(full(false), ("", Command::SetFullUrls(true)));
+        assert_eq!(full(true), ("check", Command::SetFullUrls(false)));
+        // a long address is cut in the middle, a long search at its end
+        let long = format!("https://a.test/{}", "x".repeat(80));
+        assert_eq!(
+            paste_label(&long).chars().count(),
+            "Paste and Go to ".len() + 50
+        );
+        let words = "word ".repeat(20);
+        assert!(paste_label(&words).ends_with("\u{2026}\u{201d}"));
     }
 
     fn labels(entries: &[Entry]) -> Vec<&str> {
@@ -2329,10 +2764,10 @@ mod tests {
 
     #[test]
     fn engine_commands_answer_with_the_command() {
-        let (s, fx) = transition(Menu::Closed, requested(1, page()));
+        let (s, fx) = transition(None, requested(1, page()));
         assert!(fx.is_empty());
         let (s, fx) = transition(s, MenuEvent::Chosen(2));
-        assert_eq!(s, Menu::Closed);
+        assert_eq!(s, None);
         assert_eq!(
             fx,
             [MenuEffect::Answer {
@@ -2344,9 +2779,9 @@ mod tests {
 
     #[test]
     fn app_commands_dismiss_then_run() {
-        let (s, _) = transition(Menu::Closed, requested(1, link()));
+        let (s, _) = transition(None, requested(1, link()));
         let (s, fx) = transition(s, MenuEvent::Chosen(0));
-        assert_eq!(s, Menu::Closed);
+        assert_eq!(s, None);
         assert_eq!(
             fx,
             [
@@ -2362,19 +2797,18 @@ mod tests {
     #[test]
     fn disabled_entries_and_separators_are_not_chosen() {
         // Back and Forward are disabled without history.
-        let (s, _) = transition(Menu::Closed, requested(1, page()));
+        let (s, _) = transition(None, requested(1, page()));
         let (s, fx) = transition(s, MenuEvent::Chosen(0));
         assert!(fx.is_empty());
         let (s, fx) = transition(s, MenuEvent::Chosen(99));
         assert!(fx.is_empty());
-        assert!(matches!(s, Menu::Open { .. }));
+        assert!(matches!(s, Some(Menu::Open { .. })));
     }
 
     #[test]
     fn only_the_page_s_own_menu_keeps_its_focus() {
-        let open = transition(Menu::Closed, requested(1, link())).0;
+        let open = transition(None, requested(1, link())).0.unwrap();
         assert!(open.keeps_page_focus());
-        assert!(!Menu::Closed.keeps_page_focus());
         let shell = Menu::Shell {
             at: (0, 0),
             entries: vec![],
@@ -2384,7 +2818,7 @@ mod tests {
             "the shell's menu is not the page's"
         );
         // CEF closed it (window blurred, tab hidden): the page is free to blur.
-        assert!(!transition(open, MenuEvent::Reset).0.keeps_page_focus());
+        assert_eq!(transition(Some(open), MenuEvent::Reset).0, None);
     }
 
     #[test]
@@ -2404,11 +2838,11 @@ mod tests {
                 Reset,
                 Dismiss,
                 requested(5, page()),
-                ViewGone,
+                Reset,
                 Chosen(2),
             ]
         };
-        let mut s = Menu::Closed;
+        let mut s: Option<Menu> = None;
         let mut answered = vec![];
         for e in events() {
             let (next, fx) = transition(s, e);
@@ -2444,6 +2878,9 @@ mod tests {
         );
         let mute = e.iter().find(|e| e.label == "Mute Tab").unwrap();
         assert_eq!(mute.command, Command::ToggleMute(visible));
+        let site = e.iter().find(|e| e.label == "Mute Site").unwrap();
+        assert_eq!(site.command, Command::ToggleMuteSite(visible));
+        assert!(labels.contains(&"New Tab Below"));
         // dividers never lead, trail or double
         assert!(e.first().unwrap().command != Command::Separator);
         assert!(e.last().unwrap().command != Command::Separator);
@@ -2679,7 +3116,7 @@ mod tests {
     fn the_shell_s_menu_runs_its_entry_and_answers_nothing() {
         let entries = split_entries(&tabs(3), TabId(1));
         let (open, fx) = transition(
-            Menu::Closed,
+            None,
             MenuEvent::ShellRequested {
                 at: (5, 6),
                 entries: entries.clone(),
@@ -2688,27 +3125,27 @@ mod tests {
         assert!(fx.is_empty());
         assert_eq!(
             open,
-            Menu::Shell {
+            Some(Menu::Shell {
                 at: (5, 6),
                 entries
-            }
+            })
         );
         let (closed, fx) = transition(open.clone(), MenuEvent::Chosen(0));
-        assert_eq!(closed, Menu::Closed);
+        assert_eq!(closed, None);
         assert_eq!(fx, [MenuEffect::Run(Command::SplitWith(TabId(1)))]);
         assert_eq!(transition(open.clone(), MenuEvent::Chosen(9)).0, open);
-        assert_eq!(transition(open, MenuEvent::Dismiss), (Menu::Closed, vec![]));
+        assert_eq!(transition(open, MenuEvent::Dismiss), (None, vec![]));
         // nothing to show: no menu
         let (state, fx) = transition(
-            Menu::Closed,
+            None,
             MenuEvent::ShellRequested {
                 at: (0, 0),
                 entries: vec![],
             },
         );
-        assert_eq!((state, fx), (Menu::Closed, vec![]));
+        assert_eq!((state, fx), (None, vec![]));
         // the shell's menu replaces a page's, which is answered
-        let (page, _) = transition(Menu::Closed, requested(1, page()));
+        let (page, _) = transition(None, requested(1, page()));
         let (_, fx) = transition(
             page,
             MenuEvent::ShellRequested {

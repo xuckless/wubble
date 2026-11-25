@@ -237,10 +237,10 @@ pub enum Stage {
     Sending,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The print sheet's content while it is up (`overlay::Kind::PrintSheet` says whether it is
+/// open): `None` where the sheet is closed.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sheet {
-    #[default]
-    Closed,
     Open {
         tab: TabId,
         settings: PrintSettings,
@@ -305,11 +305,13 @@ fn name(path: &std::path::Path) -> String {
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
 }
 
-pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
+/// One print event on the sheet that is up (`None`: none); the sheet back, `None` when it
+/// closes.
+pub fn transition(sheet: Option<Sheet>, event: Event) -> (Option<Sheet>, Vec<Effect>) {
     use Effect as F;
     match (sheet, event) {
         (
-            Sheet::Closed,
+            None,
             Event::Open {
                 tab,
                 printers,
@@ -329,9 +331,9 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                 printers,
                 error: None,
             };
-            (open, vec![])
+            (Some(open), vec![])
         }
-        (Sheet::Open { tab, printers, .. }, Event::Edit(settings)) => {
+        (Some(Sheet::Open { tab, printers, .. }), Event::Edit(settings)) => {
             // A range being typed is checked as it changes; any edit retires
             // the last failure's message.
             let error = parse_range(&settings.pages)
@@ -343,25 +345,25 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                 printers,
                 error,
             };
-            (open, vec![])
+            (Some(open), vec![])
         }
         (
-            Sheet::Open {
+            Some(Sheet::Open {
                 tab,
                 settings,
                 printers,
                 ..
-            },
+            }),
             Event::Submit(path),
         ) => match to_pdf_options(&settings) {
             Ok(options) => (
-                Sheet::Working {
+                Some(Sheet::Working {
                     tab,
                     settings,
                     printers,
                     path: path.clone(),
                     stage: Stage::Rendering,
-                },
+                }),
                 vec![F::PrintToPdf { tab, path, options }],
             ),
             Err(e) => {
@@ -371,22 +373,22 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                     printers,
                     error: Some(e.message().to_owned()),
                 };
-                (open, vec![])
+                (Some(open), vec![])
             }
         },
-        (Sheet::Open { .. }, Event::Cancel) => (Sheet::Closed, vec![]),
+        (Some(Sheet::Open { .. }), Event::Cancel) => (None, vec![]),
         (
-            Sheet::Working {
+            Some(Sheet::Working {
                 tab,
                 settings,
                 printers,
                 path,
                 stage: Stage::Rendering,
-            },
+            }),
             Event::Rendered { ok },
         ) => match (&settings.destination, ok) {
             (Destination::Pdf, true) => (
-                Sheet::Closed,
+                None,
                 vec![
                     F::Toast(format!("Saved {}", name(&path))),
                     F::ListDownload(path),
@@ -401,7 +403,7 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                     path,
                     stage: Stage::Sending,
                 };
-                (working, vec![F::Lp(args)])
+                (Some(working), vec![F::Lp(args)])
             }
             // CEF says only that it failed: a range past the last page is the
             // usual reason (the page cannot be counted beforehand).
@@ -417,17 +419,17 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                     printers,
                     error: Some(error.into()),
                 };
-                (open, vec![F::RemoveFile(path)])
+                (Some(open), vec![F::RemoveFile(path)])
             }
         },
         (
-            Sheet::Working {
+            Some(Sheet::Working {
                 tab,
                 settings,
                 printers,
                 path,
                 stage: Stage::Sending,
-            },
+            }),
             Event::Sent(result),
         ) => {
             let printer = match &settings.destination {
@@ -436,7 +438,7 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
             };
             match result {
                 Ok(()) => (
-                    Sheet::Closed,
+                    None,
                     vec![F::RemoveFile(path), F::Toast(format!("Sent to {printer}"))],
                 ),
                 Err(why) => {
@@ -446,23 +448,23 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                         printers,
                         error: Some(format!("{printer}: {why}")),
                     };
-                    (open, vec![F::RemoveFile(path)])
+                    (Some(open), vec![F::RemoveFile(path)])
                 }
             }
         }
-        (Sheet::Open { tab, .. }, Event::TabClosed(closed)) if tab == closed => {
-            (Sheet::Closed, vec![])
+        (Some(Sheet::Open { tab, .. }), Event::TabClosed(closed)) if tab == closed => {
+            (None, vec![])
         }
         // The PDF of a closed tab is never written; `lp` already has its file.
         (
-            Sheet::Working {
+            Some(Sheet::Working {
                 tab,
                 path,
                 stage: Stage::Rendering,
                 ..
-            },
+            }),
             Event::TabClosed(closed),
-        ) if tab == closed => (Sheet::Closed, vec![F::RemoveFile(path)]),
+        ) if tab == closed => (None, vec![F::RemoveFile(path)]),
         // A second Ctrl+P, a click while working, a stale answer.
         (sheet, _) => (sheet, vec![]),
     }
@@ -565,9 +567,9 @@ mod tests {
         assert_eq!(parse_lpstat_e(out), ["Office_Laser", "HP-LaserJet.local"]);
     }
 
-    fn open(printers: &[&str], default: Option<&str>) -> Sheet {
+    fn open(printers: &[&str], default: Option<&str>) -> Option<Sheet> {
         transition(
-            Sheet::Closed,
+            None,
             Event::Open {
                 tab: T,
                 printers: printers.iter().map(|p| p.to_string()).collect(),
@@ -577,16 +579,18 @@ mod tests {
         .0
     }
 
-    fn settings(sheet: &Sheet) -> PrintSettings {
+    fn settings(sheet: &Option<Sheet>) -> PrintSettings {
         match sheet {
-            Sheet::Open { settings, .. } | Sheet::Working { settings, .. } => settings.clone(),
-            Sheet::Closed => panic!("closed"),
+            Some(Sheet::Open { settings, .. } | Sheet::Working { settings, .. }) => {
+                settings.clone()
+            }
+            None => panic!("closed"),
         }
     }
 
-    fn error(sheet: &Sheet) -> Option<String> {
+    fn error(sheet: &Option<Sheet>) -> Option<String> {
         match sheet {
-            Sheet::Open { error, .. } => error.clone(),
+            Some(Sheet::Open { error, .. }) => error.clone(),
             _ => None,
         }
     }
@@ -612,7 +616,7 @@ mod tests {
             },
         );
         assert!(fx.is_empty());
-        assert!(matches!(again, Sheet::Open { tab: T, .. }));
+        assert!(matches!(again, Some(Sheet::Open { tab: T, .. })));
     }
 
     #[test]
@@ -625,7 +629,7 @@ mod tests {
         assert_eq!(error(&s).as_deref(), Some(RangeError::Reversed.message()));
         let (s, fx) = transition(s, Event::Submit("/d/p.pdf".into()));
         assert!(fx.is_empty());
-        assert!(matches!(s, Sheet::Open { .. }));
+        assert!(matches!(s, Some(Sheet::Open { .. })));
         // Fixing it clears the message.
         let (s, _) = transition(s, Event::Edit(PrintSettings::default()));
         assert_eq!(error(&s), None);
@@ -636,19 +640,22 @@ mod tests {
         let (s, fx) = transition(open(&[], None), Event::Submit("/d/Page.pdf".into()));
         assert!(matches!(
             s,
-            Sheet::Working {
+            Some(Sheet::Working {
                 stage: Stage::Rendering,
                 ..
-            }
+            })
         ));
         assert!(matches!(
             &fx[..],
             [Effect::PrintToPdf { tab: T, path, .. }] if path == std::path::Path::new("/d/Page.pdf")
         ));
         let (s, _) = transition(s.clone(), Event::Cancel);
-        assert!(matches!(s, Sheet::Working { .. }), "working ignores cancel");
+        assert!(
+            matches!(s, Some(Sheet::Working { .. })),
+            "working ignores cancel"
+        );
         let (s, fx) = transition(s, Event::Rendered { ok: true });
-        assert_eq!(s, Sheet::Closed);
+        assert_eq!(s, None);
         assert_eq!(
             fx,
             [
@@ -682,7 +689,7 @@ mod tests {
             [Effect::Lp(lp_args("Office", 1, "/tmp/w.pdf".as_ref()))]
         );
         let (done, fx) = transition(s.clone(), Event::Sent(Ok(())));
-        assert_eq!(done, Sheet::Closed);
+        assert_eq!(done, None);
         assert_eq!(
             fx,
             [
@@ -698,13 +705,13 @@ mod tests {
     #[test]
     fn closing_the_tab_closes_the_sheet() {
         let (s, fx) = transition(open(&[], None), Event::TabClosed(TabId(9)));
-        assert!(fx.is_empty() && matches!(s, Sheet::Open { .. }));
+        assert!(fx.is_empty() && matches!(s, Some(Sheet::Open { .. })));
         let (s, _) = transition(s, Event::TabClosed(T));
-        assert_eq!(s, Sheet::Closed);
+        assert_eq!(s, None);
         let printing = open(&["P"], Some("P"));
         let (s, _) = transition(printing, Event::Submit("/tmp/t.pdf".into()));
         let (s, fx) = transition(s, Event::TabClosed(T));
-        assert_eq!(s, Sheet::Closed);
+        assert_eq!(s, None);
         assert_eq!(fx, [Effect::RemoveFile("/tmp/t.pdf".into())]);
         let (s, _) = transition(open(&[], None), Event::Submit("/d/t.pdf".into()));
         let (_, fx) = transition(s, Event::TabClosed(T));
@@ -720,6 +727,6 @@ mod tests {
         assert!(error(&s).is_some());
         let (s, fx) = transition(s, Event::Submit("/tmp/w2.pdf".into()));
         assert!(matches!(&fx[..], [Effect::PrintToPdf { .. }]));
-        assert!(matches!(s, Sheet::Working { .. }));
+        assert!(matches!(s, Some(Sheet::Working { .. })));
     }
 }

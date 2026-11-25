@@ -8,7 +8,8 @@
 // it while a page loads (wubble_core::beam; the scene draws it, BorderBeam where it cannot).
 // On the rail it is `.wb-rail-addr`, a 40 x 36 icon button whose command bar grows from its right
 // edge. wubble's own chips (pop-ups, media, blocker shield and count, reader, bookmark star) sit
-// at the right end in the same 13 px icon and 8 px gap (derived: docs/fidelity/derived-review.md).
+// at the right end in the same 13 px icon and 8 px gap (derived: docs/fidelity/derived-review.md);
+// the zoom chip (Chrome's omnibox zoom icon) shows the page's percent while it is not the default.
 
 import { Palette, Tsx } from "../gen/tokens.slint";
 import { BrowserCss } from "../gen/css.slint";
@@ -95,6 +96,8 @@ export component AddressPill inherits Rectangle {
         ? { x: rail.absolute-position.x + rail.width, y: rail.absolute-position.y + rail.height / 2 }
         : { x: root.absolute-position.x + Tsx.address-origin-dx, y: root.absolute-position.y + root.height / 2 };
     callback activated();
+    // wubble: a right click on the pill at x, y (window coordinates): the host's address menu
+    callback context(length, length);
     // wubble: the chips at the pill's right end.
     in property <bool> bookmarkable: false;
     in property <bool> bookmarked: false;
@@ -105,6 +108,9 @@ export component AddressPill inherits Rectangle {
     callback blocker-requested(length, length);
     in property <int> popups-blocked: 0;
     callback popups-requested(length, length);
+    // the page's zoom while it is not the default (0: no chip); its popover below x, y
+    in property <int> zoom: 0;
+    callback zoom-requested(length, length);
     in property <bool> media-visible: false;
     callback media-requested(length, length);
     in property <bool> reader-available: false;
@@ -151,6 +157,11 @@ export component AddressPill inherits Rectangle {
             mouse-cursor: text;
             clicked => {
                 root.activated();
+            }
+            pointer-event(e) => {
+                if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                    root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
             }
         }
 
@@ -220,6 +231,15 @@ export component AddressPill inherits Rectangle {
                 label: "Blocked pop-ups: " + root.popups-blocked;
                 clicked(x, y) => {
                     root.popups-requested(x, y);
+                }
+            }
+            if root.zoom > 0: zoom-chip := Chip {
+                icon-path: Glyph.search;
+                tint: zoom-chip.hovered ? Palette.ink : BrowserCss.wb-address-icon--color;
+                count: root.zoom + "%";
+                label: "Zoom: " + root.zoom + "%";
+                clicked(x, y) => {
+                    root.zoom-requested(x, y);
                 }
             }
             if root.media-visible: media := Chip {

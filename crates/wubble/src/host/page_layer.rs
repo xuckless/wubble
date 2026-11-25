@@ -69,6 +69,15 @@ impl PageLayers {
     }
 }
 
+/// Pages on a layer whose newest frame welding dropped because every OS buffer was held (a burst
+/// of frames, docs/research/page-layer.md "Dropped frames"), and the timer that asks them for it
+/// again a refresh later, once the compositor has let a buffer go.
+#[derive(Default)]
+pub(crate) struct LostFrames {
+    tabs: std::collections::BTreeSet<TabId>,
+    timer: slint::Timer,
+}
+
 struct LayerPane {
     route: Route,
     layer: Box<dyn PageLayer>,
@@ -275,6 +284,54 @@ impl Host {
         self.enter(here);
     }
 
+    /// After CEF's work: the pages on a layer in any window that lost their newest frame to a busy
+    /// pool paint again a refresh from now (`repaint_lost`): else the layer shows the frame before
+    /// until the page paints by itself, which a still page never does.
+    pub(super) fn layer_frames_lost(&mut self) {
+        let tabs: Vec<TabId> = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .flat_map(|w| w.layers.panes.keys().copied())
+            .collect();
+        for tab in tabs {
+            if self.tab_view(tab).is_some_and(|v| v.take_os_buffers_lost()) {
+                self.lost_frames.tabs.insert(tab);
+            }
+        }
+        if self.lost_frames.tabs.is_empty() || self.lost_frames.timer.running() {
+            return;
+        }
+        let delay = self
+            .refresh()
+            .unwrap_or(std::time::Duration::from_millis(16));
+        self.lost_frames
+            .timer
+            .start(slint::TimerMode::SingleShot, delay, || {
+                crate::with_host(Host::repaint_lost)
+            });
+    }
+
+    /// Each page that lost its newest frame paints it again (`repaint_page`). One dropped again
+    /// is reported again.
+    fn repaint_lost(&mut self) {
+        for tab in std::mem::take(&mut self.lost_frames.tabs) {
+            if let Some(id) = self.model.window_of(tab)
+                && self.enter(id)
+            {
+                self.repaint_page(tab);
+            }
+        }
+        self.enter_focused();
+    }
+
+    /// `tab`'s page, in this window, paints its frame again: CEF's `invalidate`; with the shell's
+    /// begin frames, the window's driver woken for it.
+    fn repaint_page(&mut self, tab: TabId) {
+        if let Some(view) = self.tab_view(tab) {
+            view.repaint();
+        }
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+    }
+
     /// The window (the current one or a parked one) `holds` picks.
     pub(super) fn window_where(&self, holds: impl Fn(&WindowHost) -> bool) -> Option<WindowId> {
         std::iter::once(&self.w)
@@ -292,10 +349,11 @@ impl Host {
         )
     }
 
-    /// Whether `tab` is one of this window's panes, drawn as a `SplitPane` (`render_panes_with`):
-    /// not the peek's page, an extension's popup or a start page.
+    /// Whether `tab` is one of this window's panes with a page of its own to show
+    /// (`page_layer::Owners::placed`): not the peek's page, an extension's popup or a built-in
+    /// page (the shell draws it; a split's pane of one included).
     fn placed(&self, window: &AppWindow, tab: TabId) -> bool {
-        self.pane_rects(window).iter().any(|r| r.tab == tab) && !self.start_page(tab)
+        self.pane_rects(window).iter().any(|r| r.tab == tab) && !self.model.is_internal(tab)
     }
 
     /// What keeps `tab`'s page on the shell's path now, read from each owner: the window's
@@ -568,6 +626,7 @@ impl Host {
                         }
                         window.window().request_redraw();
                     }
+                    Effect::Repaint => self.repaint_page(tab),
                 }
             }
             // the hole opened or closed: the shell's panes say so
@@ -707,6 +766,7 @@ mod tests {
             Effect::PresentLatest => "Effect::PresentLatest =>",
             Effect::Redraw => "Effect::Redraw =>",
             Effect::Snapshot => "Effect::Snapshot =>",
+            Effect::Repaint => "Effect::Repaint =>",
         }
     }
 
@@ -726,6 +786,7 @@ mod tests {
             Effect::PresentLatest,
             Effect::Redraw,
             Effect::Snapshot,
+            Effect::Repaint,
         ];
         for effect in effects {
             let arm = arm(effect);

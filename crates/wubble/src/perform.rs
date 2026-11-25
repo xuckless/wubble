@@ -8,7 +8,7 @@ use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 
 use wubble_core::shot::ShotRequest;
-use wubble_core::window::WindowTarget;
+use wubble_core::window::{WindowId, WindowTarget};
 
 use wubble_engine::page::EditCommand;
 
@@ -20,6 +20,8 @@ use crate::surface::FindEvent;
 pub enum ViewOp {
     Reload,
     HardReload,
+    /// The HTTP cache cleared (CDP `Network.clearBrowserCache`), then a hard reload.
+    EmptyCacheHardReload,
     Stop,
     Back,
     Forward,
@@ -39,6 +41,10 @@ pub enum Plan {
     Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
+    /// Open the command bar on every open and recently closed tab (tab search).
+    SearchTabs,
+    /// Load the clipboard's text in the visible tab as typed (a new tab without one).
+    PasteAndGo,
     /// Add this Space (a `Command::NewSpace`), then show it.
     NewSpace(Command),
     /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
@@ -65,6 +71,23 @@ pub enum Plan {
     CloseTabs(Vec<TabId>),
     /// F12: DevTools docked or detached for the visible tab (`wubble_core::devtools`).
     DevTools,
+    /// Ctrl+Shift+J: DevTools on its Console panel for the visible tab.
+    DevToolsConsole,
+    /// Ctrl+E: the command bar on the visible tab, every query a search.
+    FocusSearch,
+    /// Ctrl+S: download this tab's page, asking where (the menu's Save Page As).
+    SavePage {
+        tab: TabId,
+        url: String,
+    },
+    /// Ctrl+O: the OS dialog for local files, each opened in a new tab.
+    OpenFile,
+    /// F7: caret browsing on or off (`wubble_core::caret`).
+    CaretBrowsing,
+    /// Raise and focus this window (Cmd+`).
+    RaiseWindow(WindowId),
+    /// Cmd+M: the focused window to the dock or taskbar.
+    Minimize,
     /// The docked panel a step wider (1) or narrower (-1).
     DockNudge(i8),
     /// A built-in on the visible page (`host/builtins.rs`).
@@ -74,6 +97,16 @@ pub enum Plan {
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
+}
+
+/// The action a click on a shell button runs, from the one it names and whether Shift, Ctrl or
+/// Cmd was held: Chrome's reload button hard-reloads on a Shift- or Ctrl-click
+/// (`ReloadButton::ButtonPressed`, the event's flags). Every other button runs its own.
+pub fn clicked(action: Action, held: bool) -> Action {
+    match (action, held) {
+        (Action::Reload, true) => Action::HardReload,
+        _ => action,
+    }
 }
 
 /// What `action` does to `model`. Exhaustive, without a catch-all: a new
@@ -102,15 +135,26 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         // its key, unhandled by the page, goes to `Host::perform_unhandled` instead
         Action::UndoCloseTab => Plan::UndoClose,
         Action::FocusAddress => Plan::FocusAddress,
+        Action::SearchTabs => Plan::SearchTabs,
+        Action::FocusSearch => Plan::FocusSearch,
         Action::NextRegion => Plan::CycleRegion(false),
         Action::PrevRegion => Plan::CycleRegion(true),
         Action::Reload => view(ViewOp::Reload),
         Action::HardReload => view(ViewOp::HardReload),
+        Action::EmptyCacheHardReload => view(ViewOp::EmptyCacheHardReload),
         Action::Stop => view(ViewOp::Stop),
         Action::Back => view(ViewOp::Back),
         Action::Forward => view(ViewOp::Forward),
         Action::NextTab => activate(model.tab_step(1)),
         Action::PrevTab => activate(model.tab_step(-1)),
+        Action::MoveTabUp | Action::MoveTabDown => {
+            let delta = if action == Action::MoveTabUp { -1 } else { 1 };
+            visible
+                .and_then(|tab| Some((tab, model.tab_shift(tab, delta)?)))
+                .map_or(Plan::Nothing, |(tab, to)| {
+                    Plan::Model(Command::MoveTab { tab, to })
+                })
+        }
         Action::SelectTab(n) => {
             activate(usize::from(n).checked_sub(1).and_then(|i| model.nth_tab(i)))
         }
@@ -142,9 +186,21 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::Cut => view(ViewOp::Edit(EditCommand::Cut)),
         Action::Copy => view(ViewOp::Edit(EditCommand::Copy)),
         Action::Paste => view(ViewOp::Edit(EditCommand::Paste)),
+        Action::PasteAndMatchStyle => view(ViewOp::Edit(EditCommand::PasteMatchStyle)),
         Action::SelectAll => view(ViewOp::Edit(EditCommand::SelectAll)),
         Action::Print => visible.map_or(Plan::Nothing, |_| Plan::Print),
+        // a web or file page; the shell's own pages (wubble://) have nothing to download
+        Action::SavePage => visible
+            .and_then(|t| model.tabs.get(&t))
+            .filter(|t| !t.url.is_empty() && InternalPage::from_url(&t.url).is_none())
+            .map_or(Plan::Nothing, |t| Plan::SavePage {
+                tab: t.id,
+                url: t.url.clone(),
+            }),
+        Action::OpenFile => Plan::OpenFile,
+        Action::ToggleCaretBrowsing => visible.map_or(Plan::Nothing, |_| Plan::CaretBrowsing),
         Action::Fullscreen => Plan::Fullscreen,
+        Action::PasteAndGo => Plan::PasteAndGo,
         Action::CopyUrl => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| !t.url.is_empty())
@@ -185,6 +241,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::DevTools => visible.map_or(Plan::Nothing, |_| Plan::DevTools),
+        Action::DevToolsConsole => visible.map_or(Plan::Nothing, |_| Plan::DevToolsConsole),
         // Chromium's Ctrl+U: the page's source in a new tab beside it
         Action::ViewSource => visible
             .and_then(|t| model.tabs.get(&t))
@@ -210,6 +267,13 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::NewPrivateWindow => Plan::Model(Command::NewPrivateWindow { url: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
+        Action::MinimizeWindow => Plan::Minimize,
+        Action::NextWindow => model
+            .window_step(1)
+            .map_or(Plan::Nothing, Plan::RaiseWindow),
+        Action::PrevWindow => model
+            .window_step(-1)
+            .map_or(Plan::Nothing, Plan::RaiseWindow),
         Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
             Plan::Model(Command::MoveTabToWindow {
                 tab,
@@ -325,6 +389,19 @@ mod tests {
         );
         assert_eq!(plan(Action::Reload, &m), Plan::View(ViewOp::Reload));
         assert_eq!(plan(Action::HardReload, &m), Plan::View(ViewOp::HardReload));
+        assert_eq!(
+            plan(Action::EmptyCacheHardReload, &m),
+            Plan::View(ViewOp::EmptyCacheHardReload)
+        );
+        for (action, held, want) in [
+            (Action::Reload, false, Action::Reload),
+            (Action::Reload, true, Action::HardReload),
+            (Action::Stop, true, Action::Stop),
+            (Action::Back, true, Action::Back),
+            (Action::ToggleSidebar, true, Action::ToggleSidebar),
+        ] {
+            assert_eq!(clicked(action, held), want, "{action:?} {held}");
+        }
         assert_eq!(plan(Action::ZoomIn, &m), Plan::View(ViewOp::ZoomIn));
         assert_eq!(plan(Action::ToggleMute, &m), Plan::View(ViewOp::ToggleMute));
         assert_eq!(plan(Action::Print, &m), Plan::Print);
@@ -366,6 +443,7 @@ mod tests {
             Action::SelectLastTab,
             Action::TogglePinTab,
             Action::Reload,
+            Action::EmptyCacheHardReload,
             Action::Back,
             Action::Find,
             Action::ZoomOut,
@@ -392,6 +470,7 @@ mod tests {
         assert_eq!(plan(Action::ReopenClosedTab, &m), Plan::ReopenClosed);
         assert_eq!(plan(Action::UndoCloseTab, &m), Plan::UndoClose);
         assert_eq!(plan(Action::FocusAddress, &m), Plan::FocusAddress);
+        assert_eq!(plan(Action::PasteAndGo, &m), Plan::PasteAndGo);
         assert_eq!(plan(Action::NextRegion, &m), Plan::CycleRegion(false));
         assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
         assert_eq!(plan(Action::Quit, &m), Plan::Quit);

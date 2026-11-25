@@ -72,9 +72,10 @@ pub enum Stage {
     Opening,
     /// The bubble is drawn; letting it settle until it rests, then checking its pixels.
     Rest,
-    /// Poked; waiting for the wave and the change.
+    /// Poked; waiting for the wave (`waved`: one ran, however short) and the change.
     Poked {
         rest: u64,
+        waved: bool,
     },
     /// A mini pressed; waiting for its pop.
     Popping,
@@ -155,6 +156,7 @@ pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
             Some((c, _)) if seen.bright >= BRIGHT_MIN && seen.sites >= 1 => Some((
                 Poked {
                     rest: seen.body_pixels,
+                    waved: false,
                 },
                 vec![Action::Shoot("rest"), Action::Click(c.0, c.1)],
             )),
@@ -163,7 +165,11 @@ pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
                 seen.bright, seen.sites
             )),
         },
-        Poked { rest } if s.wants_pixels() && seen.waves > 0 && seen.body_pixels != rest => {
+        // a wave may end before the pixels are read: it is kept as seen
+        Poked { rest, waved: false } if seen.waves > 0 => {
+            Some((Poked { rest, waved: true }, vec![]))
+        }
+        Poked { rest, waved: true } if s.wants_pixels() && seen.body_pixels != rest => {
             match seen.mini {
                 Some(m) => Some((
                     Popping,
@@ -286,11 +292,31 @@ mod tests {
         seen.resting = true;
         let (s, a) = run(s, &seen, 1);
         assert_eq!(a, [Action::Shoot("rest"), Action::Click(400.0, 300.0)]);
-        assert_eq!(s.stage, Stage::Poked { rest: 1 });
-        // the same pixels: not poked yet
+        assert_eq!(
+            s.stage,
+            Stage::Poked {
+                rest: 1,
+                waved: false
+            }
+        );
+        // new pixels without a wave: not poked yet
+        seen.body_pixels = 2;
+        let (s, a) = run(s, &seen, SETTLE_RUNS);
+        assert!(a.is_empty());
+        // a wave, then the same pixels: not poked yet
+        seen.body_pixels = 1;
         seen.waves = 1;
         let (s, a) = run(s, &seen, SETTLE_RUNS);
         assert!(a.is_empty());
+        assert_eq!(
+            s.stage,
+            Stage::Poked {
+                rest: 1,
+                waved: true
+            }
+        );
+        // the wave over before the pixels change still counts
+        seen.waves = 0;
         seen.body_pixels = 2;
         seen.mini = Some((10.0, 20.0));
         let (s, a) = next(s, &seen);
