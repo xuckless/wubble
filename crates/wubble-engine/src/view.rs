@@ -278,8 +278,12 @@ pub struct View {
     filter: Option<Arc<dyn ContentFilter>>,
     /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
     favicons: crate::favicon::Sink,
-    /// The scripts every new document runs first ([`Self::set_document_scripts`]).
+    /// The scripts every new document runs first: the host's ([`Self::set_document_scripts`])
+    /// and then the blocker's scriptlets for the page being navigated to
+    /// ([`Self::scriptlets_for`]).
     doc_scripts: cdp::DocScripts,
+    host_scripts: Vec<String>,
+    scriptlet: Option<String>,
     /// The navigations the page asked for, from its DevTools events.
     nav_requests: cdp::NavRequests,
     /// The client DevTools windows are created with: it reports them to the
@@ -433,6 +437,8 @@ impl View {
             drag: DragSource::default(),
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
+            host_scripts: Vec::new(),
+            scriptlet: None,
             nav_requests: cdp::NavRequests::default(),
             devtools_client,
             rule,
@@ -523,6 +529,7 @@ impl View {
     }
 
     pub fn load(&mut self, url: &str) {
+        self.scriptlets_for(url);
         self.apply_nav(NavInput::Load(url.into()));
     }
 
@@ -1183,7 +1190,9 @@ impl View {
             }
         }
         while let Some(text) = self.producer.poll_devtools_message() {
-            self.nav_requests.read(&text);
+            if let Some(url) = self.nav_requests.read(&text) {
+                self.scriptlets_for(&url);
+            }
             if let Some(opened) = cdp::chooser_opened(&text) {
                 self.page.push(PageEvent::ChooserIntercepted(opened));
                 continue;
@@ -1754,7 +1763,32 @@ impl View {
     /// scripts, replacing what an earlier call set (`cdp::DocScripts`). The page now on screen
     /// is not touched: [`Self::run_script`] that.
     pub fn set_document_scripts(&mut self, sources: &[String]) {
-        let calls = self.doc_scripts.set(sources);
+        self.host_scripts = sources.to_vec();
+        self.send_doc_scripts();
+    }
+
+    /// The main frame is about to navigate to `url`: its document starts with the blocker's
+    /// scriptlets for it, before any of the page's own scripts (uBO's document_start). Only a
+    /// document of that host runs them (`cosmetic::document_start`); another frame, or a page
+    /// a redirect took elsewhere, gets its own when it says hello.
+    fn scriptlets_for(&mut self, url: &str) {
+        let Some(filter) = self.filter.clone() else {
+            return;
+        };
+        let script = filter
+            .frame_cosmetic(url, url)
+            .script
+            .and_then(|s| crate::cosmetic::document_start(&s, url));
+        if script != self.scriptlet {
+            self.scriptlet = script;
+            self.send_doc_scripts();
+        }
+    }
+
+    fn send_doc_scripts(&mut self) {
+        let mut all = self.host_scripts.clone();
+        all.extend(self.scriptlet.clone());
+        let calls = self.doc_scripts.set(&all);
         self.send_doc_calls(calls);
     }
 

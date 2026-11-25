@@ -66,9 +66,35 @@ pub fn reply_text(rules: &FrameCosmetic) -> String {
     .to_string()
 }
 
+/// `script` (a frame's scriptlets) as a document-start script for the page at `page_url`: it
+/// runs only in a document of that page's host, since every frame of the view runs it and
+/// scriptlets are per host. `None` for a page without a host.
+pub fn document_start(script: &str, page_url: &str) -> Option<String> {
+    // `host_key` reads a bare host when there is no scheme separator
+    let host = page_url
+        .contains("://")
+        .then(|| wubble_core::routing::host_key(page_url))
+        .flatten()?;
+    let host = serde_json::Value::String(host).to_string();
+    Some(format!(
+        "if(location.hostname.toLowerCase().replace(/\\.$/,'')==={host}){{\n{script}}}\n"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_start_scripts_run_on_their_host_only() {
+        assert_eq!(
+            document_start("x();", "https://News.Test/a?b").as_deref(),
+            Some("if(location.hostname.toLowerCase().replace(/\\.$/,'')===\"news.test\"){\nx();}\n")
+        );
+        assert_eq!(document_start("x();", "about:blank"), None);
+        assert_eq!(document_start("x();", "data:text/html,a"), None);
+        assert_eq!(document_start("x();", "file:///tmp/a.html"), None);
+    }
 
     fn names(classes: &[&str], ids: &[&str]) -> Request {
         Request::Names {

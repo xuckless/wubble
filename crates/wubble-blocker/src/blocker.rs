@@ -67,16 +67,27 @@ impl Cosmetic {
     /// filters init script and uBO's injector both declare it and keep the
     /// scriptlets in one function scope, off the page's globals; a plain
     /// object is enough for uBO's property access.
+    ///
+    /// They run once per document: the copy registered for document start
+    /// and the one a frame gets when it says hello share one guard on the
+    /// page's window, so whichever comes first runs and the other returns.
     pub fn scriptlets(&self) -> Option<String> {
         if self.injected_script.is_empty() {
             return None;
         }
         Some(format!(
-            "(function(){{const scriptletGlobals={{}};\n{}\n}})();\n",
+            "{SCRIPTLET_HEAD}{}{SCRIPTLET_TAIL}",
             self.injected_script
         ))
     }
 }
+
+/// [`Cosmetic::scriptlets`]'s wrapper around adblock's script. The guard is
+/// a registered symbol on the page's window: no page name can clash with it.
+const SCRIPTLET_HEAD: &str = "(function(){const k=Symbol.for('wubble.scriptlets');\
+    if(window[k])return;try{Object.defineProperty(window,k,{value:true});}catch(e){}\
+    const scriptletGlobals={};\n";
+const SCRIPTLET_TAIL: &str = "\n})();\n";
 
 /// The rule that hides `selector`.
 pub fn hide_rule(selector: &str) -> String {
@@ -431,9 +442,10 @@ mod tests {
             ..Cosmetic::default()
         };
         assert_eq!(
-            c.scriptlets().as_deref(),
-            Some("(function(){const scriptletGlobals={};\nwindow.scriptlet=1;\n})();\n")
+            c.scriptlets(),
+            Some(format!("{SCRIPTLET_HEAD}window.scriptlet=1;{SCRIPTLET_TAIL}"))
         );
+        assert!(SCRIPTLET_HEAD.contains("if(window[k])return;"));
     }
 
     #[test]
@@ -449,8 +461,8 @@ mod tests {
             .scriptlets()
             .unwrap();
         let body = script
-            .strip_prefix("(function(){const scriptletGlobals={};\n")
-            .and_then(|s| s.strip_suffix("\n})();\n"))
+            .strip_prefix(SCRIPTLET_HEAD)
+            .and_then(|s| s.strip_suffix(SCRIPTLET_TAIL))
             .unwrap_or_else(|| panic!("not wrapped: {script}"));
         assert!(body.contains("function safeSelf()"), "{script}");
         assert!(body.contains("depUser("), "{script}");
