@@ -356,3 +356,69 @@ blurs a snapshot refreshed about 4 times a second and the pane stays on its laye
 - decisions.md: "Page layer: glass over a page on its layer blurs a snapshot of the layer (`Coverage::Glass`,
   `Hold::Frost`), refreshed at most every `SNAPSHOT_MS` (250); only glass whose rectangle meets the pane counts; a
   brief hold expires to long after `BRIEF_MS` (1 s)."
+
+## Default on macOS (0.6.2)
+The owner's M2 run with the overlay fix (2026-11-24, 1080p60 video, `~/Downloads/wubble-layer-log-3.txt`): 159 of
+166 s on Layer, through overlays; left only for a resize and the SeamBow at start, each ended by the one-second rule;
+`slint_renders` median 8 a second, `layer_snapshots` 4. Owner's decision the same day: on by default on macOS.
+
+### Dropped frames (`pool_busy`)
+0 before the fix, 67 over 159 s after (in 43 seconds, up to 4 a second). Read from the code: the snapshot holds no
+pool slot past its blit. `Effect::Snapshot` borrows the layer's latest frame (`pane.latest`, the same slot as the
+layer's `shown[0]`), `FramePresenter::refresh` submits its blit at once (`Blitter::run` ends in `queue.submit`) and
+keeps no `OsBuffer`; so it adds no hold the layer does not already have. The holds as a frame is copied: the layer's
+frame and the one before (`CaLayer::shown`, `OsBuffer` clones), a frame copied but not yet taken (the pool's
+`latest`, never chosen), and whatever the compositor still reads (`IOSurfaceIsInUse`). The busy seconds are the
+seconds with the most frames (28 seconds with one drop average 60 frames, the 120 without any 46): frames that come in
+a burst, several Core Animation commits within one display frame, leave the compositor holding two older surfaces
+while the layer holds two, and four slots are gone. Fixed with a fifth slot (`POOL_SLOTS`; 20 MB more per layered
+pane at 2732 x 1866 px, 31 MB for a full 3456 x 2234 window), table test `every_holder_at_once_leaves_the_next_frame_a_slot`.
+A frame still dropped as `Busy` is lost: if it was a burst's last, the layer shows the one before until the page
+paints again [u].
+
+### The frame rate on the layer
+`cef_frames` median 49 a second for the 60 fps video (run 1 before the fix: 62; run 2: 73, another page). The drops
+explain under one frame a second of the 11 missing. The counts swing 30 to 70 from one second to the next (run 1: 58
+to 74), so frames reach the host late and in bursts. What is new on the layer's frame path: 4 snapshot renders a
+second, each a shell render whose drawable is presented with the Core Animation transaction (`presentsWithTransaction`
+is on whenever the page is on its layer), so the main thread, which is also CEF's UI thread and runs the frame copy,
+waits in that commit for the glass's GPU work; and the copy itself (`waitUntilCompleted`) waits behind that work. Our
+path, likely, unmeasured: not changed blind. Next, on the Mac: `--measure` with `window` and a glass surface over
+the video for `copy_wait` and the main thread's time in the present; the candidate fix is to present with the
+transaction only while a route or a placement changes (a hide, a hole opening or closing, a move), not for a render
+that only redraws glass over a layer that stays.
+
+### The default, the switch, the diagnostics
+- `page_layer::PLATFORM_MODES`: `("macos", Window)`; every other platform `off` (no layer). The browser takes it;
+  every smoke, `--measure`, `--shot-dir` gallery run stays `off` unless it passes `--page-layer`, so they behave as
+  before. A plain run with `--shot` takes the default; its pending shot holds the page on the shell (`Need::Pixels`),
+  as do the frames smoke's pixel checks.
+- Settings, Performance, "Show pages on their own layer (macOS)" (`settings::PAGE_LAYER`, `page.layer`, restart):
+  off, the browser starts `off`. `--page-layer=off|fullscreen|window` overrides both.
+- The route lines and the per-second summary print only with `WUBBLE_TRACE=1` (as `wubble: trace +Nms pid P: page
+  layer: ...`); a failure (`wubble: page layer: ...`) always prints.
+
+### Owner's hand-check list for a default-on release (macOS, release build, by risk)
+Run the release app with no flag and `WUBBLE_TRACE=1` from a terminal; each item by eye against Settings' row off.
+1. Split view with two pages (two layers): both show, each in its pane with its corners; no page over the other or
+   over the seam.
+2. Sidebar toggle, peek and spring: the pane's page follows the pane in the same frame, no gap or doubled edge; the
+   peek's page stays on the shell (`Unplaced`).
+3. Split seam drag: both pages follow the seam, stretch then settle; no stale strip under the seam.
+4. Tab switch, and closing the shown tab: the new page at once, never the old one through the hole; no black pane.
+5. Typing with an input method (Japanese, Chinese) and dead keys (´ then e): the candidate window at the caret, the
+   text in the page.
+6. Drag and drop into the page (a file, a link) and out of it (a picture, selected text): the ghost drawn over the
+   page, the drop lands.
+7. Find bar and command bar over the page: glass over the live page, the page stays on its layer (no route line).
+8. A context menu over the page: drawn over it, its glass blurring the page.
+9. `<select>`: the popup over the page, opens where the select is, picks.
+10. Picture-in-picture: the video in the Pip window, back into the page.
+11. Page fullscreen and back: fullscreen video smooth; on exit the pane right, no stale frame.
+12. Second display and moving the window to it; a display change (unplug, resolution): page sharp, placed right.
+13. Window resize: the stretch then the page sharp on its layer again within about a second.
+14. Minimise and restore: the page there at once, live.
+15. Sleep and wake: the page live after wake, not a stale frame.
+16. Screenshots (the OS's, and `--shot`): the OS's shows the page (the layer is in the window); `--shot` a page.
+17. A private window: its pages on their layer too, its tint and chip over them.
+18. An external 60 Hz display: video at 60 a second (the summary's `cef_frames`), no dropped frames (`pool_busy 0`).
