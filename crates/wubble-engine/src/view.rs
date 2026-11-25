@@ -816,12 +816,6 @@ impl View {
                 self.held_keys.push((key.physical, up));
             }
         }
-        // The OS's editing commands ride on DevTools input, the one way to send them;
-        // its reply carries nothing (an unknown id to `PageEvent::CdpReply`'s readers).
-        if let Some(params) = input::edit_command_key(key) {
-            self.cdp("Input.dispatchKeyEvent", &params);
-            return;
-        }
         for event in input::key_events(key) {
             let event = cef::KeyEvent::from(event);
             self.send(|host| host.send_key_event(Some(&event)));

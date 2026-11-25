@@ -27,8 +27,6 @@ use std::time::Duration;
 
 use crate::app::{Current, Platform};
 use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, PhysicalKey};
-use wubble_core::edit_keys::{EditBindings, edit_commands};
-use wubble_core::keys::{Chord, Key as ChordKey};
 use wubble_core::touch::TouchKind;
 
 /// `cef_event_flags_t` (cef-dll-sys 156).
@@ -440,85 +438,6 @@ fn key_events_with(key: &KeyInput, named_key_character: fn(i32) -> Option<u16>) 
             .map(|&c| event(KeyKind::Char, c, unmodified_of(c))),
     );
     events
-}
-
-/// The keys an OS binds editing commands to ([`Platform::EDIT_BINDINGS`]): Windows key code,
-/// the keymap's key, and the DOM `code` and `key` the DevTools key event names them by (US
-/// positions; CDP makes no NSEvent for Blink to read them from).
-#[rustfmt::skip]
-const EDIT_KEYS: &[(i32, ChordKey, &str, &str)] = &[
-    (vk::BACK, ChordKey::Backspace, "Backspace", "Backspace"),
-    (vk::DELETE, ChordKey::Delete, "Delete", "Delete"),
-    (vk::LEFT, ChordKey::Left, "ArrowLeft", "ArrowLeft"),
-    (vk::RIGHT, ChordKey::Right, "ArrowRight", "ArrowRight"),
-    (vk::UP, ChordKey::Up, "ArrowUp", "ArrowUp"),
-    (vk::DOWN, ChordKey::Down, "ArrowDown", "ArrowDown"),
-    (vk::A, ChordKey::Char('a'), "KeyA", "a"),
-    (vk::A + 1, ChordKey::Char('b'), "KeyB", "b"),
-    (vk::A + 3, ChordKey::Char('d'), "KeyD", "d"),
-    (vk::A + 4, ChordKey::Char('e'), "KeyE", "e"),
-    (vk::A + 5, ChordKey::Char('f'), "KeyF", "f"),
-    (vk::A + 7, ChordKey::Char('h'), "KeyH", "h"),
-    (vk::A + 10, ChordKey::Char('k'), "KeyK", "k"),
-    (vk::A + 13, ChordKey::Char('n'), "KeyN", "n"),
-    (vk::A + 15, ChordKey::Char('p'), "KeyP", "p"),
-];
-
-/// A key-down the OS binds editing commands to, as the DevTools call that sends it with them:
-/// `Input.dispatchKeyEvent` params, sent in place of the key's CEF key-down and characters.
-/// `None` for a release and for keys without commands, which go through [`key_events`].
-///
-/// In a window, Chromium on macOS sends AppKit's commands for a key with it
-/// (`ForwardKeyboardEventWithCommands`); CEF's `SendKeyEvent` cannot carry them, DevTools input
-/// can (`InputHandler::DispatchKeyEvent`, `commands`; Chromium
-/// `content/browser/devtools/protocol/input_handler.cc`, BSD-3-Clause, called, nothing copied).
-/// A key the page does not handle still comes back as unhandled (DevTools input from a trusted
-/// client with a native key code carries an OS event), so Cmd+Left outside a text field stays
-/// Back. The key-up goes through CEF as before; no character follows, as none follows a key
-/// AppKit turned into commands.
-pub fn edit_command_key(key: &KeyInput) -> Option<serde_json::Value> {
-    edit_command_key_with(key, Current::EDIT_BINDINGS)
-}
-
-/// [`edit_command_key`] with an OS's bindings, so macOS's are testable elsewhere.
-fn edit_command_key_with(key: &KeyInput, bindings: EditBindings) -> Option<serde_json::Value> {
-    if !key.pressed {
-        return None;
-    }
-    let down = *key_events(key).first()?;
-    let &(_, chord_key, code, name) = EDIT_KEYS
-        .iter()
-        .find(|(windows, ..)| *windows == down.windows_key_code)?;
-    let m = &key.modifiers.keys;
-    let chord = Chord {
-        ctrl: m.control_key(),
-        alt: m.alt_key(),
-        shift: m.shift_key(),
-        cmd: m.super_key(),
-        key: chord_key,
-    };
-    let commands = edit_commands(bindings, chord);
-    if commands.is_empty() {
-        return None;
-    }
-    // DevTools' modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8.
-    let held = [chord.alt, chord.ctrl, chord.cmd, chord.shift];
-    let modifiers: u32 = (0..held.len()).filter(|&i| held[i]).map(|i| 1 << i).sum();
-    let dom_key = match chord_key {
-        ChordKey::Char(c) if chord.shift => c.to_ascii_uppercase().to_string(),
-        _ => name.to_owned(),
-    };
-    Some(serde_json::json!({
-        "type": "rawKeyDown",
-        "modifiers": modifiers,
-        "windowsVirtualKeyCode": down.windows_key_code,
-        "nativeVirtualKeyCode": down.native_key_code,
-        "code": code,
-        "key": dom_key,
-        "autoRepeat": key.repeat,
-        "isSystemKey": down.is_system_key,
-        "commands": commands,
-    }))
 }
 
 /// CEF's `native_key_code`: on Linux the X11/xkb keycode (evdev + 8), which
@@ -1373,86 +1292,6 @@ mod tests {
         assert_eq!(key_events(&odd)[0].windows_key_code, 0x58);
         odd.unmodified = ch("ж");
         assert_eq!(key_events(&odd)[0].windows_key_code, 0);
-    }
-
-    #[rustfmt::skip]
-    #[test]
-    fn mac_editing_keys_carry_appkit_s_commands() {
-        use wubble_core::edit_keys::MAC_EDIT_BINDINGS as MAC;
-        const S: ModifiersState = ModifiersState::SHIFT;
-        const C: ModifiersState = ModifiersState::CONTROL;
-        const A: ModifiersState = ModifiersState::ALT;
-        const M: ModifiersState = ModifiersState::SUPER;
-        const NONE: ModifiersState = ModifiersState::empty();
-        let named = |code, n| key(code, Key::Named(n), None);
-        let back = named(KeyCode::Backspace, NamedKey::Backspace);
-        let delete = named(KeyCode::Delete, NamedKey::Delete);
-        let left = named(KeyCode::ArrowLeft, NamedKey::ArrowLeft);
-        let right = named(KeyCode::ArrowRight, NamedKey::ArrowRight);
-        let up = named(KeyCode::ArrowUp, NamedKey::ArrowUp);
-        let down = named(KeyCode::ArrowDown, NamedKey::ArrowDown);
-        let letter = |code, c: &str| key(code, ch(c), Some(c));
-        let release = KeyInput {
-            pressed: false,
-            ..back.clone()
-        };
-        // want: space-separated commands, DevTools modifiers, DOM key
-        type Want = Option<(&'static str, u32, &'static str)>;
-        // (name, key, held, want)
-        let cases: Vec<(&str, KeyInput, ModifiersState, Want)> = vec![
-            ("cmd delete", back.clone(), M, Some(("deleteToBeginningOfLine", 4, "Backspace"))),
-            ("option delete", back.clone(), A, Some(("deleteWordBackward", 1, "Backspace"))),
-            ("cmd fn delete", delete.clone(), M, Some(("deleteToEndOfLine", 4, "Delete"))),
-            ("option fn delete", delete, A, Some(("deleteWordForward", 1, "Delete"))),
-            ("cmd left", left.clone(), M, Some(("moveToLeftEndOfLine", 4, "ArrowLeft"))),
-            ("option left", left, A, Some(("moveWordLeft", 1, "ArrowLeft"))),
-            (
-                "cmd shift right",
-                right,
-                M | S,
-                Some(("moveToRightEndOfLineAndModifySelection", 12, "ArrowRight")),
-            ),
-            ("cmd up", up, M, Some(("moveToBeginningOfDocument", 4, "ArrowUp"))),
-            ("option down", down, A, Some(("moveForward moveToEndOfParagraph", 1, "ArrowDown"))),
-            ("ctrl a", letter(KeyCode::KeyA, "a"), C, Some(("moveToBeginningOfParagraph", 2, "a"))),
-            (
-                "ctrl shift e",
-                letter(KeyCode::KeyE, "e"),
-                C | S,
-                Some(("moveToEndOfParagraphAndModifySelection", 10, "E")),
-            ),
-            ("ctrl k", letter(KeyCode::KeyK, "k"), C, Some(("deleteToEndOfParagraph", 2, "k"))),
-            ("ctrl d", letter(KeyCode::KeyD, "d"), C, Some(("deleteForward", 2, "d"))),
-            ("ctrl h", letter(KeyCode::KeyH, "h"), C, Some(("deleteBackward", 2, "h"))),
-            ("ctrl f", letter(KeyCode::KeyF, "f"), C, Some(("moveForward", 2, "f"))),
-            ("ctrl b", letter(KeyCode::KeyB, "b"), C, Some(("moveBackward", 2, "b"))),
-            ("ctrl n", letter(KeyCode::KeyN, "n"), C, Some(("moveDown", 2, "n"))),
-            ("ctrl p", letter(KeyCode::KeyP, "p"), C, Some(("moveUp", 2, "p"))),
-            ("plain backspace goes through CEF", back.clone(), NONE, None),
-            ("plain a goes through CEF", letter(KeyCode::KeyA, "a"), NONE, None),
-            ("cmd a goes through CEF", letter(KeyCode::KeyA, "a"), M, None),
-            ("an unbound letter", letter(KeyCode::KeyZ, "z"), C, None),
-            ("a release", release, M, None),
-        ];
-        for (name, mut input, held, want) in cases {
-            input.modifiers = mods(held);
-            let got = edit_command_key_with(&input, MAC);
-            let Some((commands, modifiers, dom_key)) = want else {
-                assert_eq!(got, None, "{name}");
-                continue;
-            };
-            let got = got.unwrap_or_else(|| panic!("{name}: no DevTools key"));
-            let commands: Vec<&str> = commands.split(' ').collect();
-            assert_eq!(got["type"], "rawKeyDown", "{name}");
-            assert_eq!(got["commands"], serde_json::json!(commands), "{name}");
-            assert_eq!(got["modifiers"], modifiers, "{name}");
-            assert_eq!(got["key"], dom_key, "{name}");
-            let vk = key_events(&input)[0].windows_key_code;
-            assert_eq!(got["windowsVirtualKeyCode"], vk, "{name}");
-        }
-        let mut cmd_delete = back;
-        cmd_delete.modifiers = mods(M);
-        assert_eq!(edit_command_key_with(&cmd_delete, &[]), None, "no bindings, no commands");
     }
 
     #[cfg(target_os = "linux")]

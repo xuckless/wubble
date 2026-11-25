@@ -23,7 +23,6 @@ use extra::ExtraBrowsers;
 use state::{Effect, Event, State};
 pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
-use wubble_core::edit_keys::EditBindings;
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
 use crate::ext_api::{ActionClick, ActionState, ExtApi, ExtRequest, ExtViewTab, TabOpened};
@@ -450,11 +449,6 @@ pub(crate) trait Platform {
     fn named_key_character(_windows_key_code: i32) -> Option<u16> {
         None
     }
-
-    /// The editing commands the OS's text system binds to keys, which a windowless view must
-    /// send with the key (`input::edit_command_key`): none by default, Blink's own table
-    /// (`editing_behavior.cc`) covers Linux and Windows.
-    const EDIT_BINDINGS: EditBindings = &[];
 }
 
 /// Process-wide setup that must come first in `main`, before the window
@@ -664,10 +658,6 @@ impl Platform for MacOs {
     /// Chromium's test keychain (`os_crypt`'s mock): a smoke run of a rebuilt binary stalled
     /// before its first frame behind a keychain access prompt for "Chromium Safe Storage".
     const THROWAWAY_SWITCHES: &[(&str, Option<&str>)] = &[("use-mock-keychain", None)];
-
-    /// AppKit's: Cmd+Delete, Option+Left, Ctrl+A and the rest come from `interpretKeyEvents:`,
-    /// which a windowless view never runs.
-    const EDIT_BINDINGS: EditBindings = wubble_core::edit_keys::MAC_EDIT_BINDINGS;
 
     /// An idle turn blocks in `-[NSApplication run]` until the next frame
     /// (16.7 ms measured at 60 Hz), so a turn is a frame, not microseconds.
