@@ -778,7 +778,7 @@ struct FieldRow {
 const FIELD_ROWS: &[FieldRow] = &[
     FieldRow {
         group: 0,
-        show: FieldFacts::bar,
+        show: |f| f.bar(),
         enabled: |f| f.selected,
         label: |_| "Cut".into(),
         command: |_| Command::FieldEdit(FieldEdit::Cut),
@@ -786,7 +786,7 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
     FieldRow {
         group: 0,
-        show: FieldFacts::bar,
+        show: |f| f.bar(),
         enabled: |f| f.selected,
         label: |_| "Copy".into(),
         command: |_| Command::FieldEdit(FieldEdit::Copy),
@@ -794,8 +794,8 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
     FieldRow {
         group: 0,
-        show: FieldFacts::bar,
-        enabled: FieldFacts::pasteable,
+        show: |f| f.bar(),
+        enabled: |f| f.pasteable(),
         label: |_| "Paste".into(),
         command: |_| Command::FieldEdit(FieldEdit::Paste),
         key: Some(Action::Paste),
@@ -803,14 +803,14 @@ const FIELD_ROWS: &[FieldRow] = &[
     FieldRow {
         group: 0,
         show: |_| true,
-        enabled: FieldFacts::pasteable,
+        enabled: |f| f.pasteable(),
         label: |f| paste_label(f.clipboard),
         command: |f| Command::PasteAndGo(f.field, f.clipboard.trim().to_owned()),
         key: None,
     },
     FieldRow {
         group: 0,
-        show: FieldFacts::bar,
+        show: |f| f.bar(),
         enabled: |f| f.selected,
         label: |_| "Delete".into(),
         command: |_| Command::FieldEdit(FieldEdit::Delete),
@@ -818,7 +818,7 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
     FieldRow {
         group: 1,
-        show: FieldFacts::bar,
+        show: |f| f.bar(),
         enabled: |f| f.text,
         label: |_| "Select All".into(),
         command: |_| Command::FieldEdit(FieldEdit::SelectAll),
@@ -826,7 +826,7 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
     FieldRow {
         group: 1,
-        show: FieldFacts::pill,
+        show: |f| f.pill(),
         enabled: |_| true,
         label: |_| "Copy Address".into(),
         command: |_| Command::Perform(Action::CopyUrl),
@@ -834,7 +834,7 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
     FieldRow {
         group: 1,
-        show: FieldFacts::pill,
+        show: |f| f.pill(),
         enabled: |_| true,
         label: |_| "Edit Address".into(),
         command: |_| Command::Perform(Action::FocusAddress),
