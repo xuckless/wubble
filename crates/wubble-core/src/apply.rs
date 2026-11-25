@@ -146,8 +146,19 @@ pub enum Applied {
         sites: ThemeTable,
         media: MediaPrefs,
     },
-    /// Chromium's minimum font size in CSS pixels (0: none), for the whole profile.
-    MinFontSize(u32),
+    /// HTTPS-Upgrades: the mode and the allowlist (`https`).
+    Https {
+        mode: crate::https::HttpsMode,
+        allowed: ZoomTable,
+    },
+    /// Chromium local-state preferences, process-wide, set in this order (secure DNS's
+    /// `dns_over_https.templates`, then its `.mode`).
+    GlobalPrefs(Vec<(&'static str, crate::privacy::PrefValue)>),
+    /// One Chromium profile preference (`privacy::PREFS`), for every container's context.
+    ProfilePref {
+        name: &'static str,
+        value: crate::privacy::PrefValue,
+    },
     Reader(ReaderPrefs),
     ScreenshotOutput(ShotOutput),
     /// The link hints' letters (`hints::alphabet`).
@@ -172,6 +183,8 @@ pub enum Applied {
     BoostsEnabled(bool),
     /// Every download asks where to save it (`settings::DOWNLOADS_ASK_WHERE`).
     AskWhereToSave(bool),
+    /// Where downloads go (`settings::DOWNLOADS_DIR`, trimmed); empty: the OS folder.
+    DownloadsDir(String),
     /// Calmer motion: the setting (the host combines it with the OS preference).
     ReduceMotion(crate::motion::Calm),
     /// Pages for screen readers: the setting (the host combines it with whether a screen reader
@@ -230,6 +243,9 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
     let def = settings::find(key)?;
     if def.restart {
         return Some(Applied::RestartOnly);
+    }
+    if let Some((name, value)) = crate::privacy::pref_of(key, stored) {
+        return Some(Applied::ProfilePref { name, value });
     }
     let v = value_of(def, stored);
     Some(match key {
@@ -296,7 +312,6 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
                 },
             }
         }
-        k if k == s::PAGES_MIN_FONT_SIZE.key => Applied::MinFontSize(count(def, stored)),
         k if [
             s::READER_DETECT.key,
             s::READER_SIZE.key,
@@ -342,12 +357,30 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
+        k if k == s::DOWNLOADS_DIR.key => Applied::DownloadsDir(v.trim().to_owned()),
         k if k == s::REDUCE_MOTION.key => Applied::ReduceMotion(crate::motion::Calm::parse(v)),
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
+        k if [s::PRIVACY_HTTPS_MODE.key, s::PRIVACY_HTTPS_ALLOWED.key].contains(&k) => {
+            Applied::Https {
+                mode: crate::https::HttpsMode::from_word(value_of(&s::PRIVACY_HTTPS_MODE, stored))?,
+                allowed: map(&s::PRIVACY_HTTPS_ALLOWED, stored),
+            }
+        }
+        k if k == s::PRIVACY_SECURE_DNS.key => {
+            let (mode, templates) = crate::secure_dns::SecureDns::parse(v)
+                .unwrap_or(crate::secure_dns::SecureDns::Automatic)
+                .prefs();
+            use crate::privacy::PrefValue::Str;
+            // the templates first, so a "secure" mode never meets the old ones
+            Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ])
+        }
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
@@ -566,6 +599,58 @@ mod tests {
         assert_eq!(effect_of("no.such", &empty), None);
         // The seam owns the width while the app runs.
         assert_eq!(effect_of(settings::SIDEBAR_WIDTH.key, &empty), None);
+    }
+
+    #[test]
+    fn https_mode_and_allowlist_apply_together() {
+        use crate::https::HttpsMode;
+        let s = stored(&[
+            ("privacy.https_mode", "only"),
+            ("privacy.https_allowed", r#"{"0/a.test": 99}"#),
+        ]);
+        let want = Some(Applied::Https {
+            mode: HttpsMode::Only,
+            allowed: [("0/a.test".to_owned(), 99)].into(),
+        });
+        assert_eq!(effect_of("privacy.https_mode", &s), want);
+        assert_eq!(effect_of("privacy.https_allowed", &s), want);
+        assert_eq!(
+            effect_of("privacy.https_mode", &HashMap::new()),
+            Some(Applied::Https {
+                mode: HttpsMode::Upgrade,
+                allowed: ZoomTable::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn secure_dns_sets_chromiums_local_state() {
+        use crate::privacy::PrefValue::Str;
+        let dns = |text: &str| {
+            effect_of(
+                "privacy.secure_dns",
+                &stored(&[("privacy.secure_dns", text)]),
+            )
+        };
+        let want = |templates: &'static str, mode: &'static str| {
+            Some(Applied::GlobalPrefs(vec![
+                ("dns_over_https.templates", Str(templates.into())),
+                ("dns_over_https.mode", Str(mode.into())),
+            ]))
+        };
+        assert_eq!(dns("automatic"), want("", "automatic"));
+        assert_eq!(dns("off"), want("", "off"));
+        assert_eq!(
+            dns("provider:google"),
+            want("https://dns.google/dns-query{?dns}", "secure")
+        );
+        assert_eq!(dns("custom:"), want("", "automatic"));
+        assert_eq!(
+            dns("custom:https://d.test/q"),
+            want("https://d.test/q", "secure")
+        );
+        // a refused value reads as the default
+        assert_eq!(dns("custom:http://d.test/q"), want("", "automatic"));
     }
 
     #[test]
@@ -869,7 +954,10 @@ mod tests {
         assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
         assert_eq!(
             effect_of("pages.min_font_size", &s),
-            Some(Applied::MinFontSize(12))
+            Some(Applied::ProfilePref {
+                name: "webkit.webprefs.minimum_font_size",
+                value: crate::privacy::PrefValue::Int(12),
+            })
         );
         let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
             panic!("no reader prefs")

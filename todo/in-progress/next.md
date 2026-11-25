@@ -64,7 +64,7 @@ Chrome's TabRestoreService keeps tabs, whole windows and tab groups. Ctrl+Shift+
 
 ## HTTPS-First and HTTPS-Only mode (`https-upgrade-mode`)
 
-Key: `https-upgrade-mode` · engine patch: no · state: not written.
+Key: `https-upgrade-mode` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); a live http-only site and the https-redirects-to-http case unchecked by hand.
 
 Chrome's "Always use secure connections" setting tries https for every http navigation. If https fails, it shows an interstitial ("Connection is not secure" … "Continue to site") and remembers the choice per site for a while. Chrome also upgrades automatically with a silent fallback (HTTPS-Upgrades). wubble only upgrades typed scheme-less public hosts (decision "Typed local addresses") and has no mode.
 
@@ -77,7 +77,7 @@ Build:
 
 ## Secure DNS (DNS-over-HTTPS) setting (`secure-dns`)
 
-Key: `secure-dns` · engine patch: no · state: not written.
+Key: `secure-dns` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); not checked against a live resolver.
 
 Chrome Settings > Security > "Use secure DNS" offers Off, "With your current service provider" (automatic upgrade), or a chosen provider (Cloudflare, Google, Quad9, CleanBrowsing, NextDNS, OpenDNS, …) or a custom template. wubble has no row, and Chromium's default (automatic) applies silently.
 
@@ -90,7 +90,7 @@ Build:
 
 ## Global Privacy Control (Sec-GPC header and navigator.globalPrivacyControl) (`global-privacy-control`)
 
-Key: `global-privacy-control` · engine patch: no · state: not written.
+Key: `global-privacy-control` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); the `Sec-GPC` header and `navigator.globalPrivacyControl` not checked on a live page (the feature names are from source, unverified on libcef 156).
 
 GPC sends `Sec-GPC: 1` on every request and exposes `navigator.globalPrivacyControl === true`. Brave and Firefox ship it, and Chrome has it behind a feature. wubble has neither.
 
@@ -103,7 +103,7 @@ Build:
 
 ## Privacy preferences table: Do Not Track, preload pages, ad privacy, WebRTC IP (`privacy-prefs-table`)
 
-Key: `privacy-prefs-table` · engine patch: no · state: not written.
+Key: `privacy-prefs-table` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); each pref not read back from a live Chromium.
 
 Chrome's privacy settings are profile prefs: "Send a Do Not Track request" (`enable_do_not_track`, off by default), "Preload pages" (`net.network_prediction_options`), "Allow sites to check if you have payment methods saved" (`payments.can_make_payment_enabled`), the Ad privacy toggles (`privacy_sandbox.m1.topics_enabled`, `privacy_sandbox.m1.fledge_enabled`, `privacy_sandbox.m1.ad_measurement_enabled`), and the WebRTC IP handling policy (`webrtc.ip_handling_policy`, with no UI in Chrome; Brave exposes it). wubble sets one pref only (`webkit.webprefs.minimum_font_size`, crates/wubble-engine/src/view.rs:848) and exposes none of these.
 
@@ -114,7 +114,7 @@ Build:
 
 ## "Download PDFs instead of opening them" site setting (`pdf-download-setting`)
 
-Key: `pdf-download-setting` · engine patch: no · state: not written.
+Key: `pdf-download-setting` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's Settings → Privacy → Site settings → PDF documents offers "Open PDFs in Chrome" or "Download PDFs", stored as the pref plugins.always_open_pdf_externally. When it is on, a PDF navigation becomes a download that the system viewer can open. wubble always shows PDFs in Chromium's viewer (host/builtins.rs `pdf` set) and has no such setting.
 
@@ -122,7 +122,7 @@ What to build: (1) wubble-core/src/settings.rs: `PDF_DOWNLOAD` (key pdf.download
 
 ## Downloads settings section with a folder picker (`download-location-setting`)
 
-Key: `download-location-setting` · engine patch: no · state: not written.
+Key: `download-location-setting` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's Settings → Downloads has Location [Change] and "Ask where to save each file". The design has a Downloads section with "Save files to" (a folder choice), "Ask where to save each file" and "Open safe files after downloading" (ref/the-wallpaper-project/src/wubble/pages/settings.tsx lines ~55-123). In wubble the downloads folder can only be set on the command line (crates/wubble/src/profile.rs downloads_dir: the CLI, else dirs::download_dir). DOWNLOADS_ASK_WHERE and the media rows sit under Section::General, and there is no Downloads section.
 
@@ -132,14 +132,14 @@ What to build: (1) wubble-core/src/settings.rs: add `Section::Downloads` (title 
 
 ## Context menu: the missing link, selection, page and frame rows (`ctx-menu-link-page-frame`)
 
-Key: `ctx-menu-link-page-frame` · engine patch: no · state: not written.
+Key: `ctx-menu-link-page-frame` · engine patch: no · state: [~] integrated on `next/all` (unit tests, smokes pass); the macOS Emoji & Symbols and Writing Direction rows need a run on the Mac.
 Note: 0.6.1 shipped more context-menu entries: check what is left before writing.
 
 Chrome's `RenderViewContextMenu` has rows that wubble's `ROWS` (crates/wubble/src/menu.rs) lacks. Link: "Open link in new window" (now possible: `Action::NewWindow` and `Command::MoveToWindow` exist; the comment above `ROWS` saying one window is stale), "Open link in split view" (wubble has split: `Command::SplitWith`), an "Open link in Glance" equivalent (`ModelCommand::OpenGlance`), and "Copy link text". Selection: "Copy link to highlight", which puts a `#:~:text=` URL on the clipboard, built as Chromium's `shared_highlighting` text-fragment generator does (port the generator to a helper page script, BSD-3, run with `View::run_script_in` in `ContextMenu::frame`), plus a search row for a selected URL that offers "Go to <url>". Frame (when `frame_url` is non-empty and differs from `page_url`): "Reload frame" (script `location.reload()` in the frame) and "View frame source" (view-source: of frame_url via the existing `Action::ViewSource` path, parameterised by URL). Editable: "Emoji" on macOS (`orderFrontCharacterPalette:`) and Windows (the Win+. panel through `CoreInputView`/SendInput), plus "Writing direction" on macOS. Keep the Chromium group order, with dividers from the `row!` group numbers. Add `Command` variants as needed and execute them where the host runs `menu::Command` (crates/wubble/src/host). Unit-test each row's predicate in menu.rs's tests as the existing ones do.
 
 ## Media context menu: Picture in Picture, Mute, video frame rows (`media-context-menu`)
 
-Key: `media-context-menu` · engine patch: no · state: not written.
+Key: `media-context-menu` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 Chrome's context menu on a video has Play/Pause, Mute/Unmute, Loop, Show controls, Picture in picture, Open video in new tab, Save video as, Copy video address, and since M120 Copy video frame and Save video frame as. wubble's crates/wubble/src/menu.rs ROWS has Play, Loop, Show Controls, the three address rows and the screenshot row. Picture in Picture is left out on purpose (comment at ~line 313 and TODO.md M1 "Page context menu: the Picture in Picture row"), and there is no Mute or frame row, even though wubble now has its own PiP (wubble_core::pip) and a frame grab (kit.js `k.frame`).
 
@@ -147,7 +147,7 @@ What to build in menu.rs, with its label tests updated: (1) A Mute/Unmute row: `
 
 ## Video strip save button: wording and in-progress state (`video-save-button-states`)
 
-Key: `video-save-button-states` · engine patch: no · state: not written.
+Key: `video-save-button-states` · engine patch: no · state: [x] integrated on `next/all` (unit tests, smokes pass).
 
 TODO.md review findings: "Video strip button reads 'Save video'; a second click mid-download re-enters the downloader". Chrome has no such control. The rules for this one come from wubble (decisions.md "Save control"). The strip's save state is wubble_core::video::Save (host/videos.rs video_save_now, video_save_state, video_save_redraw), and the click goes to `video_save(x, y)`, which starts the downloader again even while that video's job runs.
 

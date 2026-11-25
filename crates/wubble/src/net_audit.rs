@@ -9,6 +9,8 @@
 //! A connect to port 53 is a lookup leaving for the system resolver (the stub on 127.0.0.53
 //! counts as loopback by address, not by effect), so it fails like any other.
 //! The dictionary download (`gvt1.com`, `.bdic`) is named on its own.
+//! Secure DNS (`privacy.secure_dns`) stays on Chromium's automatic mode in these runs; a run with
+//! a provider chosen would have to allow that provider's host, and only then.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 

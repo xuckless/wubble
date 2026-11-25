@@ -8,6 +8,7 @@
 //! made of them. The page is drawn from them each time they or the model change.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use wubble_blocker::ListRow;
 use wubble_blocker::catalog::Selection;
@@ -88,6 +89,10 @@ impl Host {
                 self.apply_setting(applied);
             }
         }
+        // the preferences no setting changes (Chromium's own HTTPS upgrades off)
+        for (name, value) in wubble_core::privacy::FIXED {
+            self.engine.set_profile_pref(name, value.clone());
+        }
     }
 
     /// The one place a setting takes effect while the app runs.
@@ -154,10 +159,21 @@ impl Host {
                 sites,
                 media,
             } => self.set_page_themes(default, sites, media),
-            Applied::MinFontSize(px) => self.set_min_font_size(px),
+            Applied::ProfilePref { name, value } => self.engine.set_profile_pref(name, value),
+            Applied::Https { mode, allowed } => self.blocking.https.set(mode, allowed),
+            Applied::GlobalPrefs(prefs) => {
+                for (name, value) in prefs {
+                    if let Err(e) = self.engine.set_global_pref(name, &value) {
+                        eprintln!("wubble: {e}");
+                    }
+                }
+            }
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
+            Applied::DownloadsDir(dir) => self
+                .downloads
+                .set_dir((!dir.is_empty()).then(|| PathBuf::from(dir))),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
             Applied::Video {
                 controls,
@@ -197,10 +213,20 @@ impl Host {
     }
 
     /// Writes one setting: refused unless `key` is a setting and `text` a value of it; then
-    /// stored, applied and shown.
+    /// stored, applied and shown. A refused secure DNS template says why on its row.
     pub(crate) fn write_setting(&mut self, key: &str, text: &str) -> bool {
         if !self.store.set_setting(key, text) {
+            if let Some(Err(note)) = (key == defs::PRIVACY_SECURE_DNS.key)
+                .then(|| wubble_core::secure_dns::SecureDns::parse(text))
+            {
+                self.answer(key, note);
+                self.render_settings();
+            }
             return false;
+        }
+        // a value taken clears the row's last refusal
+        if self.settings.answer.0 == key {
+            self.settings.answer.2 = "";
         }
         self.settings.stored.insert(key.to_owned(), text.to_owned());
         if let Some(applied) = apply::effect_of(key, &self.settings.stored) {
@@ -261,17 +287,54 @@ impl Host {
         let draft = pages::submission(entry);
         let text = pages::entry_text(key, &draft.cells);
         let put = apply::put_entry(key, &self.settings.stored, draft.replacing, &text);
-        let serial = self.settings.answer.1.wrapping_add(1);
-        self.settings.answer = (
-            key.to_owned(),
-            serial,
-            put.as_ref().err().map_or("", |r| r.note()),
-        );
+        self.answer(key, put.as_ref().err().map_or("", |r| r.note()));
         match put {
             Ok(text) => {
                 self.write_setting(key, &text);
             }
             Err(_) => self.render_settings(),
+        }
+    }
+
+    /// The row `key` hears back: a new serial, and why its value was refused (empty: taken).
+    fn answer(&mut self, key: &str, note: &'static str) {
+        let serial = self.settings.answer.1.wrapping_add(1);
+        self.settings.answer = (key.to_owned(), serial, note);
+    }
+
+    /// A folder row's Change: the OS folder chooser, starting at the row's folder (else the
+    /// downloads folder); the folder picked is stored, a cancel changes nothing.
+    pub(crate) fn setting_folder_requested(&mut self, key: &str) {
+        let Some(def) = defs::find(key).filter(|d| d.kind == defs::SettingKind::Folder) else {
+            return;
+        };
+        let current = apply::value_of(def, &self.settings.stored)
+            .trim()
+            .to_owned();
+        let start = match current.as_str() {
+            "" => self.downloads.dir().map(PathBuf::from).unwrap_or_default(),
+            dir => PathBuf::from(dir),
+        };
+        let spec = crate::chooser::dialog_spec(
+            wubble_engine::page::FileChooserMode::OpenFolder,
+            def.label,
+            &start,
+            &[],
+        );
+        let window = self.w.window.upgrade();
+        let dialog =
+            crate::chooser::dialog(&spec, window.as_ref().map(slint::ComponentHandle::window));
+        let key = def.key;
+        let task = slint::spawn_local(async move {
+            let picked = crate::chooser::pick(spec, dialog).await;
+            if let Some(folder) = picked.and_then(|p| p.into_iter().next()) {
+                crate::with_host(|host| {
+                    host.write_setting(key, &folder.to_string_lossy());
+                });
+            }
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the folder dialog: {e}");
         }
     }
 

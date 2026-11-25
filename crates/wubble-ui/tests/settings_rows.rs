@@ -16,7 +16,7 @@ use i_slint_backend_testing::{
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use wubble_core::pages::{Control, settings_page};
-use wubble_core::settings::{ALL, Section};
+use wubble_core::settings::{ALL, Section, SettingKind};
 use wubble_ui::settings::setting_items;
 use wubble_ui::{AppWindow, InternalPageKind, SettingItem};
 
@@ -92,6 +92,12 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
     let stored: Stored = Rc::default();
     let log = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
     {
+        let log = log.clone();
+        app.on_setting_folder_requested(move |key| {
+            log.borrow_mut().push((key.to_string(), "folder".into()));
+        });
+    }
+    {
         let (st, log, weak) = (stored.clone(), log.clone(), app.as_weak());
         app.on_setting_changed(move |key, value| {
             let (key, value) = (key.to_string(), value.to_string());
@@ -164,8 +170,10 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
                         ));
                     }
                 }
-                Control::Segmented(words) if key == "search.engine" => {
-                    // the dropdown has its own test
+                Control::Segmented(words)
+                    if matches!(row.kind, SettingKind::SearchEngine | SettingKind::SecureDns) =>
+                {
+                    // a Select: the dropdown has its own test
                     let _ = words;
                     if find(&app, label, AccessibleRole::Combobox).len() != 1 {
                         note("no dropdown by its label".into());
@@ -281,6 +289,19 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
                 Control::Slider { .. } => {
                     if find(&app, label, AccessibleRole::Slider).len() != 1 {
                         note("no slider by its label".into());
+                    }
+                }
+                Control::Folder => {
+                    let change = format!("Change {label}");
+                    let button = find(&app, &change, AccessibleRole::Button);
+                    if button.len() != 1 {
+                        note(format!("{} Change buttons for the row", button.len()));
+                        continue;
+                    }
+                    button[0].invoke_accessible_default_action();
+                    pump();
+                    if *log.borrow() != [(key.to_owned(), "folder".to_owned())] {
+                        note(format!("Change asked for {:?}", log.borrow()));
                     }
                 }
                 Control::ListEditor | Control::MapEditor => {

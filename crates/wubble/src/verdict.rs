@@ -249,6 +249,7 @@ mod tests {
         let browse = Mode::Browse {
             url: None,
             downloads: None,
+            downloads_fixed: false,
             listener: None,
         };
         assert_eq!(

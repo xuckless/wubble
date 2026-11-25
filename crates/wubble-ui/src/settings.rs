@@ -5,6 +5,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
 use wubble_core::omnibox::ENGINES;
 use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
+use wubble_core::secure_dns::{self, SecureDns};
 use wubble_core::settings::{Section, SettingKind};
 
 use crate::{BindingItem, EntryItem, MenuEntry, PageLinkItem, SettingControl, SettingItem};
@@ -22,12 +23,16 @@ pub fn section_title(section: Section) -> &'static str {
     section.title()
 }
 
-/// What a segment shows for a stored word: an engine's name, or the word capitalised.
+/// What a segment shows for a stored word: an engine's name, a secure DNS choice's, or the
+/// word capitalised.
 fn word_label(kind: SettingKind, word: &str) -> String {
     if kind == SettingKind::SearchEngine
         && let Some(e) = ENGINES.iter().find(|e| e.id == word)
     {
         return e.name.to_owned();
+    }
+    if kind == SettingKind::SecureDns {
+        return secure_dns::label(word).to_owned();
     }
     let mut chars = word.chars();
     chars
@@ -70,15 +75,28 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         Control::Segmented(words) => {
             item.control = SettingControl::Segmented;
             let labels: Vec<String> = words.iter().map(|w| word_label(row.kind, w)).collect();
+            // a custom secure DNS template is chosen under its menu word, `custom:`
+            let chosen = match SecureDns::parse(&row.value) {
+                Ok(dns) if row.kind == SettingKind::SecureDns => dns.word(),
+                _ => row.value.as_str(),
+            };
             item.selected = words
                 .iter()
-                .position(|w| *w == row.value)
+                .position(|w| *w == chosen)
                 .map_or(-1, |i| i as i32);
-            // The engine is picked from a Select, as the design's. None chosen yet (the stored
-            // default, "ask on first search") keeps `selected` at -1: the Select reads "Ask on
-            // first search", and picking any engine, the first too, stores it.
-            if row.kind == SettingKind::SearchEngine {
-                item.placeholder = "Ask on first search".into();
+            // custom secure DNS: the template's own field below the Select
+            if row.kind == SettingKind::SecureDns && chosen == secure_dns::CUSTOM {
+                item.field_prefix = secure_dns::CUSTOM.into();
+                item.field_text = row.value[secure_dns::CUSTOM.len()..].into();
+            }
+            // The engine and secure DNS are picked from a Select, as the design's engine. None
+            // chosen yet (the stored default, "ask on first search") keeps `selected` at -1:
+            // the Select reads "Ask on first search", and picking any engine, the first too,
+            // stores it.
+            if matches!(row.kind, SettingKind::SearchEngine | SettingKind::SecureDns) {
+                if row.kind == SettingKind::SearchEngine {
+                    item.placeholder = "Ask on first search".into();
+                }
                 item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
                     labels
                         .iter()
@@ -106,6 +124,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         Control::ListEditor => item.control = SettingControl::List,
         Control::MapEditor => item.control = SettingControl::Map,
         Control::TextField => item.control = SettingControl::Text,
+        Control::Folder => item.control = SettingControl::Folder,
     }
     item
 }
@@ -230,6 +249,7 @@ mod tests {
                 Control::ListEditor => SettingControl::List,
                 Control::MapEditor => SettingControl::Map,
                 Control::TextField => SettingControl::Text,
+                Control::Folder => SettingControl::Folder,
             };
             assert_eq!(item.control, want, "{}", item.key);
         }
@@ -238,7 +258,16 @@ mod tests {
             .filter(|i| i.first)
             .map(|i| i.section.as_str())
             .collect();
-        assert_eq!(headers, ["General", "Privacy", "Appearance", "Performance"]);
+        assert_eq!(
+            headers,
+            [
+                "General",
+                "Privacy",
+                "Downloads",
+                "Appearance",
+                "Performance"
+            ]
+        );
         assert!(items.last().unwrap().last);
         let engine = setting_item(
             page.iter()

@@ -46,6 +46,12 @@ pub enum PageError {
         request: RequestId,
     },
     Crashed,
+    /// HTTPS-Only mode: the upgrade of `url` (http) to `failed` (https) failed; the user goes
+    /// back or continues on http (`wubble_core::https`).
+    HttpsOnly {
+        url: String,
+        failed: String,
+    },
 }
 
 /// A failed load's own reload (`PageError::Load`).
@@ -91,6 +97,11 @@ pub enum ErrorEvent {
     },
     /// The renderer process ended.
     Crashed,
+    /// HTTPS-Only mode asks before loading `url` over http; its upgrade `failed`.
+    HttpsOnly {
+        url: String,
+        failed: String,
+    },
     /// The tab committed `url`.
     Committed(String),
     /// The tab went from not loading to loading: a reload or a new
@@ -137,6 +148,8 @@ pub enum ErrorEffect {
         request: RequestId,
         proceed: bool,
     },
+    /// HTTPS-Only's Continue to site: the upgrade machine allows the host and loads http.
+    ContinueHttp,
 }
 
 pub fn transition(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
@@ -208,6 +221,12 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
         }
         (_, E::CertError { url, code, request }) => (S::Cert { url, code, request }, vec![]),
         (_, E::Crashed) => (S::Crashed, vec![]),
+        (_, E::HttpsOnly { url, failed }) => (S::HttpsOnly { url, failed }, vec![]),
+        // the failed upgrade's error document commits at the https URL, or at the http one
+        // when the cancelled redirect back to http failed
+        (s @ S::HttpsOnly { .. }, E::Committed(at)) if matches!(&s, S::HttpsOnly { url, failed } if *failed == at || *url == at) => {
+            (s, vec![])
+        }
         // Chromium commits the error document at the failed URL; anything
         // else committing means the page moved on.
         (s @ (S::Load { .. } | S::Cert { .. }), E::Committed(at)) if s.url() == Some(&at) => {
@@ -303,6 +322,7 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
                 None => (S::Cert { url, code, request }, vec![]),
             }
         }
+        (S::HttpsOnly { .. }, E::Proceed) => (S::None, vec![ErrorEffect::ContinueHttp]),
         (_, E::ViewGone) => (S::None, vec![]),
         // every other pair leaves the state: a button with nothing to do, a tick before the
         // reload is due, the schedule's events where nothing is scheduled
@@ -324,9 +344,10 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
 impl PageError {
     fn url(&self) -> Option<&String> {
         match self {
-            Self::Load { url, .. } | Self::Cert { url, .. } | Self::Reloading { url, .. } => {
-                Some(url)
-            }
+            Self::Load { url, .. }
+            | Self::Cert { url, .. }
+            | Self::Reloading { url, .. }
+            | Self::HttpsOnly { url, .. } => Some(url),
             Self::None | Self::Crashed => None,
         }
     }
@@ -396,6 +417,19 @@ pub fn error_text(error: &PageError) -> Option<ErrorText> {
                 cert: true,
             }
         }
+        // Chrome's HTTPS-First interstitial (`https_only_mode_blocking_page.cc`), its wording
+        PageError::HttpsOnly { url, .. } => ErrorText {
+            title: "Connection is not secure".into(),
+            summary: format!(
+                "{} does not support a secure connection. Attackers might be able to see or \
+                 change what you send to it or get from it.",
+                host(url)
+            ),
+            detail: url.clone(),
+            primary: "Go back",
+            secondary: "Continue to site".into(),
+            cert: true,
+        },
         PageError::Crashed => ErrorText {
             title: "This page crashed".into(),
             summary: "Something went wrong while showing this page.".into(),
@@ -519,6 +553,86 @@ mod tests {
         for (name, state, event, want, effects) in cases {
             assert_eq!(transition(state, event), (want, effects), "{name}");
         }
+    }
+
+    /// HTTPS-Only's panel: one row per (state, event).
+    #[test]
+    fn https_only_asks_and_goes_back_or_continues() {
+        let asking = || PageError::HttpsOnly {
+            url: "http://a.test/".into(),
+            failed: "https://a.test/".into(),
+        };
+        let cases: Vec<(&str, PageError, ErrorEvent, PageError, Vec<ErrorEffect>)> = vec![
+            (
+                "the upgrade failed",
+                PageError::None,
+                E::HttpsOnly {
+                    url: "http://a.test/".into(),
+                    failed: "https://a.test/".into(),
+                },
+                asking(),
+                vec![],
+            ),
+            (
+                "the failed upgrade's error document commits",
+                asking(),
+                E::Committed("https://a.test/".into()),
+                asking(),
+                vec![],
+            ),
+            (
+                "the cancelled redirect back's error document commits",
+                asking(),
+                E::Committed("http://a.test/".into()),
+                asking(),
+                vec![],
+            ),
+            (
+                "another page commits",
+                asking(),
+                E::Committed("https://b.test/".into()),
+                PageError::None,
+                vec![],
+            ),
+            (
+                "Continue to site",
+                asking(),
+                E::Proceed,
+                PageError::None,
+                vec![ErrorEffect::ContinueHttp],
+            ),
+            (
+                "Go back",
+                asking(),
+                E::GoBack { can_go_back: true },
+                PageError::None,
+                vec![ErrorEffect::Back],
+            ),
+            (
+                "Go back with nowhere to go",
+                asking(),
+                E::GoBack { can_go_back: false },
+                PageError::None,
+                vec![ErrorEffect::Blank],
+            ),
+            (
+                "a tick changes nothing",
+                asking(),
+                E::Tick(T0),
+                asking(),
+                vec![],
+            ),
+        ];
+        for (name, state, event, want, effects) in cases {
+            assert_eq!(transition(state, event), (want, effects), "{name}");
+        }
+        let text = error_text(&asking()).unwrap();
+        assert_eq!(text.title, "Connection is not secure");
+        assert_eq!(
+            (text.primary, text.secondary.as_str(), text.cert),
+            ("Go back", "Continue to site", true)
+        );
+        assert!(text.summary.starts_with("a.test "), "{}", text.summary);
     }
 
     #[test]

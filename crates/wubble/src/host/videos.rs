@@ -22,7 +22,7 @@ use wubble_core::video::{
 use wubble_core::window::WindowKind;
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
-use wubble_ui::{AppWindow, VideoMark, VideoSave, VideoView};
+use wubble_ui::{AppWindow, DownloadAction, VideoMark, VideoSave, VideoView};
 
 use super::boost::KIT_REF;
 use super::{Host, now_ms};
@@ -128,6 +128,18 @@ impl SponsorTab {
 /// Maximum stale eval IDs retained so a long-lived tab that drops evals cannot grow unboundedly.
 const MAX_STALE_POLLS: usize = 256;
 
+/// Who asked for a video frame, so where it goes: the strip's button (the screenshot setting's
+/// output), or a context menu row (its own output, and the element's screenshot when the page's
+/// canvas may not read the video, a cross-origin one).
+#[derive(Clone, Copy, Debug)]
+enum FrameAsk {
+    Strip,
+    Menu {
+        output: wubble_core::shot::ShotOutput,
+        at: (i32, i32),
+    },
+}
+
 pub(super) struct Videos {
     controls: bool,
     rates: RateTable,
@@ -141,8 +153,8 @@ pub(super) struct Videos {
     /// Polls sent to a document that has since gone: their answers are dropped (and may never
     /// come, so they do not hold up the next poll). Keyed to `TabId` so closing a view prunes them.
     stale: BTreeMap<u64, TabId>,
-    /// Frame screenshots in flight.
-    frames: BTreeMap<u64, TabId>,
+    /// Frame screenshots in flight, and who asked.
+    frames: BTreeMap<u64, (TabId, FrameAsk)>,
     /// The pointer over the visible page's video, and over the controls.
     over_video: bool,
     over_controls: bool,
@@ -361,15 +373,22 @@ impl Host {
                     self.media_snapshot(tab, json.unwrap_or(Value::Null));
                     return true;
                 }
-                if self.videos.frames.remove(&id.0).is_some() {
+                if let Some((_, ask)) = self.videos.frames.remove(&id.0) {
                     let png = result
                         .as_deref()
                         .ok()
                         .and_then(|t| serde_json::from_str::<Option<String>>(t).ok())
                         .flatten();
-                    match png {
-                        Some(png) => self.save_shot(tab, png, true),
-                        None => self.toast_text("This video's frames cannot be saved"),
+                    match (png, ask) {
+                        (Some(png), FrameAsk::Strip) => self.save_shot(tab, png, true, None),
+                        (Some(png), FrameAsk::Menu { output, .. }) => {
+                            self.save_shot(tab, png, true, Some(output))
+                        }
+                        (None, FrameAsk::Strip) => {
+                            self.toast_text("This video's frames cannot be saved")
+                        }
+                        // a tainted canvas: the element as the view shows it
+                        (None, FrameAsk::Menu { at, .. }) => self.shot_element(tab, at),
                     }
                     return true;
                 }
@@ -529,14 +548,34 @@ impl Host {
                         ));
                     }
                 }
-                VideoEffect::Frame => {
-                    let script = format!("{KIT_REF}?{KIT_REF}.frame():null");
-                    if let Some(id) = self.tab_view(tab).and_then(|v| v.eval(&script)) {
-                        self.videos.frames.insert(id.0, tab);
-                    }
-                }
+                VideoEffect::Frame => self.video_frame(tab, FrameAsk::Strip),
                 VideoEffect::Pip => self.pip_event(PipInput::Request(tab)),
                 VideoEffect::Save { x, y } => self.media_entry(tab, x, y),
+                // opened, never toggled shut: the button shows the save, it does not hide it
+                VideoEffect::ShowDownloads => {
+                    if self.overlay_open(Kind::Downloads, None)
+                        && let Some(window) = self.w.window.upgrade()
+                    {
+                        self.render_surfaces(&window);
+                    }
+                }
+                VideoEffect::RevealSaved => {
+                    if let Some(id) = self.media_latest(tab) {
+                        self.download_action(id, DownloadAction::Reveal);
+                    }
+                }
+                // a stream's entry is not restarted from the list (`DownloadEffect::StartAgain`
+                // asks for the page, which is this one): the downloader's entry again
+                VideoEffect::RetrySave { x, y } => {
+                    let latest = self.media_latest(tab);
+                    let stream = latest
+                        .and_then(|id| self.downloads.get(id))
+                        .is_some_and(|e| super::media::is_stream_entry(&e.url));
+                    match latest {
+                        Some(id) if !stream => self.download_action(id, DownloadAction::Retry),
+                        _ => self.media_entry(tab, x, y),
+                    }
+                }
                 VideoEffect::Redraw => {
                     if self.shown() == Some(tab) {
                         self.redraw_video();
@@ -586,13 +625,13 @@ impl Host {
     }
 
     fn video_cmd(&mut self, tab: TabId, cmd: VideoCmd) {
-        let can_save = self.video_save_state(tab).offered();
+        let save = self.video_save_state(tab);
         self.video_event(
             tab,
             VideoInput::Command {
                 cmd,
                 over: self.video_over(),
-                can_save,
+                save,
             },
         );
     }
@@ -740,7 +779,7 @@ impl Host {
         self.videos.overlays.remove(&tab);
         self.videos.polls.retain(|_, (t, _)| *t != tab);
         self.videos.stale.retain(|_, t| *t != tab);
-        self.videos.frames.retain(|_, t| *t != tab);
+        self.videos.frames.retain(|_, (t, _)| *t != tab);
         self.videos.pip_calls.retain(|_, (t, _)| *t != tab);
         self.videos.playing.remove(&tab);
         self.videos.sponsor_tabs.remove(&tab);
@@ -1152,14 +1191,40 @@ impl Host {
 
     // ----- picture-in-picture
 
-    fn pip_event(&mut self, input: PipInput) {
+    /// The context menu's Copy Video Frame (`output` the clipboard) and Save Video Frame As
+    /// (a file in the downloads folder, listed as a finished download): the video under `at`.
+    pub(super) fn video_frame_at(
+        &mut self,
+        tab: TabId,
+        at: (i32, i32),
+        output: wubble_core::shot::ShotOutput,
+    ) {
+        self.video_frame(tab, FrameAsk::Menu { output, at });
+    }
+
+    /// Asks the page's kit for a video frame as a PNG; the answer comes to `media_answer`.
+    fn video_frame(&mut self, tab: TabId, ask: FrameAsk) {
+        let script = match ask {
+            FrameAsk::Strip => format!("{KIT_REF}?{KIT_REF}.frame():null"),
+            FrameAsk::Menu { at: (x, y), .. } => format!("{KIT_REF}?{KIT_REF}.frame({x},{y}):null"),
+        };
+        if let Some(id) = self.tab_view(tab).and_then(|v| v.eval(&script)) {
+            self.videos.frames.insert(id.0, (tab, ask));
+        }
+    }
+
+    pub(super) fn pip_event(&mut self, input: PipInput) {
         let (next, effects) = pip::transition(self.videos.pip, input);
         self.videos.pip = next;
         for effect in effects {
             match effect {
-                PipEffect::EnterFullscreen(tab) => {
+                PipEffect::EnterFullscreen { tab, at } => {
+                    let expression = match at {
+                        Some((x, y)) => format!("{KIT_REF}.pipAt({x},{y})"),
+                        None => format!("{KIT_REF}.pip()"),
+                    };
                     let params = serde_json::json!({
-                        "expression": format!("{KIT_REF}.pip()"),
+                        "expression": expression,
                         "userGesture": true,
                         "awaitPromise": true,
                         "returnByValue": true,

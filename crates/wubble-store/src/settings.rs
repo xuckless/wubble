@@ -273,6 +273,8 @@ settings! {
     MediaAskEachTime: bool = defs::MEDIA_ASK_EACH_TIME;
     MediaConcurrency: u32 = defs::MEDIA_CONCURRENCY;
     MediaMinBytes: u32 = defs::MEDIA_MIN_BYTES;
+    /// Empty: the OS downloads folder.
+    DownloadsDir: String = defs::DOWNLOADS_DIR;
     DownloadsAskWhere: bool = defs::DOWNLOADS_ASK_WHERE;
     PageThemeDefault: PageTheme = defs::PAGE_THEME;
     /// Per-site page themes (`wubble_core::pagetheme`): hosts at the default are absent.
@@ -312,6 +314,21 @@ settings! {
     UpdateLastCheck: u32 = defs::UPDATE_LAST_CHECK;
     /// A CEF start switch (`--load-extension`): read before the engine starts.
     InstalledExtensions: Installed = defs::EXTENSIONS_INSTALLED;
+    /// The profile preferences (`wubble_core::privacy::PREFS`), read through the text table.
+    PrivacyDoNotTrack: bool = defs::PRIVACY_DO_NOT_TRACK;
+    PrivacyPreload: String = defs::PRIVACY_PRELOAD;
+    PrivacyCanMakePayment: bool = defs::PRIVACY_CAN_MAKE_PAYMENT;
+    PrivacyAdTopics: bool = defs::PRIVACY_AD_TOPICS;
+    PrivacySiteSuggestedAds: bool = defs::PRIVACY_SITE_SUGGESTED_ADS;
+    PrivacyAdMeasurement: bool = defs::PRIVACY_AD_MEASUREMENT;
+    PrivacyWebrtcIp: String = defs::PRIVACY_WEBRTC_IP;
+    PdfDownload: bool = defs::PDF_DOWNLOAD;
+    /// `wubble_core::secure_dns::SecureDns`'s stored text.
+    PrivacySecureDns: String = defs::PRIVACY_SECURE_DNS;
+    PrivacyGpc: bool = defs::PRIVACY_GPC;
+    PrivacyHttpsMode: String = defs::PRIVACY_HTTPS_MODE;
+    /// `container/host` to the Unix second it ends (`wubble_core::https`).
+    PrivacyHttpsAllowed: ZoomTable = defs::PRIVACY_HTTPS_ALLOWED;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

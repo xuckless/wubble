@@ -112,19 +112,23 @@ component SettingRow inherits VerticalLayout {
     callback reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
+    // a folder row's Change: the host opens the OS folder chooser for the setting
+    callback folder-requested(string);
     out property <bool> menu-mounted;
 
     property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
-    padding-bottom: root.listed ? Shell.row-pad-y : 0px;
+    property <bool> fielded: root.setting.field-prefix != "";
+    padding-bottom: root.listed || root.fielded ? Shell.row-pad-y : 0px;
     Row {
         tap: root.setting.control == SettingControl.toggle;
         tapped => {
             root.changed(root.setting.key, root.setting.on ? "0" : "1");
         }
+        // a list editor shows its own note; any other row's refusal is its row's note
         RowText {
             title: root.setting.label;
-            note: root.setting.restart ? "Applies after a restart" : "";
-            tone: NoteTone.restart;
+            note: root.setting.restart ? "Applies after a restart" : root.listed ? "" : root.setting.note;
+            tone: root.setting.restart ? NoteTone.restart : NoteTone.conflict;
         }
         RowControls {
             if root.setting.changed: ResetButton {
@@ -185,6 +189,17 @@ component SettingRow inherits VerticalLayout {
                     root.changed(root.setting.key, t);
                 }
             }
+            // the design's `.st-path`: the folder in mono, and Change
+            if root.setting.control == SettingControl.folder: MonoNote {
+                text: root.setting.value == "" ? "The downloads folder" : root.setting.value;
+            }
+            if root.setting.control == SettingControl.folder: Button {
+                text: "Change";
+                label: "Change " + root.setting.label;
+                clicked => {
+                    root.folder-requested(root.setting.key);
+                }
+            }
             if root.setting.control == SettingControl.slider: slider := ElasticSlider {
                 compact: true;
                 value: root.setting.number;
@@ -196,6 +211,19 @@ component SettingRow inherits VerticalLayout {
                 edited(v) => {
                     root.changed(root.setting.key, v);
                 }
+            }
+        }
+    }
+    // wubble: a choice's own text (secure DNS's custom template), applied on Enter
+    if root.fielded: HorizontalLayout {
+        padding-left: Shell.row-pad-x;
+        padding-right: Shell.row-pad-x;
+        Field {
+            label: root.setting.label;
+            text: root.setting.field-text;
+            placeholder: "https://dns.example/dns-query{?dns}";
+            accepted(t) => {
+                root.changed(root.setting.key, root.setting.field-prefix + t);
             }
         }
     }
@@ -325,6 +353,7 @@ global SectionIcons {
         if title == "Privacy" { return Glyph.shield; }
         if title == "Appearance" { return Glyph.palette; }
         if title == "Performance" { return Glyph.gauge; }
+        if title == "Downloads" { return Glyph.download; }
         return Glyph.globe;
     }
 }
@@ -584,6 +613,7 @@ export component SettingsPage inherits Rectangle {
     callback setting-reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
+    callback folder-requested(string);
     callback binding-record(string);
     callback binding-reset(string);
     callback binding-clear(string);
@@ -869,6 +899,9 @@ export component SettingsPage inherits Rectangle {
                             }
                             entry-added(k, e) => {
                                 root.entry-added(k, e);
+                            }
+                            folder-requested(k) => {
+                                root.folder-requested(k);
                             }
                         }
                     }
