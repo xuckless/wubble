@@ -15,3 +15,4 @@ Moved out of [AGENTS.md](../../AGENTS.md) on 2026-11-23. Read the matching docum
 - [docs/research/tts.md](../research/tts.md): tiny-voca as an on-device voice for a Read aloud feature (shelved; not a screen reader).
 - [docs/research/surface-store.md](../research/surface-store.md): one store for every shell surface (an extension of `wubble_core::overlay`): the inventory, the rows, the migration.
 - [docs/research/page-layer.md](../research/page-layer.md): the page on its own OS layer (a `CALayer` on an IOSurface, a Wayland subsurface): facts, state, and the two parts, Layer: fullscreen and Layer: windowed.
+- [docs/research/linux-page-layer.md](../research/linux-page-layer.md): the page layer on Linux: a Wayland subsurface below the shell, CEF's buffer lifetime, the copy into a dmabuf pool, prior art, the experiment and the build.
