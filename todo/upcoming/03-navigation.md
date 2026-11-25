@@ -75,19 +75,6 @@ Add a pure `fn zero_rows(current_url: Option<&str>, clipboard_url: Option<&str>,
 
 Call it from bar_rows in crates/wubble/src/bar.rs when the query is blank. The host reads the clipboard once per open through crates/wubble/src/clipboard.rs, and never in agent-session tabs (they have their own clipboard). In Navigate mode the field opens filled with the current URL and selected (take-focus already selects all), as in Chrome. The start page capsule (kit/pages/start.slint) uses the same rows. Unit tests for ordering and dedupe.
 
-## Address field context menu: Paste and go, Paste and search, copy and edit rows (`address-paste-and-go`)
-
-Key: `address-paste-and-go` · engine patch: no · state: not written.
-
-Right-clicking Chrome's omnibox gives Undo, Cut, Copy, Paste, 'Paste and go to <url>' or 'Paste and search for "text"', Delete, Select all, and 'Always show full URLs'. In wubble, the command bar field (kit/chrome/command-head.slint) and the address pill (kit/chrome/address-pill.slint) have no menu. Chrome's paste-and-go is missing entirely, and Shift+Insert paste in shell fields is an open TODO.
-
-Add a shell menu for the command field and the pill, built as Menu::Shell entries in crates/wubble/src/menu.rs, like the tab row menu:
-- one table of rows
-- the paste row's label from classify() over the clipboard text (crates/wubble/src/clipboard.rs): 'Paste and go to <elided url>' for Intent::Url, 'Paste and search for "…"' for Search, disabled when the clipboard is empty
-- choosing it runs bar.rs target_command in the bar's mode
-
-The pill's menu adds Copy address (Action::CopyUrl), Edit address (open the bar filled) and Paste and go. Add Action::PasteAndGo to action.rs (FIXED table and PALETTE) so the command bar and keymap can reach it; Chrome has no default chord, so leave it unbound. Add a setting `ui.full_urls`, off by default. When on, the pill shows scheme and full path instead of wubble_core::chrome::address_parts' host and path; feed it from shell.rs. Shift+Insert pastes in CommandHead's key-pressed. Unit tests for the menu labels in menu.rs.
-
 ## Back and forward history list (long press or right-click), middle-click to new tab (`nav-history-menus`)
 
 Key: `nav-history-menus` · engine patch: no · state: not written.
@@ -104,16 +91,6 @@ UI:
 - A middle or Mod click on a row, or on Back, Forward or Reload, makes Command::NewTab with that entry's URL (a copy, as Chrome; history is not cloned).
 
 The page context menu's Back and Forward rows keep working. Not for agent-session tabs (agent::may_go still guards the navigation).
-
-## Reload button turns into Stop while loading; reload menu with hard reload and empty cache (`nav-stop-reload`)
-
-Key: `nav-stop-reload` · engine patch: no · state: not written.
-
-While a page loads, Chrome's reload button turns into an X (Stop), and back into Reload when the load ends. Shift-click or Ctrl-click does a hard reload. With DevTools open, a right-click or long press gives Normal reload, Hard reload and 'Empty cache and hard reload'. wubble has Action::Stop (Escape, Cmd+.), Action::HardReload (ViewOp::HardReload, reload_ignore_cache in crates/wubble-engine/src/view.rs) and an `address-loading` property in app.slint, but NavButtons (crates/wubble-ui/ui/components/nav-buttons.slint) always shows Reload.
-
-Add `in property <bool> loading` to NavButtons, bound from the visible tab's loading state (the same source as address-loading in crates/wubble/src/bind.rs). The fourth button's icon, label and id become Glyph.close / 'Stop' / 'stop' while loading, swapped with a kit crossfade (kit/motion/crossfade.slint). If the kit's icon set has no stop glyph, use close and note it in docs/fidelity/derived-review.md. Add a modifiers argument to `action(...)` so the host maps Shift or Mod on reload to hard-reload. The NavButtons button table stays one table.
-
-Add Action::EmptyCacheHardReload (FIXED table and PALETTE). It sends the CDP call Network.clearBrowserCache through View::cdp (crates/wubble-engine/src/cdp.rs), then ViewOp::HardReload. A right-click on the reload button opens a Menu::Shell (crates/wubble/src/menu.rs) with the three rows; the third is shown only when wubble_core::devtools says DevTools is open for that tab. Unit tests in perform.rs for the plans.
 
 ## History swipe on macOS and Windows touchpads (and X11) (`swipe-nav-macos-windows`)
 
@@ -152,16 +129,6 @@ wubble's error panel (crates/wubble/src/page_error.rs PageError/ErrorText, crate
 5. ERR_CACHE_MISS on back or reload to a POST: Chrome's 'Confirm Form Resubmission' with a button that reloads (CEF's Reload reposts).
 
 The transition stays the single machine. Add unit tests in page_error.rs and neterror.rs.
-
-## Error panel: auto-reload when the network comes back (`offline-auto-reload`)
-
-Key: `offline-auto-reload` · engine patch: no · state: not written.
-
-Chrome's NetErrorAutoReloader reloads a page that failed with a network error (ERR_INTERNET_DISCONNECTED, ERR_NAME_NOT_RESOLVED, ERR_NETWORK_CHANGED, ERR_CONNECTION_*, ERR_ADDRESS_UNREACHABLE, timeouts). It retries on an exponential backoff (1 s, 5 s, 30 s, 1 m, 5 m, 10 m), and at once when the system comes back online, but only while the tab is visible. It never retries certificate errors, a POST, or a load the user stopped. wubble's PageError::Load (crates/wubble/src/page_error.rs) stays until the user presses Reload.
-
-Add the retry schedule to the error machine as data: a `retry: Option<Retry { attempt, due_ms }>` inside PageError::Load. New events: Tick(now_ms), Online, Hidden, Shown and UserStopped. A new effect is ErrorEffect::Reload with a flag marking it as automatic. All of it stays pure in transition(), and the host's existing tick drives Tick. The table of retryable codes lives in wubble-core/neterror.rs (a `retryable(code)` fn ported from Chromium's net_error_auto_reloader.cc IsReloadableError, BSD-3, behaviour only).
-
-Online detection makes no request. On Linux, watch NetworkManager's or systemd-networkd's state over D-Bus only if a crate is already in the tree; otherwise rely on the backoff alone. On macOS use SCNetworkReachability or NWPathMonitor. Put each behind one shared trait in a new small module, next to os_scope.rs. Hidden tabs and sleeping or discarded tabs (wubble_core::sleep) do not retry. The panel shows 'Trying again…' while a retry is due. Unit tests for the schedule, the visibility gating and the refusal cases.
 
 ## Connection security: certificate viewer, Not secure and mixed-content states in the address pill (`cert-viewer-security-state`)
 

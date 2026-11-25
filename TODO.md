@@ -14,6 +14,8 @@ Owner, by hand on the Mac: whether your 0.6.1 install updated itself to 0.6.2. (
 
 ## Working on
 - [~] Fix round from the owner's 0.6.2 hand checks: the pointer after a drop, picture-in-picture from a split pane, built-in pages in split view ([fix-round.md](todo/in-progress/fix-round.md))
+- [ ] Optimization loaded now: ProMotion read as 60 Hz, CEF's own begin frames on the layer, the accessibility mirror, hidden tabs' GPU memory, a frame lost to a busy pool, Skia cache and frame rate by content ([optimization.md](todo/in-progress/optimization.md))
+- [ ] Features loaded now: mute site and tab menu rows, tab search, Chrome's missing shortcuts, paste and go, stop/reload, zoom indicator, download speed, auto-reload when online, the pop-up minimum size ([features.md](todo/in-progress/features.md))
 - [~] Surface manager: tested parts shipped in 0.6.2; blind overlays, command bar and focus left ([surface-manager.md](todo/in-progress/surface-manager.md))
 - Open owner decisions: [decisions.md](todo/in-progress/decisions.md)
 

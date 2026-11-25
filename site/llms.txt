@@ -5,7 +5,7 @@
 - Who it is for: people who liked Arc and want it on Linux or still developed; Zen users who want Chrome's engine; developers who let an AI agent (Claude Code, Codex, Gemini CLI, Cursor) browse, each session approved, in its own Space, limited to allowed sites, local only and off by default.
 - Has: vertical tabs, Spaces with separate logins, pinned tabs, folders, tab archive, sleeping tabs, split view (up to three pages), command bar, link peek, reader view, PDF, screenshots, picture-in-picture, video controls, built-in ad, tracker and cookie-banner blocking, encrypted password manager, import from Arc, Zen and Firefox, signed automatic updates, no telemetry.
 - Does not have yet: extensions, sync, Windows, Netflix and other protected (DRM) video.
-- Status: preview; usable daily on Linux.
+- Status: stable release 0.6.2 for Linux and macOS; used daily on both.
 - Install: https://wubble.cc/#install
 - Comparison with Arc, Zen, Chrome and Brave: https://wubble.cc/#compare
 - Questions: https://wubble.cc/#faq

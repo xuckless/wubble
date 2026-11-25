@@ -39,3 +39,5 @@ Batch 1's written branches are integrated this way, one feature at a time.
 As few as possible: one, when CPU needs it. Engine patches are written and collected under `patches/chromium/` without
 building; the first CEF rebuild happens only when the under-5 % CPU patch is ready, and it carries every collected
 patch. A feature that needs an engine patch lives in [upcoming/engine-build.md](upcoming/engine-build.md), not in its area file.
+
+`in-progress/` is the working memory (owner, 2026-11-25): what is loaded for the current round, optimization and features together, moved there from `upcoming/` when chosen.

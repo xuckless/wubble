@@ -36,14 +36,6 @@ When a page starts a second download with no gesture, Chrome's DownloadRequestLi
 
 What to build: (1) In welding, mark the changes `wubble change` and list them in WUBBLE_CHANGES.md. Add MULTIPLE_DOWNLOADS = 1 << 14 and `PermissionKind::MultipleDownloads`, with a decode test. Pass the url and the browser id from can_download through a host hook (a `CanDownload` question answered synchronously from a host-set table), so a per-site Block takes effect before anything starts. (2) In wubble-core/src/site.rs, add `Permission::AutomaticDownloads` (stored name "automatic-downloads") to ALL, with the prompt wording "Download multiple files" and tests. (3) In crates/wubble-engine/src/page.rs, map the new kind in the engine permission mapping. In the host's permission routing, use the existing permission prompt (components/permission-prompt.slint). (4) Add the row to Settings' Sites list, where it can be revoked like the others. (5) Agent-driven tabs keep refusing, as today. All platforms.
 
-## Download speed and time remaining in rows (`download-speed-eta`)
-
-Key: `download-speed-eta` · engine patch: no · state: not written.
-
-Chrome's download rows read "2.1 MB/s · 12 MB of 100 MB, 40 secs left". wubble's DownloadEntry::detail (wubble-core/src/download.rs) shows only the amounts, because welding's DownloadProgress event (vendor/welding/src/handlers.rs on_download_updated) drops CefDownloadItem::current_speed.
-
-What to build: (1) welding: add `bytes_per_second: Option<u64>` to NavigationEvent::DownloadProgress from `item.current_speed()`, as a `wubble change` entry. (2) wubble-engine/src/download.rs and page.rs: carry the speed through DownloadInput::Progress and PageEvent::DownloadProgress, and update their tests. (3) wubble-core/src/download.rs: give DownloadEvent::Progress the speed, store `speed: Option<u64>` on DownloadEntry (not persisted; it is cleared when the download leaves Running), and make detail() return Chromium's format: speed, amount, and the time left from (total - received) / speed. Format the time with a pure port of ui::TimeFormat's short remaining strings ("40 secs left", "3 mins left", "2 hours left", from ui/base/l10n/time_format.cc, BSD) in a new `remaining_text(secs)`, with unit tests. Smooth the speed with an exponential moving average, kept in the entry, so the text does not jitter. (4) Media downloads (host/media.rs jobs) report their own rate the same way, from the bytes the writer has written per tick, so both kinds of row read alike. No UI change: the row already shows `detail`. All platforms.
-
 ## Open when done, always open this type, open safe files (`download-auto-open`)
 
 Key: `download-auto-open` · engine patch: no · state: not written.
