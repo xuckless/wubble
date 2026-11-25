@@ -658,6 +658,27 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenInPrivateWindow(url)) => {
                     self.dispatch(Command::NewPrivateWindow { url: Some(url) });
                 }
+                MenuEffect::Run(MenuCommand::OpenInGlance(url)) => {
+                    let window = self.w.id;
+                    self.dispatch(Command::OpenGlance {
+                        window,
+                        opener: tab,
+                        url,
+                    });
+                }
+                // the field keeps its focus: the viewer types into it
+                MenuEffect::Run(MenuCommand::EmojiPalette) => {
+                    #[cfg(target_os = "macos")]
+                    if let Some(mtm) = objc2::MainThreadMarker::new() {
+                        // SAFETY: on the main thread (`mtm`), with no sender, as AppKit's
+                        // Edit menu sends it
+                        #[allow(unused_unsafe)]
+                        unsafe {
+                            objc2_app_kit::NSApplication::sharedApplication(mtm)
+                                .orderFrontCharacterPalette(None);
+                        }
+                    }
+                }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),
                 MenuEffect::Run(MenuCommand::Search(text)) => self.search_for(tab, text),

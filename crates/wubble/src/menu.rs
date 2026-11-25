@@ -81,6 +81,11 @@ pub enum Command {
     FrameScript { frame: String, script: &'static str },
     /// Open the URL in a new private window (`Command::NewPrivateWindow`).
     OpenInPrivateWindow(String),
+    /// Open the URL in a peek over the page (`Command::OpenGlance`).
+    OpenInGlance(String),
+    /// The OS's emoji and symbols picker over the focused field (macOS's Character Viewer,
+    /// `orderFrontCharacterPalette:`).
+    EmojiPalette,
     /// Put the text on the clipboard.
     CopyText(String),
     /// Download the URL with the page's cookies, asking where to save it.
@@ -241,6 +246,18 @@ impl Ctx<'_> {
             .then(|| wubble_core::url::view_source(&self.menu.frame_url))
             .flatten()
     }
+    /// The selection is one web address (Chromium's "Go to <url>", which replaces the search
+    /// row): the URL it names.
+    fn selected_url(&self) -> Option<String> {
+        match omnibox::classify(&self.menu.selection_text) {
+            omnibox::Intent::Url(url)
+                if url.starts_with("http://") || url.starts_with("https://") =>
+            {
+                Some(url)
+            }
+            _ => None,
+        }
+    }
     fn misspelled(&self) -> bool {
         self.menu.editable && !self.menu.misspelled_word.is_empty()
     }
@@ -354,6 +371,9 @@ struct Row {
     command: fn(&Ctx) -> Command,
 }
 
+/// The rows only macOS has (the Character Viewer, Writing Direction).
+const MAC: bool = cfg!(target_os = "macos");
+
 const fn always(_: &Ctx) -> bool {
     true
 }
@@ -410,6 +430,16 @@ const ROWS: &[Row] = &[
         always,
         |c| { Command::OpenInPrivateWindow(c.menu.link_url.clone()) }
     ),
+    // Chrome's "Open link in split view": a new tab beside the page
+    row!(1, "Open Link in Split View", |c| c.link(), always, |c| {
+        Command::Model(TabCommand(ModelCommand::OpenBeside {
+            url: c.menu.link_url.clone(),
+        }))
+    }),
+    // wubble's peek, where Arc and Zen offer theirs
+    row!(1, "Open Link in a Peek", |c| c.link(), always, |c| {
+        Command::OpenInGlance(c.menu.link_url.clone())
+    }),
     row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
         Command::SaveAs(c.menu.link_url.clone())
     }),
@@ -522,6 +552,15 @@ const ROWS: &[Row] = &[
         enabled: always,
         command: |c| Command::CopyText(c.menu.media_url.clone()),
     },
+    // Chromium's IDC_CONTENT_CONTEXT_EMOJI, first of a field's rows (macOS's Character Viewer;
+    // Windows, where Chrome also has it, is parked)
+    row!(
+        12,
+        "Emoji & Symbols",
+        |c| c.editable() && MAC,
+        always,
+        |_| Command::EmojiPalette
+    ),
     row!(5, "Undo", |c| c.editable(), |c| c.edit(F::CAN_UNDO), |_| {
         Command::Engine(cef_id::UNDO)
     }),
@@ -573,10 +612,54 @@ const ROWS: &[Row] = &[
         |c| c.edit(F::CAN_SELECT_ALL),
         |_| { Command::Engine(cef_id::SELECT_ALL) }
     ),
+    // macOS's Writing Direction submenu (Chromium `AppendPlatformEditableItems`), as rows: the
+    // focused field's `dir`, as Chromium's `UpdateTextDirection` sets it
+    row!(
+        13,
+        "Writing Direction: Default",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && document.activeElement.removeAttribute('dir')",
+        }
+    ),
+    row!(
+        13,
+        "Writing Direction: Left to Right",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && (document.activeElement.dir = 'ltr')",
+        }
+    ),
+    row!(
+        13,
+        "Writing Direction: Right to Left",
+        |c| c.editable() && MAC,
+        always,
+        |c| Command::FrameScript {
+            frame: c.menu.frame.clone(),
+            script: "document.activeElement && (document.activeElement.dir = 'rtl')",
+        }
+    ),
+    Row {
+        group: 7,
+        label: |c| {
+            format!(
+                "Go to {}",
+                short_text(&c.selected_url().unwrap_or_default())
+            )
+        },
+        show: |c| c.selected_url().is_some(),
+        enabled: always,
+        command: |c| Command::OpenInNewTab(c.selected_url().unwrap_or_default()),
+    },
     Row {
         group: 7,
         label: |c| search_label(c.nav.search, &c.menu.selection_text),
-        show: |c| !c.menu.selection_text.trim().is_empty(),
+        show: |c| !c.menu.selection_text.trim().is_empty() && c.selected_url().is_none(),
         enabled: always,
         command: |c| Command::Search(c.menu.selection_text.clone()),
     },
@@ -2263,6 +2346,8 @@ mod tests {
                 "Open Link in New Tab",
                 "Open Link in New Window",
                 "Open Link in Private Window",
+                "Open Link in Split View",
+                "Open Link in a Peek",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -2278,6 +2363,11 @@ mod tests {
                 "Open Link in Private Window",
                 Command::OpenInPrivateWindow(next()),
             ),
+            (
+                "Open Link in Split View",
+                Command::Model(TabCommand(ModelCommand::OpenBeside { url: next() })),
+            ),
+            ("Open Link in a Peek", Command::OpenInGlance(next())),
             ("Save Link As\u{2026}", Command::SaveAs(next())),
             ("Copy Link Address", Command::CopyText(next())),
             ("Take Screenshot of Element", Command::ShotElement((10, 20))),
@@ -2303,6 +2393,8 @@ mod tests {
                 "Open Link in New Tab",
                 "Open Link in New Window",
                 "Open Link in Private Window",
+                "Open Link in Split View",
+                "Open Link in a Peek",
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
@@ -2365,6 +2457,40 @@ mod tests {
         );
     }
 
+    /// A field's whole menu: on macOS with Emoji & Symbols first and the writing directions
+    /// after Select All.
+    fn field_labels() -> Vec<&'static str> {
+        let mac = cfg!(target_os = "macos");
+        let emoji: &[&str] = if mac { &["Emoji & Symbols", "-"] } else { &[] };
+        let direction: &[&str] = if mac {
+            &[
+                "-",
+                "Writing Direction: Default",
+                "Writing Direction: Left to Right",
+                "Writing Direction: Right to Left",
+            ]
+        } else {
+            &[]
+        };
+        [
+            emoji,
+            &[
+                "Undo",
+                "Redo",
+                "-",
+                "Cut",
+                "Copy",
+                "Paste",
+                "Paste as Plain Text",
+                "Delete",
+                "Select All",
+            ],
+            direction,
+            &["-", "Inspect"],
+        ]
+        .concat()
+    }
+
     #[test]
     fn editable_entries_follow_every_flag() {
         let all = [
@@ -2384,22 +2510,7 @@ mod tests {
                 ..page()
             };
             let e = entries(&m, NavFlags::default());
-            assert_eq!(
-                labels(&e),
-                [
-                    "Undo",
-                    "Redo",
-                    "-",
-                    "Cut",
-                    "Copy",
-                    "Paste",
-                    "Paste as Plain Text",
-                    "Delete",
-                    "Select All",
-                    "-",
-                    "Inspect"
-                ]
-            );
+            assert_eq!(labels(&e), field_labels());
             let plain = e.iter().find(|e| e.label == "Paste as Plain Text").unwrap();
             assert_eq!(plain.enabled, bits & EditFlags::CAN_PASTE != 0);
             assert_eq!(plain.command, Command::PastePlain("f1".into()));
@@ -2430,7 +2541,10 @@ mod tests {
             misspelled_word: String::new(),
             ..m
         };
-        assert_eq!(labels(&entries(&m, NavFlags::default()))[0], "Undo");
+        assert_eq!(
+            labels(&entries(&m, NavFlags::default()))[0],
+            field_labels()[0]
+        );
     }
 
     /// Each row Chromium adds to a target, where it adds it: the whole menu's labels, dividers
@@ -2470,19 +2584,7 @@ mod tests {
             "Copy Image",
             "Copy Image Address",
         ];
-        let field_rows = [
-            "Undo",
-            "Redo",
-            "-",
-            "Cut",
-            "Copy",
-            "Paste",
-            "Paste as Plain Text",
-            "Delete",
-            "Select All",
-            "-",
-            "Inspect",
-        ];
+        let field_rows = field_labels();
         let bare = [
             "Back",
             "Forward",
@@ -2494,7 +2596,11 @@ mod tests {
         ];
         let tail = ["Take Screenshot of Element", "Inspect"];
         let search = "Search Google for \u{201c}hello world\u{201d}";
-        let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 10] = [
+        let url_selection = ContextMenu {
+            selection_text: " https://b.test/x ".into(),
+            ..page()
+        };
+        let cases: [(&str, ContextMenu, NavFlags, Vec<&str>); 11] = [
             (
                 "image search on an engine that has one",
                 image("https://a.test/i.png"),
@@ -2584,6 +2690,23 @@ mod tests {
                 google,
                 [&["Copy", "-", search, "Print\u{2026}", "-"][..], &tail].concat(),
             ),
+            (
+                "a selected address is gone to, not searched",
+                url_selection,
+                google,
+                [
+                    &[
+                        "Copy",
+                        "Copy Link to Highlight",
+                        "-",
+                        "Go to https://b.test/x",
+                        "Print\u{2026}",
+                        "-",
+                    ][..],
+                    &tail,
+                ]
+                .concat(),
+            ),
         ];
         for (what, menu, nav, want) in cases {
             assert_eq!(labels(&entries(&menu, nav)), want, "{what}");
@@ -2655,6 +2778,24 @@ mod tests {
         assert_eq!(
             command(&frame, "Open Frame in New Tab"),
             Command::OpenInNewTab("https://b.test/f".into())
+        );
+        let address = ContextMenu {
+            selection_text: "example.com/x".into(),
+            ..page()
+        };
+        assert_eq!(
+            command(&address, "Go to https://example.com/x"),
+            Command::OpenInNewTab("https://example.com/x".into())
+        );
+        // not a web address: searched
+        let script = ContextMenu {
+            selection_text: "javascript:alert(1)".into(),
+            ..page()
+        };
+        assert!(
+            entries(&script, google)
+                .iter()
+                .all(|e| !e.label.starts_with("Go to"))
         );
         assert_eq!(
             command(&frame, "Reload Frame"),
