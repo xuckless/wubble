@@ -94,6 +94,8 @@ with no route change. Only what reads the page's pixels sends the pane back to t
   and the host never sets `hole` there (no layer is made off macOS).
 
 ### Glass
+Superseded 2026-11-24: glass no longer holds a layered pane; it blurs a slow snapshot of the layer ("Overlays over
+a layered page", below).
 - Glass over a pane reads the page from the scene's page-inclusive blur, which the host feeds the presenter's
   texture of each pane (`host/panes.rs:708-729` `sync_scene_pages_with`; `wubble-gfx/src/scene/pages.rs:1-8`).
   With the page on its layer the presenter is not fed, so that blur would be stale.
@@ -211,3 +213,104 @@ Command: `cargo run -p wubble --release -- --page-layer=window <url>`; compare w
   kept (`Hold::Brief`); `--page-layer=window`, default off."
 - decisions.md: "Page layer modes are rows of `page_layer::MODES` (order of the layer, a hold per need); a new
   mode is a row."
+
+## Overlays over a layered page
+
+Fix agent, 2026-11-24, on `untested/page-layer-2` (08b719e), read only (nothing built or run here; the Mac builds
+and tests it). Replaces Stage 2's "Glass" rule (glass over a pane holds it on the shell, `Hold::Brief`). Owner's
+measurement (M2, windowed 1080p60 video): on its layer the main process is 10-12 % with 4-5 shell renders a second,
+but while Notice, Toast or VideoStrip glass is over the page the pane sits in `Entering` with both paths running
+(about 30 %, 60-119 renders a second; `~/Downloads/wubble-layer-log*.txt`, lines like `Layer -> Leaving on Changed;
+needs: Windowed, Covered, Sampled Brief [Status Part, Notice Pixels, Toast Pixels, VideoStrip Pixels]`).
+
+### Where glass gets its backdrop today
+- The pane's texture: every render of the panes hands the scene each pane's presenter texture itself, no copy
+  (`host/panes.rs:712-733` `sync_scene_pages_with`, :725 `frame.image.to_wgpu_30_texture()`; `backdrop.rs:487-495`
+  `Glass::set_pages`; `scene/render.rs:744-756`). A frame written in place marks the page blur stale through
+  `mark_damage` (`host/panes.rs:905-944`, :941-943 `pages_written`; `backdrop.rs:499-506`; `render.rs:767-776`
+  `pages_written_rect`, which asks `pages.rs:65-106` `damage_reaches_glass`).
+- The page blur `P`: the backdrop's half-resolution `bg` with every pane's texture drawn on it as its card, then
+  blurred like the backdrop (`render.rs:24-30`, :18-20 the levels: ¼, ⅛, 1/16), built when `pages.rs:163-177`
+  `page_blur` says so (`render.rs:1148-1155`): an overlay's glass over a pane follows every stale page frame, the
+  ambience alone at `AMBIENCE_HZ` = 8 (`render.rs:99-111`) through the scene's own wake-up (`backdrop.rs:655-675`
+  `schedule_pages`, `page_wake`).
+- The `GlassLayer`/`over-on` path: `over-on` is the scene running and no page fullscreen (`app.slint:117-121`); a
+  panel with `over-layer > 0` then lets the scene draw its material (`kit/material/glass.slint:32` `over-wgpu`), the
+  scene draws overlay glass into one window-sized image per layer, above the pages (`app.slint:1351-1358`
+  `over-card`, :1725-1730 `over-top`; the peek's in `kit/chrome/sidebar.slint:64`). `Facts.glass` is `over-on`
+  (`host/layers.rs:251`).
+- The glass sweep: each panel reports its rectangle as data (`glass.slint:58-80`, `GlassLayer.report`); the list
+  reaches the scene in `Glass::frame` (`backdrop.rs:358-360`, `set_items`) at the start of each render, before the
+  panes' step (`main.rs:498-515`). Glass is opaque inside its shape, its shadow black at the shadow's alpha
+  (`shaders/glass.wgsl:203-204`).
+- The ambience: the glass under the page mixes in `P` (`render.rs:99-111`); `mark_damage` is what makes `P` stale
+  for it. While a pane is on its layer nothing feeds the presenter, so both the overlay glass and the ambience blur
+  the pane's last composited frame: that is why Stage 2 held glass on the shell.
+- Partial rendering: a scene frame marks only the overlay glass rects (padded by `GLASS_PAD`) and the strips round
+  a single pane (`backdrop.rs:449-481`, :723-748 `scene_dirty_rects`); a page frame through the shell marks its
+  damage in the pane (`panes.rs:938`).
+
+### The snapshot source: the layer's own pool, no import
+Yes. The layer's latest frame (`host/page_layer.rs:72-74`, kept at :448) is a `welding::NativeFrame::Copied` whose
+`texture` is already a `wgpu::Texture` over the pool slot's IOSurface: `copy_metal_to_owned` copies into the slot's
+Metal texture (`vendor/welding/src/native_frame/metal.rs:166-168`) and grafts that texture into wgpu
+(:200-216); `CopiedFrame` says "`texture` is the same memory" (`native_frame/mod.rs:548-564`), and
+`WgpuTextureImporter::import` of a copied frame only moves it out (`mod.rs:796`). The slot is not copied into again
+while the frame lives (`metal.rs:358-360` `in_use`: a live `OsBuffer` clone; `latest` and `layer.rs:105,191-192`
+`shown` hold them). So the host can read the latest pool surface by reference, on demand, with nothing new
+imported and the composited path left off (no `Present`, no `mark_damage`, no Slint damage). The one step needed:
+the pool texture is `Bgra8UnormSrgb` (`metal.rs:143`) while the scene samples display-encoded `Rgba8Unorm`
+(`wubble-gfx/src/import.rs:283-288`), so it goes through the presenter's existing blit, which re-encodes
+(`import.rs:589-603`), into the pane's own ring target, in place (`FramePresenter::present` consumes the frame,
+`import.rs:394-412`; the new `refresh` borrows it). The pane draws its hole, not that image, so Slint sees nothing
+change; `P` is marked stale and the scene's next frame rebuilds it. Cost per refresh: one full-size GPU blit
+(1080p: about 8 MB read and written) and one `P` build, a few times a second.
+
+### Low resolution
+Nothing new: `P` draws the pane's texture at the scene's half resolution and the glass reads its ⅛ and 1/16 levels
+(`render.rs:18-20`, :24-26). The snapshot is low resolution by the blur that already runs; a second shrink pass
+would only add one. "Slow refresh" is the new part: `page_layer::SNAPSHOT_MS`.
+
+### Which rows use the snapshot, which still hold
+- Snapshot (every row with glass and a cover, the scene's glass on; `overlay.rs:620-623`): Notice, Permission,
+  Find, Dialog, BookmarkSheet, PrintSheet, ExtensionSheet, AgentSheet, Region, CommandBar, Downloads, Extensions,
+  Spaces, Menu, ErrorPanel, Boost, Toast, Preview, AutofillMenu, AutofillPrompt, VideoStrip, VideoTab, VideoSpeeds,
+  PipStrip, Reader, Glance, Peek. They become `Coverage::Glass`.
+- Still hold (live pixels in the shell's textures): no overlay. `Coverage::Pixels` stays for Entrance and SeamBow,
+  which are not glass but move or cut the page itself (the shell draws the page scaled or masked); `Need::Resizing`
+  (the stretch); `Need::Pixels` (a shot, a pixel check, a snapshot or the preview card's thumbnail, which already
+  hand the layer's latest frame over: `layer_pixels`). `Need::Unplaced` is a place, held for long as before.
+
+### Window-scope glass counts against every pane
+`overlay.rs:617`: only `Scope::Pane` rows are filtered by pane; a menu, a toast or the tab preview over the sidebar
+counts for every pane. The rectangles are known only to the scene (the glass sweep), so the host makes
+`Facts.glass` per pane: `over-on` and some overlay glass surface's rectangle meets the pane's
+(`Renderer::overlay_over`, the test `page_in` already does for all panes, `render.rs:827-829`). Non-glass rows
+stay as they are: in `window` they hold nothing, and in `fullscreen` the pane is the whole window.
+
+### The hole under an overlay
+No change. The hole is a `Clear` draw at its place in the tree (`vendor/i-slint-renderer-skia/itemrenderer.rs:728-729`);
+the overlay layers' images and the overlays' own content come later in the tree (`app.slint:1351`, :1725) and draw
+over the cleared pixels as usual, so under a glass panel the shell's pixels are the glass (opaque inside its shape,
+the shadow and anti-aliased rim blending over the layer as they would over the page). A dirty rect over the overlay
+redraws hole and glass together in order. While a glass fades in or out its alpha shows the live page under it, as
+over a composited page.
+
+### Design
+- `Coverage::Glass` (between `Part` and `Pixels`), from the row data that already says glass (`row.glass`), not a
+  branch; `Need::Frosted` is it, `Hold::Frost` (between `Free` and `Brief`) what it does: `window` `Frost`,
+  `fullscreen` `Long` (unchanged). Under `Frost` the page stays on its layer; the machine emits `Effect::Snapshot`
+  when the snapshot is due: at once when glass comes over the page, then at a frame or a render once
+  `SNAPSHOT_MS` (250) passed and the layer shows a newer frame. `Route::Layer` carries the last one (`Snap`: which
+  frame, when); no glass, no snapshot (the field goes back to `None`). No timer: frames and renders drive it, so idle
+  stays idle. A page that stops (pause, end of a scroll) keeps the snapshot taken before its last frame until the
+  next render: at most `SNAPSHOT_MS` of the page behind, blurred.
+- The host's snapshot slot is the pane's presenter ring target (no new texture): `Effect::Snapshot` blits the
+  layer's latest frame there (`FramePresenter::refresh`) and marks `P` stale (`Glass::pages_written(.., None)`); the
+  scene's frame then marks only the overlay rects and the strips round the pane.
+- A brief hold expires: `Route::Entering { expires }` carries its deadline (`BRIEF_MS` = 1000 after the hold began
+  there); `Route::hold` makes a brief hold past it a long one, so the next event sends the pane to `Composited` and
+  lets the buffers go; `Composited` stays while anything holds it (it went there for long), and comes back at the
+  first event free of holds. The host reads the clock once per event (`surface_now`, the store's clock).
+- Diagnostics: the summary line gains `layer_snapshots`; a route change by an expired hold ends in
+  `(brief hold expired: Long)`.
