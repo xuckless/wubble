@@ -706,6 +706,12 @@ impl Host {
         } else {
             self.w.panes.ring(focused, height)
         };
+        // a built-in page draws over its pane of a split; alone, over the whole content
+        let page = rects
+            .iter()
+            .find(|r| !fill && Some(r.tab) == self.page_tab());
+        window.set_page_x(page.map_or(0.0, |r| r.x as f32));
+        window.set_page_width(page.map_or(0.0, |r| r.width as f32));
         crate::bind::sync_by(window.get_panes(), panes, same_pane, |m| {
             window.set_panes(m)
         });

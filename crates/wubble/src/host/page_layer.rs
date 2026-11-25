@@ -292,10 +292,11 @@ impl Host {
         )
     }
 
-    /// Whether `tab` is one of this window's panes, drawn as a `SplitPane` (`render_panes_with`):
-    /// not the peek's page, an extension's popup or a start page.
+    /// Whether `tab` is one of this window's panes with a page of its own to show
+    /// (`page_layer::Owners::placed`): not the peek's page, an extension's popup or a built-in
+    /// page (the shell draws it; a split's pane of one included).
     fn placed(&self, window: &AppWindow, tab: TabId) -> bool {
-        self.pane_rects(window).iter().any(|r| r.tab == tab) && !self.start_page(tab)
+        self.pane_rects(window).iter().any(|r| r.tab == tab) && !self.model.is_internal(tab)
     }
 
     /// What keeps `tab`'s page on the shell's path now, read from each owner: the window's

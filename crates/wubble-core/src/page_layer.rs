@@ -123,8 +123,9 @@ pub enum Need {
     /// The shell draws the page's own pixels under its UI: an entrance moving it, a mask cutting
     /// it (`overlay::covers` is [`Coverage::Pixels`]; [`Needs::covered`]).
     Sampled,
-    /// The tab has no pane of its own in the shell (the peek's page, an extension's popup, a start
-    /// page): there is no place for a layer.
+    /// The tab has no pane of its own in the shell (the peek's page, an extension's popup), or its
+    /// pane is a built-in page the shell draws (Settings, a start page, alone or in a split): there
+    /// is no place for a layer.
     Unplaced,
     /// Glass over the page blurs it (`overlay::covers` is [`Coverage::Glass`]): a snapshot of the
     /// page will do.
@@ -232,7 +233,8 @@ pub struct Owners {
     pub page_fullscreen: bool,
     /// The window is the picture-in-picture window.
     pub pip_window: bool,
-    /// The tab is one of the shell's panes (a `SplitPane`).
+    /// The tab is one of the shell's panes with a page of its own: a `SplitPane` whose page is a
+    /// web view's (a built-in page's pane, a start page's, is the shell's own drawing).
     pub placed: bool,
     /// What the shell draws over the pane (`overlay::covers`).
     pub coverage: Coverage,
@@ -1256,6 +1258,8 @@ mod tests {
             (Unsupported, Needs::from_place(false, true), Fullscreen, true),
             (Unsupported, Needs::from_place(false, true), Window, false),
             (Unsupported, Needs::from_place(false, false), Window, true),
+            // a built-in page's split pane has no page of its own: never a layer, in any mode
+            (Unsupported, Needs::from_place(false, false), Fullscreen, true),
         ];
         for &(route, needs, mode, gone) in rows {
             assert_eq!(

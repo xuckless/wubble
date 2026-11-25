@@ -2290,9 +2290,15 @@ fn open_internal_focuses_the_tab_already_on_it() {
         let (m, fx) = run(m, Command::OpenInternal(page));
         assert_eq!(fx, [Effect::ActivateTab(shown)], "{page:?}");
         assert_eq!(m.tabs.len(), 2);
-        // A split refuses every internal page.
-        let (m2, fx) = run(m.clone(), Command::SplitWith(shown));
-        assert!(fx.is_empty() && m2.shown_split().is_none(), "{page:?}");
+        // Every internal page is a split pane beside a web page.
+        let (m2, _) = run(m.clone(), Command::ActivateTab(ids[0]));
+        let (m2, fx) = run(m2, Command::SplitWith(shown));
+        assert_eq!(fx, [Effect::ActivateTab(shown)], "{page:?}");
+        assert_eq!(
+            m2.shown_split().map(|g| g.tabs.clone()),
+            Some(vec![ids[0], shown]),
+            "{page:?}"
+        );
     }
 }
 
@@ -2324,16 +2330,39 @@ fn an_internal_page_typed_into_a_web_tab_opens_its_own_tab() {
     assert!(fx.is_empty());
 }
 
+/// Built-in pages are split panes, the shell drawing one per split: beside web pages, from
+/// either side, but never two in one split.
 #[test]
-fn an_internal_tab_never_joins_a_split() {
-    let (m, ids) = with_tabs(1);
+fn a_split_holds_one_internal_page() {
+    let (m, ids) = with_tabs(2);
     let (m, _) = run(m, Command::OpenInternal(InternalPage::Settings));
     let settings = m.visible_tab().unwrap();
-    let (m2, fx) = run(m.clone(), Command::SplitWith(ids[0]));
-    assert!(fx.is_empty() && m2.shown_split().is_none());
     let (m, _) = run(m, Command::ActivateTab(ids[0]));
-    let (m, fx) = run(m, Command::SplitWith(settings));
-    assert!(fx.is_empty() && m.shown_split().is_none());
+    let (m, _) = run(m, Command::OpenInternal(InternalPage::History));
+    let history = m.visible_tab().unwrap();
+    /// (name, focused, split with, the split's panes after: none, refused)
+    type Row = (&'static str, TabId, TabId, Option<Vec<TabId>>);
+    let rows: [Row; 4] = [
+        ("the focused page is internal", settings, ids[0], Some(vec![settings, ids[0]])),
+        ("the page split with is", ids[0], settings, Some(vec![ids[0], settings])),
+        ("both are", settings, history, None),
+        ("two web pages", ids[0], ids[1], Some(vec![ids[0], ids[1]])),
+    ];
+    for (name, focus, with, panes) in rows {
+        let (m, _) = run(m.clone(), Command::ActivateTab(focus));
+        let (m, fx) = run(m, Command::SplitWith(with));
+        assert_eq!(m.shown_split().map(|g| g.tabs.clone()), panes, "{name}");
+        assert_eq!(fx.is_empty(), panes.is_none(), "{name}");
+    }
+    // a second internal page joining a split that holds one is refused; a web page is not
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(settings));
+    let (m2, fx) = run(m.clone(), Command::SplitWith(history));
+    assert!(fx.is_empty());
+    assert_eq!(m2.shown_split().map(|g| g.tabs.len()), Some(2));
+    let (m, fx) = run(m, Command::SplitWith(ids[1]));
+    assert_eq!(fx, [Effect::ActivateTab(ids[1])]);
+    assert_eq!(m.shown_split().map(|g| g.tabs.len()), Some(3));
 }
 
 #[test]

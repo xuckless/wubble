@@ -1769,10 +1769,19 @@ impl Model {
         let Some(focused) = self.spaces[si].active.filter(|&f| f != tab) else {
             return vec![];
         };
+        // a split shows one built-in page at most (the shell draws one of each per window)
+        let joined = match self.spaces[si].split.as_ref() {
+            Some(g) if g.tabs.contains(&focused) => g.tabs.clone(),
+            _ => vec![focused],
+        };
+        let built_in = joined
+            .iter()
+            .chain([&tab])
+            .filter(|&&t| self.is_internal(t))
+            .count();
         if !self.order_idx(si).contains(&tab)
             || !self.order_idx(si).contains(&focused)
-            || self.is_internal(tab)
-            || self.is_internal(focused)
+            || built_in > 1
             || self.windowed(tab).is_some()
             || self.windowed(focused).is_some()
             || self.pip_tab().is_some_and(|p| p == tab || p == focused)
@@ -2104,7 +2113,8 @@ impl Model {
         vec![]
     }
 
-    /// Whether the tab shows an internal page (no web view; never a split pane).
+    /// Whether the tab shows an internal page (no web view: the shell draws it, alone or as the
+    /// one built-in pane of a split).
     pub fn is_internal(&self, tab: TabId) -> bool {
         self.tabs
             .get(&tab)

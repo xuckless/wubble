@@ -538,9 +538,9 @@ impl Host {
         {
             return Some(Shell::Bar);
         }
-        // the bookmarks page, a folder row on it
+        // the bookmarks page, a folder row on it (its pane, in a split)
         let bookmarks = self.shown_page() == Some(wubble_core::pages::InternalPage::Bookmarks)
-            && self.pane_under(window, at).is_some();
+            && self.pane_under(window, at).is_some_and(|t| Some(t) == self.page_tab());
         self.bookmarks_drop_point(window, bookmarks.then_some(at));
         if bookmarks {
             return Some(Shell::Bookmarks {

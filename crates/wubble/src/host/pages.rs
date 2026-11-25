@@ -421,9 +421,21 @@ fn utc_offset_min() -> i32 {
 }
 
 impl Host {
-    /// The internal page the visible tab shows.
+    /// The tab whose built-in page the window draws: the visible tab's, else the one pane of
+    /// the shown split that is one (a split holds one, `Model::split_with`).
+    pub(super) fn page_tab(&self) -> Option<TabId> {
+        let internal = |t: &TabId| self.model.is_internal(*t);
+        self.shown().filter(internal).or_else(|| {
+            self.model
+                .window_tabs(self.w.id)
+                .into_iter()
+                .find(internal)
+        })
+    }
+
+    /// The built-in page the window draws ([`Host::page_tab`]).
     pub(super) fn shown_page(&self) -> Option<InternalPage> {
-        self.shown()
+        self.page_tab()
             .and_then(|t| self.model.tabs.get(&t))
             .and_then(|t| InternalPage::from_url(&t.url))
     }

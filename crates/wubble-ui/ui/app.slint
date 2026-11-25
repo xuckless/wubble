@@ -500,8 +500,12 @@ export component AppWindow inherits Window {
     in property <ErrorView> page-error;
     // The settings page (wubble://settings), shown while the visible tab is on it; the host fills
     // it from the settings table and takes every change through these callbacks.
-    // Which native page shows (the visible tab's internal page; none for a web page).
+    // Which native page shows (the visible tab's internal page, else the one pane of the shown
+    // split that is one; none for web pages).
     in property <InternalPageKind> page: InternalPageKind.none;
+    // Where it shows in the content area: its pane of a split; `page-width` 0, the whole of it.
+    in property <length> page-x;
+    in property <length> page-width;
     out property <bool> settings-open: root.page == InternalPageKind.settings;
     in property <[SettingItem]> settings-rows <=> settings-ui.rows;
     in property <bool> settings-searching <=> settings-ui.searching;
@@ -1129,222 +1133,229 @@ export component AppWindow inherits Window {
                     root.ax-action(id, name, value);
                 }
             }
-            // The settings page fills the content area of its tab (no web view under it).
-            settings-ui := SettingsPage {
-                open: root.settings-open;
-                accent: root.space-accent;
-                // a built-in page's link: the page's own action
-                page-requested(id) => {
-                    root.shell-action(id);
-                }
-            }
-            // start page (L7): the new-tab page's front over the scene's living layer
-            if root.page == InternalPageKind.start: StartPage {
-                sites: StartBridge.sites;
-                shortcut: StartBridge.shortcut;
-                grabbing: StartBridge.grabbing;
-                // the command bar in the page: the capsule is its field (the host gives it the tab)
-                state: root.in-page-state;
-                query <=> root.command-query;
-                results: root.command-results;
-                focus-serial: StartBridge.focus-serial;
-                release-serial: StartBridge.release-serial;
-                query-changed(q) => {
-                    root.command-query-changed(q);
-                }
-                result-chosen(i) => {
-                    root.command-result-chosen(i);
-                    root.command-pick();
-                }
-                // the capsule taking the keys opens the bar in it; losing them closes it
-                focus-changed(on) => {
-                    if on || root.window-active {
-                        StartBridge.search-focused = on;
-                    }
-                    if on && root.in-page-state != CommandBarState.open {
-                        root.request-address-focus();
-                    } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
-                        root.command-dismissed();
-                        root.command-close();
+            // The built-in pages over their pane: the content area, or their pane of a split (no
+            // web view under them; the pane's card is drawn under, and takes a press on bare page
+            // to focus the pane).
+            Rectangle {
+                x: root.page-width > 0 ? root.page-x : 0px;
+                width: root.page-width > 0 ? root.page-width : parent.width;
+                // The settings page fills its pane.
+                settings-ui := SettingsPage {
+                    open: root.settings-open;
+                    accent: root.space-accent;
+                    // a built-in page's link: the page's own action
+                    page-requested(id) => {
+                        root.shell-action(id);
                     }
                 }
-                site-activated(url) => {
-                    StartBridge.site-activated(url);
+                // start page (L7): the new-tab page's front over the scene's living layer
+                if root.page == InternalPageKind.start: StartPage {
+                    sites: StartBridge.sites;
+                    shortcut: StartBridge.shortcut;
+                    grabbing: StartBridge.grabbing;
+                    // the command bar in the page: the capsule is its field (the host gives it the tab)
+                    state: root.in-page-state;
+                    query <=> root.command-query;
+                    results: root.command-results;
+                    focus-serial: StartBridge.focus-serial;
+                    release-serial: StartBridge.release-serial;
+                    query-changed(q) => {
+                        root.command-query-changed(q);
+                    }
+                    result-chosen(i) => {
+                        root.command-result-chosen(i);
+                        root.command-pick();
+                    }
+                    // the capsule taking the keys opens the bar in it; losing them closes it
+                    focus-changed(on) => {
+                        if on || root.window-active {
+                            StartBridge.search-focused = on;
+                        }
+                        if on && root.in-page-state != CommandBarState.open {
+                            root.request-address-focus();
+                        } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
+                            root.command-dismissed();
+                            root.command-close();
+                        }
+                    }
+                    site-activated(url) => {
+                        StartBridge.site-activated(url);
+                    }
+                    stage-down(x, y) => {
+                        StartBridge.stage-down(x, y);
+                    }
+                    stage-move(x, y) => {
+                        StartBridge.stage-move(x, y);
+                    }
+                    stage-up => {
+                        StartBridge.stage-up();
+                    }
+                    stage-leave => {
+                        StartBridge.stage-leave();
+                    }
+                    init => {
+                        // a start page shown: its capsule takes the keys
+                        StartBridge.focus-serial += 1;
+                        StartBridge.search-x = self.search-x;
+                        StartBridge.search-y = self.search-y;
+                    }
+                    changed search-x => {
+                        StartBridge.search-x = self.search-x;
+                    }
+                    changed search-y => {
+                        StartBridge.search-y = self.search-y;
+                    }
                 }
-                stage-down(x, y) => {
-                    StartBridge.stage-down(x, y);
+                history-ui := HistoryPage {
+                    open: root.page == InternalPageKind.history;
+                    lines: root.history-lines;
+                    searching: root.history-searching;
+                    has-more: root.history-has-more;
+                    query-changed(q) => {
+                        root.history-query-changed(q);
+                    }
+                    opened(u, k) => {
+                        root.page-opened(u);
+                    }
+                    opened-new-tab(u, k) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    deleted(u, k) => {
+                        root.history-deleted(u);
+                    }
+                    more => {
+                        root.history-more();
+                    }
+                    cleared(range) => {
+                        root.history-cleared(range);
+                    }
                 }
-                stage-move(x, y) => {
-                    StartBridge.stage-move(x, y);
+                // Click restores the tab (and takes it off the list); middle-click opens it and keeps it.
+                archive-ui := HistoryPage {
+                    open: root.page == InternalPageKind.archive;
+                    title: "Archive";
+                    placeholder: "Search archived tabs";
+                    empty-text: "Nothing archived yet. Tabs you have not visited for a while end up here.";
+                    empty-search-text: "No archived tab matches";
+                    clearable: false;
+                    lines: root.archive-lines;
+                    searching: root.archive-searching;
+                    has-more: root.archive-has-more;
+                    query-changed(q) => {
+                        root.archive-query-changed(q);
+                    }
+                    opened(u, k) => {
+                        root.archive-restored(k);
+                    }
+                    opened-new-tab(u, k) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    deleted(u, k) => {
+                        root.archive-deleted(k);
+                    }
+                    more => {
+                        root.archive-more();
+                    }
                 }
-                stage-up => {
-                    StartBridge.stage-up();
+                bookmarks-ui := BookmarksPage {
+                    open: root.page == InternalPageKind.bookmarks;
+                    lines: root.bookmark-lines;
+                    searching: root.bookmarks-searching;
+                    query-changed(q) => {
+                        root.bookmarks-query-changed(q);
+                    }
+                    opened(u) => {
+                        root.page-opened(u);
+                    }
+                    opened-new-tab(u) => {
+                        root.page-opened-new-tab(u);
+                    }
+                    toggled(id) => {
+                        root.bookmark-toggled(id);
+                    }
+                    rename-requested(id) => {
+                        root.bookmark-rename-requested(id);
+                    }
+                    move-requested(id) => {
+                        root.bookmark-move-requested(id);
+                    }
+                    deleted(id) => {
+                        root.bookmark-deleted(id);
+                    }
+                    folder-requested => {
+                        root.bookmark-folder-requested();
+                    }
+                    drop-on: root.bookmarks-drop.on;
+                    drop-x: root.bookmarks-drop.x;
+                    drop-y: root.bookmarks-drop.y;
+                    drop-folder-on: root.bookmarks-drop.folder-on;
+                    drop-folder: root.bookmarks-drop.folder;
+                    drop-hovered(id, on) => {
+                        root.bookmark-drop-hovered(id, on);
+                    }
                 }
-                stage-leave => {
-                    StartBridge.stage-leave();
+                downloads-page-ui := DownloadsPage {
+                    open: root.page == InternalPageKind.downloads;
+                    items: root.downloads-page-items;
+                    searching: root.downloads-searching;
+                    has-finished: root.downloads-has-finished;
+                    query-changed(q) => {
+                        root.downloads-query-changed(q);
+                    }
+                    action(id, a) => {
+                        root.download-action(id, a);
+                    }
+                    clear-finished => {
+                        root.downloads-cleared();
+                    }
                 }
-                init => {
-                    // a start page shown: its capsule takes the keys
-                    StartBridge.focus-serial += 1;
-                    StartBridge.search-x = self.search-x;
-                    StartBridge.search-y = self.search-y;
+                tasks-ui := TasksPage {
+                    open: root.page == InternalPageKind.tasks;
+                    items: root.tasks;
+                    total: root.tasks-total;
+                    action(tab, pid, a) => {
+                        root.task-action(tab, pid, a);
+                    }
                 }
-                changed search-x => {
-                    StartBridge.search-x = self.search-x;
+                agent-log-ui := AgentLogPage {
+                    open: root.page == InternalPageKind.agent-log;
+                    items: root.agent-log;
                 }
-                changed search-y => {
-                    StartBridge.search-y = self.search-y;
-                }
-            }
-            history-ui := HistoryPage {
-                open: root.page == InternalPageKind.history;
-                lines: root.history-lines;
-                searching: root.history-searching;
-                has-more: root.history-has-more;
-                query-changed(q) => {
-                    root.history-query-changed(q);
-                }
-                opened(u, k) => {
-                    root.page-opened(u);
-                }
-                opened-new-tab(u, k) => {
-                    root.page-opened-new-tab(u);
-                }
-                deleted(u, k) => {
-                    root.history-deleted(u);
-                }
-                more => {
-                    root.history-more();
-                }
-                cleared(range) => {
-                    root.history-cleared(range);
-                }
-            }
-            // Click restores the tab (and takes it off the list); middle-click opens it and keeps it.
-            archive-ui := HistoryPage {
-                open: root.page == InternalPageKind.archive;
-                title: "Archive";
-                placeholder: "Search archived tabs";
-                empty-text: "Nothing archived yet. Tabs you have not visited for a while end up here.";
-                empty-search-text: "No archived tab matches";
-                clearable: false;
-                lines: root.archive-lines;
-                searching: root.archive-searching;
-                has-more: root.archive-has-more;
-                query-changed(q) => {
-                    root.archive-query-changed(q);
-                }
-                opened(u, k) => {
-                    root.archive-restored(k);
-                }
-                opened-new-tab(u, k) => {
-                    root.page-opened-new-tab(u);
-                }
-                deleted(u, k) => {
-                    root.archive-deleted(k);
-                }
-                more => {
-                    root.archive-more();
-                }
-            }
-            bookmarks-ui := BookmarksPage {
-                open: root.page == InternalPageKind.bookmarks;
-                lines: root.bookmark-lines;
-                searching: root.bookmarks-searching;
-                query-changed(q) => {
-                    root.bookmarks-query-changed(q);
-                }
-                opened(u) => {
-                    root.page-opened(u);
-                }
-                opened-new-tab(u) => {
-                    root.page-opened-new-tab(u);
-                }
-                toggled(id) => {
-                    root.bookmark-toggled(id);
-                }
-                rename-requested(id) => {
-                    root.bookmark-rename-requested(id);
-                }
-                move-requested(id) => {
-                    root.bookmark-move-requested(id);
-                }
-                deleted(id) => {
-                    root.bookmark-deleted(id);
-                }
-                folder-requested => {
-                    root.bookmark-folder-requested();
-                }
-                drop-on: root.bookmarks-drop.on;
-                drop-x: root.bookmarks-drop.x;
-                drop-y: root.bookmarks-drop.y;
-                drop-folder-on: root.bookmarks-drop.folder-on;
-                drop-folder: root.bookmarks-drop.folder;
-                drop-hovered(id, on) => {
-                    root.bookmark-drop-hovered(id, on);
-                }
-            }
-            downloads-page-ui := DownloadsPage {
-                open: root.page == InternalPageKind.downloads;
-                items: root.downloads-page-items;
-                searching: root.downloads-searching;
-                has-finished: root.downloads-has-finished;
-                query-changed(q) => {
-                    root.downloads-query-changed(q);
-                }
-                action(id, a) => {
-                    root.download-action(id, a);
-                }
-                clear-finished => {
-                    root.downloads-cleared();
-                }
-            }
-            tasks-ui := TasksPage {
-                open: root.page == InternalPageKind.tasks;
-                items: root.tasks;
-                total: root.tasks-total;
-                action(tab, pid, a) => {
-                    root.task-action(tab, pid, a);
-                }
-            }
-            agent-log-ui := AgentLogPage {
-                open: root.page == InternalPageKind.agent-log;
-                items: root.agent-log;
-            }
-            passwords-ui := PasswordsPage {
-                open: root.page == InternalPageKind.passwords;
-                view: root.passwords-view;
-                logins: root.logins;
-                searching: root.passwords-searching;
-                query-changed(q) => {
-                    root.passwords-query-changed(q);
-                }
-                unlock => {
-                    root.passwords-unlock();
-                }
-                reveal(id) => {
-                    root.login-reveal(id);
-                }
-                hide() => {
-                    root.login-hide();
-                }
-                copy(id) => {
-                    root.login-copy(id);
-                }
-                deleted(id) => {
-                    root.login-deleted(id);
-                }
-                added(site, user, password) => {
-                    root.login-added(site, user, password);
-                }
-                edited(id, site, user, password) => {
-                    root.login-edited(id, site, user, password);
-                }
-                import-requested => {
-                    root.passwords-import-requested();
-                }
-                start-over => {
-                    root.passwords-start-over();
+                passwords-ui := PasswordsPage {
+                    open: root.page == InternalPageKind.passwords;
+                    view: root.passwords-view;
+                    logins: root.logins;
+                    searching: root.passwords-searching;
+                    query-changed(q) => {
+                        root.passwords-query-changed(q);
+                    }
+                    unlock => {
+                        root.passwords-unlock();
+                    }
+                    reveal(id) => {
+                        root.login-reveal(id);
+                    }
+                    hide() => {
+                        root.login-hide();
+                    }
+                    copy(id) => {
+                        root.login-copy(id);
+                    }
+                    deleted(id) => {
+                        root.login-deleted(id);
+                    }
+                    added(site, user, password) => {
+                        root.login-added(site, user, password);
+                    }
+                    edited(id, site, user, password) => {
+                        root.login-edited(id, site, user, password);
+                    }
+                    import-requested => {
+                        root.passwords-import-requested();
+                    }
+                    start-over => {
+                        root.passwords-start-over();
+                    }
                 }
             }
             // The scene's glass of the overlays in the card (GlassOver.card), above the pages and
