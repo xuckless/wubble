@@ -93,20 +93,20 @@ impl NativeFrame {
         }
     }
 
-    /// Whether the frame was copied into an OS buffer (`crate::layer`), which only macOS has.
-    #[cfg(target_os = "macos")]
+    /// Whether the frame was copied into an OS buffer (`crate::layer`): macOS and Linux.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn has_os_buffer(&self) -> bool {
         self.os_buffer().is_some()
     }
 
     /// Whether the frame was copied into an OS buffer: never here.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn has_os_buffer(&self) -> bool {
         false
     }
 
     /// The OS buffer the frame was copied into, when the view was asked for them.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub fn os_buffer(&self) -> Option<&welding::OsBuffer> {
         match &self.0 {
             welding::NativeFrame::Copied(c) => c.os.as_ref(),
