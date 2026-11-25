@@ -1368,6 +1368,15 @@ impl Host {
         self.render_pip(&window);
         self.render_ax(&window);
         self.render_boost(&window);
+        self.render_nav(&window);
+        window.set_address_zoom(self.address_zoom());
+        self.render_pages();
+        self.render_extensions_in(&window);
+    }
+
+    /// Back, forward and Reload or Stop from the shown view's navigation: with the shell, and
+    /// whenever its loading changes (a load that ends changes nothing in the model).
+    fn render_nav(&mut self, window: &AppWindow) {
         let nav = self.view().map(|view| {
             (
                 view.nav().page.clone(),
@@ -1375,13 +1384,10 @@ impl Host {
             )
         });
         crate::bind::render_history(
-            &window,
+            window,
             nav.as_ref().map(|n| &n.0),
             nav.as_ref().is_some_and(|n| n.1),
         );
-        window.set_address_zoom(self.address_zoom());
-        self.render_pages();
-        self.render_extensions_in(&window);
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -1869,6 +1875,7 @@ impl Host {
                     self.error_news(tab, ErrorEvent::LoadEnded);
                 }
                 self.report_busy(tab);
+                self.render_nav(window);
             }
             WebEvent::RendererGone => {
                 self.apply_error(tab, ErrorEvent::Crashed);
