@@ -20,7 +20,7 @@ const COMMON = ['--headless=new', '--no-sandbox', '--hide-scrollbars', '--font-r
 /**
  * WebGL back ends. `swiftshader` is the reference (CPU, deterministic). `gpu` is ANGLE on Vulkan:
  * deterministic and identical to SwiftShader on pages that draw no WebGL (the touch kit, the
- * Foundations page), wrong on the liquid (glass blown out white on NVIDIA, ~/Dev/wubble-wt/notes/
+ * Foundations page), wrong on the liquid (glass blown out white on NVIDIA, ~/Dev/wubble-wt/notes/ (deleted 2026-11-25) 
  * ui2a/h1.md), so only specimen pages ask for it.
  */
 export const GL_FLAGS = {

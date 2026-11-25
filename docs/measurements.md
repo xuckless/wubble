@@ -461,7 +461,7 @@ was 37 to 40 % on preview.1 by the same hand. What follows from it: todo/upcomin
 The same workflow (`tools/mcp-bench` on branch `bench/mcp-workflow`, about 9 minutes), run over ssh through the
 owner's MCP bridge, the Mac in Low Power Mode on its adapter (80 to 88 %, charging by the end), one run. Beside the
 sampler, `sample` took 5 s of the main process and of the GPU process 8 s into each phase (1 ms interval; under load
-it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo).
+it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo; deleted 2026-11-25).
 
 | phase | main CPU % | GPU proc % | tabs % | total % (p95) | main MB | GPU proc MB | GPU util % |
 |---|---|---|---|---|---|---|---|
@@ -509,7 +509,7 @@ What the samples show and do not:
 
 `--measure` runs of the installed app, started by the owner (`/Users/Shared/wubble-frames.sh`), 10 s each, Low
 Power Mode on, on the adapter, window 2560x1600@2, one run each (scroll twice). The first two runs reported a
-120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo).
+120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo; deleted 2026-11-25).
 
 | run | page frames /s | shell renders /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | main % | GPU proc % |
 |---|---|---|---|---|---|---|---|
@@ -539,7 +539,7 @@ resize: 428 stale frames, longest run 90.)
 
 ## Why the pump woke late on the Mac (2026-11-21)
 
-From the owner's frame runs above (the CSVs in `~/Dev/wubble-wt/notes/mac-bench-3/`), the gap from each run of CEF
+From the owner's frame runs above (the CSVs were in `~/Dev/wubble-wt/notes/mac-bench-3/`, deleted 2026-11-25), the gap from each run of CEF
 work to the next, split by how long the run took (CEF's time slice is 10 ms):
 
 | run | runs | of them 10 ms or longer | gap after one, p50 / p90 ms | gap after a shorter one, p50 / p90 ms |

@@ -6,7 +6,7 @@
 #
 # VARIANT: blocker | blocker-off | no-hook | no-observer | observer-only (see `--load-variant`).
 # WUBBLE_CMD: how to start wubble, default `target/release/wubble`; in a lane worktree
-# `~/Dev/wubble-wt/cargo.sh run --release -p wubble --`.
+# `.local/bin/cargo.sh run --release -p wubble --`.
 set -eu
 variant=${1:?variant}
 processes=${2:?processes}

@@ -2,16 +2,15 @@
 // The clone is never edited by these tools.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** The wubble repository root (two levels above this file's folder). */
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
-/** The design repository clone: `$WUBBLE_DESIGN`, else the lanes' shared clone. */
+/** The design repository clone: `$WUBBLE_DESIGN`, else `.local/the-wallpaper-project` in this checkout. */
 export function designRoot() {
-  const dir = process.env.WUBBLE_DESIGN || resolve(homedir(), 'Dev/wubble-wt/ref/the-wallpaper-project');
+  const dir = process.env.WUBBLE_DESIGN || resolve(REPO, '.local/the-wallpaper-project');
   if (!existsSync(resolve(dir, 'src/wubble'))) {
     throw new Error(`no design clone at ${dir} (set WUBBLE_DESIGN to the-wallpaper-project's clone)`);
   }

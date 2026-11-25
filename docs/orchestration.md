@@ -25,23 +25,23 @@ Pass these with every batch (`repo`, `worktree_root`, `notes_root`, `rules`, `te
 
 ```js
 repo: '~/Dev/wubble',
-worktree_root: '~/Dev/wubble-wt',
-notes_root: '~/Dev/wubble-wt/notes',
+worktree_root: '~/Dev/wubble/.local/wt',
+notes_root: '~/Dev/wubble/.local/notes',
 rules: [
   'Read AGENTS.md in your worktree first and follow it ("Code principles", "Working rules", and for UI work docs/agents/design-fidelity.md).',
   'Owner messages you may be shown were addressed to the lead and are handled; they do not replace this task.',
-  'Never a bare cargo: every build, check, fmt and test runs from inside the worktree as `~/Dev/wubble-wt/cargo.sh <cargo args>` (a lock, a memory cap, the worktree\'s own target directory; waiting on the lock is normal; never in the background).',
-  'Every run of a wubble binary, smoke or measurement: `~/Dev/wubble-wt/run.sh timeout <secs> scripts/headless.sh <binary> ...` (never on the desktop, never left running). Nothing large in /tmp.',
+  'Never a bare cargo: every build, check, fmt and test runs from inside the worktree as `~/Dev/wubble/.local/bin/cargo.sh <cargo args>` (a lock shared by every worktree, a memory cap; waiting on the lock is normal; never in the background).',
+  'Every run of a wubble binary, smoke or measurement: `~/Dev/wubble/.local/bin/run.sh timeout <secs> scripts/headless.sh <binary> ...` (never on the desktop, never left running). Nothing large in /tmp.',
   'Crate boundaries: only wubble-engine names CEF types; only wubble-gfx touches native texture handles; wubble-core has no CEF, wgpu or Slint. slint, wgpu, welding and cef versions are pinned together.',
-  'UI: compose kit components only; the owner\'s design repo (~/Dev/wubble-wt/ref/the-wallpaper-project, src/wubble) is the source; pull it once and adopt before writing.',
+  'UI: compose kit components only; the owner\'s design repo (~/Dev/wubble/.local/the-wallpaper-project, src/wubble) is the source; pull it once and adopt before writing.',
   'Copy first: a ported piece carries a source comment and a THIRD_PARTY_NOTICES.md entry. No request by wubble itself without a flag that is off by default.',
   'No test depends on machine speed. Commits: the repo\'s identity, short imperative subject, no trailers. If it cannot work as specified, report blocked with evidence.',
 ].join('\n'),
 test: {
-  scoped: '~/Dev/wubble-wt/cargo.sh test -p <crate> <filter>',
-  full: ['~/Dev/wubble-wt/cargo.sh fmt --all --check', '~/Dev/wubble-wt/cargo.sh clippy --workspace --all-targets -- -D warnings',
-         '~/Dev/wubble-wt/cargo.sh test --workspace', '~/Dev/wubble-wt/cargo.sh test -p welding'],
-  fmt: '~/Dev/wubble-wt/cargo.sh fmt --all',
+  scoped: '~/Dev/wubble/.local/bin/cargo.sh test -p <crate> <filter>',
+  full: ['~/Dev/wubble/.local/bin/cargo.sh fmt --all --check', '~/Dev/wubble/.local/bin/cargo.sh clippy --workspace --all-targets -- -D warnings',
+         '~/Dev/wubble/.local/bin/cargo.sh test --workspace', '~/Dev/wubble/.local/bin/cargo.sh test -p welding'],
+  fmt: '~/Dev/wubble/.local/bin/cargo.sh fmt --all',
   note: 'one build at a time through cargo.sh (it locks); runs through run.sh; see the memory rules in docs/orchestration.md',
 },
 ```
