@@ -20,6 +20,7 @@
 //! Chromium's `ui/accessibility/ax_enums.mojom` names (BSD-3-Clause); no code is copied.
 
 pub mod flat;
+pub mod lazy;
 pub mod value;
 
 use std::collections::{BTreeMap, BTreeSet};

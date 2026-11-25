@@ -2179,6 +2179,8 @@ impl Host {
             Some(wubble_core::autofill::web_origin(url).unwrap_or_else(|| url.clone()))
         });
         let tab = tab.unwrap_or(TabId(u64::MAX));
+        // the page's accessibility events waited unparsed for a call (`Host::ax_settle`)
+        self.ax_settle(tab);
         match call {
             AgentCall::StartSession { .. } => {}
             AgentCall::StopSession { keep_tabs, .. } => {
@@ -4677,7 +4679,12 @@ impl Host {
             | Wait::Started { tab, .. }
             | Wait::Chooser { tab, .. }
             | Wait::Uploaded { tab, .. }
-            | Wait::Tree { tab, .. } => *tab,
+            | Wait::Tree { tab, .. } => {
+                // what it waits for may be in the events that came meanwhile
+                let tab = *tab;
+                self.ax_settle(tab);
+                tab
+            }
             Wait::Input { .. } if late => {
                 self.agent_fail(p.reply, "the page did not handle the input in time");
                 return None;
