@@ -199,6 +199,10 @@ pub enum WebEvent {
         request: PopupRequest,
         view: crate::app::ViewId,
     },
+    /// A top-level navigation to another site right after a press on an invisible overlay
+    /// (`wubble_core::click_guard::navigated`) was cancelled before it was sent, and the
+    /// overlay asked to go; the host offers it as a blocked pop-up.
+    OverlayNavigationHeld(String),
     /// The renderer process died. Unless the host draws its own crash page
     /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
     /// itself.

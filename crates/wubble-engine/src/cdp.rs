@@ -93,26 +93,30 @@ pub struct NavRequests {
 }
 
 impl NavRequests {
-    /// Reads one DevTools message; anything but those two events is ignored.
-    pub fn read(&mut self, text: &str) {
-        let Ok(value) = serde_json::from_str::<Value>(text) else {
-            return;
-        };
+    /// Reads one DevTools message; anything but those events is ignored. Returns the URL the
+    /// main frame is starting to navigate to, when it is (the page asked, or
+    /// `Page.frameStartedNavigating`, which every navigation sends before its request).
+    pub fn read(&mut self, text: &str) -> Option<String> {
+        let value = serde_json::from_str::<Value>(text).ok()?;
         let params = &value["params"];
+        let main = self
+            .main
+            .as_deref()
+            .is_none_or(|m| params["frameId"].as_str() == Some(m));
+        let url = || params["url"].as_str().map(str::to_owned);
         match value["method"].as_str() {
             Some("Page.frameNavigated") if params["frame"]["parentId"].is_null() => {
                 self.main = params["frame"]["id"].as_str().map(str::to_owned);
+                None
             }
             Some("Page.frameRequestedNavigation")
-                if params["disposition"] == "currentTab"
-                    && self
-                        .main
-                        .as_deref()
-                        .is_none_or(|m| params["frameId"].as_str() == Some(m)) =>
+                if params["disposition"] == "currentTab" && main =>
             {
                 self.count += 1;
+                url()
             }
-            _ => {}
+            Some("Page.frameStartedNavigating") if main => url(),
+            _ => None,
         }
     }
 
@@ -184,32 +188,43 @@ impl DocCall {
 /// (`Page.addScriptToEvaluateOnNewDocument`: evaluated by the inspector, so no page
 /// Content-Security-Policy applies; the Page domain is enabled first). DevTools names each by
 /// an identifier that comes back later; a script replaced before its identifier came is
-/// removed once it does. The Page domain's events are drained with every other DevTools
-/// message and dropped (`reply` ignores events).
+/// removed once it does. A script wanted again stays registered (only what changed is removed
+/// or added), so the blocker's scriptlets can change before each navigation without the page
+/// kit ever leaving. The Page domain's events are drained with every other DevTools message
+/// and dropped (`reply` ignores events).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DocScripts {
     /// `Page.enable` went out (its id, until answered). Set when it is sent, not when it is
     /// asked for, so a call the channel refused is asked for again by the next `set`.
     enabled: bool,
     enabling: Option<u64>,
-    /// The identifiers of the scripts in place.
-    registered: Vec<String>,
-    /// Add calls not answered yet, and whether their script is still wanted.
-    adding: BTreeMap<u64, bool>,
+    /// The scripts in place: identifier and source.
+    registered: Vec<(String, String)>,
+    /// Add calls not answered yet: their source, and whether it is still wanted.
+    adding: BTreeMap<u64, (String, bool)>,
 }
 
 impl DocScripts {
-    /// The calls that replace every script with `sources`.
+    /// The calls that make `sources` the scripts in place.
     pub fn set(&mut self, sources: &[String]) -> Vec<DocCall> {
-        for wanted in self.adding.values_mut() {
-            *wanted = false;
-        }
         let mut calls = vec![];
         if !self.enabled {
             calls.push(DocCall::Enable);
         }
-        calls.extend(self.registered.drain(..).map(DocCall::Remove));
-        calls.extend(sources.iter().cloned().map(DocCall::Add));
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.registered)
+            .into_iter()
+            .partition(|(_, source)| sources.contains(source));
+        self.registered = kept;
+        calls.extend(gone.into_iter().map(|(id, _)| DocCall::Remove(id)));
+        for (source, wanted) in self.adding.values_mut() {
+            *wanted = sources.contains(source);
+        }
+        let present = |s: &String| {
+            self.registered.iter().any(|(_, r)| r == s)
+                || self.adding.values().any(|(a, wanted)| *wanted && a == s)
+        };
+        let new: Vec<String> = sources.iter().filter(|s| !present(s)).cloned().collect();
+        calls.extend(new.into_iter().map(DocCall::Add));
         calls
     }
 
@@ -220,8 +235,8 @@ impl DocScripts {
                 self.enabled = true;
                 self.enabling = Some(id.0);
             }
-            DocCall::Add(_) => {
-                self.adding.insert(id.0, true);
+            DocCall::Add(source) => {
+                self.adding.insert(id.0, (source.clone(), true));
             }
             DocCall::Remove(_) => {}
         }
@@ -234,7 +249,7 @@ impl DocScripts {
             self.enabling = None;
             return Some(vec![]);
         }
-        let wanted = self.adding.remove(&id.0)?;
+        let (source, wanted) = self.adding.remove(&id.0)?;
         let identifier = result
             .as_ref()
             .ok()
@@ -243,7 +258,7 @@ impl DocScripts {
             .map(str::to_owned);
         Some(match (identifier, wanted) {
             (Some(identifier), true) => {
-                self.registered.push(identifier);
+                self.registered.push((identifier, source));
                 vec![]
             }
             (Some(identifier), false) => vec![DocCall::Remove(identifier)],
@@ -380,6 +395,47 @@ mod tests {
     }
 
     #[test]
+    fn only_what_changed_is_removed_or_added() {
+        let mut d = DocScripts::default();
+        let calls = d.set(&["kit".into(), "s1".into()]);
+        for (id, call) in calls.iter().enumerate() {
+            d.sent(CdpId(id as u64 + 1), call);
+        }
+        assert_eq!(d.reply(CdpId(1), &Ok(json!({}))), Some(vec![]));
+        assert_eq!(
+            d.reply(CdpId(2), &Ok(json!({"identifier": "k"}))),
+            Some(vec![])
+        );
+        // the same scripts again, with the scriptlet's add still on the way: nothing
+        assert_eq!(d.set(&["kit".into(), "s1".into()]), vec![]);
+        assert_eq!(
+            d.reply(CdpId(3), &Ok(json!({"identifier": "x"}))),
+            Some(vec![])
+        );
+        // another page's scriptlet: the kit stays
+        assert_eq!(
+            d.set(&["kit".into(), "s2".into()]),
+            vec![DocCall::Remove("x".into()), DocCall::Add("s2".into())]
+        );
+        // a script dropped while its add is on the way, then wanted again: added once more
+        d.sent(CdpId(4), &DocCall::Add("s2".into()));
+        assert_eq!(d.set(&["kit".into()]), vec![]);
+        assert_eq!(
+            d.set(&["kit".into(), "s2".into()]),
+            vec![],
+            "the add on the way is wanted again"
+        );
+        assert_eq!(
+            d.reply(CdpId(4), &Ok(json!({"identifier": "y"}))),
+            Some(vec![])
+        );
+        assert_eq!(
+            d.set(&[]),
+            vec![DocCall::Remove("k".into()), DocCall::Remove("y".into())]
+        );
+    }
+
+    #[test]
     fn an_enable_that_never_went_out_is_asked_for_again() {
         let mut d = DocScripts::default();
         // The channel refused every call: none was `sent`.
@@ -434,6 +490,39 @@ mod tests {
         n.read(r#"{"id":12,"result":{}}"#);
         n.read("not json");
         assert_eq!(n.count(), 2);
+    }
+
+    #[test]
+    fn the_main_frame_says_where_it_is_going() {
+        let mut n = NavRequests::default();
+        let started = |frame: &str, url: &str| {
+            format!(
+                r#"{{"method":"Page.frameStartedNavigating","params":{{"frameId":"{frame}","url":"{url}","loaderId":"L","navigationType":"differentDocument"}}}}"#
+            )
+        };
+        let asked = |frame: &str, disposition: &str| {
+            format!(
+                r#"{{"method":"Page.frameRequestedNavigation","params":{{"frameId":"{frame}","reason":"anchorClick","url":"https://c.test/","disposition":"{disposition}"}}}}"#
+            )
+        };
+        assert_eq!(
+            n.read(&started("ANY", "https://a.test/")).as_deref(),
+            Some("https://a.test/"),
+            "before the main frame is known, any frame's"
+        );
+        n.read(r#"{"method":"Page.frameNavigated","params":{"frame":{"id":"MAIN","loaderId":"L","url":"https://a.test/"},"type":"Navigation"}}"#);
+        assert_eq!(
+            n.read(&started("MAIN", "https://b.test/")).as_deref(),
+            Some("https://b.test/")
+        );
+        assert_eq!(n.read(&started("SUB", "https://ad.test/")), None);
+        assert_eq!(
+            n.read(&asked("MAIN", "currentTab")).as_deref(),
+            Some("https://c.test/")
+        );
+        assert_eq!(n.read(&asked("MAIN", "newTab")), None);
+        assert_eq!(n.read(&asked("SUB", "currentTab")), None);
+        assert_eq!(n.read("not json"), None);
     }
 
     #[test]

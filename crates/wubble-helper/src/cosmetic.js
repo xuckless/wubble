@@ -17,8 +17,12 @@
 //
 // Protocol (all JSON, no code from the browser is evaluated here):
 //   page -> browser: `hello` when the frame's context is created, then
-//     {"c":[class names],"i":[ids]} batches of names not asked about yet;
-//   browser -> page: {"css":[rules],"procedural":[filters],"generic":bool}.
+//     {"c":[class names],"i":[ids]} batches of names not asked about yet, and
+//     {"click":{opacity,cover,painted,control,href,download}} for each pointer
+//     press (wubble-core `click_guard::Click`);
+//   browser -> page: {"css":[rules],"procedural":[filters],"generic":bool}, or
+//     {"unclick":{"opacity":n,"cover":n}}: remove the invisible overlay the last
+//     press landed on (its numbers are `click_guard`'s).
 //
 // Called once per frame with this channel's `send` and `register` (main.rs
 // `compose`), before any page script, so everything used is captured here.
@@ -272,11 +276,93 @@
     }
   }
 
+  // ---- clicks (wubble-core `click_guard`): what the pointer went down on, measured before
+  // any page handler runs (a capture listener on the window, added before the page's
+  // scripts), so the browser can judge the window, navigation or download the click leads to
+  // by what the user could see. Own code, no copy.
+  const rectOf = Element.prototype.getBoundingClientRect;
+  const DRAWN = new Set(['IMG', 'VIDEO', 'CANVAS', 'svg', 'SVG', 'IFRAME', 'EMBED', 'OBJECT',
+    'INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'PICTURE']);
+  const CONTROL = 'a[href],area[href],button,input,select,textarea,label,summary,' +
+    '[role="button"],[role="link"]';
+  let pressed = null; // the element the last press landed on
+  function opacityOf(el) {
+    let o = 1;
+    for (let e = el, k = 0; e && e.nodeType === 1 && k < 64; e = e.parentElement, k++) {
+      const v = parseFloat(computed(e).opacity);
+      if (!isNaN(v)) o *= v;
+    }
+    return o;
+  }
+  function coverOf(el) {
+    const r = apply(rectOf, el), w = win.innerWidth, h = win.innerHeight;
+    if (!w || !h) return 0;
+    const x = Math.max(0, Math.min(r.right, w) - Math.max(r.left, 0));
+    const y = Math.max(0, Math.min(r.bottom, h) - Math.max(r.top, 0));
+    return (x * y) / (w * h);
+  }
+  function paintedOf(el) {
+    // the page itself is drawn (Chromium paints its canvas)
+    if (el === doc.body || el === doc.documentElement || DRAWN.has(el.tagName)) return true;
+    const st = computed(el);
+    if (st.backgroundImage && st.backgroundImage !== 'none') return true;
+    const bg = /rgba?\(([^)]*)\)/.exec(st.backgroundColor || '');
+    if (bg) {
+      const p = bg[1].split(/[\s,/]+/).filter(Boolean);
+      if (p.length < 4 || parseFloat(p[3]) > 0) return true;
+    }
+    for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim()) return true;
+    return false;
+  }
+  function positioned(el) {
+    const p = computed(el).position;
+    return p === 'fixed' || p === 'absolute';
+  }
+  function onPress(e) {
+    if (!e.isTrusted) return;
+    const path = e.composedPath ? e.composedPath() : [];
+    const el = path.length && path[0].nodeType === 1 ? path[0] : e.target;
+    if (!el || el.nodeType !== 1) return;
+    pressed = el;
+    try {
+      const link = apply(closestOf, el, 'a[href],area[href]');
+      send(stringify({ click: {
+        opacity: opacityOf(el),
+        cover: coverOf(el),
+        painted: paintedOf(el),
+        control: !!apply(closestOf, el, CONTROL),
+        href: link ? link.href : null,
+        download: !!link && apply(hasAttr, link, 'download'),
+      } }));
+    } catch (err) {}
+  }
+  win.addEventListener('pointerdown', onPress, true);
+  // `click_guard::Click::unseen` with the browser's numbers.
+  function unseen(el, rule) {
+    return opacityOf(el) < rule.opacity || (coverOf(el) >= rule.cover && !paintedOf(el));
+  }
+  // The overlay goes, so the next click reaches what the user aimed at: the outermost
+  // positioned ancestor as unseen as the element pressed (the overlay, not a piece of it).
+  // Only a positioned or transparent one: a page's own layout is never removed.
+  function unclick(rule) {
+    let el = pressed;
+    pressed = null;
+    if (!el || !el.isConnected || !unseen(el, rule)) return;
+    for (let up = el.parentElement; up && up !== doc.body && up !== doc.documentElement &&
+      positioned(up) && unseen(up, rule); up = up.parentElement) el = up;
+    if (el === doc.body || el === doc.documentElement) return;
+    if (positioned(el) || opacityOf(el) < rule.opacity) el.remove();
+  }
+
   // ---- the browser's answers
   register((text) => {
     let reply;
     try { reply = parse(text); } catch (e) { return; }
     if (!reply || typeof reply !== 'object') return;
+    if (reply.unclick && typeof reply.unclick === 'object') {
+      try { unclick(reply.unclick); } catch (e) {}
+      return;
+    }
     if (Array.isArray(reply.css)) addRules(reply.css);
     if (Array.isArray(reply.procedural)) {
       for (const json of reply.procedural) {

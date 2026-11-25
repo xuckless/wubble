@@ -175,15 +175,16 @@ TODO.md review findings: "a video a service worker answers is not seen by the de
 What to build: (1) Service workers: in the response hook, a response with no browser but with a service worker's scope or initiator origin is kept in a small per-origin queue. On the host side, it is credited to every live tab of the same container whose committed origin equals the worker's origin, and the newest active tab of that origin wins when several match. Put the attribution in a pure function in wubble_core::media::detect with unit tests. (2) Embedded YouTube: kit.js's `bigFrame()` also reports the iframe's `src` when it is a youtube.com or youtube-nocookie.com /embed/ID URL. The host feeds that ID to the existing lookup (behind media.youtube, still off by default) and lists the result for the tab as Kind::YouTube, so the strip's save control over the iframe works. Extend youtube::video_id with the embed forms and nocookie hosts, with unit tests. (3) Add the fixture rows to scripts/media-fixtures.py for hand runs. All platforms.
 
 ## E. Ad blocker: uBlock Origin parity and click abuse (owner)
-- [ ] uBlock Origin parity: scriptlets at document start, procedural cosmetic filters (`:has-text`, `:upward`, `:remove`, ...), redirect resources, `$removeparam`, `$csp`, `$popup`/`$popunder`
-- [ ] "Weird invisible panes on websites that open up another tab when clicked": the invisible full-page overlay that opens a new tab (popunder) on the first click: block it
-- [ ] "Not allowing arbitrary downloads and scripts to happen when clicking something": a click must not start a download or a navigation to another site the user did not aim at
-- [ ] Content blocker: uBO scriptlet coverage
-- [ ] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
+Written blind on next/blocker (2026-11-25), integrated on `next/all` (unit tests; block, popup, builtins, data, spell smokes pass).
+- [~] uBlock Origin parity: scriptlets at document start, procedural cosmetic filters (`:has-text`, `:upward`, `:remove`, ...), redirect resources, `$removeparam`, `$csp`, `$popup`/`$popunder`
+- [~] (integrated; no smoke clicks an invisible overlay yet: unchecked on a live ad site) "Weird invisible panes on websites that open up another tab when clicked": the invisible full-page overlay that opens a new tab (popunder) on the first click: block it
+- [~] (integrated; the prompt asks on every site's first download of a run, a click aimed or not; the page's own file (the PDF viewer's Save) goes without asking) "Not allowing arbitrary downloads and scripts to happen when clicking something": a click must not start a download or a navigation to another site the user did not aim at
+- [~] Content blocker: uBO scriptlet coverage
+- [~] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
 
 ## Content blocker start-up gate holds the first navigation (`blocker-startup-gate`)
 
-Key: `blocker-startup-gate` · engine patch: no · state: not written.
+Key: `blocker-startup-gate` · engine patch: no · state: [x] integrated on `next/all` (a fresh profile's first web page waited about 0.15 s in the smokes; lists ready before the first frame now open the gate then, not at its 10 s deadline).
 
 With no compiled-engine cache (first run, or after a list change), requests go through unfiltered for several seconds until the lists compile. Chrome extensions such as uBO hold requests at start-up. wubble cannot wait on CEF's IO thread, so the hold belongs at the host. The swap point is `Blocking::swap` around crates/wubble/src/blocking.rs:477-481 (`measure::Stage::BlockerReady`).
 
@@ -191,7 +192,7 @@ To build: a pure lifecycle in wubble-core (for example `blocker_gate.rs`: `enum 
 
 ## Blocker scriptlets run at document start (`blocker-scriptlets-at-start`)
 
-Key: `blocker-scriptlets-at-start` · engine patch: no · state: not written.
+Key: `blocker-scriptlets-at-start` · engine patch: no · state: [~] integrated on `next/all` (unit tests, block smoke; a live page's document-start scriptlet unchecked by hand).
 
 uBO injects scriptlets (`##+js(...)`) at document_start, before any page script runs. In wubble the frame's `cosmetic.js` sends `hello` when its context is created; the browser answers, and only then runs the scriptlets with `run_script_in` (crates/wubble-engine/src/view.rs `answer_cosmetic`, around line 1099). By then the page's own scripts have often run, so many scriptlets (set-constant, abort-on-property-read, json-prune, no-fetch-if) come too late. That is the "uBO scriptlet coverage" gap.
 
@@ -199,7 +200,7 @@ To build: when a view's main frame is about to navigate (`OnBeforeBrowse`/nav co
 
 ## Dangerous-site interstitial for blocker badware/malware document blocks (`dangerous-site-interstitial`)
 
-Key: `dangerous-site-interstitial` · engine patch: no · state: not written.
+Key: `dangerous-site-interstitial` · engine patch: no · state: [~] integrated on `next/all` (unit tests; no smoke opens a badware-listed page).
 
 Chrome shows a red full-page "Dangerous site" warning with "Back to safety" and, under Details, "visit this unsafe site". uBlock Origin's strict blocking does the same for `$doc` and badware rules. wubble's blocker ships the uBO badware list (crates/wubble-blocker/src/catalog.rs `ublock-badware`). A blocked main-frame document ends as ERR_BLOCKED_BY_CLIENT in the generic error panel (crates/wubble-core/src/neterror.rs -20), with no way through and no explanation.
 

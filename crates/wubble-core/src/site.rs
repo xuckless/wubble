@@ -40,10 +40,13 @@ pub enum Permission {
     /// Handing links of one scheme (`mailto:`, `tel:`) to another app. Remembered per site and
     /// scheme, under the origin `external::key` makes (`mailto:https://a.test`).
     ExternalLinks,
+    /// Downloading files: asked on a site's first download and on any download no click asked
+    /// for (`click_guard::download`), Safari's "Allow downloads on <site>?".
+    Downloads,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 14] = [
+    pub const ALL: [Permission; 15] = [
         Self::Camera,
         Self::Microphone,
         Self::Geolocation,
@@ -58,6 +61,7 @@ impl Permission {
         Self::SavePasswords,
         Self::Popups,
         Self::ExternalLinks,
+        Self::Downloads,
     ];
 
     /// The stored name. Stable: never rename one.
@@ -77,6 +81,7 @@ impl Permission {
             Self::SavePasswords => "password-save",
             Self::Popups => "popups",
             Self::ExternalLinks => "external-links",
+            Self::Downloads => "downloads",
         }
     }
 
@@ -101,6 +106,7 @@ impl Permission {
             Self::SavePasswords => "Save your passwords",
             Self::Popups => "Open pop-ups and new tabs",
             Self::ExternalLinks => "Open links in another app",
+            Self::Downloads => "Download files",
         }
     }
 }

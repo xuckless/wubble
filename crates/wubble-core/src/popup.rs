@@ -66,7 +66,17 @@ pub const ROWS: &[(Opened, bool, Outcome)] = &[
 ///
 /// Chromium's own blocker is off (wubble-engine's `disable-popup-blocking` switch), so requests
 /// without a gesture reach this table; were it on, they would never arrive.
-pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: bool) -> Outcome {
+///
+/// `abuse`: the click's gesture does not count, since it landed on an invisible overlay or on
+/// a link to another site (`click_guard::opened`), or the filter lists name the window
+/// (`$popup`); the request is held as one without a gesture is, unless the site is allowed.
+pub fn decide(
+    opened: Opened,
+    gesture: bool,
+    site: Option<Decision>,
+    glance: bool,
+    abuse: bool,
+) -> Outcome {
     let row = |g: bool| {
         ROWS.iter()
             .find(|(o, rg, _)| *o == opened && *rg == g)
@@ -74,7 +84,7 @@ pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: boo
     };
     let out = match site {
         Some(Decision::Allow) => row(true),
-        Some(Decision::Block) | None => row(gesture),
+        Some(Decision::Block) | None => row(gesture && !abuse),
     };
     match out {
         Outcome::Glance if !glance => Outcome::Tab { foreground: true },
@@ -89,7 +99,7 @@ pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: boo
 /// fresh page with no opener (Chromium's blocked pop-ups too reopen without one).
 pub fn creates_browser(opened: Opened, gesture: bool) -> bool {
     matches!(
-        decide(opened, gesture, None, true),
+        decide(opened, gesture, None, true, false),
         Outcome::Tab { .. } | Outcome::PopupWindow
     )
 }
@@ -122,20 +132,27 @@ mod tests {
     #[test]
     fn the_table() {
         for &(o, g, out) in ROWS {
-            assert_eq!(decide(o, g, None, true), out, "{o:?} gesture={g}");
+            assert_eq!(decide(o, g, None, true, false), out, "{o:?} gesture={g}");
         }
         assert_eq!(
-            decide(Opened::PopupWindow, true, None, true),
+            decide(Opened::PopupWindow, true, None, true, false),
             Outcome::PopupWindow
         );
-        assert_eq!(decide(Opened::Window, true, None, true), Outcome::Glance);
         assert_eq!(
-            decide(Opened::Window, true, None, false),
+            decide(Opened::Window, true, None, true, false),
+            Outcome::Glance
+        );
+        assert_eq!(
+            decide(Opened::Window, true, None, false, false),
             Outcome::Tab { foreground: true },
             "peeks off: a tab"
         );
         for o in ALL {
-            assert_eq!(decide(o, false, None, true), Outcome::Blocked, "{o:?}");
+            assert_eq!(
+                decide(o, false, None, true, false),
+                Outcome::Blocked,
+                "{o:?}"
+            );
         }
     }
 
@@ -154,20 +171,46 @@ mod tests {
     }
 
     #[test]
+    fn an_abused_click_counts_as_none() {
+        for o in ALL {
+            assert_eq!(
+                decide(o, true, None, true, true),
+                Outcome::Blocked,
+                "{o:?}: held for the pill"
+            );
+            assert_eq!(
+                decide(o, true, Some(Decision::Block), true, true),
+                Outcome::Blocked,
+                "{o:?}"
+            );
+            assert_eq!(
+                decide(o, true, Some(Decision::Allow), true, true),
+                decide(o, true, None, true, false),
+                "{o:?}: an allowed site opens"
+            );
+            assert_eq!(
+                decide(o, false, None, true, true),
+                Outcome::Blocked,
+                "{o:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_site_choice_wins() {
         for o in ALL {
             assert_eq!(
-                decide(o, false, Some(Decision::Allow), true),
-                decide(o, true, None, true),
+                decide(o, false, Some(Decision::Allow), true, false),
+                decide(o, true, None, true, false),
                 "allowed: as with a gesture"
             );
             assert_eq!(
-                decide(o, false, Some(Decision::Block), true),
+                decide(o, false, Some(Decision::Block), true, false),
                 Outcome::Blocked
             );
             assert_eq!(
-                decide(o, true, Some(Decision::Block), true),
-                decide(o, true, None, true),
+                decide(o, true, Some(Decision::Block), true, false),
+                decide(o, true, None, true, false),
                 "a click still opens"
             );
         }

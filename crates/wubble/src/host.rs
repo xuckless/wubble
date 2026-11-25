@@ -90,6 +90,7 @@ use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
+use wubble_core::blocker_gate::{self, GateEffect, GateEvent};
 use wubble_core::busy::Reason;
 use wubble_core::closed;
 use wubble_core::closed::{ClosedTab, Entry};
@@ -493,6 +494,11 @@ pub struct Host {
     /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
     /// until the page commits another URL; the address pill offers them.
     held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
+    /// The content blocker's start-up gate: web pages the host loads wait for the lists
+    /// (`wubble_core::blocker_gate`); one owner, stepped by [`Self::gate_event`].
+    gate: blocker_gate::Gate,
+    /// Opens the gate at [`blocker_gate::DEADLINE`] at the latest.
+    gate_deadline: slint::Timer,
     /// A pop-up browser Chromium created, with its URL, while the command placing it runs: the
     /// tab it creates shows this view instead of a new one (`host/popups.rs`).
     adopting: Option<(String, ViewId)>,
@@ -669,6 +675,13 @@ impl Host {
             clean_exit: _,
             startup: offer,
         } = loaded;
+        let gate = blocker_gate::Gate::start(!blocking.is_enabled() || !blocking.is_busy());
+        let gate_deadline = slint::Timer::default();
+        if gate != blocker_gate::Gate::Ready {
+            gate_deadline.start(slint::TimerMode::SingleShot, blocker_gate::DEADLINE, || {
+                crate::with_host(|host| host.gate_event(blocker_gate::GateEvent::Deadline))
+            });
+        }
         let favicons = model
             .tabs
             .values()
@@ -782,6 +795,8 @@ impl Host {
             failure: None,
             surfaces: BTreeMap::new(),
             held_popups: BTreeMap::new(),
+            gate,
+            gate_deadline,
             adopting: None,
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
             drag_window: WindowId(0),
@@ -1191,6 +1206,11 @@ impl Host {
                 if self.views.contains_key(&tab) {
                     return None;
                 }
+                // a pop-up Chromium created is the page's own window, never held
+                let popup = self.adopting.as_ref().is_some_and(|(u, _)| *u == url);
+                if !popup && !self.gate_allows(tab, &url) {
+                    return None;
+                }
                 let layout = self.pane_layout(&window, tab);
                 let opened = match self.adopted(&url) {
                     Some(id) => self.adopt_view(id, layout, frame_rate),
@@ -1253,6 +1273,9 @@ impl Host {
                     .is_some_and(|t| t.lifecycle.liveness == Liveness::Active);
                 if self.views.contains_key(&tab) {
                     self.builtins_loading(tab, &url);
+                }
+                if self.views.contains_key(&tab) && !self.gate_allows(tab, &url) {
+                    return None;
                 }
                 match self.tab_view(tab) {
                     Some(view) => view.load(&url),
@@ -1749,6 +1772,11 @@ impl Host {
             let frame_rate = pacing::frame_rate_for(refresh);
             log_frame_rate(frame_rate, refresh);
             self.frame_rate = Some(frame_rate);
+            // lists that compiled (or a blocker switched off) before this first frame told a
+            // gate that could not open yet: it opens now, not at its deadline
+            if !self.blocking.is_enabled() || !self.blocking.is_busy() {
+                self.gate_event(blocker_gate::GateEvent::BlockerReady);
+            }
             let follow = self.flush();
             for command in follow {
                 self.dispatch(command);
@@ -1919,7 +1947,21 @@ impl Host {
                 self.dispatch(Command::TitleChanged { tab, title });
             }
             WebEvent::PopupRequested(request) => self.popup_requested(tab, request),
-            WebEvent::PopupOpened { request, view } => self.place_opened(tab, request, Some(view)),
+            WebEvent::PopupOpened { request, view } => {
+                self.place_opened(tab, request, Some(view), true)
+            }
+            // the page was sent to another site from an invisible overlay: held in the pill
+            // as the window it would have been
+            WebEvent::OverlayNavigationHeld(url) => self.hold_popup(
+                tab,
+                PopupRequest {
+                    url,
+                    gesture: true,
+                    opened: wubble_core::popup::Opened::ForegroundTab,
+                    size: None,
+                    position: None,
+                },
+            ),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1951,18 +1993,73 @@ impl Host {
         }
     }
 
+    // ----- the blocker's start-up gate
+
+    /// Whether `tab` may load `url` now; if not, the gate holds it and loads it when it opens.
+    fn gate_allows(&mut self, tab: TabId, url: &str) -> bool {
+        let event = GateEvent::Navigate {
+            tab,
+            url: url.to_owned(),
+        };
+        let (gate, effects) = blocker_gate::transition(
+            std::mem::replace(&mut self.gate, blocker_gate::Gate::Ready),
+            event,
+        );
+        self.gate = gate;
+        effects
+            .iter()
+            .any(|GateEffect::Load { tab: t, .. }| *t == tab)
+    }
+
+    /// One gate event from the blocker (ready, off) or the deadline: what waited loads now.
+    pub(crate) fn gate_event(&mut self, event: GateEvent) {
+        if self.gate == blocker_gate::Gate::Ready {
+            return;
+        }
+        if event == GateEvent::Deadline {
+            eprintln!(
+                "wubble: blocker lists not ready after {:?}; loading anyway",
+                blocker_gate::DEADLINE
+            );
+        }
+        // before the first frame no view can open: the gate stays shut, and the deadline (or
+        // the next list change) opens it
+        let Some(frame_rate) = self.frame_rate else {
+            return;
+        };
+        let (gate, effects) = blocker_gate::transition(
+            std::mem::replace(&mut self.gate, blocker_gate::Gate::Ready),
+            event,
+        );
+        self.gate = gate;
+        self.gate_deadline.stop();
+        for GateEffect::Load { tab, url } in effects {
+            // a tab closed meanwhile loads nothing
+            if !self.model.tabs.contains_key(&tab) {
+                continue;
+            }
+            let call = if self.views.contains_key(&tab) {
+                Call::Load { tab, url }
+            } else {
+                Call::OpenView { tab, url }
+            };
+            if let Some(follow) = self.execute(call, frame_rate) {
+                self.dispatch(follow);
+            }
+        }
+        self.after_change();
+    }
+
     // ----- pop-ups
 
     /// Opens what `tab`'s page asked for and the policy held back, as if it had been clicked.
     fn open_held_popups(&mut self, tab: TabId) {
         for request in self.held_popups.remove(&tab).unwrap_or_default() {
-            self.popup_requested(
-                tab,
-                PopupRequest {
-                    gesture: true,
-                    ..request
-                },
-            );
+            let request = PopupRequest {
+                gesture: true,
+                ..request
+            };
+            self.place_opened(tab, request, None, false);
         }
         self.after_change();
     }

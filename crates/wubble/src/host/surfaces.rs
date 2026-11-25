@@ -51,6 +51,9 @@ pub(super) struct Drawn {
     permission: Option<PermissionPrompt>,
 }
 
+/// Chromium's ERR_BLOCKED_BY_CLIENT: a request the content filter cancelled.
+const BLOCKED_BY_CLIENT: i32 = -20;
+
 impl Host {
     pub(super) fn on_page_event(&mut self, window: &AppWindow, view: ViewId, event: PageEvent) {
         // Events of a view whose tab is already gone: welding answered its
@@ -216,11 +219,19 @@ impl Host {
             Routed::LoadFailed { url, code } => {
                 if !self.https_failed(tab, &url) {
                     let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
-                    let event = ErrorEvent::LoadFailed {
-                        url,
-                        code,
-                        now_ms: wall_ms(),
-                        shown,
+                    // a page the blocker stopped says so (ERR_BLOCKED_BY_CLIENT)
+                    let browser = self.tab_view(tab).map(|v| v.browser_id());
+                    let blocked = browser
+                        .filter(|_| code == BLOCKED_BY_CLIENT)
+                        .and_then(|b| self.blocking.document_block(b, &url));
+                    let event = match blocked {
+                        Some(dangerous) => ErrorEvent::DocumentBlocked { url, dangerous },
+                        None => ErrorEvent::LoadFailed {
+                            url,
+                            code,
+                            now_ms: wall_ms(),
+                            shown,
+                        },
                     };
                     self.apply_error(tab, event);
                 }
@@ -391,6 +402,12 @@ impl Host {
                         view.answer_permission(id, &granted);
                     }
                 }
+                Reply::Download {
+                    id,
+                    download,
+                    name,
+                    allow,
+                } => self.download_answered(tab, id, download, &name, allow),
             }
         }
     }
@@ -480,25 +497,18 @@ impl Host {
         // the panel is the tab's store overlay while its machine holds an error
         self.layer_is(Kind::ErrorPanel, tab, open);
         for effect in effects {
-            if let ErrorEffect::Allow { host, code } = &effect {
-                self.cert_exceptions.allow(host, *code);
-                continue;
-            }
-            if effect == ErrorEffect::ContinueHttp {
-                self.https_continue(tab);
-                continue;
-            }
-            let Some(view) = self.tab_view(tab) else {
-                continue;
-            };
+            // the view's own effects need the view; the rest are the host's
+            let view = self.tab_view(tab);
             match effect {
-                ErrorEffect::Reload { .. } => view.reload(),
-                ErrorEffect::Back => view.back(),
-                ErrorEffect::Blank => view.load("about:blank"),
-                ErrorEffect::AnswerCert { request, proceed } => {
-                    view.answer_certificate(request, proceed);
-                }
-                ErrorEffect::Allow { .. } | ErrorEffect::ContinueHttp => {}
+                ErrorEffect::Allow { host, code } => self.cert_exceptions.allow(&host, code),
+                ErrorEffect::ContinueHttp => self.https_continue(tab),
+                ErrorEffect::Unblock { host } => self.blocking.allow_pages_for_session(&host),
+                ErrorEffect::Reload { .. } => view.into_iter().for_each(|v| v.reload()),
+                ErrorEffect::Back => view.into_iter().for_each(|v| v.back()),
+                ErrorEffect::Blank => view.into_iter().for_each(|v| v.load("about:blank")),
+                ErrorEffect::AnswerCert { request, proceed } => view.into_iter().for_each(|v| {
+                    v.answer_certificate(request, proceed);
+                }),
             }
         }
     }
@@ -1136,7 +1146,9 @@ impl Host {
             return;
         };
         let event = match self.surfaces.get(&tab).map(|s| &s.error) {
-            Some(PageError::Cert { .. } | PageError::HttpsOnly { .. }) => ErrorEvent::GoBack {
+            Some(
+                PageError::Cert { .. } | PageError::HttpsOnly { .. } | PageError::Blocked { .. },
+            ) => ErrorEvent::GoBack {
                 can_go_back: self.tab_view(tab).is_some_and(|v| v.nav().page.can_go_back),
             },
             _ => ErrorEvent::Reload,
