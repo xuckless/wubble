@@ -551,15 +551,20 @@ pub fn drain(engine: &mut Engine) {
 /// a run that hangs (once, 300 s, right after a rebuild: never reproduced) is stuck. Take
 /// `eu-stack -p <pid>` of the process and its children next to the last line. Off by default.
 pub(crate) fn trace(stage: &str) {
-    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
-    let start = START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()));
-    if let Some(start) = start {
+    if let Some(start) = tracing() {
         eprintln!(
             "wubble: trace +{}ms pid {}: {stage}",
             start.elapsed().as_millis(),
             std::process::id()
         );
     }
+}
+
+/// `WUBBLE_TRACE` is set (read once): when its first line's clock began. The diagnostics that
+/// print only then (the page layer's route lines and summary, the scene's run state) ask here.
+pub(crate) fn tracing() -> Option<Instant> {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    *START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()))
 }
 
 /// The browser on its profile: `--profile`, else the per-user one, which

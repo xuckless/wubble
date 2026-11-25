@@ -1290,9 +1290,10 @@ pub fn shell_page() {
 }
 
 /// Counts `count` while a session records (a thread-local lookup and nothing else otherwise),
-/// and, with a page layer mode on, into the page layer's second ([`layer_second`]).
+/// and, with a page layer mode on and `WUBBLE_TRACE` set, into the page layer's second
+/// ([`layer_second`]).
 pub fn count(count: Count) {
-    if crate::page_layer() != wubble_core::page_layer::Mode::Off {
+    if crate::page_layer() != wubble_core::page_layer::Mode::Off && crate::tracing().is_some() {
         LAYER_SECOND.with_borrow_mut(|(_, r)| r.record(Event::Count(count)));
     }
     with_session(|s| {

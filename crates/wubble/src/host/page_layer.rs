@@ -10,8 +10,10 @@
 //! (`mounted-changed`) and a snapshot (its pixels). What keeps a page on the shell's path is read
 //! from its owners on every call ([`Host::layer_needs`]), never kept.
 //!
-//! With the flag off (the default) no layer is made, so no pane has an entry and every frame
-//! goes to `present_frame` as before.
+//! With the mode off (`--page-layer=off`, Settings' row off, any platform but macOS, every smoke
+//! and measurement that does not ask) no layer is made, so no pane has an entry and every frame
+//! goes to `present_frame` as before. The route lines and the per-second summary print only with
+//! `WUBBLE_TRACE` (`crate::trace`); failures always do.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -369,9 +371,13 @@ impl Host {
             if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
                 pane.route = route;
             }
-            // the one place a route is replaced: each change, why, and who holds the page
-            if before.name() != route.name() {
+            // the one place a route is replaced: counted; with `WUBBLE_TRACE`, each change, why,
+            // and who holds the page
+            let replaced = before.name() != route.name();
+            if replaced {
                 measure::count(Count::LayerRoute);
+            }
+            if replaced && crate::tracing().is_some() {
                 let (stack, facts) = self.page_covers(window, tab);
                 let owner = |need: Need| -> String {
                     match need {
@@ -408,8 +414,8 @@ impl Host {
                     .collect();
                 // a brief hold kept past its deadline reads as a long one (`Route::hold`)
                 let expired = before.hold(hold, now) != hold;
-                eprintln!(
-                    "wubble: page layer: tab {}: {} -> {} on {event:?}; needs: {}{}",
+                crate::trace(&format!(
+                    "page layer: tab {}: {} -> {} on {event:?}; needs: {}{}",
                     tab.0,
                     before.name(),
                     route.name(),
@@ -423,7 +429,7 @@ impl Host {
                     } else {
                         ""
                     },
-                );
+                ));
             }
             let mut failed = false;
             for effect in effects {
@@ -589,10 +595,11 @@ impl Host {
             let layout = self.pane_layout(window, tab);
             self.place_layer(window, tab, size, &layout);
         }
-        // a second's summary, from this frame path (never a timer of its own: nothing happening,
-        // nothing printed): its counts (`measure`), the frames welding dropped for a busy pool,
-        // each pane's route, the window's focus and where the pointer is
-        if let Some((took, counts)) = measure::layer_second(Instant::now()) {
+        // with `WUBBLE_TRACE`, a second's summary, from this frame path (never a timer of its
+        // own: nothing happening, nothing printed): its counts (`measure`), the frames welding
+        // dropped for a busy pool, each pane's route, the window's focus and where the pointer is
+        let second = crate::tracing().and_then(|_| measure::layer_second(Instant::now()));
+        if let Some((took, counts)) = second {
             let routes: Vec<(TabId, Route)> = std::iter::once(&self.w)
                 .chain(self.parked.values())
                 .flat_map(|w| w.layers.panes.iter().map(|(&t, p)| (t, p.route)))
@@ -616,13 +623,13 @@ impl Host {
                 Some(_) if self.w.cursor.over_page => "over a page",
                 Some(_) => "over the shell",
             };
-            eprintln!(
-                "wubble: page layer: {:.2}s: {}; pool_busy {busy}; {}; window {}, pointer {pointer}",
+            crate::trace(&format!(
+                "page layer: {:.2}s: {}; pool_busy {busy}; {}; window {}, pointer {pointer}",
                 took.as_secs_f64(),
                 counted.join(", "),
                 routes.join(", "),
                 if focused { "focused" } else { "unfocused" },
-            );
+            ));
         }
         error.map_or(Ok(drew), Err)
     }
