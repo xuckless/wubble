@@ -203,6 +203,8 @@ settings! {
     TouchSizing: String = defs::TOUCH_SIZING;
     /// Shift+click opens a peek.
     GlanceEnabled: bool = defs::GLANCE_ENABLED;
+    /// The address pill shows whole URLs.
+    FullUrls: bool = defs::UI_FULL_URLS;
     /// Opaque entries; the keybinding editor owns their format.
     KeybindingOverrides: Vec<String> = defs::KEYBINDING_OVERRIDES;
     BlockerEnabled: bool = defs::BLOCKER_ENABLED;
