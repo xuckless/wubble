@@ -3,11 +3,11 @@
 Legend: `[ ]` open · `[~]` in progress. Loaded by the owner while the sprint compiles; written blind now on their own branches, integrated after the sprint passes.
 
 ## A. Written branches to integrate, and more search engines
-- [ ] More search engines (owner): Chrome's list plus privacy ones: Google, Bing, DuckDuckGo, Kagi, Brave Search, Startpage, Ecosia, Qwant, Yahoo, Yandex, Baidu, Naver, Perplexity, plus Wikipedia, YouTube and GitHub as keyword engines; Chromium's regional defaults table
+- [x] More search engines (owner), integrated on `next/all` (`crates/wubble-core/src/engines.rs`; unit tests, Settings smokes): Chrome's list plus privacy ones: Google, Bing, DuckDuckGo, Kagi, Brave Search, Startpage, Ecosia, Qwant, Yahoo, Yandex, Baidu, Naver, Perplexity, plus Wikipedia, YouTube and GitHub as keyword engines; Chromium's regional defaults table
 
 ## Command bar: local calculator and unit conversion answers (`omni-calculator-units`)
 
-Key: `omni-calculator-units` · engine patch: no · state: written on `feat/omni-calculator-units`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `omni-calculator-units` · engine patch: no · state: [~] integrated on `next/all` (unit tests pass; no smoke types into the bar yet: the answer row and its toast unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's omnibox answers '12*7+3', 'sqrt(2)', '5 km in miles' and '70 F to C' as a row above the search. Chrome gets these from the server; wubble must compute them on the device with no request. Today omnibox::Kind (crates/wubble-core/src/omnibox.rs) has OpenTab/History/Bookmark/Search/Action and there is no answer row.
 
@@ -20,7 +20,7 @@ Add Kind::Answer and Target::Copy(String). Choosing the row copies the result th
 
 ## Command bar: inline autocomplete and Chrome's omnibox keys (`omni-inline-autocomplete`)
 
-Key: `omni-inline-autocomplete` · engine patch: no · state: written on `feat/omni-inline-autocomplete`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `omni-inline-autocomplete` · engine patch: no · state: [~] integrated on `next/all` (unit tests pass; the field's selected completion and the keys unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome finishes a typed address inside the field. Type 'git' and it shows 'github.com/' with the added part selected. Right or End accepts it, Backspace drops it, Enter goes to the completed URL. Only a history entry whose host or URL starts with the typed text and whose typed_count is above 0 (or that has a high visit_count) is offered. wubble has no inline completion. CommandHead (crates/wubble-ui/ui/kit/chrome/command-head.slint) handles only Up, Down, Enter and Escape, and omnibox::rank (crates/wubble-core/src/omnibox.rs) returns rows only.
 
@@ -37,7 +37,7 @@ Wire it in crates/wubble/src/bar.rs and the host's command-bar handling. Add uni
 
 ## Search engines: more built-ins, custom engines with keywords, management in Settings (`search-engines-keywords`)
 
-Key: `search-engines-keywords` · engine patch: no · state: written on `feat/search-engines-keywords`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `search-engines-keywords` · engine patch: no · state: [~] integrated on `next/all` (unit tests and the Settings tests pass; site search discovery against a live OpenSearch page unchecked) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome keeps a list of search engines, each with a name, a keyword and a URL with %s. You can set any of them as the default, add and edit your own, and site searches are picked up from pages. wubble has only `ENGINES: [EngineInfo; 2]` (Google, DuckDuckGo) in crates/wubble-core/src/omnibox.rs, chosen by the `search.engine` Select in settings.rs.
 
@@ -50,13 +50,13 @@ The Settings section shows the default engine, the built-in list and the custom 
 
 ## Startup, home page and quit settings (`startup-home-settings`)
 
-Key: `startup-home-settings` · engine patch: no · state: written on `feat/startup-home-settings`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `startup-home-settings` · engine patch: no · state: [~] integrated on `next/all` (unit tests, session smoke on the default mode; Start page and Specific pages modes, the Restore notice and the macOS quit warning (Cmd+Q, Mac) unchecked by hand) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's 'On startup' setting offers: open the New Tab page, continue where you left off, or open a specific set of pages. There is a Home page (Alt+Home / Cmd+Shift+H), a 'Restore pages?' offer after a crash, and on macOS 'Warn before quitting'. The design's settings (pages/settings.tsx row `startup`: 'When Wubble opens', Start page | Last session) have the first two. wubble has no such setting: it always restores the stored session (wubble-store session.rs load_session). Build: settings rows in crates/wubble-core/src/settings.rs. `startup.mode` is a Select of Last session (default), Start page, or Specific pages. `startup.pages` is a list editor of URLs, shown only for Specific pages. `home.url` is empty for the start page. `quit.warn` (macOS default on) requires a second Cmd+Q or a hold. At start, in crates/wubble/src (where the loaded Model is handed to the host): with Start page, keep Spaces, pinned tabs and folders, but open a start tab in each window. The unpinned tabs of the last session go to the archive or recently closed, following Chrome's 'new tab page' semantics: they are not restored. Pinned tabs always stay. With Specific pages, open those pages as new tabs. Record a clean-exit flag in the store. When the last run did not exit cleanly and the mode is not Last session, show a kit banner 'Restore pages?' that restores the saved session. Add `Action::GoHome` (Alt+Home on Linux/Windows, Cmd+Shift+H on macOS) and a palette title 'Home'. Add a command-bar row 'Open pages from last session'.
 
 ## Recently closed windows, folders and Spaces, and a recently-closed list UI (`recently-closed-full`)
 
-Key: `recently-closed-full` · engine patch: no · state: written on `feat/recently-closed-full`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
+Key: `recently-closed-full` · engine patch: no · state: [~] integrated on `next/all` (unit tests, store migration v17 tests, smokes pass; reopening a window, folder or Space unchecked by hand; a reopened window comes back in its normal size, not maximized) (its report: [batch-1-reports.md](batch-1-reports.md)).
 
 Chrome's TabRestoreService keeps tabs, whole windows and tab groups. Ctrl+Shift+T reopens the newest entry of any kind, and the History menu and tab search list 'Recently closed' with titles. Today crates/wubble-core/src/closed.rs and wubble-store/src/closed.rs keep tab entries only, and nothing lists them (`Store::recently_closed` has no caller in crates/wubble). A closed Main window keeps its Space, so it is not remembered at all (model/windows.rs close_window), and a closed folder or deleted Space adds its tabs one by one, if at all. Build: generalize the store row into an entry enum, `Tab | Window { space, geometry } | Folder { name, tabs } | Space { name, tint, icon, container, tabs }`, with a migration. Grouped entries carry child tab rows with url, title, container, place and, once captured, history. Record a Window entry in `close_window` (and a Space entry from `DeleteSpace` and `FolderRow::Close`, when they actually close tabs). Extend the `closed::Event` and `Effect` machine: `Restore` gains a window variant (reopen a Main window on that Space at its geometry, or recreate the Space if it is gone) and a folder or Space variant. Mod+Shift+T and Mod+Z pop any kind. UI: a 'Recently closed' block at the top of wubble://history (pages.rs, history page model), and command-bar rows (bar.rs) listing the entries with titles. Each row reopens its entry and can be deleted on its own. Keep RECENTLY_CLOSED_MAX at 25 entries. Agent and private tabs stay off the list.
 

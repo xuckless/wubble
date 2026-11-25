@@ -6,12 +6,15 @@
 //! free text chooses it.
 
 use wubble_core::action::Action;
+use wubble_core::answer;
+use wubble_core::closed::Listed;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
     self, Bookmark, Candidates, Disposition, HistoryEntry, Kind, OmniResult, OpenTab, SearchClosed,
-    SearchEngine, SearchTab, Target,
+    SearchTab, Target,
 };
+use wubble_core::search::{EngineRef, Engines};
 use wubble_core::space::SpaceKind;
 use wubble_core::tab::TabId;
 use wubble_ui::CommandKind;
@@ -40,12 +43,12 @@ pub enum BarMode {
 }
 
 /// What a row stands for: an omnibox result, or (first run only) a search
-/// engine to choose. The engine choice is the bar's own row, not a global
+/// engine to choose, by its stored id. The engine choice is the bar's own row, not a global
 /// `Action`: it exists only until a choice is stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowTarget {
     Omni(Target),
-    PickEngine(SearchEngine),
+    PickEngine(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,7 +68,7 @@ impl BarRow {
             (RowTarget::Omni(Target::Url(u)), CommandKind::History | CommandKind::Bookmark) => {
                 Some(u)
             }
-            (RowTarget::Omni(Target::ClosedTab { url, .. }), _) => Some(url),
+            (RowTarget::Omni(Target::ClosedTab { url, .. }), _) if !url.is_empty() => Some(url),
             _ => None,
         }
     }
@@ -85,12 +88,15 @@ pub struct BarInputs<'a> {
     pub history: &'a [HistoryEntry],
     /// Bookmarked links.
     pub bookmarks: &'a [Bookmark],
-    /// `None` until the first-run choice.
-    pub engine: Option<SearchEngine>,
+    /// Every engine; its default is `None` until the first-run choice.
+    pub engines: &'a Engines,
     pub keymap: &'a Keymap,
     /// Live engine suggestions, already fetched (`suggest_fx`).
     pub suggestions: &'a [String],
     pub now_ms: i64,
+    /// No inline completion: the edit only deleted text, a completion was just accepted, or the
+    /// field cannot show one (`omnibox::Candidates::prevent_inline`).
+    pub prevent_inline: bool,
 }
 
 /// What choosing a row does.
@@ -98,15 +104,14 @@ pub struct BarInputs<'a> {
 pub enum Choice {
     Model(Command),
     Perform(Action),
-    /// Store the search engine (first run).
-    SetEngine(SearchEngine),
-    /// Take this entry off the recently-closed list and open it (tab search).
-    ReopenClosed {
-        url: String,
-        closed_at_ms: i64,
-    },
+    /// Store the search engine (first run), by its id.
+    SetEngine(String),
+    /// Reopen this recently-closed entry (by its store id) and take it off the list.
+    ReopenClosed(i64),
     /// Shift+Enter: a new window, then this URL in a new tab there.
     NewWindow(String),
+    /// Put the text on the clipboard (an answer row).
+    Copy(String),
 }
 
 /// The open tabs, active Space first, each Space in sidebar order. A private window lists its
@@ -179,6 +184,7 @@ fn kind(k: Kind) -> CommandKind {
         Kind::Search => CommandKind::Search,
         Kind::Action => CommandKind::Action,
         Kind::ClosedTab => CommandKind::ClosedTab,
+        Kind::Answer => CommandKind::Answer,
     }
 }
 
@@ -199,18 +205,6 @@ fn omni_row(r: OmniResult, keymap: &Keymap) -> BarRow {
     }
 }
 
-/// The first-run rows: one per engine in `omnibox::ENGINES`, each a search row (the search
-/// glyph): choosing one searches the query with it.
-fn engine_rows() -> impl Iterator<Item = BarRow> {
-    omnibox::ENGINES.iter().map(|e| BarRow {
-        kind: CommandKind::Search,
-        title: format!("Search with {}", e.name),
-        subtitle: "Choose the search engine".into(),
-        shortcut: String::new(),
-        target: RowTarget::PickEngine(e.engine),
-    })
-}
-
 /// The rows for `query`. Once an engine is chosen: `omnibox::rank` (nothing
 /// for a blank query). Before: the engine choice instead of every search
 /// row, after the "open" row if the query is an address.
@@ -220,21 +214,100 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
         history: inputs.history,
         bookmarks: inputs.bookmarks,
         suggestions: inputs.suggestions,
+        prevent_inline: inputs.prevent_inline,
     };
-    // Before the choice the engine only names the search rows, which are
-    // replaced below.
-    let ranking_engine = inputs.engine.unwrap_or(SearchEngine::DuckDuckGo);
-    let ranked = omnibox::rank(query, ranking_engine, &cands, inputs.now_ms, MAX_ROWS);
+    // Before the choice the default search rows are replaced below; a keyword's rows (its
+    // engine's results pages) stay.
+    let ranked = omnibox::rank(query, inputs.engines, &cands, inputs.now_ms, MAX_ROWS);
     let rows = ranked.into_iter().map(|r| omni_row(r, inputs.keymap));
-    if inputs.engine.is_some() {
+    if inputs.engines.default.is_some() {
         return rows.collect();
     }
     let mut rows: Vec<BarRow> = rows
         .filter(|r| !matches!(r.target, RowTarget::Omni(Target::Search(_))))
         .collect();
-    let at = usize::from(matches!(omnibox::classify(query), omnibox::Intent::Url(_)));
+    // The "open" row, a keyword search and a calculation's answer stay above the choice, as
+    // above a search.
+    let leads = inputs.engines.keyword_search(query).is_some()
+        || match omnibox::classify(query) {
+            omnibox::Intent::Url(_) => true,
+            omnibox::Intent::Search(q) => {
+                answer::answer(&q).is_some_and(|a| a.kind == answer::AnswerKind::Math)
+            }
+        };
+    let at = usize::from(leads);
     let at = at.min(rows.len());
-    rows.splice(at..at, engine_rows());
+    // the first-run rows: the region's engines (`Engines::first_run`), each a search row (the
+    // search glyph): choosing one searches the query with it
+    let choice = inputs.engines.first_run().map(|e| BarRow {
+        kind: CommandKind::Search,
+        title: format!("Search with {}", e.name),
+        subtitle: "Choose the search engine".into(),
+        shortcut: String::new(),
+        target: RowTarget::PickEngine(e.id.clone()),
+    });
+    rows.splice(at..at, choice);
+    rows.truncate(MAX_ROWS);
+    rows
+}
+
+/// The inline completion the field shows for `query`, the same one `bar_rows` puts first.
+pub fn bar_inline(inputs: &BarInputs, query: &str) -> Option<omnibox::InlineMatch> {
+    if inputs.prevent_inline {
+        return None;
+    }
+    omnibox::inline_match(query, inputs.history, inputs.bookmarks)
+}
+
+/// The URL Shift+Delete forgets on `row`: a history row's (Chrome deletes only what history can
+/// forget), `None` for any other row.
+pub fn removable_url(row: &BarRow) -> Option<&str> {
+    match (&row.target, row.kind) {
+        (RowTarget::Omni(Target::Url(u)), CommandKind::History) => Some(u),
+        _ => None,
+    }
+}
+
+/// Recently-closed rows a typed query adds at most.
+const CLOSED_HITS: usize = 3;
+
+/// `rows` with the recently-closed list's rows (Chrome's tab search and History menu list
+/// "Recently closed" with titles): on a blank query every entry, newest first; on a typed one
+/// the entries it finds, after the ranked rows. Not for a bar that puts a page beside another.
+pub fn with_closed(
+    mut rows: Vec<BarRow>,
+    closed: &[Listed],
+    query: &str,
+    mode: BarMode,
+) -> Vec<BarRow> {
+    if mode == BarMode::Beside {
+        return rows;
+    }
+    let query = query.trim().to_lowercase();
+    // a blank query lists every entry the rows above leave room for (the first-run choice
+    // stays); a typed one adds its few hits
+    let room = if query.is_empty() {
+        MAX_ROWS.saturating_sub(rows.len())
+    } else {
+        CLOSED_HITS
+    };
+    let found: Vec<BarRow> = closed
+        .iter()
+        .filter(|l| l.entry.matches(&query))
+        .take(room)
+        .map(|l| BarRow {
+            kind: CommandKind::ClosedTab,
+            title: l.entry.title(),
+            subtitle: format!("{} \u{b7} {}", omnibox::RECENTLY_CLOSED, l.entry.note()),
+            shortcut: String::new(),
+            target: RowTarget::Omni(Target::ClosedTab {
+                id: l.id,
+                url: l.entry.icon_url().unwrap_or_default().to_owned(),
+            }),
+        })
+        .collect();
+    rows.truncate(MAX_ROWS.saturating_sub(found.len()).max(1));
+    rows.extend(found);
     rows.truncate(MAX_ROWS);
     rows
 }
@@ -247,7 +320,7 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
 pub fn target_command_as(
     target: &RowTarget,
     mode: BarMode,
-    engine: Option<SearchEngine>,
+    engine: Option<&EngineRef>,
     disposition: Disposition,
 ) -> Option<Choice> {
     let load = |url: String| match (mode, disposition) {
@@ -262,17 +335,15 @@ pub fn target_command_as(
     };
     Some(match target {
         RowTarget::Omni(Target::Url(url)) => load(url.clone()),
-        RowTarget::Omni(Target::Search(q)) => load(omnibox::fill(engine?.info().search, q)),
+        RowTarget::Omni(Target::Search(q)) => load(engine?.search_url(q)),
         RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(match mode {
             BarMode::Beside => Command::SplitWith(*tab),
             _ => Command::ActivateTab(*tab),
         }),
         RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
-        RowTarget::Omni(Target::ClosedTab { url, closed_at_ms }) => Choice::ReopenClosed {
-            url: url.clone(),
-            closed_at_ms: *closed_at_ms,
-        },
-        RowTarget::PickEngine(e) => Choice::SetEngine(*e),
+        RowTarget::Omni(Target::ClosedTab { id, .. }) => Choice::ReopenClosed(*id),
+        RowTarget::Omni(Target::Copy(text)) => Choice::Copy(text.clone()),
+        RowTarget::PickEngine(id) => Choice::SetEngine(id.clone()),
     })
 }
 
@@ -351,17 +422,19 @@ mod tests {
         assert_eq!(row(CommandKind::OpenTab, tab).icon_url(), None);
     }
 
-    fn rows(engine: Option<SearchEngine>, tabs: &[OpenTab], query: &str) -> Vec<BarRow> {
+    /// The rows with `default` the chosen engine's id (`""`: none chosen yet).
+    fn rows(default: &str, tabs: &[OpenTab], query: &str) -> Vec<BarRow> {
         let keymap = Keymap::defaults(Platform::Linux);
         bar_rows(
             &BarInputs {
                 tabs,
                 history: &[],
                 bookmarks: &[],
-                engine,
+                engines: &Engines::resolve(default, &[], &[]),
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                prevent_inline: false,
             },
             query,
         )
@@ -371,7 +444,7 @@ mod tests {
         rows.iter().map(|r| r.target.clone()).collect()
     }
 
-    const DDG: Option<SearchEngine> = Some(SearchEngine::DuckDuckGo);
+    const DDG: &str = "duckduckgo";
 
     #[test]
     fn open_tabs_list_the_active_space_first() {
@@ -436,21 +509,21 @@ mod tests {
     }
 
     #[test]
-    fn the_first_run_offers_the_two_engines() {
+    fn the_first_run_offers_the_region_s_engines() {
         let picks = |r: &[BarRow]| -> Vec<RowTarget> {
             r.iter()
                 .filter(|r| matches!(r.target, RowTarget::PickEngine(_)))
                 .map(|r| r.target.clone())
                 .collect()
         };
-        let both = vec![
-            RowTarget::PickEngine(SearchEngine::Google),
-            RowTarget::PickEngine(SearchEngine::DuckDuckGo),
-        ];
+        // no region stored: Chromium's default list
+        let all: Vec<RowTarget> = ["google", "bing", "yahoo"]
+            .map(|id| RowTarget::PickEngine(id.into()))
+            .to_vec();
         // A blank query and a search: the choice comes first, no search row.
-        assert_eq!(targets(&rows(None, &[], "")), both);
-        let r = rows(None, &[], "cats");
-        assert_eq!(targets(&r[..2]), both);
+        assert_eq!(targets(&rows("", &[], "")), all);
+        let r = rows("", &[], "cats");
+        assert_eq!(targets(&r[..all.len()]), all);
         assert!(
             !targets(&r).contains(&RowTarget::Omni(Target::Search("cats".into()))),
             "{r:?}"
@@ -468,16 +541,25 @@ mod tests {
                 .all(|r| r.kind == CommandKind::Search)
         );
         // An address still opens first.
-        let r = rows(None, &[], "example.com");
+        let r = rows("", &[], "example.com");
         assert_eq!(
             r[0].target,
             RowTarget::Omni(Target::Url("https://example.com/".into()))
         );
-        assert_eq!(targets(&r[1..3]), both);
+        assert_eq!(targets(&r[1..1 + all.len()]), all);
+        // A keyword searches its engine before any choice.
+        let r = rows("", &[], "wikipedia.org cats");
+        assert_eq!(
+            r[0].target,
+            RowTarget::Omni(Target::Url(
+                "https://en.wikipedia.org/wiki/Special:Search?search=cats".into()
+            ))
+        );
+        assert_eq!(targets(&r[1..1 + all.len()]), all);
         // Once chosen, never again.
         for q in ["", "cats", "example.com"] {
             assert_eq!(picks(&rows(DDG, &[], q)), vec![], "{q}");
-            assert_eq!(picks(&rows(Some(SearchEngine::Google), &[], q)), vec![]);
+            assert_eq!(picks(&rows("google", &[], q)), vec![]);
         }
     }
 
@@ -489,10 +571,11 @@ mod tests {
                 tabs: &[],
                 history: &[],
                 bookmarks: &[],
-                engine: DDG,
+                engines: &Engines::resolve(DDG, &[], &[]),
                 keymap: &keymap,
                 suggestions: &["cats and dogs".into()],
                 now_ms: 0,
+                prevent_inline: false,
             },
             "cats",
         );
@@ -515,10 +598,12 @@ mod tests {
                 tabs: &[],
                 history: &[],
                 bookmarks: &bookmarks,
-                engine: DDG,
+                engines: &Engines::resolve(DDG, &[], &[]),
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                // the inline completion would be the bookmark's row
+                prevent_inline: true,
             },
             "docs",
         );
@@ -541,10 +626,12 @@ mod tests {
                 tabs: &[],
                 history: &history,
                 bookmarks: &[],
-                engine: DDG,
+                engines: &Engines::resolve(DDG, &[], &[]),
                 keymap: &keymap,
                 suggestions: &[],
                 now_ms: 0,
+                // the page would complete inline and lead as the completion's row
+                prevent_inline: true,
             },
             "rust",
         );
@@ -573,9 +660,11 @@ mod tests {
         };
         let url = RowTarget::Omni(Target::Url("https://a.test/".into()));
         let search = RowTarget::Omni(Target::Search("a b".into()));
-        let google = Some(SearchEngine::Google);
+        let (google, ddg) = (EngineRef::builtin("google"), EngineRef::builtin(DDG));
+        let (google, ddg) = (google.as_ref(), ddg.as_ref());
+        let pick = RowTarget::PickEngine("google".into());
         let cases = [
-            (&url, BarMode::NewTab, DDG, Some(new_tab("https://a.test/"))),
+            (&url, BarMode::NewTab, ddg, Some(new_tab("https://a.test/"))),
             (
                 &url,
                 BarMode::Navigate(t),
@@ -591,26 +680,26 @@ mod tests {
             (
                 &search,
                 BarMode::Navigate(t),
-                DDG,
+                ddg,
                 Some(navigate("https://duckduckgo.com/?q=a%20b")),
             ),
             (&search, BarMode::NewTab, None, None),
             (
                 &RowTarget::Omni(Target::OpenTab(TabId(9))),
                 BarMode::Navigate(t),
-                DDG,
+                ddg,
                 Some(Choice::Model(Command::ActivateTab(TabId(9)))),
             ),
             (
                 &RowTarget::Omni(Target::Action(Action::ReopenClosedTab)),
                 BarMode::NewTab,
-                DDG,
+                ddg,
                 Some(Choice::Perform(Action::ReopenClosedTab)),
             ),
             (
                 &url,
                 BarMode::Beside,
-                DDG,
+                ddg,
                 Some(Choice::Model(Command::OpenBeside {
                     url: "https://a.test/".into(),
                 })),
@@ -618,14 +707,14 @@ mod tests {
             (
                 &RowTarget::Omni(Target::OpenTab(TabId(9))),
                 BarMode::Beside,
-                DDG,
+                ddg,
                 Some(Choice::Model(Command::SplitWith(TabId(9)))),
             ),
             (
-                &RowTarget::PickEngine(SearchEngine::Google),
+                &pick,
                 BarMode::NewTab,
                 None,
-                Some(Choice::SetEngine(SearchEngine::Google)),
+                Some(Choice::SetEngine("google".into())),
             ),
         ];
         for (target, mode, engine, want) in cases {
@@ -643,6 +732,6 @@ mod tests {
         assert!(is_typed(&RowTarget::Omni(Target::Search("q".into()))));
         assert!(!is_typed(&RowTarget::Omni(Target::OpenTab(TabId(1)))));
         assert!(!is_typed(&RowTarget::Omni(Target::Action(Action::Reload))));
-        assert!(!is_typed(&RowTarget::PickEngine(SearchEngine::Google)));
+        assert!(!is_typed(&RowTarget::PickEngine("google".into())));
     }
 }

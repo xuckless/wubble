@@ -13,12 +13,12 @@ use std::collections::HashMap;
 use wubble_core::apply::GlassSetting;
 use wubble_core::archive::ArchiveAfter;
 use wubble_core::extensions::Installed;
-use wubble_core::omnibox::SearchEngine;
 use wubble_core::pagetheme::{Contrast, Motion, PageTheme};
 use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
 use wubble_core::shot::ShotOutput;
+use wubble_core::startup::StartupMode;
 use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
@@ -68,16 +68,17 @@ impl Codec for f32 {
     }
 }
 
-/// `None` (ask on first run) is the empty string; engines use their `EngineInfo::id`.
-impl Codec for Option<SearchEngine> {
+/// The default search engine's id (`wubble_core::search::EngineRef::id`): `None` (ask on first
+/// run) is the empty string.
+impl Codec for Option<String> {
     fn encode(&self) -> String {
-        self.map_or("", SearchEngine::id).into()
+        self.clone().unwrap_or_default()
     }
     fn decode(s: &str) -> Option<Self> {
         if s.is_empty() {
             Some(None)
         } else {
-            SearchEngine::from_id(s).map(Some)
+            wubble_core::search::is_engine_id(s).then(|| Some(s.to_owned()))
         }
     }
 }
@@ -106,6 +107,7 @@ word_codec!(
     ReaderFont,
     ReaderTheme,
     ShotOutput,
+    StartupMode,
 );
 
 /// A word of a choice the store has no type for (the core table checks it).
@@ -189,10 +191,18 @@ macro_rules! settings {
 }
 
 settings! {
-    /// `None` = ask on first run.
-    SearchEngineChoice: Option<SearchEngine> = defs::SEARCH_ENGINE;
+    /// The default engine's id; `None` = ask on first run.
+    SearchEngineChoice: Option<String> = defs::SEARCH_ENGINE;
     /// Live engine suggestions; off until the user turns them on.
     LiveSuggestions: bool = defs::LIVE_SUGGESTIONS;
+    /// The user's own engines (`wubble_core::search::EngineEntry` texts).
+    SearchCustom: Vec<String> = defs::SEARCH_CUSTOM;
+    /// Site searches found on pages, inactive.
+    SearchDiscovered: Vec<String> = defs::SEARCH_DISCOVERED;
+    /// Off until the user turns it on: a request wubble makes itself.
+    SearchDiscoverSites: bool = defs::SEARCH_DISCOVER_SITES;
+    /// The country whose engines are offered; empty until read from the locale.
+    SearchRegion: String = defs::SEARCH_REGION;
     /// The extended sidebar's width, logical px (the seam's `saved`).
     SidebarWidth: f32 = defs::SIDEBAR_WIDTH;
     /// Extended, rail or hidden.
@@ -237,6 +247,16 @@ settings! {
     ArchiveAfterSetting: ArchiveAfter = defs::ARCHIVE_AFTER;
     /// `host -> Space[, Container]` entries (`wubble_core::routing`).
     RoutingRules: Vec<String> = defs::ROUTING_RULES;
+    /// What wubble opens (`wubble_core::startup`): read when it opens.
+    StartupModeSetting: StartupMode = defs::STARTUP_MODE;
+    /// The addresses "Specific pages" opens.
+    StartupPages: Vec<String> = defs::STARTUP_PAGES;
+    /// Empty: Home is the start page.
+    HomeUrl: String = defs::HOME_URL;
+    /// The quit keys quit only when pressed twice or held.
+    QuitWarn: bool = defs::QUIT_WARN;
+    /// "0" while wubble runs, "1" after it quit in order (`Store::begin_run`).
+    SessionExitedCleanly: bool = defs::SESSION_EXITED_CLEANLY;
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;
@@ -352,6 +372,19 @@ impl Store {
         self.set_raw(S::DEF.key, &Codec::encode(&value)).await
     }
 
+    /// A run starts: whether the last one quit in order (Chrome's `exited_cleanly` pref,
+    /// `ExitTypeService`), and the flag is down until [`Store::end_run`].
+    pub async fn begin_run(&mut self) -> Result<bool> {
+        let clean = self.setting::<SessionExitedCleanly>().await?;
+        self.set_setting::<SessionExitedCleanly>(false).await?;
+        Ok(clean)
+    }
+
+    /// The run quit in order: the next start offers nothing.
+    pub async fn end_run(&mut self) -> Result<()> {
+        self.set_setting::<SessionExitedCleanly>(true).await
+    }
+
     /// Every stored row that is a setting of the table, `key -> text`, as stored (the page and
     /// `apply::effect_of` read an invalid one as the default).
     pub async fn all_settings(&self) -> Result<HashMap<String, String>> {
@@ -448,8 +481,9 @@ mod tests {
     fn values_round_trip_and_overwrite() {
         run(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            round_trip::<SearchEngineChoice>(&mut s, Some(SearchEngine::DuckDuckGo)).await;
-            round_trip::<SearchEngineChoice>(&mut s, Some(SearchEngine::Google)).await;
+            round_trip::<SearchEngineChoice>(&mut s, Some("duckduckgo".into())).await;
+            round_trip::<SearchEngineChoice>(&mut s, Some("google".into())).await;
+            round_trip::<SearchEngineChoice>(&mut s, Some("custom:docs".into())).await;
             round_trip::<SearchEngineChoice>(&mut s, None).await;
             round_trip::<LiveSuggestions>(&mut s, true).await;
             round_trip::<LiveSuggestions>(&mut s, false).await;
@@ -499,7 +533,7 @@ mod tests {
             let mut s = Store::open_in_memory().await.unwrap();
             s.set_raw(LiveSuggestions::DEF.key, "maybe").await.unwrap();
             s.set_raw(SidebarWidth::DEF.key, "wide").await.unwrap();
-            s.set_raw(SearchEngineChoice::DEF.key, "bing")
+            s.set_raw(SearchEngineChoice::DEF.key, "altavista")
                 .await
                 .unwrap();
             s.set_raw(BlockerExceptions::DEF.key, "{not a list")
@@ -576,7 +610,7 @@ mod tests {
     fn legacy_key_strings_and_flag_format_are_kept() {
         run(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            s.set_setting::<SearchEngineChoice>(Some(SearchEngine::Google))
+            s.set_setting::<SearchEngineChoice>(Some("google".into()))
                 .await
                 .unwrap();
             s.set_setting::<LiveSuggestions>(true).await.unwrap();
@@ -596,7 +630,7 @@ mod tests {
             s.set_raw("search.engine", "duckduckgo").await.unwrap();
             assert_eq!(
                 s.setting::<SearchEngineChoice>().await.unwrap(),
-                Some(SearchEngine::DuckDuckGo)
+                Some("duckduckgo".to_owned())
             );
         });
     }

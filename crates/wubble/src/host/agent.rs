@@ -5425,7 +5425,7 @@ impl Host {
                         let _ = slint::invoke_from_event_loop(move || {
                             with_host(|host| match closed {
                                 Some(c) => {
-                                    host.fail(format!("the user's closed tabs hold {}", c.url))
+                                    host.fail(format!("the user's closed tabs hold {}", c.key()))
                                 }
                                 None => host.mcp_smoke_history(steps),
                             })

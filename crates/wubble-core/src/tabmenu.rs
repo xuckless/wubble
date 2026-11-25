@@ -383,10 +383,7 @@ pub fn folder_entries(model: &Model, folder: FolderId) -> Vec<Entry> {
                 FolderRow::Close if f.tabs.is_empty() => {
                     ("Delete Folder", Run::Model(Command::DeleteFolder(folder)))
                 }
-                FolderRow::Close => (
-                    "Close Folder",
-                    Run::Model(Command::CloseTabs(f.tabs.clone())),
-                ),
+                FolderRow::Close => ("Close Folder", Run::Model(Command::CloseFolder(folder))),
             };
             Entry {
                 label: label.into(),
@@ -566,7 +563,7 @@ mod tests {
         let fe = folder_entries(&m, f);
         let fl: Vec<&str> = fe.iter().map(|e| e.label.as_str()).collect();
         assert_eq!(fl, ["Rename Folder", "Collapse", "Ungroup", "Close Folder"]);
-        assert_eq!(fe[3].run, Run::Model(Command::CloseTabs(vec![b])));
+        assert_eq!(fe[3].run, Run::Model(Command::CloseFolder(f)));
         assert!(folder_entries(&m, FolderId(99)).is_empty());
         // a pinned tab has no folder rows
         let (m, _) = apply(m, Command::PinTab(a));

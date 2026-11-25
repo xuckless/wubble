@@ -51,6 +51,8 @@ enum ToastAct {
     AskSponsor(TabId),
     /// "wubble <v> is ready: restart to update" (`host/updates.rs`).
     RestartToUpdate,
+    /// "Restore pages?" after a run that did not quit cleanly (`host/startup.rs`).
+    RestorePages,
 }
 
 /// The question's text and button.
@@ -1126,22 +1128,34 @@ impl Host {
                 self.write_setting(defs::SPONSOR_ENABLED.key, "1");
             }
             Some(ToastAct::RestartToUpdate) => self.updates_restart(),
+            Some(ToastAct::RestorePages) => {
+                self.startup_event(wubble_core::startup::OfferEvent::Restore)
+            }
             None => {}
         }
     }
 
     pub(crate) fn toast_closed(&mut self) {
         self.toast_hide();
-        if let Some(ToastAct::AskSponsor(_)) = self.toast_taken() {
-            self.videos.asking = false;
-            self.write_setting(defs::SPONSOR_ASKED.key, "1");
+        match self.toast_taken() {
+            Some(ToastAct::AskSponsor(_)) => {
+                self.videos.asking = false;
+                self.write_setting(defs::SPONSOR_ASKED.key, "1");
+            }
+            Some(ToastAct::RestorePages) => {
+                self.startup_event(wubble_core::startup::OfferEvent::Dismiss)
+            }
+            _ => {}
         }
     }
 
     /// Another notice replaced whatever the toast's button was for. An unanswered question is
     /// not asked again in this run (`asking` stays), only in the next.
     pub(super) fn toast_replaced(&mut self) {
-        self.toast_taken();
+        // "Restore pages?" replaced goes unanswered: the command bar's row still offers it
+        if self.toast_taken() == Some(ToastAct::RestorePages) {
+            self.startup_event(wubble_core::startup::OfferEvent::Dismiss);
+        }
     }
 
     /// The toast's button is done with (answered, closed or replaced): what it was for. The
@@ -1175,6 +1189,12 @@ impl Host {
             self.toast_hide();
         }
         self.videos.toast = Some(act);
+    }
+
+    /// "Restore pages?": a notice that stays until answered, its button restores them.
+    pub(super) fn toast_restore_pages(&mut self, text: &str, action: &str) {
+        self.toast_with(text, action, true);
+        self.videos.toast = Some(ToastAct::RestorePages);
     }
 
     /// The update is ready: a notice with "Restart" that runs `updates_restart`.

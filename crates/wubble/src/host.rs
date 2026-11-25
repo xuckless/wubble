@@ -49,10 +49,13 @@ mod pinch;
 mod popups;
 mod preview;
 mod print;
+mod recent;
 mod settings;
 mod shortcuts;
+mod site_search;
 mod snapshots;
 pub(crate) mod start;
+mod startup;
 mod status;
 mod surfaces;
 mod swipe;
@@ -69,6 +72,7 @@ pub use hosting::McpPlace;
 pub use media::MediaObserver;
 pub(crate) use parity::ParityRun;
 pub(crate) use pinch::fixture as pinch_fixture;
+pub(crate) use startup::open_session;
 pub use swipe::Swipe;
 
 pub use builtins::Builtin;
@@ -88,13 +92,14 @@ use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
 use wubble_core::busy::Reason;
 use wubble_core::closed;
+use wubble_core::closed::{ClosedTab, Entry};
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
 use wubble_core::neterror::CertExceptions;
-use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
+use wubble_core::omnibox::{self, HistoryEntry, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, Stored};
@@ -110,7 +115,7 @@ use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{Desktop, View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent, Pacing};
 use wubble_gfx::scene::run::RunEvent;
-use wubble_store::{ArchivedTab, ClosedTab, Transition};
+use wubble_store::{ArchivedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, FocusRegion, GlassKeys, SidebarMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
@@ -289,10 +294,11 @@ struct Bar {
     suggestions: Vec<String>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
-    /// Tab search's recently closed tabs, newest first, as the store last listed them.
-    closed: Vec<omnibox::SearchClosed>,
     /// Opened by Ctrl+E: every query is a search (`omnibox::as_search`).
     search: bool,
+    /// No inline completion for `query`: its edit only deleted text, a completion was just
+    /// accepted, or the field is the start page's capsule, which cannot show one.
+    prevent_inline: bool,
 }
 
 /// What a windowed run is for, as far as the host cares.
@@ -468,7 +474,10 @@ pub struct Host {
     print_serial: i32,
     /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
     print_dir: Option<tempfile::TempDir>,
-    search_engine: Option<SearchEngine>,
+    /// The search engines and the default (`apply::Applied::SearchEngines`).
+    search: wubble_core::search::Engines,
+    /// Site searches found on pages (`host/site_search.rs`).
+    site_search: site_search::SiteSearch,
     live_suggestions: bool,
     /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
     suggest: crate::suggest_fx::SuggestFx,
@@ -568,6 +577,9 @@ pub struct Host {
     /// This run's closes still on the recently-closed list, for undo close tab and the
     /// reopen's place (`wubble_core::closed`).
     close_undo: closed::Undo,
+    /// The recently-closed list as the store last listed it, for its rows on the history page
+    /// and in the command bar (`host/recent.rs`).
+    recent: recent::Recent,
     /// The tab hover preview and the thumbnails it shows.
     preview: preview::Preview,
     /// The link status bubble (`host/status.rs`).
@@ -611,6 +623,10 @@ pub struct Host {
     ext_ui: ext_ui::ExtUi,
     /// Whether the MCP server is hosted (`host/hosting.rs`).
     hosting: hosting::McpHosting,
+    /// The last session's pages the startup mode left out, offered back (`host/startup.rs`).
+    startup: wubble_core::startup::Offer,
+    /// "Warn before quitting": the quit keys' first press (`wubble_core::quit`).
+    quit_guard: wubble_core::quit::QuitGuard,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
@@ -650,6 +666,8 @@ impl Host {
             downloads,
             favicons,
             boosts,
+            clean_exit: _,
+            startup: offer,
         } = loaded;
         let favicons = model
             .tabs
@@ -706,8 +724,8 @@ impl Host {
                 bookmarks: vec![],
                 suggestions: vec![],
                 generation: 0,
-                closed: vec![],
                 search: false,
+                prevent_inline: true,
             },
             focus_view: None,
             key_pane: None,
@@ -751,7 +769,8 @@ impl Host {
             gestures: Default::default(),
             print_serial: 0,
             print_dir: None,
-            search_engine: None,
+            search: Default::default(),
+            site_search: Default::default(),
             live_suggestions: false,
             suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
                 let _ = slint::invoke_from_event_loop(move || {
@@ -805,6 +824,7 @@ impl Host {
             routing_rules: vec![],
             tidy_undo: None,
             close_undo: closed::Undo::default(),
+            recent: recent::Recent::default(),
             preview: preview::Preview::new(),
             status: status::Status::new(),
             tips: tooltip::Tips::new(),
@@ -840,6 +860,8 @@ impl Host {
             contents: Default::default(),
             ui_epoch: Instant::now(),
             ui_timer: slint::Timer::default(),
+            startup: offer,
+            quit_guard: Default::default(),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -1051,11 +1073,17 @@ impl Host {
         if matches!(command, Command::NewWindow { .. }) {
             self.record_geometry();
         }
+        // a Main window, a folder or a Space closed as a whole is one entry of the list, and its
+        // tabs are not entries of their own (Chromium's window and group entries)
+        let group = self
+            .closed_group(&command)
+            .map(|entry| (entry, command.clone()));
         let pre_close = matches!(
             command,
             Command::CloseTab(_)
                 | Command::CloseTabs(_)
                 | Command::CloseOthers(_)
+                | Command::CloseFolder(_)
                 | Command::DeleteSpace(_)
                 | Command::CloseWindow(_)
                 | Command::CloseGlance(_)
@@ -1065,7 +1093,15 @@ impl Host {
                 .tabs
                 .keys()
                 .copied()
-                .map(|tab| (tab, self.closed_tab_entry(tab, &command)))
+                .map(|tab| {
+                    let grouped = matches!(&group, Some((Entry::Space(_) | Entry::Folder(_), _)));
+                    let entry = if grouped {
+                        None
+                    } else {
+                        self.closed_tab_entry(tab, &command)
+                    };
+                    (tab, entry)
+                })
                 .collect::<Vec<_>>()
         });
         if matches!(
@@ -1074,6 +1110,7 @@ impl Host {
                 | Command::CloseTab(_)
                 | Command::CloseTabs(_)
                 | Command::CloseOthers(_)
+                | Command::CloseFolder(_)
                 | Command::DeleteSpace(_)
                 | Command::CloseGlance(_)
                 | Command::SwitchSpace(_)
@@ -1097,6 +1134,12 @@ impl Host {
                     self.finish_closed(tab, closed);
                 }
             }
+        }
+        if let Some((entry, command)) = group {
+            self.finish_closed_group(&command, entry);
+        }
+        if std::mem::take(&mut self.recent.stale) {
+            self.recent_refresh();
         }
         // Surfaces outlive a sleeping tab's view, not the tab.
         let tabs = &self.model.tabs;
@@ -1580,6 +1623,7 @@ impl Host {
         }
         self.ext_requests();
         self.media_pump();
+        self.site_search_pump();
         self.agent_check();
         self.enter_focused();
         self.agent_sheet_pump();
@@ -1832,6 +1876,7 @@ impl Host {
         self.parity_web(&event);
         let taken_back = self.agent_web(tab, &event);
         self.builtins_web(tab, &event);
+        self.site_search_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         if self.checks.video_smoke.is_some() {
             self.video_smoke_step(crate::video_smoke::Input::Web(&event));
@@ -2179,55 +2224,48 @@ impl Host {
         }
     }
 
-    /// Mod+Shift+A (tab search): the bar on every open tab, the recently closed ones following
-    /// once the store has listed them. A Little or Popup window has no bar.
+    /// Mod+Shift+A (tab search): the bar on every open tab, the recently closed entries
+    /// following once the store has listed them (`open_bar` asks). A Little or Popup window has
+    /// no bar.
     pub fn bar_for_tabs(&mut self, window: &AppWindow) {
         if self.w.kind != wubble_core::window::WindowKind::Main {
             return;
         }
-        self.bar.closed.clear();
         self.open_bar(window, BarMode::Tabs, String::new());
-        self.list_closed();
-    }
-
-    /// Asks the store for the recently-closed list; tab search re-renders when it arrives.
-    fn list_closed(&mut self) {
-        self.store.recently_closed(move |list| {
-            let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| host.closed_arrived(list));
-            });
-        });
-    }
-
-    fn closed_arrived(&mut self, list: persist::ClosedList) {
-        if self.bar.mode != BarMode::Tabs {
-            return;
-        }
-        self.bar.closed = list
-            .entries
-            .into_iter()
-            .map(|c| omnibox::SearchClosed {
-                title: c.title,
-                url: c.url,
-                closed_at_ms: c.closed_at_ms,
-            })
-            .collect();
-        self.bar.icons = list.icons;
-        if let Some(window) = self.w.window.upgrade() {
-            self.render_bar(&window);
-        }
     }
 
     /// Tab search's close button or Shift+Delete on row `index`: its tab closes (onto the
     /// recently-closed list, which is listed again) and the bar stays open on the rows left.
+    /// Shift+Delete on a recently-closed row deletes the entry; elsewhere, on a history row, it
+    /// forgets the page (`history_deleted`, as the history page's delete) and the rows are
+    /// ranked again without it.
     pub fn bar_result_closed(&mut self, index: i32) {
-        if self.bar.mode != BarMode::Tabs {
+        let row = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.bar.rows.get(i));
+        let closed = row.and_then(|r| match r.target {
+            RowTarget::Omni(Target::ClosedTab { id, .. }) => Some(id),
+            _ => None,
+        });
+        if let Some(id) = closed {
+            // the list is listed again, and the rows with it
+            self.closed_deleted(id);
             return;
         }
-        let tab = usize::try_from(index)
-            .ok()
-            .and_then(|i| self.bar.rows.get(i))
-            .and_then(BarRow::icon_tab);
+        if self.bar.mode != BarMode::Tabs {
+            let Some(url) = row.and_then(bar::removable_url).map(str::to_owned) else {
+                return;
+            };
+            self.history_deleted(&url);
+            self.bar.history.retain(|h| h.url != url);
+            // a reply already on its way still holds the row
+            self.bar.generation += 1;
+            if let Some(window) = self.w.window.upgrade() {
+                self.render_bar(&window);
+            }
+            return;
+        }
+        let tab = row.and_then(BarRow::icon_tab);
         let Some(tab) = tab else {
             return;
         };
@@ -2235,7 +2273,6 @@ impl Host {
         if let Some(window) = self.w.window.upgrade() {
             self.render_bar(&window);
         }
-        self.list_closed();
     }
 
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
@@ -2251,14 +2288,32 @@ impl Host {
         }
         self.bar.mode = mode;
         self.bar.search = false;
+        // its recently-closed rows as the store has them now
+        self.recent_refresh();
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
+        // the same text again: nothing was typed, so nothing completes inline (Chrome on focus)
+        self.bar.query = query.clone();
         self.bar_query(window, &query);
     }
 
     /// Renders the rows for `query` at once from what is at hand, and asks
     /// the store for its history hits, which re-render when they arrive.
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
+        let prevent = omnibox::just_deleted(&self.bar.query, query);
+        self.bar_edited(window, query, prevent);
+    }
+
+    /// Right or End over the field's completion: the completed text is the query now, and it
+    /// does not complete again until the next typed character.
+    pub fn bar_inline_accepted(&mut self, window: &AppWindow, text: &str) {
+        self.bar_edited(window, text, true);
+    }
+
+    fn bar_edited(&mut self, window: &AppWindow, query: &str, prevent_inline: bool) {
+        self.bar.prevent_inline = prevent_inline
+            || self.bar.search
+            || window.get_command_placement() == wubble_ui::CommandPlacement::InPage;
         self.bar.query = if self.bar.search {
             omnibox::as_search(query)
         } else {
@@ -2297,12 +2352,12 @@ impl Host {
     }
 
     /// What this window's bar consults: a private window's suggests from this machine only.
-    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings {
+    fn suggest_settings(&self) -> wubble_core::suggest::SuggestSettings<'_> {
         wubble_core::suggest::SuggestSettings {
-            engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
+            engines: &self.search,
             live: wubble_core::suggest::LiveSuggestions::of(
                 self.live_suggestions,
-                self.search_engine.is_some(),
+                self.search.default.is_some(),
                 self.model.side_of_window(self.w.id),
             ),
         }
@@ -2310,7 +2365,11 @@ impl Host {
 
     /// One event of the live suggestion fetch; re-renders the rows when its list changed.
     pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
-        let settings = self.suggest_settings();
+        // the fields, not `&self`: the fetch below is `self.suggest`'s
+        let settings = wubble_core::suggest::SuggestSettings {
+            engines: &self.search,
+            live: self.suggest_settings().live,
+        };
         if let Some(list) = self.suggest.event(event, &settings)
             && list != self.bar.suggestions
         {
@@ -2324,11 +2383,22 @@ impl Host {
     fn render_bar(&mut self, window: &AppWindow) {
         if self.bar.mode == BarMode::Tabs {
             let tabs = bar::search_tabs(&self.model, |t| self.agent_drives(t));
-            self.bar.rows = bar::tab_search_rows(&tabs, &self.bar.closed, &self.bar.query);
+            let closed: Vec<omnibox::SearchClosed> = self
+                .recent
+                .entries
+                .iter()
+                .map(|l| omnibox::SearchClosed {
+                    id: l.id,
+                    title: l.entry.title(),
+                    url: l.entry.icon_url().unwrap_or_default().to_owned(),
+                })
+                .collect();
+            self.bar.rows = bar::tab_search_rows(&tabs, &closed, &self.bar.query);
             crate::bind::render_bar(
                 window,
                 &self.bar.rows,
                 &self.bar.icons,
+                &self.recent.icons,
                 &self.favicons,
                 true,
             );
@@ -2339,19 +2409,26 @@ impl Host {
             tabs: &tabs,
             history: &self.bar.history,
             bookmarks: &self.bar.bookmarks,
-            engine: self.search_engine,
+            engines: &self.search,
             keymap: &self.keymap,
             suggestions: &self.bar.suggestions,
             now_ms: now_ms(),
+            prevent_inline: self.bar.prevent_inline,
         };
-        self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
+        let inline = bar::bar_inline(&inputs, &self.bar.query);
+        let rows = bar::bar_rows(&inputs, &self.bar.query);
+        self.bar.rows =
+            bar::with_closed(rows, &self.recent.entries, &self.bar.query, self.bar.mode);
         crate::bind::render_bar(
             window,
             &self.bar.rows,
             &self.bar.icons,
+            &self.recent.icons,
             &self.favicons,
             false,
         );
+        let suffix = inline.as_ref().map_or("", |m| m.suffix.as_str());
+        crate::bind::render_inline(window, &self.bar.query, suffix, self.bar.generation);
     }
 
     /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.
@@ -2479,7 +2556,12 @@ impl Host {
     }
 
     fn choose_as(&mut self, target: &RowTarget, disposition: omnibox::Disposition) {
-        let choice = bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
+        let choice = bar::target_command_as(
+            target,
+            self.bar.mode,
+            self.search.default.as_ref(),
+            disposition,
+        );
         match choice {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
@@ -2488,12 +2570,8 @@ impl Host {
                 }
             }
             Some(Choice::Perform(action)) => self.perform(action),
-            Some(Choice::ReopenClosed { url, closed_at_ms }) => {
-                self.store.take_closed(&url, closed_at_ms, |entry| {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.restore_closed(closed::Event::Taken, entry));
-                    });
-                });
+            Some(Choice::ReopenClosed(id)) => {
+                self.close_undo(closed::Event::Take(id));
             }
             Some(Choice::NewWindow(url)) => {
                 self.dispatch(Command::NewWindow { space: None });
@@ -2502,8 +2580,14 @@ impl Host {
                     self.typed_nav.started(self.shown());
                 }
             }
+            Some(Choice::Copy(text)) => {
+                self.copy(&text);
+                if let Some(window) = self.w.window.upgrade() {
+                    self.toast(&window, &format!("Copied {text}"));
+                }
+            }
             Some(Choice::SetEngine(engine)) => {
-                self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
+                self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, &engine);
                 // The text that offered the choice is searched with it.
                 if let omnibox::Intent::Search(q) = omnibox::classify(&self.bar.query)
                     && !q.is_empty()
@@ -2657,11 +2741,9 @@ impl Host {
                 }
             }
             Plan::StopAgents => self.agents_stop(),
-            Plan::Quit => {
-                if !self.close_asks(wubble_core::window::Closing::App) {
-                    quit();
-                }
-            }
+            Plan::GoHome => self.go_home(),
+            Plan::OpenLastSession => self.startup_event(wubble_core::startup::OfferEvent::Restore),
+            Plan::Quit => self.quit_keys(),
             Plan::Nothing => {}
         }
     }
@@ -2678,7 +2760,7 @@ impl Host {
     }
 
     /// Steps the closed-tab machine and runs its effects. The restores are returned: they
-    /// need the entry the store popped (`restore_closed`).
+    /// need the entry the store popped (`reopen_closed`).
     fn close_undo(&mut self, event: closed::Event) -> Vec<closed::Effect> {
         let (state, effects) = closed::transition(std::mem::take(&mut self.close_undo), event);
         self.close_undo = state;
@@ -2687,47 +2769,58 @@ impl Host {
             match effect {
                 closed::Effect::Pop => self.store.pop_closed(|entry| {
                     let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.restore_closed(closed::Event::Popped, entry));
+                        with_host(|host| host.reopen_closed(entry));
                     });
                 }),
+                closed::Effect::Take(id) => self.store.take_closed(id, |closed| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.reopen_closed(closed));
+                    });
+                }),
+                closed::Effect::Delete(id) => {
+                    self.store.delete_closed(id);
+                    self.recent_refresh();
+                }
                 closed::Effect::FieldUndo => self.perform(Action::Undo),
                 closed::Effect::NothingToUndo => {
                     if let Some(window) = self.w.window.upgrade() {
                         self.toast(&window, "Nothing to undo");
                     }
                 }
-                restore @ closed::Effect::Restore { .. } => restores.push(restore),
+                restore @ (closed::Effect::Restore { .. }
+                | closed::Effect::RestoreWindow(_)
+                | closed::Effect::RestoreFolder(_)
+                | closed::Effect::RestoreSpace(_)) => restores.push(restore),
             }
         }
         restores
     }
 
-    /// A recently-closed entry the store took off its list (the newest, popped, or the one tab
-    /// search chose, taken; `event` tells the machine which): a close of this run back in its
-    /// Space at its place (pinned, in its folder), an older one in the active Space; in its
-    /// container if that still exists. The one restore of a closed tab, for Mod+Shift+T, Mod+Z
-    /// and tab search alike.
-    fn restore_closed(
-        &mut self,
-        event: fn(Option<(String, i64)>) -> closed::Event,
-        closed: Option<ClosedTab>,
-    ) {
-        let popped = closed.as_ref().map(|c| (c.url.clone(), c.closed_at_ms));
-        let restores = self.close_undo(event(popped));
-        let Some(closed) = closed else {
-            return;
-        };
+    /// A recently-closed entry the store took off the list (the newest, or a row's): a tab
+    /// closed this run back in its Space at its place (pinned, in its folder), an older one in
+    /// the active Space, in its container if that still exists; a window, folder or Space as a
+    /// whole (`Command::ReopenWindow`, `ReopenFolder`, `ReopenSpace`). The one restore, for
+    /// Mod+Shift+T, Mod+Z and the list's rows alike.
+    fn reopen_closed(&mut self, closed: Option<Entry>) {
+        let restores = self.close_undo(closed::Event::Popped(closed));
         for restore in restores {
-            let closed::Effect::Restore { space, place } = restore else {
-                continue;
-            };
-            let newest = self.model.tabs.keys().next_back().copied();
-            self.reopen(closed.url.clone(), space, Some(closed.container));
-            let tab = self.model.tabs.keys().next_back().copied();
-            if let (Some(to), Some(tab)) = (place, tab.filter(|t| Some(*t) != newest)) {
-                self.dispatch(Command::MoveTab { tab, to });
+            match restore {
+                closed::Effect::Restore { tab, space, place } => {
+                    let newest = self.model.tabs.keys().next_back().copied();
+                    self.reopen(tab.url, space, Some(tab.container));
+                    let tab = self.model.tabs.keys().next_back().copied();
+                    if let (Some(to), Some(tab)) = (place, tab.filter(|t| Some(*t) != newest)) {
+                        self.dispatch(Command::MoveTab { tab, to });
+                    }
+                }
+                group => {
+                    if let Some(command) = group.command() {
+                        self.dispatch(command);
+                    }
+                }
             }
         }
+        self.recent_refresh();
     }
 
     /// Opens `url` again, the one way a tab comes back: in `space` if it still exists (the view
@@ -2893,20 +2986,26 @@ impl Host {
         tab: TabId,
         command: &Command,
     ) -> Option<(ClosedTab, closed::Closed)> {
-        // an agent's and a private window's closed tabs are none of the user's records
-        if self.archiving.contains_key(&tab) || !self.records(tab) {
+        if !self.keeps_closed(tab) {
             return None;
         }
         let undo = closed::Closed::of(&self.model, tab, command, now_ms())?;
         let t = self.model.tabs.get(&tab)?;
         let entry = ClosedTab {
-            url: undo.url.clone(),
+            url: t.url.clone(),
             title: t.title.clone(),
             container: t.container,
-            space: Some(undo.space),
+            space: undo.at.map(|(space, _)| space),
             closed_at_ms: undo.closed_at_ms,
         };
         Some((entry, undo))
+    }
+
+    /// Whether `tab` may be on the recently-closed list as far as the host knows: not filed in
+    /// the Archive, and one of the user's records (an agent's and a private window's closed
+    /// tabs are not).
+    fn keeps_closed(&self, tab: TabId) -> bool {
+        !self.archiving.contains_key(&tab) && self.records(tab)
     }
 
     /// Cleans up per-tab host state for a tab the model removed and records it if eligible.
@@ -2915,8 +3014,9 @@ impl Host {
         self.committed.remove(&tab);
         self.typed_nav.ended(tab);
         if let Some((entry, undo)) = closed {
-            self.store.push_closed(entry);
+            self.store.push_closed(Entry::Tab(entry));
             self.close_undo(closed::Event::Closed(undo));
+            self.recent.stale = true;
         }
     }
 
@@ -2953,6 +3053,7 @@ impl Host {
         self.agents_quit();
         self.mcp_quit();
         self.media_shutdown();
+        self.site_search_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, &self.agents.spaces(), ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
@@ -3526,7 +3627,12 @@ impl Host {
                 &self.settings.stored,
             )
             .to_owned(),
-            engine_applied: self.search_engine.map_or("", |e| e.id()).to_owned(),
+            engine_applied: self
+                .search
+                .default
+                .as_ref()
+                .map_or("", |e| e.id.as_str())
+                .to_owned(),
             acted: self.settings_acted,
         };
         self.settings_scroll_seen = scroll;

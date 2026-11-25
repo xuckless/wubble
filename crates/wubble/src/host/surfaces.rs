@@ -82,7 +82,10 @@ impl Host {
             if self.pinch_smoke_answer(&event) {
                 return;
             }
-            if self.agent_answer(&event) || self.ax_answer(&event) || self.media_answer(tab, &event)
+            if self.agent_answer(&event)
+                || self.ax_answer(&event)
+                || self.media_answer(tab, &event)
+                || self.site_search_answer(tab, &event)
             {
                 return;
             }
@@ -124,8 +127,8 @@ impl Host {
                     });
                 let nav = NavFlags {
                     zoomed: self.zoomed(tab),
-                    search: self.search_engine.map(|e| e.info().name),
-                    image: self.search_engine.and_then(|e| e.info().image),
+                    search: self.search.default.as_ref().map(|e| e.name.clone()),
+                    image: self.search.default.as_ref().and_then(|e| e.image.clone()),
                     private: self.model.side_of_tab(tab) == Side::Private,
                     ..nav
                 };
@@ -793,9 +796,9 @@ impl Host {
     /// is picked.
     fn search_for(&mut self, tab: TabId, text: String) {
         let query = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        match self.search_engine {
+        match self.search.default.as_ref() {
             Some(engine) => {
-                let url = wubble_core::omnibox::fill(engine.info().search, &query);
+                let url = engine.search_url(&query);
                 self.dispatch(new_tab(url, Some(tab)));
             }
             None => {

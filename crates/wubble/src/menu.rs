@@ -200,13 +200,14 @@ pub struct Entry {
 
 /// What the menu needs besides the click: the page's navigation (from the
 /// view's `NavState`) and the search engine's name, if one is chosen.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
-    pub search: Option<&'static str>,
-    /// The chosen engine's search by image URL (`omnibox::EngineInfo::image`).
-    pub image: Option<&'static str>,
+    /// The default engine's name (a built-in's or the user's own).
+    pub search: Option<String>,
+    /// The default engine's search by image URL (`search::EngineRef::image`).
+    pub image: Option<String>,
     /// The page is a private window's: "Open Link in Private Window" is not offered there
     /// (Chrome's incognito window has no "Open link in incognito window").
     pub private: bool,
@@ -482,12 +483,17 @@ const ROWS: &[Row] = &[
     }),
     Row {
         group: 2,
-        label: |c| format!("Search {} for Image", c.nav.search.unwrap_or_default()),
+        label: |c| {
+            format!(
+                "Search {} for Image",
+                c.nav.search.as_deref().unwrap_or_default()
+            )
+        },
         show: |c| c.image_search(),
         enabled: always,
         command: |c| {
             Command::OpenInNewTab(omnibox::fill(
-                c.nav.image.unwrap_or_default(),
+                c.nav.image.as_deref().unwrap_or_default(),
                 &c.menu.media_url,
             ))
         },
@@ -705,7 +711,7 @@ const ROWS: &[Row] = &[
     },
     Row {
         group: 7,
-        label: |c| search_label(c.nav.search, &c.menu.selection_text),
+        label: |c| search_label(c.nav.search.as_deref(), &c.menu.selection_text),
         show: |c| !c.menu.selection_text.trim().is_empty() && c.selected_url().is_none(),
         enabled: always,
         command: |c| Command::Search(c.menu.selection_text.clone()),
@@ -2494,7 +2500,7 @@ mod tests {
         };
         assert!(search(&e).is_some());
         let named = NavFlags {
-            search: Some("DuckDuckGo"),
+            search: Some("DuckDuckGo".into()),
             ..NavFlags::default()
         };
         let named = entries(&m, named);
@@ -2599,8 +2605,8 @@ mod tests {
     #[test]
     fn rows_follow_chromiums_groups() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let image = |url: &str| ContextMenu {
@@ -2651,7 +2657,7 @@ mod tests {
             (
                 "image search on an engine that has one",
                 image("https://a.test/i.png"),
-                google,
+                google.clone(),
                 [&image_rows[..], &["Search Google for Image", "-"], &tail].concat(),
             ),
             (
@@ -2663,13 +2669,13 @@ mod tests {
             (
                 "none for an image that is not on the web",
                 image("data:image/png;base64,AA=="),
-                google,
+                google.clone(),
                 [&image_rows[..], &["-"], &tail].concat(),
             ),
             (
                 "suggestions, then the dictionary",
                 spelling(&["the", "tea"]),
-                google,
+                google.clone(),
                 [
                     &["the", "tea", "-", "Add to Dictionary", "-"][..],
                     &field_rows,
@@ -2679,7 +2685,7 @@ mod tests {
             (
                 "nothing to suggest",
                 spelling(&[]),
-                google,
+                google.clone(),
                 [
                     &["No Spelling Suggestions", "-", "Add to Dictionary", "-"][..],
                     &field_rows,
@@ -2689,7 +2695,7 @@ mod tests {
             (
                 "a frame's rows follow the page's source",
                 frame("https://b.test/f"),
-                google,
+                google.clone(),
                 [
                     &bare[..],
                     &[
@@ -2705,19 +2711,19 @@ mod tests {
             (
                 "the page's own frame has none",
                 frame("https://a.test/"),
-                google,
+                google.clone(),
                 [&bare[..], &["View Page Source"], &tail].concat(),
             ),
             (
                 "nor a frame with no address",
                 frame("about:srcdoc"),
-                google,
+                google.clone(),
                 [&bare[..], &["View Page Source"], &tail].concat(),
             ),
             (
                 "the highlight follows Copy",
                 selection("https://a.test/"),
-                google,
+                google.clone(),
                 [
                     &[
                         "Copy",
@@ -2734,13 +2740,13 @@ mod tests {
             (
                 "none on a page that has no fragments",
                 selection("wubble://start"),
-                google,
+                google.clone(),
                 [&["Copy", "-", search, "Print\u{2026}", "-"][..], &tail].concat(),
             ),
             (
                 "a selected address is gone to, not searched",
                 url_selection,
-                google,
+                google.clone(),
                 [
                     &[
                         "Copy",
@@ -2763,12 +2769,12 @@ mod tests {
     #[test]
     fn the_new_rows_run_what_chrome_runs() {
         let google = NavFlags {
-            search: Some("Google"),
-            image: Some("https://g.test/i?u={q}"),
+            search: Some("Google".into()),
+            image: Some("https://g.test/i?u={q}".into()),
             ..NavFlags::default()
         };
         let command = |menu: &ContextMenu, label: &str| {
-            entries(menu, google)
+            entries(menu, google.clone())
                 .into_iter()
                 .find(|e| e.label == label)
                 .unwrap_or_else(|| panic!("{label}"))
@@ -2792,7 +2798,7 @@ mod tests {
             command(&word, "Add to Dictionary"),
             Command::Engine(cef_id::ADD_TO_DICTIONARY)
         );
-        let none = entries(&word, google);
+        let none = entries(&word, google.clone());
         assert_eq!(none[0].command, Command::Info);
         assert!(!none[0].enabled);
         let selection = ContextMenu {
@@ -2809,7 +2815,7 @@ mod tests {
             ..selection.clone()
         };
         assert!(
-            entries(&in_frame, google)
+            entries(&in_frame, google.clone())
                 .iter()
                 .all(|e| e.label != "Copy Link to Highlight")
         );
@@ -2840,7 +2846,7 @@ mod tests {
             ..page()
         };
         assert!(
-            entries(&script, google)
+            entries(&script, google.clone())
                 .iter()
                 .all(|e| !e.label.starts_with("Go to"))
         );

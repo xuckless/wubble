@@ -67,14 +67,23 @@ fn settings_page_scenarios() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
     // Tall enough for every row of the page: the element queries see only what is on screen.
-    app.window().set_size(LogicalSize::new(1280.0, 6000.0));
+    app.window().set_size(LogicalSize::new(1280.0, 14000.0));
     // the kit controls' machines (the engine's Select is the kit menu)
     let _wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
     app.set_page(InternalPageKind::Settings);
 
     // The shipped table: a row per visible setting.
     let page = settings_page(&HashMap::new());
-    let shown = ALL.iter().filter(|d| d.section != Section::Hidden).count();
+    // rows shown only for another row's value (`SHOWN_WHEN`) are not, at the defaults
+    let shown = ALL
+        .iter()
+        .filter(|d| d.section != Section::Hidden)
+        .filter(|d| {
+            !wubble_core::settings::SHOWN_WHEN
+                .iter()
+                .any(|(row, ..)| *row == d.key)
+        })
+        .count();
     app.set_settings_rows(rows(setting_items(&page)));
     pump();
     assert_eq!(app.get_settings_rows().row_count(), shown);
@@ -108,7 +117,8 @@ fn settings_page_scenarios() {
         // the engine picks from a Select, as the design's; the other choice is segmented
         ("SettingRow::segmented", 1),
         ("SettingRow::select", 1),
-        ("SettingRow::entries", 2),
+        // the list, the map, and the built-in engines under the engine's Select
+        ("SettingRow::entries", 3),
     ] {
         assert_eq!(count(&app, id), n, "{id}");
     }

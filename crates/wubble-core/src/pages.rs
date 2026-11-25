@@ -726,11 +726,11 @@ pub enum Control {
 }
 
 /// The search engines' stored ids, the words of the engine's segmented control.
-const ENGINE_IDS: [&str; crate::omnibox::ENGINES.len()] = {
-    let mut ids = [""; crate::omnibox::ENGINES.len()];
+const ENGINE_IDS: [&str; crate::engines::ENGINES.len()] = {
+    let mut ids = [""; crate::engines::ENGINES.len()];
     let mut i = 0;
     while i < ids.len() {
-        ids[i] = crate::omnibox::ENGINES[i].id;
+        ids[i] = crate::engines::ENGINES[i].id;
         i += 1;
     }
     ids
@@ -769,6 +769,15 @@ pub struct SettingRow {
     pub entries: Vec<Entry>,
     /// A list or map row's column titles in its list editor ([`columns_of`]).
     pub columns: &'static [&'static str],
+    /// A Select's choices, `(stored word, label)`: the search engine's, built-in and the
+    /// user's own (they change with `search.custom`, so they are not the control's words).
+    /// Empty for the other rows.
+    pub options: Vec<(String, String)>,
+    /// The entries are shown, never added, edited or removed (the built-in search engines
+    /// under the engine's Select).
+    pub entries_fixed: bool,
+    /// A list whose entries are only removed (the site searches found on pages).
+    pub remove_only: bool,
 }
 
 /// One removable entry of a list: what it shows (one cell per column of its list editor, and
@@ -784,10 +793,17 @@ pub struct Entry {
 /// Empty for the other kinds.
 pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
     match def.kind {
+        SettingKind::SearchEngine => &crate::search::COLUMNS,
+        SettingKind::List if ENGINE_LISTS.contains(&def.key) => &crate::search::COLUMNS,
         SettingKind::List if def.key == settings::ROUTING_RULES.key => {
             &["Site", "Space", "Container"]
         }
-        SettingKind::List if def.key == settings::BLOCKER_CUSTOM_LISTS.key => &["Address"],
+        SettingKind::List
+            if def.key == settings::BLOCKER_CUSTOM_LISTS.key
+                || def.key == settings::STARTUP_PAGES.key =>
+        {
+            &["Address"]
+        }
         SettingKind::List if settings::SITE_LISTS.contains(&def.key) => &["Site"],
         SettingKind::List => &["Entry"],
         SettingKind::Map if def.key == settings::BLOCKER_LISTS.key => &["List", "Switched"],
@@ -796,9 +812,18 @@ pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
     }
 }
 
-/// A list item's cells: a routing rule split into its site, Space and container; any other
-/// item is one cell.
+/// The list settings whose entries are search engines (`search::EngineEntry`).
+const ENGINE_LISTS: [&str; 2] = [settings::SEARCH_CUSTOM.key, settings::SEARCH_DISCOVERED.key];
+
+/// A list item's cells: a routing rule split into its site, Space and container; a search
+/// engine into its name, keyword and address; any other item is one cell.
 fn list_cells(def: &settings::SettingDef, item: &str) -> Vec<String> {
+    if ENGINE_LISTS.contains(&def.key) {
+        return crate::search::EngineEntry::parse(item).map_or_else(
+            || vec![item.to_owned(), String::new(), String::new()],
+            |e| e.cells(),
+        );
+    }
     if def.key != settings::ROUTING_RULES.key {
         return vec![item.to_owned()];
     }
@@ -816,8 +841,31 @@ fn list_cells(def: &settings::SettingDef, item: &str) -> Vec<String> {
 }
 
 /// A list or map row's entries: a list item is its own key, a map entry is named by its key.
+/// The search engine's row lists the built-in engines (each named by its id).
 fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> Vec<Entry> {
     match def.kind {
+        SettingKind::SearchEngine => crate::engines::ENGINES
+            .iter()
+            .map(|e| {
+                let address = e.search.replace("{q}", "%s");
+                Entry {
+                    label: format!("{}, keyword {}, {address}", e.name, e.keyword),
+                    key: e.id.to_owned(),
+                    cells: vec![e.name.to_owned(), e.keyword.to_owned(), address],
+                }
+            })
+            .collect(),
+        SettingKind::List if ENGINE_LISTS.contains(&def.key) => crate::apply::list(def, stored)
+            .into_iter()
+            .map(|item| {
+                let cells = list_cells(def, &item);
+                Entry {
+                    label: format!("{}, keyword {}, {}", cells[0], cells[1], cells[2]),
+                    cells,
+                    key: item,
+                }
+            })
+            .collect(),
         SettingKind::List => crate::apply::list(def, stored)
             .into_iter()
             .map(|item| Entry {
@@ -870,9 +918,16 @@ pub fn submission(text: &str) -> Submission<'_> {
 }
 
 /// The stored entry a list editor's cells make: a routing rule `site -> Space, Container`
-/// (`routing::Rule`'s text), any other list's first cell.
+/// (`routing::Rule`'s text), a search engine `name | keyword | address`
+/// (`search::EngineEntry`), any other list's first cell. Blank cells make a blank entry.
 pub fn entry_text(key: &str, cells: &[&str]) -> String {
     let cell = |i: usize| cells.get(i).map_or("", |c| c.trim());
+    if ENGINE_LISTS.contains(&key) {
+        if cells.iter().all(|c| c.trim().is_empty()) {
+            return String::new();
+        }
+        return crate::search::EngineEntry::from_cells(cells).text();
+    }
     if key != settings::ROUTING_RULES.key {
         return cell(0).to_owned();
     }
@@ -913,12 +968,13 @@ pub fn settings_page_from(
     defs: &[&settings::SettingDef],
     stored: &HashMap<String, String>,
 ) -> Vec<SectionView> {
+    let engines = crate::search::Engines::from_stored(stored);
     SECTION_ORDER
         .iter()
         .filter_map(|&section| {
             let rows: Vec<SettingRow> = defs
                 .iter()
-                .filter(|d| d.section == section)
+                .filter(|d| d.section == section && shown(d, stored))
                 .map(|d| {
                     let value = crate::apply::value_of(d, stored);
                     SettingRow {
@@ -931,12 +987,30 @@ pub fn settings_page_from(
                         restart: d.restart,
                         entries: entries_of(d, stored),
                         columns: columns_of(d),
+                        options: if d.kind == SettingKind::SearchEngine {
+                            engines.choices()
+                        } else {
+                            vec![]
+                        },
+                        entries_fixed: d.kind == SettingKind::SearchEngine,
+                        remove_only: d.key == settings::SEARCH_DISCOVERED.key,
                     }
                 })
                 .collect();
             (!rows.is_empty()).then_some(SectionView { section, rows })
         })
         .collect()
+}
+
+/// Whether the page shows `def` now: a row of `settings::SHOWN_WHEN` only while the row it
+/// follows has its value (the startup pages while "Specific pages" is chosen).
+fn shown(def: &settings::SettingDef, stored: &HashMap<String, String>) -> bool {
+    settings::SHOWN_WHEN
+        .iter()
+        .filter(|(key, _, _)| *key == def.key)
+        .all(|(_, after, value)| {
+            settings::find(after).is_none_or(|a| crate::apply::value_of(a, stored) == *value)
+        })
 }
 
 /// The words of a settings search, lower-cased (the design's `words`).
@@ -961,14 +1035,21 @@ fn row_text(section: settings::Section, row: &SettingRow) -> String {
     if row.control == Control::Folder {
         text.push_str(" folder location directory");
     }
+    for (_, label) in &row.options {
+        text.push(' ');
+        text.push_str(label);
+    }
     if let Control::Segmented(words) = row.control {
+        let labels = settings::select_labels(row.key).unwrap_or(&[]);
         for word in words {
             text.push(' ');
             text.push_str(
-                crate::omnibox::ENGINES
+                crate::engines::ENGINES
                     .iter()
                     .find(|e| e.id == *word)
-                    .map_or(word, |e| e.name),
+                    .map(|e| e.name)
+                    .or_else(|| labels.iter().find(|(w, _)| w == word).map(|(_, l)| *l))
+                    .unwrap_or(*word),
             );
         }
     }
@@ -1330,9 +1411,11 @@ mod tests {
         let keys: Vec<_> = page.iter().flat_map(|s| &s.rows).map(|r| r.key).collect();
         assert!(!keys.contains(&"ui.sidebar_width") && !keys.contains(&"keys.overrides"));
         // Every non-hidden setting appears exactly once.
+        // rows shown only for another row's value (`SHOWN_WHEN`) are not, at the defaults
         let shown = settings::ALL
             .iter()
             .filter(|d| d.section != Section::Hidden)
+            .filter(|d| !settings::SHOWN_WHEN.iter().any(|(row, ..)| *row == d.key))
             .count();
         assert_eq!(keys.len(), shown);
         assert!(page.iter().flat_map(|s| &s.rows).all(|r| !r.changed));
@@ -1463,6 +1546,57 @@ mod tests {
             (&["Entry"][..], &["Entry", "Value"][..])
         );
         assert!(rows[0].columns.is_empty());
+    }
+
+    #[test]
+    fn the_engine_row_lists_the_built_ins_and_offers_the_user_s_own() {
+        let page = settings_page(&stored(&[
+            ("search.custom", r#"["Docs | d | https://d.test/?q=%s"]"#),
+            (
+                "search.discovered",
+                r#"["Shop | shop.test | https://shop.test/?q={q}"]"#,
+            ),
+            ("search.engine", "custom:d"),
+        ]));
+        let row = |key: &str| {
+            page.iter()
+                .flat_map(|s| &s.rows)
+                .find(|r| r.key == key)
+                .unwrap()
+        };
+        let engine = row("search.engine");
+        assert_eq!(engine.value, "custom:d");
+        assert!(engine.entries_fixed && !engine.remove_only);
+        assert_eq!(engine.entries.len(), crate::engines::ENGINES.len());
+        assert_eq!(
+            engine.entries[2].cells,
+            ["Bing", "bing.com", "https://www.bing.com/search?q=%s"]
+        );
+        let last = engine.options.last().unwrap();
+        assert_eq!((last.0.as_str(), last.1.as_str()), ("custom:d", "Docs"));
+        assert!(!engine.options.iter().any(|(id, _)| id.contains("shop")));
+        assert_eq!(engine.columns, crate::search::COLUMNS);
+        let custom = row("search.custom");
+        assert_eq!(
+            custom.entries[0].cells,
+            ["Docs", "d", "https://d.test/?q=%s"]
+        );
+        assert_eq!(custom.entries[0].key, "Docs | d | https://d.test/?q=%s");
+        assert!(!custom.entries_fixed && !custom.remove_only);
+        assert!(row("search.discovered").remove_only);
+        // the list editor's cells make the stored entry back
+        assert_eq!(
+            entry_text("search.custom", &[" Docs", "d ", "https://d.test/?q=%s"]),
+            "Docs | d | https://d.test/?q=%s"
+        );
+        assert_eq!(entry_text("search.custom", &["", " ", ""]), "");
+        // a search finds the engine row by a user's engine
+        assert!(
+            filter(&page, "docs")
+                .iter()
+                .flat_map(|s| &s.rows)
+                .any(|r| r.key == "search.engine")
+        );
     }
 
     #[test]

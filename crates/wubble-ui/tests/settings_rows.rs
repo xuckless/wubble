@@ -16,7 +16,7 @@ use i_slint_backend_testing::{
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel};
 use wubble_core::pages::{Control, settings_page};
-use wubble_core::settings::{ALL, Section, SettingKind};
+use wubble_core::settings::{ALL, Section};
 use wubble_ui::settings::setting_items;
 use wubble_ui::{AppWindow, InternalPageKind, SettingItem};
 
@@ -171,9 +171,10 @@ fn every_row_of_the_page_takes_a_change_and_shows_it() {
                     }
                 }
                 Control::Segmented(words)
-                    if matches!(row.kind, SettingKind::SearchEngine | SettingKind::SecureDns) =>
+                    if key == "search.engine"
+                        || wubble_core::settings::select_labels(key).is_some() =>
                 {
-                    // a Select: the dropdown has its own test
+                    // the dropdown has its own test
                     let _ = words;
                     if find(&app, label, AccessibleRole::Combobox).len() != 1 {
                         note("no dropdown by its label".into());

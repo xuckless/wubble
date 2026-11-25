@@ -18,6 +18,14 @@ pub const CONTENT_TYPE: &str = "document.contentType";
 /// [`CONTENT_TYPE`]'s answer, as JSON, for a PDF.
 pub const PDF_TYPE: &str = "\"application/pdf\"";
 
+/// The search description the page links (`<link rel="search"
+/// type="application/opensearchdescription+xml" href>`, any case; the first, as Chrome reads
+/// it): its absolute address, or `null` (`search::osdd_link` reads the answer).
+pub const OPENSEARCH_LINK: &str = "(function(){\n\
+    const l = document.querySelector('link[rel~=\"search\" i][type=\"application/opensearchdescription+xml\" i][href]');\n\
+    return l && /^https?:/i.test(l.href) ? l.href : null;\n\
+})()";
+
 /// `parts` declared in one function scope, then `call`'s value.
 fn wrap(parts: &[&str], call: &str) -> String {
     let mut s = String::from("(function(){\n");

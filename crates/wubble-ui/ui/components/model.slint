@@ -120,6 +120,8 @@ export enum CommandKind {
     action,
     // wubble: a recently closed tab (tab search)
     closed-tab,
+    // a calculator or unit conversion result, computed on the device (wubble_core::answer)
+    answer,
 }
 
 export struct CommandResult {
@@ -131,6 +133,17 @@ export struct CommandResult {
     icon: image,
     // wubble: the row has a close button (an open tab in tab search); Shift+Delete closes it too.
     closable: bool,
+}
+
+// The command field's inline completion (wubble: Chrome's omnibox inline autocomplete; the host
+// writes it, bind.rs `render_inline`): what was typed, the suffix shown selected after it ("" for
+// none), that selection's UTF-8 offsets, and the query's serial (one apply per query).
+export struct CommandInline {
+    base: string,
+    suffix: string,
+    from: int,
+    to: int,
+    serial: int,
 }
 
 // Who holds the keys, by the host's surface store (`wubble_core::overlay::Ui::key_owner`): the
@@ -585,6 +598,10 @@ export struct SettingItem {
     // prefix before the text (empty: no field) and the text, edited in a field below the row
     field-prefix: string,
     field-text: string,
+    // the entries are shown only, under the row's own control (the built-in search engines)
+    fixed: bool,
+    // a list whose entries are only removed (the site searches found on pages)
+    kept: bool,
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).
@@ -715,6 +732,24 @@ export struct HistoryLineItem {
     title: string,
     url: string,
     time: string,
+    favicon: image,
+}
+
+// What a recently-closed row stands for (wubble_core::closed::Entry): its glyph.
+export enum ClosedKind {
+    tab,
+    window,
+    folder,
+    space,
+}
+
+// One row of the history page's "Recently closed" block: a closed tab, window, folder or Space.
+export struct ClosedLineItem {
+    // The entry's store id (reopened or deleted by it).
+    id: int,
+    kind: ClosedKind,
+    title: string,
+    note: string,
     favicon: image,
 }
 

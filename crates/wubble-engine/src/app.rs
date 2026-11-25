@@ -480,6 +480,15 @@ pub fn set_quit_handler(_handler: Option<fn()>) {
     crate::mac_app::set_quit_handler(_handler);
 }
 
+/// Registers or clears the callback a quit by the keys (Cmd+Q) runs on macOS in place of the
+/// quit handler, so the host may ask for a second press ("Warn before quitting"); the menu's
+/// Quit, the Dock's and logout still run the quit handler. No-op on other platforms, where the
+/// quit keys are the shell's own binding.
+pub fn set_quit_key_handler(_handler: Option<fn()>) {
+    #[cfg(target_os = "macos")]
+    crate::mac_app::set_quit_key_handler(_handler);
+}
+
 /// Whether hardware video decode is there to be asked for (Linux: [`nvidia_vaapi`]). Read once
 /// per process, so the environment `prepare_process` set and the switch agree.
 pub fn hardware_video_decode_found() -> bool {

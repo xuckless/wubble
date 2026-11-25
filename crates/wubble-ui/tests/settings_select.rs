@@ -9,8 +9,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use i_slint_backend_testing::{
-    AccessibleRole, ElementHandle, ElementQuery, init_integration_test_with_mock_time,
-    mock_elapsed_time,
+    AccessibleRole, ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
@@ -44,17 +43,20 @@ fn press(app: &AppWindow, key: Key) {
     pump(400);
 }
 
+/// The search engine's Select (the page has others: the startup mode, secure DNS).
 fn trigger(app: &AppWindow) -> ElementHandle {
-    ElementQuery::from_root(app)
-        .match_descendants()
-        .match_accessible_role(AccessibleRole::Combobox)
-        .find_first()
-        .expect("a Select on the settings page")
+    ElementHandle::find_by_accessible_label(app, "Search engine")
+        .find(|h| h.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("the search engine's Select on the settings page")
 }
 
 fn row(app: &AppWindow, label: &str) -> ElementHandle {
     ElementHandle::find_by_accessible_label(app, label)
-        .find(|h| h.accessible_role() == Some(AccessibleRole::ListItem))
+        // the Select's rows are checkable; the built-in engines' list has rows of these names too
+        .find(|h| {
+            h.accessible_role() == Some(AccessibleRole::ListItem)
+                && h.accessible_checkable() == Some(true)
+        })
         .unwrap_or_else(|| panic!("no menu row {label}"))
 }
 
@@ -113,17 +115,18 @@ fn the_search_engine_select_is_picked_by_pointer_and_by_key() {
     assert!(!open(), "Escape closes a list opened by key");
     assert!(changed.borrow().is_empty(), "and picks nothing");
 
-    // Down moves off the current row (the last: it wraps) and Enter picks the one it lands on
+    // Down moves off the current row (DuckDuckGo) to the next and Enter picks the one it
+    // lands on
     trigger(&app).invoke_accessible_default_action();
     pump(400);
     press(&app, Key::DownArrow);
     press(&app, Key::Return);
     assert_eq!(
         *changed.borrow(),
-        [("search.engine".to_string(), "google".to_string())]
+        [("search.engine".to_string(), "bing".to_string())]
     );
     assert!(!open(), "a pick by key closes the list");
-    assert_eq!(shown(&app), "Google");
+    assert_eq!(shown(&app), "Bing");
 
     // a list a click opened answers the keys too: Escape closes it
     changed.borrow_mut().clear();

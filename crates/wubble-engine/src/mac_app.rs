@@ -14,16 +14,27 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Bool, NSObjectProtocol},
 };
-use objc2_app_kit::{NSApp, NSApplication, NSEvent};
+use objc2_app_kit::{NSApp, NSApplication, NSEvent, NSEventType};
 use std::cell::Cell;
 use std::sync::Mutex;
 
 static QUIT_HANDLER: Mutex<Option<fn()>> = Mutex::new(None);
+static QUIT_KEY_HANDLER: Mutex<Option<fn()>> = Mutex::new(None);
 
 /// Registers or clears the callback invoked by `-[WubbleApplication terminate:]` instead of
 /// AppKit's default `exit(0)`, so `Cmd+Q` / Dock Quit runs orderly CEF shutdown.
 pub fn set_quit_handler(handler: Option<fn()>) {
     if let Ok(mut slot) = QUIT_HANDLER.lock() {
+        *slot = handler;
+    }
+}
+
+/// Registers or clears the callback a `terminate:` sent by the keys (Cmd+Q, a key-down event is
+/// the application's current one) runs instead of the quit handler: "Warn before quitting" asks
+/// for a second press there. Chrome tells the keys from the menu and the Dock the same way
+/// (`ConfirmQuitPanelController +eventTriggersFeature:`, BSD-3-Clause).
+pub fn set_quit_key_handler(handler: Option<fn()>) {
+    if let Ok(mut slot) = QUIT_KEY_HANDLER.lock() {
         *slot = handler;
     }
 }
@@ -64,8 +75,14 @@ define_class!(
         // handler (before the loop runs, after the drain), AppKit's own terminate runs.
         #[unsafe(method(terminate:))]
         unsafe fn terminate(&self, sender: Option<&AnyObject>) {
+            let by_keys = self
+                .currentEvent()
+                .is_some_and(|event| event.r#type() == NSEventType::KeyDown);
+            let key_handler = QUIT_KEY_HANDLER.lock().ok().and_then(|g| *g);
             let handler = QUIT_HANDLER.lock().ok().and_then(|g| *g);
-            if let Some(quit) = handler {
+            if let (true, Some(_), Some(keys)) = (by_keys, handler, key_handler) {
+                keys();
+            } else if let Some(quit) = handler {
                 quit();
             } else {
                 let _: () = msg_send![super(self), terminate: sender];

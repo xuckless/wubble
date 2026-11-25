@@ -252,9 +252,9 @@ impl Host {
         if self.records(tab) {
             return super::Fail("the private tab's loads are recorded".into());
         }
-        let (live, engine) = (self.live_suggestions, self.search_engine);
+        let (live, engine) = (self.live_suggestions, self.search.default.clone());
         self.live_suggestions = true;
-        self.search_engine = Some(wubble_core::suggest::SearchEngine::DuckDuckGo);
+        self.search.default = wubble_core::search::EngineRef::builtin("duckduckgo");
         let entered = self.enter(w);
         let remote = wubble_core::suggest::sources("cats and dogs", &self.suggest_settings())
             .iter()
@@ -263,7 +263,7 @@ impl Host {
             && wubble_core::suggest::sources("cats and dogs", &self.suggest_settings())
                 .iter()
                 .any(|s| matches!(s, Source::Remote { .. }));
-        (self.live_suggestions, self.search_engine) = (live, engine);
+        (self.live_suggestions, self.search.default) = (live, engine);
         if !entered || remote {
             return super::Fail("the private window's bar would ask a server".into());
         }

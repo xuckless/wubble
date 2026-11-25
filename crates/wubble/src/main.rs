@@ -1263,10 +1263,18 @@ pub fn quit() {
     let _ = slint::quit_event_loop();
 }
 
-/// macOS's `terminate:` (Cmd+Q, the menu bar's Quit, the Dock's): the Quit action's plan,
-/// which asks first when quitting would cancel private downloads (`Host::close_asks`).
+/// macOS's `terminate:` from the menu bar's Quit or the Dock's: the Quit action's plan, which
+/// asks first when quitting would cancel private downloads (`Host::close_asks`).
 fn quit_asked() {
-    with_host(|host| host.perform(wubble_core::action::Action::Quit));
+    with_host(|host| host.quit_now());
+}
+
+/// The quit keys on macOS (`terminate:` sent by Cmd+Q): later, outside AppKit's dispatch, the
+/// host quits or asks for a second press ("Warn before quitting", `host/startup.rs`).
+fn quit_keys() {
+    if slint::invoke_from_event_loop(|| with_host(Host::quit_keys)).is_err() {
+        quit();
+    }
 }
 
 /// The window's display refresh rate. Wayland names the current monitor only
@@ -1481,6 +1489,12 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     window.on_command_result_closed(move |index| {
         with_host_in(win, |host| host.bar_result_closed(index))
     });
+    let weak = window.as_weak();
+    window.on_command_inline_accepted(move |text| {
+        if let Some(window) = weak.upgrade() {
+            with_host_in(win, |host| host.bar_inline_accepted(&window, &text));
+        }
+    });
     window.on_tab_hovered(move |id, on, y| with_host_in(win, |host| host.tab_hovered(id, on, y)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
     window.on_sidebar_context(move |x, y| with_host_in(win, |host| host.sidebar_context(x, y)));
@@ -1664,6 +1678,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_history_query_changed(move |q| with_host_in(win, |host| host.history_query(&q)));
     window.on_history_deleted(move |url| with_host_in(win, |host| host.history_deleted(&url)));
     window.on_history_more(move || with_host_in(win, Host::history_more));
+    window.on_closed_reopened(move |id| with_host_in(win, |host| host.closed_reopened(id)));
+    window
+        .on_closed_deleted(move |id| with_host_in(win, |host| host.closed_deleted(i64::from(id))));
     window.on_history_cleared(move |range| with_host_in(win, |host| host.history_cleared(range)));
     window.on_archive_query_changed(move |q| with_host_in(win, |host| host.archive_query(&q)));
     window.on_archive_deleted(move |id| with_host_in(win, |host| host.archive_deleted(id)));
@@ -2272,6 +2289,10 @@ fn run(
             page_smoke::free_port()?.to_string(),
         );
     }
+    // What the startup mode opens of the session (`wubble_core::startup`); smokes keep theirs.
+    if matches!(&*mode, Mode::Browse { .. }) {
+        host::open_session(&mut loaded, &store, url.is_some());
+    }
     let blocking = blocking::Blocking::new();
     blocking.on_lists_changed(|| {
         let _ = slint::invoke_from_event_loop(|| with_host(Host::filter_lists_changed));
@@ -2509,8 +2530,10 @@ fn run(
     window.show()?;
     measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
+    with_host(Host::startup_opened);
     measure::mark(measure::Stage::SessionRestored);
     wubble_engine::app::set_quit_handler(Some(quit_asked));
+    wubble_engine::app::set_quit_key_handler(Some(quit_keys));
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {
@@ -2578,6 +2601,7 @@ fn run(
     let code = Verdict::of(mode, &outcome).print();
     drain(&mut host.engine);
     wubble_engine::app::set_quit_handler(None);
+    wubble_engine::app::set_quit_key_handler(None);
     Ok(code)
 }
 

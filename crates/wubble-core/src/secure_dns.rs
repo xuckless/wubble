@@ -92,20 +92,26 @@ const AUTOMATIC: &str = "automatic";
 const OFF: &str = "off";
 pub const CUSTOM: &str = "custom:";
 
-/// The menu's words, in its order: automatic, off, the providers, custom (whose stored text is
-/// `custom:` and the template). Built from [`PROVIDERS`], so a provider is one row there.
-pub const WORDS: [&str; PROVIDERS.len() + 3] = {
-    let mut words = [""; PROVIDERS.len() + 3];
-    words[0] = AUTOMATIC;
-    words[1] = OFF;
+const CHOICES: usize = PROVIDERS.len() + 3;
+
+/// The menu's words and what it shows for each, in its order: automatic, off, the providers,
+/// custom (whose stored text is `custom:` and the template). Built from [`PROVIDERS`], so a
+/// provider is one row there; the Settings Select reads it (`settings::SELECT_ROWS`).
+pub const LABELS: [(&str, &str); CHOICES] = {
+    let mut labels = [("", ""); CHOICES];
+    labels[0] = (AUTOMATIC, "With your current service provider");
+    labels[1] = (OFF, "Off");
     let mut i = 0;
     while i < PROVIDERS.len() {
-        words[i + 2] = PROVIDERS[i].word;
+        labels[i + 2] = (PROVIDERS[i].word, PROVIDERS[i].name);
         i += 1;
     }
-    words[PROVIDERS.len() + 2] = CUSTOM;
-    words
+    labels[CHOICES - 1] = (CUSTOM, "Custom");
+    labels
 };
+
+/// [`LABELS`]' words: the row's choices.
+pub const WORDS: [&str; CHOICES] = crate::settings::select_words(&LABELS);
 
 /// What the setting asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,19 +186,6 @@ impl SecureDns {
     }
 }
 
-/// What the menu shows for a stored word.
-pub fn label(word: &str) -> &'static str {
-    match word {
-        AUTOMATIC => "With your current service provider",
-        OFF => "Off",
-        CUSTOM => "Custom",
-        _ => PROVIDERS
-            .iter()
-            .find(|p| p.word == word)
-            .map_or("Custom", |p| p.name),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,7 +200,7 @@ mod tests {
         for (i, w) in WORDS.iter().enumerate() {
             assert!(!WORDS[..i].contains(w), "{w} twice");
             assert_eq!(SecureDns::parse(w).map(|d| d.word()), Ok(*w), "{w}");
-            assert_ne!(label(w), "", "{w}");
+            assert_ne!(LABELS[i].1, "", "{w}");
         }
         assert_eq!(WORDS[0], "automatic");
         assert_eq!(WORDS[WORDS.len() - 1], "custom:");

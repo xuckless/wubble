@@ -5,8 +5,8 @@
 //! Live suggestions send keystrokes to the search engine, so they are off
 //! unless the user turns them on.
 
-pub use crate::omnibox::SearchEngine;
-use crate::omnibox::{Intent, classify, suggest_url};
+use crate::omnibox::{Intent, classify};
+use crate::search::Engines;
 use crate::space::Side;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,8 +31,10 @@ impl LiveSuggestions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SuggestSettings {
-    pub engine: SearchEngine,
+pub struct SuggestSettings<'a> {
+    /// The default engine is asked; a keyword query (`bing.com cats`) asks its engine. An
+    /// engine without a suggestions endpoint is never asked.
+    pub engines: &'a Engines,
     pub live: LiveSuggestions,
 }
 
@@ -60,13 +62,18 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
         return Vec::new();
     }
     let mut out = vec![Source::Local];
-    if settings.live == LiveSuggestions::On
-        && matches!(classify(query), Intent::Search(_))
-        && !looks_like_address(query)
+    if settings.live == LiveSuggestions::Off {
+        return out;
+    }
+    let (engine, query) = match settings.engines.keyword_search(query) {
+        Some((engine, rest)) => (Some(engine), rest),
+        None => (settings.engines.default.as_ref(), query),
+    };
+    if let Some(url) = engine
+        .filter(|_| matches!(classify(query), Intent::Search(_)) && !looks_like_address(query))
+        .and_then(|e| e.suggest_url(query))
     {
-        out.push(Source::Remote {
-            url: suggest_url(settings.engine, query),
-        });
+        out.push(Source::Remote { url });
     }
     out
 }
@@ -268,11 +275,42 @@ mod tests {
         }
     }
 
-    fn settings(live: LiveSuggestions) -> SuggestSettings {
+    static DDG: std::sync::LazyLock<Engines> = std::sync::LazyLock::new(|| {
+        Engines::resolve(
+            "duckduckgo",
+            &["Docs | d | https://d.test/?q=%s".to_owned()],
+            &[],
+        )
+    });
+
+    fn settings(live: LiveSuggestions) -> SuggestSettings<'static> {
         SuggestSettings {
-            engine: SearchEngine::DuckDuckGo,
+            engines: &DDG,
             live,
         }
+    }
+
+    #[test]
+    fn a_keyword_asks_its_engine_and_one_without_an_endpoint_nothing() {
+        let on = settings(LiveSuggestions::On);
+        assert_eq!(
+            sources("bing.com rust", &on),
+            [
+                Source::Local,
+                Source::Remote {
+                    url: "https://www.bing.com/osjson.aspx?query=rust".into()
+                },
+            ]
+        );
+        assert_eq!(sources("d rust", &on), [Source::Local]);
+        assert_eq!(sources("bing.com a.test/x", &on), [Source::Local]);
+        // no default chosen yet: nothing is asked
+        let none = Engines::default();
+        let unchosen = SuggestSettings {
+            engines: &none,
+            live: LiveSuggestions::On,
+        };
+        assert_eq!(sources("rust", &unchosen), [Source::Local]);
     }
 
     #[test]

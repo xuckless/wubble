@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 use crate::archive::ArchiveAfter;
-use crate::omnibox::SearchEngine;
 use crate::pagetheme::{Contrast, MediaPrefs, Motion, PageTheme, ThemeTable};
 use crate::reader::ReaderPrefs;
 use crate::routing::Rule;
 use crate::seam::SidebarMode;
+use crate::search::{EngineEntry, Engines};
 use crate::settings::{self, SettingDef};
 use crate::shot::ShotOutput;
 use crate::sleep::SleepPolicy;
@@ -109,8 +109,11 @@ impl Default for MediaSettings {
 /// A setting's live effect, for the host to execute.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Applied {
-    SearchEngine(Option<SearchEngine>),
+    /// The engines and the default (`search.engine`, `search.custom`, `search.discovered`).
+    SearchEngines(Engines),
     LiveSuggestions(bool),
+    /// Site searches are found on pages (`search.discover_sites`).
+    DiscoverSites(bool),
     SidebarMode(SidebarMode),
     BlockerEnabled(bool),
     BlockerExceptions(Vec<String>),
@@ -198,6 +201,10 @@ pub enum Applied {
     FullUrls(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
+    /// Read from the stored settings where it is used: the startup rows when the session
+    /// opens (the next start, which needs no restart note), Home and the quit warning when
+    /// pressed.
+    ReadWhenUsed,
     /// Whether wubble hosts its MCP server (`agent::hosting`), switched at once.
     McpHosting(bool),
 }
@@ -249,8 +256,18 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
     }
     let v = value_of(def, stored);
     Some(match key {
-        k if k == s::SEARCH_ENGINE.key => Applied::SearchEngine(SearchEngine::from_id(v)),
+        k if [
+            s::SEARCH_ENGINE.key,
+            s::SEARCH_CUSTOM.key,
+            s::SEARCH_DISCOVERED.key,
+            s::SEARCH_REGION.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::SearchEngines(Engines::from_stored(stored))
+        }
         k if k == s::LIVE_SUGGESTIONS.key => Applied::LiveSuggestions(flag(def, stored)),
+        k if k == s::SEARCH_DISCOVER_SITES.key => Applied::DiscoverSites(flag(def, stored)),
         k if k == s::SIDEBAR_MODE.key => Applied::SidebarMode(SidebarMode::from_id(v)?),
         k if k == s::BLOCKER_ENABLED.key => Applied::BlockerEnabled(flag(def, stored)),
         k if k == s::BLOCKER_EXCEPTIONS.key => Applied::BlockerExceptions(list(def, stored)),
@@ -381,6 +398,16 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
                 ("dns_over_https.mode", Str(mode.into())),
             ])
         }
+        k if [
+            s::STARTUP_MODE.key,
+            s::STARTUP_PAGES.key,
+            s::HOME_URL.key,
+            s::QUIT_WARN.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::ReadWhenUsed
+        }
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
@@ -435,7 +462,11 @@ pub enum Refusal {
     NotASite,
     /// `blocker.custom_lists`: not an `https://` address (the only kind fetched).
     NotAnAddress,
+    /// `startup.pages`: not an address a tab can open (`startup::page_address`).
+    NotAPage,
     Duplicate,
+    /// `search.custom`: the engine does not check out (`search::check`).
+    Engine(crate::search::Problem),
 }
 
 impl Refusal {
@@ -446,7 +477,9 @@ impl Refusal {
             Refusal::NotARule => "Needs a site and a Space, a container or both",
             Refusal::NotASite => "Needs a site, such as example.com",
             Refusal::NotAnAddress => "Needs an address that starts with https://",
+            Refusal::NotAPage => "Needs an address, such as example.com",
             Refusal::Duplicate => "Already in the list",
+            Refusal::Engine(problem) => problem.note(),
         }
     }
 }
@@ -477,11 +510,37 @@ pub fn put_entry(
     {
         return Err(Refusal::NotAnAddress);
     }
+    // an engine is checked as a whole: its keyword against the built-ins' and the other
+    // engines of the list (not the one it replaces)
+    if [settings::SEARCH_CUSTOM.key, settings::SEARCH_DISCOVERED.key].contains(&key) {
+        let engine =
+            EngineEntry::parse(entry).ok_or(Refusal::Engine(crate::search::Problem::Incomplete))?;
+        let others: Vec<String> = items
+            .iter()
+            .filter(|i| Some(i.as_str()) != replacing)
+            .cloned()
+            .collect();
+        let engines = if key == settings::SEARCH_CUSTOM.key {
+            Engines::resolve("", &others, &[])
+        } else {
+            Engines::resolve("", &list(&settings::SEARCH_CUSTOM, stored), &others)
+        };
+        crate::search::check(&engine, |k| engines.knows_keyword(k)).map_err(Refusal::Engine)?;
+        let text = engine.text();
+        match replacing.and_then(|r| items.iter().position(|i| i == r)) {
+            Some(at) => items[at] = text,
+            None => items.push(text),
+        }
+        return Ok(serde_json::to_string(&items).expect("a list of strings serialises"));
+    }
     // a site is kept as its host, the way the matchers read a URL's: a scheme, a port or a path
     // typed with it would never match anything
     let site = settings::SITE_LISTS.contains(&key);
     let entry = if site {
         crate::routing::site_host(entry).ok_or(Refusal::NotASite)?
+    } else if key == settings::STARTUP_PAGES.key {
+        // kept as the address it loads, so a typed `example.com` opens and dedupes as the page
+        crate::startup::page_address(entry).ok_or(Refusal::NotAPage)?
     } else {
         entry.to_owned()
     };
@@ -687,7 +746,11 @@ mod tests {
         ]);
         assert_eq!(
             effect_of("search.engine", &s),
-            Some(Applied::SearchEngine(Some(SearchEngine::DuckDuckGo)))
+            Some(Applied::SearchEngines(Engines::resolve(
+                "duckduckgo",
+                &[],
+                &[]
+            )))
         );
         assert_eq!(
             effect_of("blocker.enabled", &s),
@@ -707,7 +770,7 @@ mod tests {
         );
         assert_eq!(
             effect_of("search.engine", &HashMap::new()),
-            Some(Applied::SearchEngine(None))
+            Some(Applied::SearchEngines(Engines::resolve("", &[], &[])))
         );
     }
 
@@ -1027,5 +1090,52 @@ mod tests {
         assert!(!accepts("blocker.enabled", "yes"));
         assert!(!accepts("no.such", "1"));
         assert_eq!(default_of("zoom.default"), Some("100"));
+    }
+
+    #[test]
+    fn an_engine_entry_is_checked_whole() {
+        let key = "search.custom";
+        let s = stored(&[(key, r#"["Docs | d | https://d.test/?q=%s"]"#)]);
+        let refused = |entry: &str| put_entry(key, &s, None, entry).unwrap_err();
+        assert_eq!(
+            put_entry(key, &s, None, "Shop | s | https://s.test/?q={q}").unwrap(),
+            r#"["Docs | d | https://d.test/?q=%s","Shop | s | https://s.test/?q={q}"]"#
+        );
+        assert_eq!(
+            refused("Other | D | https://o.test/?q=%s"),
+            Refusal::Engine(crate::search::Problem::KeywordTaken)
+        );
+        assert_eq!(
+            refused("Mine | bing.com | https://o.test/?q=%s"),
+            Refusal::Engine(crate::search::Problem::KeywordTaken)
+        );
+        assert_eq!(
+            refused("Mine | m | https://o.test/"),
+            Refusal::Engine(crate::search::Problem::NoPlaceholder)
+        );
+        assert_eq!(
+            refused("no fields"),
+            Refusal::Engine(crate::search::Problem::Incomplete)
+        );
+        // an edit keeps its own keyword
+        assert_eq!(
+            put_entry(
+                key,
+                &s,
+                Some("Docs | d | https://d.test/?q=%s"),
+                "Docs | d | https://docs.test/?q=%s"
+            )
+            .unwrap(),
+            r#"["Docs | d | https://docs.test/?q=%s"]"#
+        );
+        let engines = effect_of(key, &s);
+        assert!(
+            matches!(&engines, Some(Applied::SearchEngines(e)) if e.by_id("custom:d").is_some()),
+            "{engines:?}"
+        );
+        assert_eq!(
+            effect_of("search.discover_sites", &HashMap::new()),
+            Some(Applied::DiscoverSites(false))
+        );
     }
 }

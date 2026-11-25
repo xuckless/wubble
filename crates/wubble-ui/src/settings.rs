@@ -2,11 +2,11 @@
 //! generic mapping per row kind, so a new setting needs no code here either.
 
 use slint::{Model, ModelRc, SharedString, VecModel};
+use wubble_core::engines::ENGINES;
 use wubble_core::keys::BindingRow;
-use wubble_core::omnibox::ENGINES;
 use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
 use wubble_core::secure_dns::{self, SecureDns};
-use wubble_core::settings::{Section, SettingKind};
+use wubble_core::settings::{self, Section, SettingKind};
 
 use crate::{BindingItem, EntryItem, MenuEntry, PageLinkItem, SettingControl, SettingItem};
 
@@ -23,16 +23,18 @@ pub fn section_title(section: Section) -> &'static str {
     section.title()
 }
 
-/// What a segment shows for a stored word: an engine's name, a secure DNS choice's, or the
-/// word capitalised.
-fn word_label(kind: SettingKind, word: &str) -> String {
+/// What a segment shows for a stored word: an engine's name, a Select row's label
+/// (`settings::SELECT_ROWS`), or the word capitalised.
+fn word_label(key: &str, kind: SettingKind, word: &str) -> String {
     if kind == SettingKind::SearchEngine
         && let Some(e) = ENGINES.iter().find(|e| e.id == word)
     {
         return e.name.to_owned();
     }
-    if kind == SettingKind::SecureDns {
-        return secure_dns::label(word).to_owned();
+    if let Some((_, label)) =
+        settings::select_labels(key).and_then(|labels| labels.iter().find(|(w, _)| *w == word))
+    {
+        return (*label).to_owned();
     }
     let mut chars = word.chars();
     chars
@@ -65,6 +67,8 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         selected: -1,
         entries: ModelRc::from(std::rc::Rc::new(VecModel::from(entry_items(&row.entries)))),
         columns: strings(row.columns.iter().copied()),
+        fixed: row.entries_fixed,
+        kept: row.remove_only,
         ..Default::default()
     };
     match row.control {
@@ -74,7 +78,22 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         }
         Control::Segmented(words) => {
             item.control = SettingControl::Segmented;
-            let labels: Vec<String> = words.iter().map(|w| word_label(row.kind, w)).collect();
+            // The engine is picked from a Select, as the design's, among the row's options (the
+            // built-ins and the user's own engines). None chosen yet (the stored default, "ask
+            // on first search") keeps `selected` at -1: the Select reads "Ask on first search",
+            // and picking any engine, the first too, stores it.
+            let (words, labels): (Vec<String>, Vec<String>) =
+                if row.kind == SettingKind::SearchEngine {
+                    row.options.iter().cloned().unzip()
+                } else {
+                    (
+                        words.iter().map(|w| (*w).to_owned()).collect(),
+                        words
+                            .iter()
+                            .map(|w| word_label(row.key, row.kind, w))
+                            .collect(),
+                    )
+                };
             // a custom secure DNS template is chosen under its menu word, `custom:`
             let chosen = match SecureDns::parse(&row.value) {
                 Ok(dns) if row.kind == SettingKind::SecureDns => dns.word(),
@@ -89,11 +108,8 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
                 item.field_prefix = secure_dns::CUSTOM.into();
                 item.field_text = row.value[secure_dns::CUSTOM.len()..].into();
             }
-            // The engine and secure DNS are picked from a Select, as the design's engine. None
-            // chosen yet (the stored default, "ask on first search") keeps `selected` at -1:
-            // the Select reads "Ask on first search", and picking any engine, the first too,
-            // stores it.
-            if matches!(row.kind, SettingKind::SearchEngine | SettingKind::SecureDns) {
+            // A Select row of the table (the startup mode, secure DNS) has a menu of its labels.
+            if row.kind == SettingKind::SearchEngine || settings::select_labels(row.key).is_some() {
                 if row.kind == SettingKind::SearchEngine {
                     item.placeholder = "Ask on first search".into();
                 }
@@ -109,7 +125,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
                 )));
             }
             item.labels = strings(labels);
-            item.words = strings(words.iter().copied());
+            item.words = strings(words);
         }
         Control::Stepper { min, max } => {
             item.control = SettingControl::Stepper;
@@ -280,13 +296,25 @@ mod tests {
             "no engine chosen yet: none is selected, so picking the first stores it"
         );
         let labels: Vec<String> = engine.labels.iter().map(|s| s.to_string()).collect();
-        assert_eq!(labels, ["Google", "DuckDuckGo"]);
+        // no region stored: the everywhere engines (Chromium's default list adds none)
+        let names: Vec<&str> = ENGINES
+            .iter()
+            .filter(|e| e.reach == wubble_core::engines::Reach::Everywhere)
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(labels, names);
+        assert!(engine.fixed, "the built-ins are listed under the Select");
+        assert_eq!(engine.entries.row_count(), ENGINES.len());
         let options: Vec<String> = engine.options.iter().map(|o| o.label.to_string()).collect();
         assert_eq!(options, labels, "the engine's Select rows");
         assert_eq!(engine.placeholder, "Ask on first search");
         let archive = items
             .iter()
-            .find(|i| i.control == SettingControl::Segmented && i.key != "search.engine")
+            .find(|i| {
+                i.control == SettingControl::Segmented
+                    && i.key != "search.engine"
+                    && settings::select_labels(&i.key).is_none()
+            })
             .expect("a segmented row");
         assert_eq!(
             archive.options.row_count(),
