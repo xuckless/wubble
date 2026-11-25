@@ -219,6 +219,9 @@ Build:
 - [ ] macOS: the search region from the system's region setting (`NSLocale`), not `LANG` (a GUI app has none; today it falls back to Google, Bing, Yahoo)
 - [ ] `$csp` filters: main-frame responses the blocker names get the CSP through DevTools `Fetch` (CEF cannot change response headers)
 - [ ] Picture-in-picture and the video frame rows for a video inside a subframe
+- [ ] The shell draws Hangul syllables as separate jamo (Settings' engine list shows 네이버 as ㄴㅔㅇㅣㅂㅓ in the Linux gallery): the font fallback for Korean
+- [ ] A reopened window (recently closed) comes back in its normal size: the store keeps its size and place, not maximized, fullscreen or its monitor
+- [ ] Another country's built-in engines are hidden from Settings' list but their keywords still search (`Engines::resolve` keeps every built-in active): keep or drop them as Chrome does
 - [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
 - [~] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH (the build script's stamp includes the configuration, so packaging rebuilds it; built and checked on Linux for `next/all`; the Mac's build on the Mac)
 - [ ] macOS Keychain prompts (owner, 2026-11-25: twice on a first install, again on every test build). Found on the Mac: the release's signature requirement is team and bundle id (`identifier "dev.wubble.browser" ... OU = "2MGLZ5685D"`), so signed updates keep their grant; an ad hoc build's is its cdhash, so every rebuild asks. Two items, so two prompts: `wubble`/`vault-wubble` (the vault key) and `Chromium Safe Storage`/`Chromium` (CEF's cookie and password key, named for Chromium, so shared with any Chromium-branded app on the machine).

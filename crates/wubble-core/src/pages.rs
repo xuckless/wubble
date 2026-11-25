@@ -841,20 +841,29 @@ fn list_cells(def: &settings::SettingDef, item: &str) -> Vec<String> {
 }
 
 /// A list or map row's entries: a list item is its own key, a map entry is named by its key.
-/// The search engine's row lists the built-in engines (each named by its id).
+/// The search engine's row lists the built-in engines offered here (each named by its id): the
+/// Select's (every region's, this region's, the default) and the keyword engines; another
+/// country's own engines are left out, as Chrome lists only its country's.
 fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> Vec<Entry> {
     match def.kind {
-        SettingKind::SearchEngine => crate::engines::ENGINES
-            .iter()
-            .map(|e| {
-                let address = e.search.replace("{q}", "%s");
-                Entry {
-                    label: format!("{}, keyword {}, {address}", e.name, e.keyword),
-                    key: e.id.to_owned(),
-                    cells: vec![e.name.to_owned(), e.keyword.to_owned(), address],
-                }
-            })
-            .collect(),
+        SettingKind::SearchEngine => {
+            let offered = crate::search::Engines::from_stored(stored).choices();
+            crate::engines::ENGINES
+                .iter()
+                .filter(|e| {
+                    e.reach == crate::engines::Reach::Site
+                        || offered.iter().any(|(id, _)| id == e.id)
+                })
+                .map(|e| {
+                    let address = e.search.replace("{q}", "%s");
+                    Entry {
+                        label: format!("{}, keyword {}, {address}", e.name, e.keyword),
+                        key: e.id.to_owned(),
+                        cells: vec![e.name.to_owned(), e.keyword.to_owned(), address],
+                    }
+                })
+                .collect()
+        }
         SettingKind::List if ENGINE_LISTS.contains(&def.key) => crate::apply::list(def, stored)
             .into_iter()
             .map(|item| {
@@ -1567,7 +1576,26 @@ mod tests {
         let engine = row("search.engine");
         assert_eq!(engine.value, "custom:d");
         assert!(engine.entries_fixed && !engine.remove_only);
-        assert_eq!(engine.entries.len(), crate::engines::ENGINES.len());
+        // the offered built-ins and the keyword engines, not another country's own
+        let listed: Vec<&str> = engine.entries.iter().map(|e| e.key.as_str()).collect();
+        let offered = crate::search::Engines::from_stored(&HashMap::new()).choices();
+        for (id, _) in offered
+            .iter()
+            .filter(|(id, _)| crate::search::EngineRef::builtin(id).is_some())
+        {
+            assert!(listed.contains(&id.as_str()), "{id} offered, not listed");
+        }
+        for e in crate::engines::ENGINES {
+            let site = e.reach == crate::engines::Reach::Site;
+            let elsewhere = e.reach == crate::engines::Reach::Regional
+                && !crate::engines::region("").contains(&e.id);
+            if site {
+                assert!(listed.contains(&e.id), "{} is a keyword engine", e.id);
+            }
+            if elsewhere {
+                assert!(!listed.contains(&e.id), "{} is another country's", e.id);
+            }
+        }
         assert_eq!(
             engine.entries[2].cells,
             ["Bing", "bing.com", "https://www.bing.com/search?q=%s"]

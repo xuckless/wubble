@@ -407,11 +407,15 @@ pub const SCENES: &[Scene] = &[
     Scene {
         click: Some(NAV_GENERAL),
         then: Some(ROUTING_RULE),
+        // the routing rules sit under the search engines' rows
+        wheel: ROUTING_WHEEL,
         ..on_lists("settings-lists")
     },
     Scene {
         click: Some(NAV_GENERAL),
         then: Some(ROUTING_ADD),
+        // the routing rules sit under the search engines' rows
+        wheel: ROUTING_WHEEL,
         ..on_lists("settings-list-draft")
     },
     Scene {
@@ -588,8 +592,10 @@ impl Scene {
 }
 const NAV_AGENTS: (u16, u16) = (420, 539);
 const NAV_UPDATES: (u16, u16) = (420, 577);
+/// How far General scrolls to bring the routing rules where these points are, logical px.
+const ROUTING_WHEEL: u32 = 1079;
 const ROUTING_RULE: (u16, u16) = (900, 560);
-const ROUTING_ADD: (u16, u16) = (632, 656);
+const ROUTING_ADD: (u16, u16) = (632, 642);
 const SECOND_SPACE: (u16, u16) = (900, 185);
 /// The fourth row of the twelve-Space popup (its highlight, and the scroll thumb), logical px.
 const SPACES_ROW: (u16, u16) = (130, 646);
