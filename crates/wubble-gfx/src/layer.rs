@@ -371,24 +371,32 @@ mod wayland {
             if let Some(shared) = SHARED.with(|s| s.borrow().upgrade()) {
                 return Ok(shared);
             }
-            let fail = |what: &str, e: &dyn std::fmt::Display| GfxError::Layer(format!("{what}: {e}"));
+            let fail =
+                |what: &str, e: &dyn std::fmt::Display| GfxError::Layer(format!("{what}: {e}"));
             // SAFETY: the caller's display.
-            let conn =
-                Connection::from_backend(unsafe { Backend::from_foreign_display(display.as_ptr().cast()) });
+            let conn = Connection::from_backend(unsafe {
+                Backend::from_foreign_display(display.as_ptr().cast())
+            });
             let (globals, mut queue) =
                 registry_queue_init::<Heard>(&conn).map_err(|e| fail("the registry", &e))?;
             let qh = queue.handle();
-            let compositor: WlCompositor =
-                globals.bind(&qh, 4..=6, ()).map_err(|e| fail("wl_compositor", &e))?;
-            let subcompositor: WlSubcompositor =
-                globals.bind(&qh, 1..=1, ()).map_err(|e| fail("wl_subcompositor", &e))?;
-            let viewporter: WpViewporter =
-                globals.bind(&qh, 1..=1, ()).map_err(|e| fail("wp_viewporter", &e))?;
+            let compositor: WlCompositor = globals
+                .bind(&qh, 4..=6, ())
+                .map_err(|e| fail("wl_compositor", &e))?;
+            let subcompositor: WlSubcompositor = globals
+                .bind(&qh, 1..=1, ())
+                .map_err(|e| fail("wl_subcompositor", &e))?;
+            let viewporter: WpViewporter = globals
+                .bind(&qh, 1..=1, ())
+                .map_err(|e| fail("wp_viewporter", &e))?;
             // v3: the formats and modifiers come as events (v4 sends a table); enough on mutter
-            let dmabuf: ZwpLinuxDmabufV1 =
-                globals.bind(&qh, 3..=3, ()).map_err(|e| fail("zwp_linux_dmabuf_v1", &e))?;
+            let dmabuf: ZwpLinuxDmabufV1 = globals
+                .bind(&qh, 3..=3, ())
+                .map_err(|e| fail("zwp_linux_dmabuf_v1", &e))?;
             let mut heard = Heard::default();
-            queue.roundtrip(&mut heard).map_err(|e| fail("the first roundtrip", &e))?;
+            queue
+                .roundtrip(&mut heard)
+                .map_err(|e| fail("the first roundtrip", &e))?;
             let shared = Rc::new(Self {
                 conn,
                 queue: RefCell::new(queue),
@@ -412,7 +420,8 @@ mod wayland {
             if let Some(guard) = self.conn.prepare_read() {
                 let _ = guard.read();
             }
-            let (Ok(mut queue), Ok(mut heard)) = (self.queue.try_borrow_mut(), self.heard.try_borrow_mut())
+            let (Ok(mut queue), Ok(mut heard)) =
+                (self.queue.try_borrow_mut(), self.heard.try_borrow_mut())
             else {
                 return;
             };
@@ -479,13 +488,16 @@ mod wayland {
             // SAFETY: the caller's display.
             let shared = unsafe { Compositor::get(display) }?;
             // SAFETY: the caller's live surface.
-            let parent = unsafe { ObjectId::from_ptr(WlSurface::interface(), parent.as_ptr().cast()) }
-                .ok()
-                .and_then(|id| WlSurface::from_id(&shared.conn, id).ok())
-                .ok_or_else(|| GfxError::Layer("the window's wl_surface".into()))?;
+            let parent =
+                unsafe { ObjectId::from_ptr(WlSurface::interface(), parent.as_ptr().cast()) }
+                    .ok()
+                    .and_then(|id| WlSurface::from_id(&shared.conn, id).ok())
+                    .ok_or_else(|| GfxError::Layer("the window's wl_surface".into()))?;
             let qh = shared.handle();
             let surface = shared.compositor.create_surface(&qh, ());
-            let sub = shared.subcompositor.get_subsurface(&surface, &parent, &qh, ());
+            let sub = shared
+                .subcompositor
+                .get_subsurface(&surface, &parent, &qh, ());
             // a later one goes next to the shell's, past the earlier ones (none overlap)
             if below {
                 sub.place_below(&parent);
@@ -549,7 +561,14 @@ mod wayland {
             let params = self.shared.dmabuf.create_params(&qh, ());
             let ((offset, stride), (fourcc, modifier), size) =
                 (buffer.offset_stride(), buffer.drm_format(), buffer.size());
-            params.add(buffer.fd(), 0, offset, stride, (modifier >> 32) as u32, modifier as u32);
+            params.add(
+                buffer.fd(),
+                0,
+                offset,
+                stride,
+                (modifier >> 32) as u32,
+                modifier as u32,
+            );
             let made = params.create_immed(
                 size.width as i32,
                 size.height as i32,
@@ -579,14 +598,16 @@ mod wayland {
             if self.placed == Some((rect, contents)) {
                 return;
             }
-            let resized = self.placed.map(|(r, c)| (r[2], r[3], c)) != Some((rect[2], rect[3], contents));
+            let resized =
+                self.placed.map(|(r, c)| (r[2], r[3], c)) != Some((rect[2], rect[3], contents));
             // the shell surface's state: lands with its next commit, synced or not
             self.sub.set_position(rect[0], rect[1]);
             self.placed = Some((rect, contents));
             if resized {
                 // the layer's own state: synced, so it lands with the shell's frame too
                 self.sync(true);
-                self.viewport.set_destination(rect[2].max(1), rect[3].max(1));
+                self.viewport
+                    .set_destination(rect[2].max(1), rect[3].max(1));
                 self.set_source();
                 self.surface.commit();
             }
@@ -650,4 +671,3 @@ mod wayland {
         }
     }
 }
-
