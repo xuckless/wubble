@@ -12,6 +12,7 @@ use wubble_core::omnibox::{
     self, Bookmark, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchClosed,
     SearchEngine, SearchTab, Target,
 };
+use wubble_core::space::SpaceKind;
 use wubble_core::tab::TabId;
 use wubble_ui::CommandKind;
 
@@ -125,14 +126,14 @@ pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
 }
 
 /// The open tabs tab search lists, in sidebar order (`omnibox::tab_search` orders them): every
-/// Space's but an agent Space's, without a peek's and without the tabs `left_out` names (the
-/// host's: those an agent session drives). A tab on screen counts as active now.
+/// listed Space's (a private window its own only, as `open_tabs`) but an agent Space's, without
+/// a peek's and without the tabs `left_out` names (the host's: those an agent session drives).
+/// A tab on screen counts as active now.
 pub fn search_tabs(model: &Model, left_out: impl Fn(TabId) -> bool) -> Vec<SearchTab> {
     let active = model.active_space();
     model
-        .spaces
-        .iter()
-        .filter(|s| !s.agent)
+        .listed_spaces(active)
+        .filter(|s| s.kind != SpaceKind::Agent)
         .flat_map(|s| model.order(s.id).into_iter().map(move |id| (s, id)))
         .filter(|&(_, id)| !model.is_glance(id) && !left_out(id))
         .filter_map(|(s, id)| model.tabs.get(&id).map(|t| (s, t)))

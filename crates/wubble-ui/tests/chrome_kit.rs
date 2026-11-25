@@ -257,6 +257,7 @@ fn command_bar(p: &Probe) {
         (CommandMode::Here, "example.com"),
         (CommandMode::New, "Search or type an address"),
         (CommandMode::Split, "Open beside this page"),
+        (CommandMode::Tabs, "Search tabs"),
     ] {
         p.set_bar_mode(mode);
         assert_eq!(p.get_bar_placeholder(), want);
