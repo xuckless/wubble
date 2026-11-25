@@ -959,6 +959,14 @@ impl Host {
         }
     }
 
+    /// The window's pixels with every pane's page drawn by the shell: a page on its layer hands
+    /// its latest frame over first, as the shell's own render has a hole where a layer shows.
+    pub(super) fn pages_snapshot(&mut self, window: &AppWindow) -> Result<Snapshot, String> {
+        let tabs: Vec<TabId> = self.pane_rects(window).iter().map(|r| r.tab).collect();
+        tabs.into_iter().for_each(|tab| self.layer_pixels(tab));
+        super::snapshot(window)
+    }
+
     /// `--smoke frames` and `--smoke split`: each pane of the snapshot shows its page.
     pub(super) fn check_pixels(
         &self,

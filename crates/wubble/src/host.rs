@@ -3209,8 +3209,9 @@ impl Host {
                     let Some(window) = self.w.window.upgrade() else {
                         continue;
                     };
-                    let checked =
-                        snapshot(&window).and_then(|shot| self.check_pixels(&window, &shot));
+                    let checked = self
+                        .pages_snapshot(&window)
+                        .and_then(|shot| self.check_pixels(&window, &shot));
                     match checked {
                         Ok(sample) => println!(
                             "smoke: windows pixels ok window={} distinct={}",
@@ -3412,7 +3413,7 @@ impl Host {
                 }
             }
             Some(split_smoke::Action::CheckPixels) => {
-                let checked = snapshot(window).and_then(|shot| {
+                let checked = self.pages_snapshot(window).and_then(|shot| {
                     let panes = self.pane_rects(window).len();
                     self.check_pixels(window, &shot).map(|s| (panes, s))
                 });
