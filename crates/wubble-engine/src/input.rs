@@ -1396,8 +1396,10 @@ mod tests {
             pressed: false,
             ..back.clone()
         };
-        // (name, key, held, want: space-separated commands, DevTools modifiers, DOM key)
-        let cases: Vec<(&str, KeyInput, ModifiersState, Option<(&str, u32, &str)>)> = vec![
+        // want: space-separated commands, DevTools modifiers, DOM key
+        type Want = Option<(&'static str, u32, &'static str)>;
+        // (name, key, held, want)
+        let cases: Vec<(&str, KeyInput, ModifiersState, Want)> = vec![
             ("cmd delete", back.clone(), M, Some(("deleteToBeginningOfLine", 4, "Backspace"))),
             ("option delete", back.clone(), A, Some(("deleteWordBackward", 1, "Backspace"))),
             ("cmd fn delete", delete.clone(), M, Some(("deleteToEndOfLine", 4, "Delete"))),

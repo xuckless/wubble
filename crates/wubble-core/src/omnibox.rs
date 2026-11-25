@@ -317,7 +317,10 @@ pub enum Target {
     Action(Action),
     /// An entry of the recently-closed list (tab search only): its URL and close time name it,
     /// as they name it to the store and to `closed`.
-    ClosedTab { url: String, closed_at_ms: i64 },
+    ClosedTab {
+        url: String,
+        closed_at_ms: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,7 +539,7 @@ pub fn tab_search(
             .into_iter()
             .filter_map(|(class, r)| Some((class?, r)))
             .collect();
-        hits.sort_by(|a, b| b.0.cmp(&a.0));
+        hits.sort_by_key(|h| std::cmp::Reverse(h.0));
         hits.into_iter().map(|(_, r)| r).collect()
     };
     let mut out = filter(open.collect());
@@ -681,9 +684,7 @@ pub fn with_desired_tld(query: &str) -> Option<String> {
     let (host, rest) = s.split_at(end);
     let bare = !host.is_empty()
         && !host.contains('.')
-        && host
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-')
+        && host.chars().all(|c| c.is_alphanumeric() || c == '-')
         && !host.starts_with('-');
     if !bare {
         return None;
