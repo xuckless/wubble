@@ -69,6 +69,14 @@ pub(super) fn pane_radius(window: &AppWindow) -> f32 {
     }
 }
 
+/// Pane `r`'s card in the window, logical px: the content's origin plus its x, the content's top
+/// and height (the scene's pages; the page layer's glass over a pane).
+pub(super) fn pane_card(window: &AppWindow, r: &PageRect) -> Rect {
+    let (_, height) = content_size(window);
+    let (cx, cy) = (window.get_content_x(), window.get_content_y());
+    Rect::new(cx + r.x as f32, cy, r.width as f32, height as f32)
+}
+
 /// The content area's size, logical pixels.
 pub(super) fn content_size(window: &AppWindow) -> (f64, f64) {
     (
@@ -710,8 +718,6 @@ impl Host {
     /// its latest frame, the presenter's texture itself (no copy). Overlay glass over a pane
     /// frosts it; the window's glass picks up its light. Panes without a frame are left out.
     fn sync_scene_pages_with(&self, window: &AppWindow, rects: &[PageRect]) {
-        let (_, height) = content_size(window);
-        let (cx, cy) = (window.get_content_x(), window.get_content_y());
         let radius = pane_radius(window);
         let pages: Vec<PagePane> = rects
             .iter()
@@ -719,7 +725,7 @@ impl Host {
                 let frame = self.w.frames.get(&r.tab)?;
                 Some(PagePane {
                     rect: ScenePage {
-                        rect: Rect::new(cx + r.x as f32, cy, r.width as f32, height as f32),
+                        rect: pane_card(window, r),
                         radius,
                     },
                     texture: frame.image.to_wgpu_30_texture()?,
@@ -764,7 +770,7 @@ impl Host {
 
     /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
     /// holds.
-    fn slot_for(&mut self, tab: TabId) -> usize {
+    pub(super) fn slot_for(&mut self, tab: TabId) -> usize {
         let own = if tab == PANEL_TAB {
             Some(PANEL_SLOT)
         } else if self.model.is_glance(tab) || tab == POPUP_TAB {
@@ -871,15 +877,11 @@ impl Host {
             });
         }
         let wanted = px(wanted);
-        let entry = self.w.frames.entry(tab).or_insert_with(|| PaneFrame {
-            image: image.clone(),
-            clip,
-            view: PaneView::Live { size: px(size) },
-            springs: PaneSprings::default(),
-            prev: None,
-            masked: None,
-            generation,
-        });
+        let entry = self
+            .w
+            .frames
+            .entry(tab)
+            .or_insert_with(|| PaneFrame::new(image.clone(), clip, size, generation));
         let (view, effect) = after_frame(entry.view, wanted, px(size));
         entry.view = view;
         // the frame at the new size arrived: one damped wobble, and the stale frame (still
@@ -939,7 +941,10 @@ impl Host {
         window.window().request_redraw();
         // the page blur (overlay glass, ambience) samples the same texture
         if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
-            glass.pages_written(window, Rect::new(x as f32, y as f32, w as f32, h as f32));
+            glass.pages_written(
+                window,
+                Some(Rect::new(x as f32, y as f32, w as f32, h as f32)),
+            );
         }
     }
 
@@ -1092,6 +1097,28 @@ impl Host {
         }
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+    }
+}
+
+impl PaneFrame {
+    /// A pane's first frame, `image` of a frame of `size` showing `clip`, shown 1:1 (the shell's
+    /// first `Present`, or the page layer's first snapshot of a page that went to its layer at
+    /// once).
+    pub(super) fn new(
+        image: slint::Image,
+        clip: FrameSize,
+        size: FrameSize,
+        generation: u64,
+    ) -> Self {
+        PaneFrame {
+            image,
+            clip,
+            view: PaneView::Live { size: px(size) },
+            springs: PaneSprings::default(),
+            prev: None,
+            masked: None,
+            generation,
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 //! The page on its own OS layer (`wubble_core::page_layer`, macOS; `--page-layer=fullscreen`: a
 //! page in fullscreen and the picture-in-picture window, over the shell; `--page-layer=window`:
 //! every pane, under the shell, which draws a hole where the pane's layer shows: its
-//! `SplitPane.hole`, from [`PageLayers::holed`]). Each pane's route has one
+//! `SplitPane.hole`, from [`PageLayers::holed`]; glass over it blurs a snapshot of the layer, which
+//! `Effect::Snapshot` copies into the pane's presenter texture). Each pane's route has one
 //! owner, its window's [`PageLayers`]; its effects have one executor, [`Host::run_layer`], fed
 //! from the frame path: a frame taken (`present_panes`), each render before it draws
 //! (`panes_frame`: what is over the page now), the same render just before it is presented
@@ -26,9 +27,9 @@ use wubble_gfx::layer::{PageLayer, Unsupported};
 use wubble_gfx::{FrameSize, NativeFrame};
 use wubble_ui::AppWindow;
 
-use super::Host;
 use super::panes::{content_size, frame_clip, pane_radius, px};
 use super::window::WindowHost;
+use super::{Host, PaneFrame};
 use crate::measure::{self, Count};
 use crate::screen::Screen;
 
@@ -312,7 +313,7 @@ impl Host {
                 .is_live(),
             None => f.view.is_live(),
         });
-        let (stack, facts) = self.page_covers(window);
+        let (stack, facts) = self.page_covers(window, tab);
         Needs::from_owners(&Owners {
             page_fullscreen,
             pip_window,
@@ -352,6 +353,8 @@ impl Host {
         // a render begins (`panes_frame`): a layer under the shell follows its pane into it
         let changed = matches!(event, Event::Changed);
         let mode = crate::page_layer();
+        // the clock the machine's deadlines are kept in, read once here
+        let now = self.surface_now();
         let mut drew = false;
         // the first failure, returned once every effect ran (a `Hide` after it must still run)
         let mut error = None;
@@ -361,21 +364,24 @@ impl Host {
                 break;
             };
             let needs = self.layer_needs(window, tab, arrival.as_ref(), pixels);
-            let (route, effects) = page_layer::transition(before, needs.hold(mode), event);
+            let hold = needs.hold(mode);
+            let (route, effects) = page_layer::transition(before, hold, now, event);
             if let Some(pane) = self.w.layers.panes.get_mut(&tab) {
                 pane.route = route;
             }
             // the one place a route is replaced: each change, why, and who holds the page
             if before.name() != route.name() {
                 measure::count(Count::LayerRoute);
-                let (stack, facts) = self.page_covers(window);
+                let (stack, facts) = self.page_covers(window, tab);
                 let owner = |need: Need| -> String {
                     match need {
-                        Need::Covered | Need::Sampled => overlay::coverers(&stack, &facts, tab)
-                            .filter(|&(_, c)| c != Coverage::None)
-                            .map(|(kind, c)| format!("{kind:?} {c:?}"))
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                        Need::Covered | Need::Sampled | Need::Frosted => {
+                            overlay::coverers(&stack, &facts, tab)
+                                .filter(|&(_, c)| c != Coverage::None)
+                                .map(|(kind, c)| format!("{kind:?} {c:?}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }
                         Need::Resizing => self
                             .w
                             .frames
@@ -400,8 +406,10 @@ impl Host {
                         hold => format!("{n:?} {hold:?} [{}]", owner(n)),
                     })
                     .collect();
+                // a brief hold kept past its deadline reads as a long one (`Route::hold`)
+                let expired = before.hold(hold, now) != hold;
                 eprintln!(
-                    "wubble: page layer: tab {}: {} -> {} on {event:?}; needs: {}",
+                    "wubble: page layer: tab {}: {} -> {} on {event:?}; needs: {}{}",
                     tab.0,
                     before.name(),
                     route.name(),
@@ -409,6 +417,11 @@ impl Host {
                         "none".to_string()
                     } else {
                         held.join(", ")
+                    },
+                    if expired {
+                        " (brief hold expired: Long)"
+                    } else {
+                        ""
                     },
                 );
             }
@@ -498,6 +511,42 @@ impl Host {
                                     error.get_or_insert(e);
                                 }
                             }
+                        }
+                    }
+                    Effect::Snapshot => {
+                        // the layer's latest frame into the pane's presenter texture, which only
+                        // the glass reads (the pane is a hole): no Slint damage, the page blur
+                        // stale, so the scene's next frame redraws the glass's rectangles only
+                        let slot = self.slot_for(tab);
+                        let layout = self.pane_layout(window, tab);
+                        let latest = self
+                            .w
+                            .layers
+                            .panes
+                            .get(&tab)
+                            .and_then(|p| p.latest.as_ref());
+                        let Some(frame) = latest else {
+                            continue;
+                        };
+                        let (size, generation) = (frame.size(), frame.generation());
+                        match self.w.presenters[slot].refresh(frame) {
+                            Ok(image) => {
+                                measure::count(Count::LayerSnapshot);
+                                let clip = frame_clip(size, &layout);
+                                let entry = self.w.frames.entry(tab).or_insert_with(|| {
+                                    PaneFrame::new(image.clone(), clip, size, generation)
+                                });
+                                // a new ring (the page resized on its layer): the panes again
+                                drew |= entry.image != image || entry.clip != clip;
+                                entry.image = image;
+                                entry.clip = clip;
+                                entry.generation = generation;
+                                if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
+                                    glass.pages_written(window, None);
+                                }
+                            }
+                            // the glass blurs the snapshot before it; the layer is unharmed
+                            Err(e) => eprintln!("wubble: page layer snapshot: {e}"),
                         }
                     }
                     Effect::Redraw => {
@@ -650,6 +699,7 @@ mod tests {
             Effect::Present => "Effect::Present =>",
             Effect::PresentLatest => "Effect::PresentLatest =>",
             Effect::Redraw => "Effect::Redraw =>",
+            Effect::Snapshot => "Effect::Snapshot =>",
         }
     }
 
@@ -668,6 +718,7 @@ mod tests {
             Effect::Present,
             Effect::PresentLatest,
             Effect::Redraw,
+            Effect::Snapshot,
         ];
         for effect in effects {
             let arm = arm(effect);

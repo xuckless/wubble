@@ -495,13 +495,26 @@ impl Glass {
 
     /// A pane's texture was written in place within `damage` (window logical px,
     /// `Host::present_panes`): marks the page blur stale only when `damage` reaches an overlay
-    /// glass surface or the ambience around a pane.
-    pub fn pages_written(&mut self, window: &AppWindow, damage: Rect) {
+    /// glass surface or the ambience around a pane. `None`: written whole for the glass over a
+    /// page on its layer (the page layer's snapshot), stale whatever reaches it.
+    pub fn pages_written(&mut self, window: &AppWindow, damage: Option<Rect>) {
         if let Glass::Scene(s) = self {
-            s.renderer.pages_written_rect(damage);
+            match damage {
+                Some(damage) => s.renderer.pages_written_rect(damage),
+                None => s.renderer.pages_written(),
+            }
             if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
                 window.window().request_redraw();
             }
+        }
+    }
+
+    /// Whether an overlay's glass drawn now lies over `page` (window logical px); none without
+    /// the scene.
+    pub fn overlay_over(&self, page: Rect) -> bool {
+        match self {
+            Glass::Scene(s) => s.renderer.overlay_over(page),
+            Glass::SlintOnly => false,
         }
     }
 

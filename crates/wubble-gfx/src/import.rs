@@ -451,6 +451,34 @@ impl FramePresenter {
         Ok((target.image.clone(), Some(damage)))
     }
 
+    /// `frame` written whole over the target shown last, without taking the frame (the page
+    /// layer's snapshot: its layer keeps showing the frame and may hand it over later); into a new
+    /// ring when there is none of the frame's size. The image comes back: the same one when
+    /// written in place, which Slint sees no change of. Only a frame copied in CEF's callback can
+    /// be read so (its copy is a texture of its own: on macOS the pool slot the layer shows).
+    pub fn refresh(&mut self, frame: &NativeFrame) -> Result<slint::Image, GfxError> {
+        let welding::NativeFrame::Copied(copied) = &frame.0 else {
+            return Err(GfxError::Import(
+                "only a copied frame can be read without taking it".into(),
+            ));
+        };
+        let size = frame.size();
+        if self.ring.as_ref().is_none_or(|ring| ring.size != size) {
+            self.ring = Some(Ring::new(&self.ctx.device, size)?);
+        }
+        self.generation = Some(frame.generation());
+        let ring = self.ring.as_ref().expect("made above");
+        let target = ring.latest();
+        self.blit.run(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &copied.texture.view,
+            &target.view,
+            None,
+        );
+        Ok(target.image.clone())
+    }
+
     /// The RGBA pixel at (`x`, `y`) (physical, clamped to the frame) of the
     /// frame `present` returned last, `None` before the first. A CPU
     /// readback that waits for the GPU: for the hand-run `--measure` input

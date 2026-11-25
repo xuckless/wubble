@@ -219,15 +219,17 @@ pub enum Count {
     WakeChange,
     /// The page layer (`host/page_layer.rs`): a frame shown on a pane's layer; a layered pane's
     /// frame (or its layer's latest) presented through the shell; the shell asked to draw its
-    /// page once more (`Effect::Redraw`); a pane's route changed.
+    /// page once more (`Effect::Redraw`); a pane's route changed; the layer's frame copied for
+    /// the glass over it (`Effect::Snapshot`).
     LayerShow,
     LayerPresent,
     LayerRedraw,
     LayerRoute,
+    LayerSnapshot,
 }
 
 impl Count {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::CefFrame,
         Self::CefFrameDamaged,
         Self::SlintRender,
@@ -253,6 +255,7 @@ impl Count {
         Self::LayerPresent,
         Self::LayerRedraw,
         Self::LayerRoute,
+        Self::LayerSnapshot,
     ];
 
     pub fn name(self) -> &'static str {
@@ -282,6 +285,7 @@ impl Count {
             Self::LayerPresent => "layer_presents",
             Self::LayerRedraw => "layer_redraws",
             Self::LayerRoute => "layer_routes",
+            Self::LayerSnapshot => "layer_snapshots",
         }
     }
 

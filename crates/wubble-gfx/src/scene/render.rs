@@ -55,8 +55,8 @@ use std::time::{Duration, Instant};
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
 use super::pages::{
-    OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, damage_reaches_glass, overlaps, page_blur,
-    rect_of,
+    OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, damage_reaches_glass, overlaps,
+    overlay_over, page_blur, rect_of,
 };
 use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::start::{
@@ -802,6 +802,16 @@ impl Renderer {
             .collect()
     }
 
+    /// Whether an overlay's glass drawn now lies over `page` (window logical px): the page layer's
+    /// per-pane `Facts::glass`.
+    pub fn overlay_over(&self, page: super::state::Rect) -> bool {
+        let page = [PageRect {
+            rect: page,
+            radius: 0.0,
+        }];
+        overlay_over(&self.scene.surfaces(), &page)
+    }
+
     /// Whether to build `P` on the next frame, from the glass and panes as they are now and no
     /// new backdrop: the host's `scene_due` input (`Build`) and its wake-up (`After`).
     pub fn page_verdict(&self, now: Instant) -> PageBlur {
@@ -824,9 +834,7 @@ impl Renderer {
         let rects = self.page_rects();
         PageBlurIn {
             pages: !self.pages.is_empty(),
-            overlay: surfaces
-                .iter()
-                .any(|s| s.layer.is_some() && overlaps(&rect_of(s), &rects)),
+            overlay: overlay_over(surfaces, &rects),
             ambience: self.ambience > 0.0 && surfaces.iter().any(|s| s.layer.is_none()),
             stale: self.pages_stale,
             backdrop_new,
