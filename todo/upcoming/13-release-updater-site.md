@@ -9,7 +9,6 @@ versions are semantic from here; Windows is parked ([windows.md](../shelved/wind
 `sh /Users/Shared/wubble-preview<N>-mac.sh`, then signed and uploaded from here.
 
 ## Releases
-- [ ] **Blocks the next release** (owner, 2026-11-24): the released app opens a tab of a wubble smoke test; it must not. Find where the tab comes from (a smoke URL left in the saved session, the start-up arguments or the bundle) and fix it before any release
 - [ ] Serve releases from our own domain (owner, 2026-11-23: "For release we can use our own domain")
 - [ ] Never run on a Mac by hand (as of 2026-11-21): Cmd+Q, the socket check, Cmd+Z undo close tab (the macOS drags and the quarantine fix have their own lines)
 - [ ] macOS: the Mac archive was never in the update manifest before preview.2, so a Mac on preview.1 needs one install by hand; video playback (H.264, AAC) on the Mac build is not checked (it is built on the owner's codec CEF, `/Users/ali/cef-codecs`)
