@@ -1005,7 +1005,7 @@ struct Outcome {
 
 /// What the window is for.
 enum Mode {
-    /// `url`, or the bundled page if `None`; downloads go to `downloads`.
+    /// `url`, else the saved session, else the start page; downloads go to `downloads`.
     Browse {
         url: Option<String>,
         downloads: Option<PathBuf>,
@@ -1074,6 +1074,19 @@ enum Mode {
         /// `--measure-page`: the page instead of the scenario's own.
         page: Option<String>,
     },
+}
+
+/// The tab a run opens on a profile with none: the browser's start page (a fresh install's first
+/// start), a smoke's bundled page; `--measure memory` opens its tabs itself.
+fn fresh_profile_page(mode: &Mode) -> Option<String> {
+    match mode {
+        Mode::Browse { .. } => Some(wubble_core::pages::InternalPage::Start.url().into()),
+        Mode::Measure {
+            scenario: measure::Scenario::Memory,
+            ..
+        } => None,
+        _ => Some(page_url(SMOKE_PAGE)),
+    }
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -1900,8 +1913,8 @@ fn run(
         Mode::Browse { downloads, .. } => downloads.clone(),
         _ => Some(profile.join("downloads")),
     };
-    // `url` is opened in a new tab; without one a fresh profile gets the
-    // bundled page and a restored session opens nothing new.
+    // `url` is opened in a new tab; without one a fresh profile gets
+    // `fresh_profile_page` and a restored session opens nothing new.
     let (url, checks) = match &*mode {
         Mode::Browse { url, .. } => (url.clone(), none),
         Mode::Frames { frames, url } => {
@@ -2259,7 +2272,14 @@ fn run(
         blocking.start(profile, &loaded.settings.blocker);
     }
     measure::mark(measure::Stage::BlockerStarted);
-    let url = url.or_else(|| (loaded.model.tabs.is_empty() && !memory_run).then(bundled));
+    let url = url.or_else(|| {
+        loaded
+            .model
+            .tabs
+            .is_empty()
+            .then(|| fresh_profile_page(mode))
+            .flatten()
+    });
     if let Some(port) = autofill_port.filter(|_| memory_run) {
         // `{}` is each tab's own site (`*.localhost` is loopback in Chromium).
         memory::begin(format!("http://{{}}.localhost:{port}/memory"));
@@ -2483,6 +2503,27 @@ mod tests {
         let off = session_phase_args("session-phase=2", profile, true);
         assert!(app::no_sandbox_requested(&off));
         assert_eq!(off[3], "/tmp/p");
+    }
+
+    #[test]
+    fn a_fresh_profile_opens_the_start_page_and_a_smoke_its_bundled_one() {
+        let browse = Mode::Browse {
+            url: None,
+            downloads: None,
+            listener: None,
+        };
+        assert_eq!(
+            fresh_profile_page(&browse).as_deref(),
+            Some(wubble_core::pages::InternalPage::Start.url())
+        );
+        assert_eq!(fresh_profile_page(&Mode::Nav), Some(page_url(SMOKE_PAGE)));
+        let memory = Mode::Measure {
+            scenario: measure::Scenario::Memory,
+            out: None,
+            load: None,
+            page: None,
+        };
+        assert_eq!(fresh_profile_page(&memory), None);
     }
 
     #[test]
