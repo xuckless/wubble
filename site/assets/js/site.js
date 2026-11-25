@@ -3,7 +3,7 @@
   'use strict';
 
   // ── The release: the one place a new version is written (site/README.md) ──
-  var VERSION = '0.6.2';
+  var VERSION = '0.6.3';
   var BASE = 'https://github.com/xuckless/wubble/releases/download/v' + VERSION + '/wubble-' + VERSION;
   var ASSETS = {
     linux: { url: BASE + '-linux-x86_64.tar.xz', file: 'wubble-' + VERSION + '-linux-x86_64.tar.xz', name: 'Linux', label: 'Download for Linux' },
