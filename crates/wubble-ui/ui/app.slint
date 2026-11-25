@@ -77,9 +77,9 @@ export component AppWindow inherits Window {
     preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
     preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
     min-width: root.pip ? Shell.pip-min-width
-        : root.popup-window ? Shell.popup-min-width : Chrome.windowMin-w;
+        : root.popup-window ? root.popup-min-side : Chrome.windowMin-w;
     min-height: root.pip ? Shell.pip-min-height
-        : root.popup-window ? Shell.popup-min-height : Chrome.windowMin-h;
+        : root.popup-window ? root.popup-min-side : Chrome.windowMin-h;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
@@ -87,6 +87,9 @@ export component AppWindow inherits Window {
     // What the window is (wubble_core::window::WindowKind::index): 0 Main, 1 Little, 2 Popup,
     // 3 Pip.
     in property <int> window-kind: 0;
+    // A pop-up window's least side, from Rust (wubble_core::window::MIN_POPUP_SIDE, Blink's least
+    // window.open size).
+    in property <length> popup-min-side;
     // Picture-in-picture: the page alone, edge to edge, over other windows (a hint Wayland
     // ignores), with its own controls on hover.
     out property <bool> pip: root.window-kind == 3;

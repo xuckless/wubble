@@ -1168,6 +1168,7 @@ impl WindowFactory {
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
+        window.set_popup_min_side(wubble_core::window::MIN_POPUP_SIDE as f32);
         // the page hole's image (kit `PageHole`), when the mode's layers sit under the shell
         if page_layer().row().order == wubble_core::page_layer::Order::Below {
             window
