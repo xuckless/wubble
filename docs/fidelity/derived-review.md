@@ -32,6 +32,8 @@ the design rule each derives from. "was" marks a value L2 changed toward the des
 | `pip-width` | `400px` | app.slint | wubble-only: picture-in-picture window, 16:9 |
 | `pip-height` | `225px` | app.slint | wubble-only: as pip-width |
 | `pip-min-height` | `135px` | app.slint | wubble-only: as pip-width (pip-min-width 240 at 16:9) |
+| `popup-min-width` | `100px` | app.slint | wubble-only: a pop-up window's least size (it inherited `Chrome.windowMin` 560x380, larger than many `window.open` sizes); Blink's least `window.open` size, 100x100 (`ChromeClient`'s minimum window size) |
+| `popup-min-height` | `100px` | app.slint | wubble-only: as popup-min-width |
 | `check-tick` | `px * 3 * 14 / 24` | components/check-box.slint | pages/touch.tsx:570 the tick: stroke 3 of a 24 viewBox drawn at 14 px (was 1.6) |
 | `settings-pad-share` | `0.04` | components/settings.slint | pages/settings.css:6 .st-grid padding clamp(16px, 4cqi, 48px) (not read by the generator) |
 | `settings-spy` | `140px` | components/settings.slint | pages/settings.tsx:468 the scroll spy line (t <= y + 140) |

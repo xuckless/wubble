@@ -76,8 +76,10 @@ export component AppWindow inherits Window {
     icon: @image-url("../../../assets/icons/linux/hicolor/128x128/apps/wubble.png");
     preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
     preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
-    min-width: root.pip ? Shell.pip-min-width : Chrome.windowMin-w;
-    min-height: root.pip ? Shell.pip-min-height : Chrome.windowMin-h;
+    min-width: root.pip ? Shell.pip-min-width
+        : root.popup-window ? Shell.popup-min-width : Chrome.windowMin-w;
+    min-height: root.pip ? Shell.pip-min-height
+        : root.popup-window ? Shell.popup-min-height : Chrome.windowMin-h;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
@@ -88,6 +90,8 @@ export component AppWindow inherits Window {
     // Picture-in-picture: the page alone, edge to edge, over other windows (a hint Wayland
     // ignores), with its own controls on hover.
     out property <bool> pip: root.window-kind == 3;
+    // A page's pop-up window (`window.open` with a size): as small as Blink lets the page ask.
+    out property <bool> popup-window: root.window-kind == 2;
     always-on-top: root.pip;
     no-frame: !root.native-frame;
     // A Main window's tab plays in the picture-in-picture window: a card stands in for it.

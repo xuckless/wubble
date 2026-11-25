@@ -2,7 +2,7 @@
 
 Legend: `[ ]` open · `[~]` in progress. Loaded by the owner (2026-11-25): the easiest build-outs, integrated one feature at a time (compile, test, caveman then adversarial review, merge). The first three are written on branches from 11-22 (`feat/site-sound-tab-menu`, `feat/tab-search`, `feat/chrome-shortcut-gaps`): rebase onto main first.
 
-- [ ] A pop-up window minimum-size design token (approved by the owner, not started): pop-up windows inherit `Chrome.windowMin` (560x380) today
+- [~] A pop-up window minimum-size design token (approved by the owner): `Shell.popup-min-width`/`-height`, 100x100 as Blink's least `window.open` size (on derived-review.md); written blind on sprint/features, not compiled
 
 ## Mute site, and the Chrome tab and link menu rows still missing (`site-sound-tab-menu`)
 
