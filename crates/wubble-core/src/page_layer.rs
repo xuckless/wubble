@@ -1,7 +1,8 @@
 //! The page on its own OS layer (macOS stage 1; decisions.md "Page layer"): a pane
 //! whose frames go to a layer of the OS compositor (a `CALayer` whose contents is the frame's
-//! IOSurface) instead of through the shell's presenter and a Slint render. A page-only frame then
-//! costs no shell render at all.
+//! IOSurface on macOS, a Wayland `wl_subsurface` showing it as a dmabuf on Linux) instead of
+//! through the shell's presenter and a Slint render. A page-only frame then costs no shell
+//! render at all.
 //!
 //! One [`Route`] per pane and one pure [`transition`]. What keeps the page on the shell's path
 //! ([`Needs`]) is not stored here: the host derives it each time from the owners of that state
@@ -501,6 +502,40 @@ pub fn place(
     }
 }
 
+/// A layer's `frame` (points, from [`place`]) in the whole points a Wayland subsurface takes
+/// (`wl_subsurface.set_position`, `wp_viewport.set_destination`): `[x, y, w, h]`, rounded
+/// outwards, so at a fractional scale the layer covers its pane and the shell's pixels around
+/// the hole hide any edge of it (the hole is never wider than the pane).
+pub fn covering(frame: Rect) -> [i32; 4] {
+    let (x0, y0) = (frame.x.floor(), frame.y.floor());
+    let (x1, y1) = ((frame.x + frame.w).ceil(), (frame.y + frame.h).ceil());
+    [x0 as i32, y0 as i32, (x1 - x0) as i32, (y1 - y0) as i32]
+}
+
+/// How a window's shell presents its frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Present {
+    /// The platform's vsync (FIFO: the present waits for the display).
+    Vsync,
+    /// Mailbox, paced by the shell itself: never more often than the display's rate.
+    Paced,
+}
+
+/// The shell's present while a layer of its window exists, by platform (`std::env::consts::OS`);
+/// [`Present::Vsync`] for one not named, and always without a layer. Linux: FIFO with a synced
+/// subsurface stalled mutter's headless display (docs/research/linux-page-layer.md section 7);
+/// Mailbox is clean there and on the desktop, but presents as often as it is asked (7.x), so the
+/// shell paces it. macOS keeps vsync (Core Animation's transaction, no stall).
+pub const LAYER_PRESENT: &[(&str, Present)] = &[("linux", Present::Paced)];
+
+/// How a window of platform `os` presents, with a page layer of it (`layers`) or none.
+pub fn shell_present(os: &str, layers: bool) -> Present {
+    LAYER_PRESENT
+        .iter()
+        .find(|&&(name, _)| layers && name == os)
+        .map_or(Present::Vsync, |&(_, present)| present)
+}
+
 /// `--page-layer`: which panes may go to a layer; each is a row of [`MODES`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
@@ -561,10 +596,12 @@ pub fn mode(name: &str) -> Option<Mode> {
 }
 
 /// The mode the browser starts in on each platform (`std::env::consts::OS`) without
-/// `--page-layer`, unless Settings turned it off (`settings::PAGE_LAYER`): macOS `window` from
-/// 0.6.2 (decisions.md); [`Mode::Off`] for a platform the table does not name (none other has a
-/// layer). Smokes and measurements start off unless they ask.
-pub const PLATFORM_MODES: &[(&str, Mode)] = &[("macos", Mode::Window)];
+/// `--page-layer`, when Settings has it on (`settings::PAGE_LAYER`): macOS `window` from 0.6.2
+/// (decisions.md, on by default); Linux `window` (a Wayland subsurface; X11 and XWayland have no
+/// layer and keep the shell's path), off by default there until the owner measured it (the
+/// setting's default is per platform); [`Mode::Off`] for a platform the table does not name.
+/// Smokes and measurements start off unless they ask.
+pub const PLATFORM_MODES: &[(&str, Mode)] = &[("macos", Mode::Window), ("linux", Mode::Window)];
 
 /// The browser's mode on platform `os` ([`PLATFORM_MODES`]).
 pub fn platform_mode(os: &str) -> Mode {
@@ -1475,6 +1512,37 @@ mod tests {
     }
 
     #[test]
+    fn a_subsurface_covers_its_frame_in_whole_points() {
+        let r = |x, y, w, h| Rect { x, y, w, h };
+        #[rustfmt::skip]
+        let rows: &[(&str, Rect, [i32; 4])] = &[
+            ("whole points as they are", r(220.0, 60.0, 1100.0, 760.0), [220, 60, 1100, 760]),
+            ("at 1.25 a pane edge between points: rounded outwards", r(10.4, 20.8, 100.4, 50.0), [10, 20, 101, 51]),
+            ("both edges inside the same points", r(0.2, 0.2, 0.4, 0.4), [0, 0, 1, 1]),
+            ("empty at a whole point stays empty", r(5.0, 5.0, 0.0, 0.0), [5, 5, 0, 0]),
+            ("negative origin (a pane sliding in)", r(-3.5, 0.0, 10.0, 10.0), [-4, 0, 11, 10]),
+        ];
+        for &(name, frame, want) in rows {
+            assert_eq!(covering(frame), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_shell_paces_its_own_presents_only_with_a_layer_on_linux() {
+        #[rustfmt::skip]
+        let rows = [
+            ("linux with a layer: Mailbox, paced by the shell", "linux", true, Present::Paced),
+            ("linux without one: vsync", "linux", false, Present::Vsync),
+            ("macos with a layer: vsync (its transaction)", "macos", true, Present::Vsync),
+            ("macos without one", "macos", false, Present::Vsync),
+            ("a platform the table does not name", "freebsd", true, Present::Vsync),
+        ];
+        for (name, os, layers, want) in rows {
+            assert_eq!(shell_present(os, layers), want, "{name}");
+        }
+    }
+
+    #[test]
     fn the_flag_names_each_mode_and_defaults_off() {
         assert_eq!(mode("off"), Some(Mode::Off));
         assert_eq!(mode("fullscreen"), Some(Mode::Fullscreen));
@@ -1484,7 +1552,7 @@ mod tests {
         #[rustfmt::skip]
         let platforms = [
             ("macos: under the shell", "macos", Mode::Window),
-            ("linux: no layer", "linux", Mode::Off),
+            ("linux: under the shell (Wayland; the setting is off by default there)", "linux", Mode::Window),
             ("windows: no layer", "windows", Mode::Off),
             ("one the table does not name", "freebsd", Mode::Off),
         ];

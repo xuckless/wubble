@@ -363,14 +363,15 @@ pub const GLASS_QUALITY: SettingDef = SettingDef {
     section: Section::Performance,
     restart: false,
 };
-/// Pages on their own OS layer, in the platform's mode (`page_layer::PLATFORM_MODES`: macOS
-/// `window`, nothing elsewhere); off, every page goes through the shell. Read at start;
-/// `--page-layer` overrides it.
+/// Pages on their own OS layer, in the platform's mode (`page_layer::PLATFORM_MODES`: `window`
+/// on macOS and Linux, nothing elsewhere); off, every page goes through the shell. Read at
+/// start; `--page-layer` overrides it. On by default on macOS; off on Linux until the owner
+/// has measured the Wayland layer (an X11 session has none either way).
 pub const PAGE_LAYER: SettingDef = SettingDef {
     key: "page.layer",
     kind: SettingKind::Bool,
-    default: "1",
-    label: "Show pages on their own layer (macOS)",
+    default: if cfg!(target_os = "macos") { "1" } else { "0" },
+    label: "Show pages on their own layer (macOS, Wayland)",
     section: Section::Performance,
     restart: true,
 };

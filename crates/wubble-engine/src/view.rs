@@ -903,12 +903,14 @@ impl View {
     /// The page layer's `Effect::Buffers` (`wubble_core::page_layer`): this view's frames are
     /// copied into OS buffers (`on`), [`wubble_core::page_layer::POOL_SLOTS`] of them chosen by
     /// `pick_slot`, which each frame then carries for the layer; or into textures of their
-    /// own. `Err` where welding has none (every platform but macOS).
-    pub fn set_os_buffers(&mut self, on: bool) -> Result<(), String> {
+    /// own. `formats`: the (DRM fourcc, modifier) pairs the compositor takes the buffers in
+    /// (the layer's `buffer_formats`; empty on macOS). `Err` where welding has none (Windows).
+    pub fn set_os_buffers(&mut self, on: bool, formats: &[(u32, u64)]) -> Result<(), String> {
         use wubble_core::page_layer::{POOL_SLOTS, pick_slot};
-        let request = on.then_some(welding::OsBufferRequest {
+        let request = on.then(|| welding::OsBufferRequest {
             slots: POOL_SLOTS,
             choose: pick_slot,
+            formats: formats.into(),
         });
         self.producer
             .set_os_buffers(request)
@@ -916,7 +918,7 @@ impl View {
     }
 
     /// Frames welding dropped since the last call because every OS buffer of
-    /// [`Self::set_os_buffers`] was in use (0 without them; macOS only).
+    /// [`Self::set_os_buffers`] was in use (0 without them).
     pub fn take_os_buffers_busy(&mut self) -> u64 {
         self.producer.take_os_buffers_busy()
     }
