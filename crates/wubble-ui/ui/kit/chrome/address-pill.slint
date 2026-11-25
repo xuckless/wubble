@@ -95,6 +95,8 @@ export component AddressPill inherits Rectangle {
         ? { x: rail.absolute-position.x + rail.width, y: rail.absolute-position.y + rail.height / 2 }
         : { x: root.absolute-position.x + Tsx.address-origin-dx, y: root.absolute-position.y + root.height / 2 };
     callback activated();
+    // wubble: a right click on the pill at x, y (window coordinates): the host's address menu
+    callback context(length, length);
     // wubble: the chips at the pill's right end.
     in property <bool> bookmarkable: false;
     in property <bool> bookmarked: false;
@@ -151,6 +153,11 @@ export component AddressPill inherits Rectangle {
             mouse-cursor: text;
             clicked => {
                 root.activated();
+            }
+            pointer-event(e) => {
+                if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                    root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
             }
         }
 

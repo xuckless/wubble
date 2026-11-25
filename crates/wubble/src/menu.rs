@@ -155,6 +155,12 @@ pub enum Command {
     Dismiss,
     /// Turn caret browsing on, and stop asking first when `dont_ask` (`caret_entries`).
     CaretBrowsing { dont_ask: bool },
+    /// An edit of the command bar's field (`address_entries`).
+    FieldEdit(FieldEdit),
+    /// Load this clipboard text from the address field it was pasted in, as typed there.
+    PasteAndGo(AddressField, String),
+    /// Turn Always Show Full URLs on or off (`settings::UI_FULL_URLS`).
+    SetFullUrls(bool),
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -279,6 +285,15 @@ const SEARCH_LABEL_CHARS: usize = 50;
 
 /// `Search <engine> for “<selection>”`, the selection shortened and on one line.
 pub fn search_label(engine: Option<&str>, text: &str) -> String {
+    format!(
+        "Search {} for \u{201c}{}\u{201d}",
+        engine.unwrap_or("the Web"),
+        short_text(text)
+    )
+}
+
+/// `text` on one line, cut to [`SEARCH_LABEL_CHARS`] with an ellipsis.
+fn short_text(text: &str) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let short: String = flat.chars().take(SEARCH_LABEL_CHARS).collect();
     let more = if flat.chars().count() > SEARCH_LABEL_CHARS {
@@ -286,10 +301,7 @@ pub fn search_label(engine: Option<&str>, text: &str) -> String {
     } else {
         ""
     };
-    format!(
-        "Search {} for \u{201c}{short}{more}\u{201d}",
-        engine.unwrap_or("the Web")
-    )
+    format!("{short}{more}")
 }
 
 /// How many characters of a host a menu row names (QA CRIT-05, HIGH-03): a longer one is cut in
@@ -663,9 +675,14 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
             },
         )
     });
+    grouped(suggestions.chain(fixed))
+}
+
+/// Entries in table order with a divider wherever the group changes.
+fn grouped(rows: impl Iterator<Item = (u8, Entry)>) -> Vec<Entry> {
     let mut out: Vec<Entry> = vec![];
     let mut last = None;
-    for (group, entry) in suggestions.chain(fixed) {
+    for (group, entry) in rows {
         if last.is_some_and(|g| g != group) {
             out.push(Entry {
                 label: String::new(),
@@ -680,6 +697,185 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
         out.push(entry);
     }
     out
+}
+
+/// Which address field a menu is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressField {
+    /// The command bar's field: its text rows act on what is typed.
+    Bar,
+    /// The address pill: the page's address.
+    Pill,
+}
+
+/// An edit of the command bar's field from its menu. All but Delete are the field's own
+/// (`FieldEdit` in model.slint); Delete is the host's edit of the text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldEdit {
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    SelectAll,
+}
+
+/// What the address menu needs to know when it opens.
+#[derive(Clone, Copy, Debug)]
+pub struct FieldFacts<'a> {
+    pub field: AddressField,
+    /// Text is selected in the bar's field.
+    pub selected: bool,
+    /// The bar's field holds text.
+    pub text: bool,
+    /// The clipboard's text; empty when it holds none (or cannot be read here).
+    pub clipboard: &'a str,
+    /// Always Show Full URLs is on.
+    pub full_urls: bool,
+}
+
+impl FieldFacts<'_> {
+    fn bar(&self) -> bool {
+        self.field == AddressField::Bar
+    }
+    fn pill(&self) -> bool {
+        self.field == AddressField::Pill
+    }
+    fn pasteable(&self) -> bool {
+        !self.clipboard.trim().is_empty()
+    }
+}
+
+/// One row of the address menu: its group (a divider between groups), when it shows and is
+/// enabled, its label, what it runs and the action whose key does the same.
+struct FieldRow {
+    group: u8,
+    show: fn(&FieldFacts) -> bool,
+    enabled: fn(&FieldFacts) -> bool,
+    label: fn(&FieldFacts) -> String,
+    command: fn(&FieldFacts) -> Command,
+    key: Option<Action>,
+}
+
+/// The address field's menu, in order: Chromium's omnibox menu
+/// (`chrome/browser/ui/views/omnibox/omnibox_view_views.cc` `UpdateContextMenu`, BSD-3-Clause;
+/// rows and labels only). The bar's field has the text rows and Paste and Go; the pill has
+/// Copy and Edit Address and Paste and Go; both end in Always Show Full URLs. Undo is left out:
+/// Slint's field has no undo the host can run.
+const FIELD_ROWS: &[FieldRow] = &[
+    FieldRow {
+        group: 0,
+        show: FieldFacts::bar,
+        enabled: |f| f.selected,
+        label: |_| "Cut".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Cut),
+        key: Some(Action::Cut),
+    },
+    FieldRow {
+        group: 0,
+        show: FieldFacts::bar,
+        enabled: |f| f.selected,
+        label: |_| "Copy".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Copy),
+        key: Some(Action::Copy),
+    },
+    FieldRow {
+        group: 0,
+        show: FieldFacts::bar,
+        enabled: FieldFacts::pasteable,
+        label: |_| "Paste".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Paste),
+        key: Some(Action::Paste),
+    },
+    FieldRow {
+        group: 0,
+        show: |_| true,
+        enabled: FieldFacts::pasteable,
+        label: |f| paste_label(f.clipboard),
+        command: |f| Command::PasteAndGo(f.field, f.clipboard.trim().to_owned()),
+        key: None,
+    },
+    FieldRow {
+        group: 0,
+        show: FieldFacts::bar,
+        enabled: |f| f.selected,
+        label: |_| "Delete".into(),
+        command: |_| Command::FieldEdit(FieldEdit::Delete),
+        key: None,
+    },
+    FieldRow {
+        group: 1,
+        show: FieldFacts::bar,
+        enabled: |f| f.text,
+        label: |_| "Select All".into(),
+        command: |_| Command::FieldEdit(FieldEdit::SelectAll),
+        key: Some(Action::SelectAll),
+    },
+    FieldRow {
+        group: 1,
+        show: FieldFacts::pill,
+        enabled: |_| true,
+        label: |_| "Copy Address".into(),
+        command: |_| Command::Perform(Action::CopyUrl),
+        key: Some(Action::CopyUrl),
+    },
+    FieldRow {
+        group: 1,
+        show: FieldFacts::pill,
+        enabled: |_| true,
+        label: |_| "Edit Address".into(),
+        command: |_| Command::Perform(Action::FocusAddress),
+        key: Some(Action::FocusAddress),
+    },
+    FieldRow {
+        group: 2,
+        show: |_| true,
+        enabled: |_| true,
+        label: |_| "Always Show Full URLs".into(),
+        command: |f| Command::SetFullUrls(!f.full_urls),
+        key: None,
+    },
+];
+
+/// The address field's menu (`FIELD_ROWS`), each row's shortcut from the keymap.
+pub fn address_entries(facts: FieldFacts, keymap: &Keymap) -> Vec<Entry> {
+    let rows = FIELD_ROWS.iter().filter(|r| (r.show)(&facts)).map(|r| {
+        let command = (r.command)(&facts);
+        let on = command == Command::SetFullUrls(false);
+        let entry = Entry {
+            label: (r.label)(&facts),
+            command,
+            enabled: (r.enabled)(&facts),
+            // the switch's state, as a check
+            icon: if on { "check" } else { "" },
+            shortcut: r
+                .key
+                .and_then(|a| keymap.shortcut_for(a))
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
+            danger: false,
+        };
+        (r.group, entry)
+    });
+    grouped(rows)
+}
+
+/// The paste row's label, from what the clipboard's text would do as typed
+/// (`omnibox::classify`): Chromium's `IDS_PASTE_AND_GO` "Paste and go to <url>" and
+/// `IDS_PASTE_AND_SEARCH` "Paste and search for “<text>”", the text cut as the page menu's
+/// search row; plain "Paste and Go" when the clipboard holds no text.
+pub fn paste_label(clipboard: &str) -> String {
+    if clipboard.trim().is_empty() {
+        return "Paste and Go".into();
+    }
+    match omnibox::classify(clipboard) {
+        omnibox::Intent::Url(url) => format!(
+            "Paste and Go to {}",
+            wubble_core::url::elide_middle(&url, SEARCH_LABEL_CHARS)
+        ),
+        omnibox::Intent::Search(q) => {
+            format!("Paste and Search for \u{201c}{}\u{201d}", short_text(&q))
+        }
+    }
 }
 
 /// The tab row's menu: the rows of `wubble_core::tabmenu::ROWS` that apply to `tab`, in table
@@ -1200,11 +1396,7 @@ pub fn caret_entries() -> Vec<Entry> {
             Command::Info,
             false,
         ),
-        line(
-            "Turn On",
-            Command::CaretBrowsing { dont_ask: false },
-            true,
-        ),
+        line("Turn On", Command::CaretBrowsing { dont_ask: false }, true),
         line(
             "Turn On, Don\u{2019}t Ask Again",
             Command::CaretBrowsing { dont_ask: true },
@@ -1769,6 +1961,114 @@ mod tests {
             assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
             assert_eq!(e[2].command, Command::Dismiss);
         }
+    }
+
+    #[test]
+    fn address_menus_follow_the_field_and_the_clipboard() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        let facts = |field, selected, text, clipboard| FieldFacts {
+            field,
+            selected,
+            text,
+            clipboard,
+            full_urls: false,
+        };
+        let bar = address_entries(facts(AddressField::Bar, true, true, " example.com "), &km);
+        assert_eq!(
+            labels(&bar),
+            [
+                "Cut",
+                "Copy",
+                "Paste",
+                "Paste and Go to https://example.com/",
+                "Delete",
+                "-",
+                "Select All",
+                "-",
+                "Always Show Full URLs"
+            ]
+        );
+        let paste = bar.iter().find(|e| e.label.starts_with("Paste and"));
+        assert_eq!(
+            paste.map(|e| &e.command),
+            Some(&Command::PasteAndGo(
+                AddressField::Bar,
+                "example.com".into()
+            ))
+        );
+        let cut = bar.iter().find(|e| e.label == "Cut");
+        assert_eq!(cut.map(|e| e.shortcut.as_str()), Some("Ctrl+X"));
+        let pill = address_entries(facts(AddressField::Pill, false, false, "two\nwords"), &km);
+        assert_eq!(
+            labels(&pill),
+            [
+                "Paste and Search for \u{201c}two words\u{201d}",
+                "-",
+                "Copy Address",
+                "Edit Address",
+                "-",
+                "Always Show Full URLs"
+            ]
+        );
+        // what is enabled: (name, facts, the rows that are)
+        for (name, f, want) in [
+            (
+                "nothing selected, empty clipboard",
+                facts(AddressField::Bar, false, true, ""),
+                vec!["Select All", "Always Show Full URLs"],
+            ),
+            (
+                "an empty field",
+                facts(AddressField::Bar, false, false, "  "),
+                vec!["Always Show Full URLs"],
+            ),
+            (
+                "a selection",
+                facts(AddressField::Bar, true, true, ""),
+                vec![
+                    "Cut",
+                    "Copy",
+                    "Delete",
+                    "Select All",
+                    "Always Show Full URLs",
+                ],
+            ),
+            (
+                "the pill, nothing to paste",
+                facts(AddressField::Pill, false, false, ""),
+                vec!["Copy Address", "Edit Address", "Always Show Full URLs"],
+            ),
+        ] {
+            let entries = address_entries(f, &km);
+            let on: Vec<&str> = entries
+                .iter()
+                .filter(|e| e.enabled)
+                .map(|e| e.label.as_str())
+                .collect();
+            assert_eq!(on, want, "{name}");
+        }
+        // the empty clipboard's row says so; the switch shows its state and flips it
+        let empty = address_entries(facts(AddressField::Pill, false, false, ""), &km);
+        assert_eq!(empty[0].label, "Paste and Go");
+        let full = |on| {
+            let f = FieldFacts {
+                full_urls: on,
+                ..facts(AddressField::Pill, false, false, "")
+            };
+            let e = address_entries(f, &km);
+            let last = e.last().expect("rows");
+            (last.icon, last.command.clone())
+        };
+        assert_eq!(full(false), ("", Command::SetFullUrls(true)));
+        assert_eq!(full(true), ("check", Command::SetFullUrls(false)));
+        // a long address is cut in the middle, a long search at its end
+        let long = format!("https://a.test/{}", "x".repeat(80));
+        assert_eq!(
+            paste_label(&long).chars().count(),
+            "Paste and Go to ".len() + 50
+        );
+        let words = "word ".repeat(20);
+        assert!(paste_label(&words).ends_with("\u{2026}\u{201d}"));
     }
 
     fn labels(entries: &[Entry]) -> Vec<&str> {

@@ -181,6 +181,8 @@ pub enum Applied {
     TouchSizing(crate::touch::Sizing),
     /// Shift+click opens a peek.
     Glance(bool),
+    /// The address pill shows whole URLs.
+    FullUrls(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
     /// Whether wubble hosts its MCP server (`agent::hosting`), switched at once.
@@ -344,6 +346,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
+        k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
@@ -889,6 +892,14 @@ mod tests {
             Some(Applied::PipOnTabSwitch(false))
         );
         assert_eq!(effect_of("media.keys", &s), Some(Applied::MediaKeys(true)));
+        assert_eq!(
+            effect_of("ui.full_urls", &s),
+            Some(Applied::FullUrls(false))
+        );
+        assert_eq!(
+            effect_of("ui.full_urls", &stored(&[("ui.full_urls", "1")])),
+            Some(Applied::FullUrls(true))
+        );
         assert_eq!(
             effect_of("a11y.web", &s),
             Some(Applied::WebAccessibility(crate::motion::Calm::Auto))

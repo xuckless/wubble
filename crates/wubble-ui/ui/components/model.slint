@@ -165,6 +165,15 @@ export enum CommandPlacement {
     in-page,
 }
 
+// wubble: what the address field's menu does to the command bar's field (the host's menu rows,
+// Chromium's omnibox menu); Delete is the host's own edit of the text.
+export enum FieldEdit {
+    cut,
+    copy,
+    paste,
+    select-all,
+}
+
 // What the command bar opens for (mirrors wubble_core::chrome::CommandMode).
 export enum CommandMode {
     here,

@@ -282,6 +282,9 @@ pub struct Row {
     pub refused_under: &'static [Group],
     /// Opening it closes the visible overlays of these groups.
     pub closes: &'static [Group],
+    /// Of those, the surfaces it opens over and leaves open: a menu over the command bar is its
+    /// field's (Chromium's omnibox menu), and the bar keeps its text under it.
+    pub spares: &'static [Kind],
     /// One in the window: opening it closes its kind's other one, on this window's tab or a
     /// hidden one (another window's stays).
     pub one_per_window: bool,
@@ -364,6 +367,7 @@ const DISMISSED: Row = Row {
     remount: true,
     refused_under: HOLDS,
     closes: USERS,
+    spares: &[],
     one_per_window: false,
     ends: &[],
     on_lost: false,
@@ -420,7 +424,7 @@ pub const ROWS: &[Row] = &[
     Row { kind: Kind::Downloads, z: 100, glass: Some("downloads"), on_leave: false, ..DISMISSED },
     Row { kind: Kind::Extensions, z: 102, glass: Some("extensions"), ..DISMISSED },
     Row { kind: Kind::Spaces, z: 104, glass: Some("spaces"), windows: MAIN, ..DISMISSED },
-    Row { kind: Kind::Menu, z: 110, glass: Some("menu"), ..DISMISSED },
+    Row { kind: Kind::Menu, z: 110, glass: Some("menu"), spares: &[Kind::CommandBar], ..DISMISSED },
     // ----- the tab's panels: its machine opens and closes them; Escape and the overlays leave them
     Row { kind: Kind::ErrorPanel, scope: Scope::Tab, z: 60, group: Group::Coexist, pointer: Pointer::OwnRect, glass: Some("error"),
         life: Life::Owner, escape: Esc::Never, on_leave: false, refused_under: &[], closes: &[], ..DISMISSED },

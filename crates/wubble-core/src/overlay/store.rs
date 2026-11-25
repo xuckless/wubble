@@ -611,7 +611,7 @@ impl<E: Env> Step<'_, E> {
         }
         let mut gone: Vec<Layer> = seen
             .into_iter()
-            .filter(|o| row.closes.contains(&o.kind.row().group))
+            .filter(|o| row.closes.contains(&o.kind.row().group) && !row.spares.contains(&o.kind))
             .collect();
         // what it ends is closed wherever it is; another grab it does not end refuses it
         let live = self.ui.live(w);

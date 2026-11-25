@@ -15,7 +15,7 @@ import { BrowserCss } from "../gen/css.slint";
 import { Calm } from "../motion/calm.slint";
 import { CommandHead } from "command-head.slint";
 import { CommandPanel, CommandList } from "command-list.slint";
-import { BeamShape, CommandBarState, CommandMode, CommandResult, Origin, GlassKeys, GlassOver } from "../../components/model.slint";
+import { BeamShape, CommandBarState, CommandMode, CommandResult, FieldEdit, Origin, GlassKeys, GlassOver } from "../../components/model.slint";
 import { BorderBeam } from "../../components/border-beam.slint";
 
 export component CommandBar inherits Rectangle {
@@ -45,6 +45,19 @@ export component CommandBar inherits Rectangle {
     public function focus-input() {
         list.selected = 0;
         head.take-focus();
+    }
+    // wubble: the address menu over the field (`CommandHead`)
+    callback field-context(length, length);
+    out property <int> field-selection-start: head.selection-start;
+    out property <int> field-selection-end: head.selection-end;
+    public function field-edit(op: FieldEdit) {
+        head.edit(op);
+    }
+    public function field-caret(at: int) {
+        head.caret(at);
+    }
+    public function refocus-input() {
+        head.refocus();
     }
     public function release-keys() {
         let had = head.has-focus;
@@ -147,6 +160,9 @@ export component CommandBar inherits Rectangle {
                 }
                 removed => {
                     list.close-current();
+                }
+                context(x, y) => {
+                    root.field-context(x, y);
                 }
                 escaped => {
                     root.dismiss();

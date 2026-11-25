@@ -627,6 +627,14 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Model(command)) => self.dispatch(command.0),
                 MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
                 MenuEffect::Run(MenuCommand::ToggleMuteSite(t)) => self.toggle_mute_site(t),
+                MenuEffect::Run(MenuCommand::FieldEdit(edit)) => self.field_edit(edit),
+                MenuEffect::Run(MenuCommand::PasteAndGo(field, text)) => {
+                    self.paste_and_go(field, &text);
+                }
+                MenuEffect::Run(MenuCommand::SetFullUrls(on)) => {
+                    let key = wubble_core::settings::UI_FULL_URLS.key;
+                    self.write_setting(key, if on { "1" } else { "0" });
+                }
                 MenuEffect::Run(MenuCommand::ReloadTab(t)) => {
                     if let Some(view) = self.tab_view(t) {
                         view.reload();

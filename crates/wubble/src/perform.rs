@@ -41,6 +41,8 @@ pub enum Plan {
     FocusAddress,
     /// Open the command bar on every open and recently closed tab (tab search).
     SearchTabs,
+    /// Load the clipboard's text in the visible tab as typed (a new tab without one).
+    PasteAndGo,
     /// Add this Space (a `Command::NewSpace`), then show it.
     NewSpace(Command),
     /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
@@ -72,7 +74,10 @@ pub enum Plan {
     /// Ctrl+E: the command bar on the visible tab, every query a search.
     FocusSearch,
     /// Ctrl+S: download this tab's page, asking where (the menu's Save Page As).
-    SavePage { tab: TabId, url: String },
+    SavePage {
+        tab: TabId,
+        url: String,
+    },
     /// Ctrl+O: the OS dialog for local files, each opened in a new tab.
     OpenFile,
     /// F7: caret browsing on or off (`wubble_core::caret`).
@@ -182,6 +187,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::OpenFile => Plan::OpenFile,
         Action::ToggleCaretBrowsing => visible.map_or(Plan::Nothing, |_| Plan::CaretBrowsing),
         Action::Fullscreen => Plan::Fullscreen,
+        Action::PasteAndGo => Plan::PasteAndGo,
         Action::CopyUrl => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| !t.url.is_empty())
@@ -249,8 +255,12 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::NewPrivateWindow => Plan::Model(Command::NewPrivateWindow { url: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
         Action::MinimizeWindow => Plan::Minimize,
-        Action::NextWindow => model.window_step(1).map_or(Plan::Nothing, Plan::RaiseWindow),
-        Action::PrevWindow => model.window_step(-1).map_or(Plan::Nothing, Plan::RaiseWindow),
+        Action::NextWindow => model
+            .window_step(1)
+            .map_or(Plan::Nothing, Plan::RaiseWindow),
+        Action::PrevWindow => model
+            .window_step(-1)
+            .map_or(Plan::Nothing, Plan::RaiseWindow),
         Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
             Plan::Model(Command::MoveTabToWindow {
                 tab,
@@ -433,6 +443,7 @@ mod tests {
         assert_eq!(plan(Action::ReopenClosedTab, &m), Plan::ReopenClosed);
         assert_eq!(plan(Action::UndoCloseTab, &m), Plan::UndoClose);
         assert_eq!(plan(Action::FocusAddress, &m), Plan::FocusAddress);
+        assert_eq!(plan(Action::PasteAndGo, &m), Plan::PasteAndGo);
         assert_eq!(plan(Action::NextRegion, &m), Plan::CycleRegion(false));
         assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
         assert_eq!(plan(Action::Quit, &m), Plan::Quit);

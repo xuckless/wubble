@@ -24,7 +24,7 @@ Compared with Chromium's `chrome/browser/ui/accelerator_table.cc` (already a cit
 
 ## Address field context menu: Paste and go, Paste and search, copy and edit rows (`address-paste-and-go`)
 
-Key: `address-paste-and-go` · engine patch: no · state: not written.
+Key: `address-paste-and-go` · engine patch: no · state: [~] written blind on sprint/features, not compiled.
 
 Right-clicking Chrome's omnibox gives Undo, Cut, Copy, Paste, 'Paste and go to <url>' or 'Paste and search for "text"', Delete, Select all, and 'Always show full URLs'. In wubble, the command bar field (kit/chrome/command-head.slint) and the address pill (kit/chrome/address-pill.slint) have no menu. Chrome's paste-and-go is missing entirely, and Shift+Insert paste in shell fields is an open TODO.
 

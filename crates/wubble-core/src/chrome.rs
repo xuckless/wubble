@@ -164,8 +164,9 @@ pub fn command(state: CommandBar, event: CommandEvent) -> (CommandBar, Vec<Comma
 /// What the address pill shows for `url`: the host in ink and the rest in haze (chrome.tsx
 /// `addressOf`). wubble's own pages read `wubble` + `://settings`; no page (a new tab, the start
 /// page) reads `wubble` + `://start`, as the design's; a `data:` page (bundled pages) is named
-/// by its scheme alone, never its raw body.
-pub fn address_parts(url: &str) -> (String, String) {
+/// by its scheme alone, never its raw body. `full` (Chrome's "Always show full URLs") keeps a
+/// site's scheme in front of its host.
+pub fn address_parts(url: &str, full: bool) -> (String, String) {
     let u = url.trim();
     if u.is_empty() || u.eq_ignore_ascii_case("about:blank") {
         return ("wubble".into(), "://start".into());
@@ -174,6 +175,12 @@ pub fn address_parts(url: &str) -> (String, String) {
         return ("data".into(), String::new());
     }
     let (host, path) = url::address_parts(u);
+    // the host and the rest are the end of `u`: whole, the host reaches back to its start
+    let host = if full {
+        &u[..u.len() - path.len()]
+    } else {
+        host
+    };
     (host.to_owned(), path.to_owned())
 }
 
@@ -376,7 +383,31 @@ mod tests {
     }
 
     fn parts(url: &str) -> (String, String) {
-        address_parts(url)
+        address_parts(url, false)
+    }
+
+    #[test]
+    fn full_urls_keep_a_sites_scheme() {
+        for (url, want) in [
+            (
+                "https://example.com/a?q=1",
+                ("https://example.com", "/a?q=1"),
+            ),
+            ("http://localhost:8080/", ("http://localhost:8080", "/")),
+            ("https://example.com", ("https://example.com", "")),
+            ("file:///home/a.txt", ("file://", "/home/a.txt")),
+            // wubble's own pages, no page and data pages read as without
+            ("wubble://settings", ("wubble", "://settings")),
+            ("", ("wubble", "://start")),
+            ("data:,x", ("data", "")),
+            ("about:version", ("about:", "version")),
+        ] {
+            assert_eq!(
+                address_parts(url, true),
+                (want.0.to_owned(), want.1.to_owned()),
+                "{url}"
+            );
+        }
     }
 
     #[test]

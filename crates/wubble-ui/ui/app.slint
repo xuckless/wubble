@@ -15,7 +15,7 @@ import { PageHoleSource } from "kit/material/page-hole.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandMode, FieldEdit, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentSheetView, AgentBindingItem, AgentLogItem, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, PageGhost, DropMarkView, DropMarkKind, DropGeometry, BookmarksDrop } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -68,7 +68,7 @@ import "fonts/GeistMono-Variable.ttf";
 export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
+export { PeekCue, CommandMode, FieldEdit, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusOwner, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }
 
 export component AppWindow inherits Window {
     // A private window's title says so (Chrome's "(Incognito)" suffix).
@@ -213,6 +213,7 @@ export component AppWindow inherits Window {
     in property <int> address-blocked <=> sidebar.address-blocked;
     callback address-bookmark-requested <=> sidebar.address-bookmark-requested;
     callback address-blocker-requested <=> sidebar.address-blocker-requested;
+    callback address-context <=> sidebar.address-context;
     in property <int> address-popups-blocked <=> sidebar.address-popups-blocked;
     callback address-popups-requested <=> sidebar.address-popups-requested;
     in property <bool> address-media-visible <=> sidebar.address-media-visible;
@@ -436,6 +437,17 @@ export component AppWindow inherits Window {
     callback command-result-chosen(int);
     // tab search closed the tab of a row; the bar stays open on the new rows
     callback command-result-closed(int);
+    // the address menu (the host's): a right click in the bar's field or on the pill, and its
+    // rows' edits of the field
+    callback command-field-context <=> bar.field-context;
+    out property <int> command-selection-start: bar.field-selection-start;
+    out property <int> command-selection-end: bar.field-selection-end;
+    public function command-field-edit(op: FieldEdit) {
+        bar.field-edit(op);
+    }
+    public function command-caret(at: int) {
+        bar.field-caret(at);
+    }
     callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
@@ -833,7 +845,11 @@ export component AppWindow inherits Window {
         } else if root.focus-owner == FocusOwner.agent-sheet {
             agent-sheet.focus-sheet();
         } else if root.focus-owner == FocusOwner.own {
-            // the command bar's input and the region picker take the keys themselves
+            // the command bar's input and the region picker take the keys themselves as they
+            // open; the bar's field takes them back after the address menu over it
+            if root.command-bar-state == CommandBarState.open {
+                bar.refocus-input();
+            }
         } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {

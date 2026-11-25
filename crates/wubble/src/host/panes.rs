@@ -44,6 +44,7 @@ pub(super) struct GlanceRect {
 use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
+use crate::clipboard::Bridge as _;
 use crate::menu;
 use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
@@ -1087,6 +1088,29 @@ impl Host {
     /// A right click on the sidebar's empty glass at `x, y` (window, logical): its own menu.
     pub fn sidebar_context(&mut self, x: f32, y: f32) {
         let entries = menu::sidebar_entries(&self.model, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
+    /// A right click in the command bar's field or on the address pill at `x, y` (window,
+    /// logical): the address menu, its paste row named for what the clipboard holds.
+    pub fn address_context(&mut self, field: menu::AddressField, x: f32, y: f32) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let clipboard = self
+            .clipboard
+            .load(window.window(), crate::clipboard::Buffer::Clipboard)
+            .unwrap_or_default();
+        let bar = field == menu::AddressField::Bar;
+        let facts = menu::FieldFacts {
+            field,
+            selected: bar
+                && window.get_command_selection_start() < window.get_command_selection_end(),
+            text: bar && !window.get_command_query().is_empty(),
+            clipboard: &clipboard,
+            full_urls: self.full_urls,
+        };
+        let entries = menu::address_entries(facts, &self.keymap);
         self.sidebar_menu(entries, x, y);
     }
 

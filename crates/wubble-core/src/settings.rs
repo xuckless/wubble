@@ -158,6 +158,16 @@ pub const TOUCH_SIZING: SettingDef = SettingDef {
     section: Section::Appearance,
     restart: false,
 };
+/// The address pill shows the whole URL, scheme and all (Chrome's "Always show full URLs",
+/// `omnibox.prevent_url_elisions`); off, it shows the host and the rest (`chrome::address_parts`).
+pub const UI_FULL_URLS: SettingDef = SettingDef {
+    key: "ui.full_urls",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Always show full URLs",
+    section: Section::Appearance,
+    restart: false,
+};
 /// Shift+click on a link opens it in a peek over the page (`model::Glance`), not a new tab.
 pub const GLANCE_ENABLED: SettingDef = SettingDef {
     key: "glance.enabled",
@@ -890,6 +900,7 @@ pub const ALL: &[&SettingDef] = &[
     &REDUCE_MOTION,
     &TOUCH_SIZING,
     &GLANCE_ENABLED,
+    &UI_FULL_URLS,
     &KEYBINDING_OVERRIDES,
     &BLOCKER_ENABLED,
     &BLOCKER_EXCEPTIONS,

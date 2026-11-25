@@ -177,6 +177,10 @@ impl Host {
             Applied::WebAccessibility(setting) => self.set_web_ax(setting),
             Applied::TouchSizing(sizing) => self.set_touch_sizing(sizing),
             Applied::Glance(on) => self.glance_enabled = on,
+            Applied::FullUrls(on) => {
+                self.full_urls = on;
+                self.after_change();
+            }
             Applied::McpHosting(on) => self.mcp_switch(on),
             Applied::RestartOnly => {}
         }

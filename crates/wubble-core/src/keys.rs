@@ -1020,6 +1020,8 @@ mod tests {
             Action::ScreenshotVisible,
             Action::ScreenshotFullPage,
             Action::NewBoost,
+            // Chrome binds none (the omnibox menu's row)
+            Action::PasteAndGo,
             // its key, Mod+Z, is undo close tab's, which runs it whenever a field has the keys
             Action::Undo,
         ];

@@ -598,6 +598,8 @@ pub struct Host {
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
+    /// The pill shows whole URLs (`settings::UI_FULL_URLS`).
+    full_urls: bool,
     /// The extensions' shell: the list, the footer popover, the popup, the install prompt
     /// (`host/ext_ui.rs`).
     ext_ui: ext_ui::ExtUi,
@@ -819,6 +821,7 @@ impl Host {
             overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
+            full_urls: false,
             ext_ui: ext_ui::ExtUi::new(installed),
             hosting: Default::default(),
             ui: Default::default(),
@@ -1318,7 +1321,13 @@ impl Host {
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
         let blocked = self.blocked_counts();
-        let mut view = crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked);
+        let mut view = crate::shell::view_model(
+            &self.model,
+            self.w.id,
+            &self.audio,
+            &blocked,
+            self.full_urls,
+        );
         self.agent_marks(&mut view);
         self.site_sound_marks(&mut view);
         crate::bind::render(&window, &view, &self.favicons);
@@ -2316,6 +2325,74 @@ impl Host {
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
     }
 
+    /// The address menu's edit of the bar's field. The field's own edits run later, outside
+    /// the host, as the field then reports its text back into it; Delete is done here.
+    pub(super) fn field_edit(&mut self, edit: crate::menu::FieldEdit) {
+        use crate::menu::FieldEdit as E;
+        let op = match edit {
+            E::Cut => wubble_ui::FieldEdit::Cut,
+            E::Copy => wubble_ui::FieldEdit::Copy,
+            E::Paste => wubble_ui::FieldEdit::Paste,
+            E::SelectAll => wubble_ui::FieldEdit::SelectAll,
+            E::Delete => {
+                self.field_delete();
+                return;
+            }
+        };
+        let _ = self
+            .w
+            .window
+            .upgrade_in_event_loop(move |window| window.invoke_command_field_edit(op));
+    }
+
+    /// The menu's Delete: the selected text leaves the bar's field, the caret where it began.
+    fn field_delete(&mut self) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let text = window.get_command_query().to_string();
+        let (start, end) = (
+            window.get_command_selection_start(),
+            window.get_command_selection_end(),
+        );
+        let range = usize::try_from(start)
+            .ok()
+            .zip(usize::try_from(end).ok())
+            .filter(|&(a, b)| a < b && text.get(a..b).is_some());
+        let Some((a, b)) = range else {
+            return;
+        };
+        let left = format!("{}{}", &text[..a], &text[b..]);
+        window.set_command_query(left.as_str().into());
+        self.bar_query(&window, &left);
+        let _ = self
+            .w
+            .window
+            .upgrade_in_event_loop(move |window| window.invoke_command_caret(start));
+    }
+
+    /// Paste and Go (the address menu's row, `Action::PasteAndGo`): `text` loads as if typed in
+    /// `field`. In the bar, as its mode loads a typed row, and the bar goes as after Enter; from
+    /// the pill, in the visible tab (a new tab without one).
+    pub(super) fn paste_and_go(&mut self, field: crate::menu::AddressField, text: &str) {
+        let target = RowTarget::Omni(match omnibox::classify(text) {
+            omnibox::Intent::Url(url) => Target::Url(url),
+            omnibox::Intent::Search(q) => Target::Search(q),
+        });
+        if field == crate::menu::AddressField::Pill {
+            self.bar.mode = self.shown().map_or(BarMode::NewTab, BarMode::Navigate);
+        }
+        self.choose(&target);
+        if field == crate::menu::AddressField::Bar {
+            self.bar_closed();
+            // later, outside the host: the bar's close calls back into it
+            let _ = self
+                .w
+                .window
+                .upgrade_in_event_loop(|window| window.invoke_command_pick());
+        }
+    }
+
     /// Ctrl+E, once the bar is open on the visible tab (`Plan::FocusSearch`): the field empties
     /// and what is typed in it from now on is searched, never opened as an address.
     pub(crate) fn bar_for_search(&mut self, window: &AppWindow) {
@@ -2464,6 +2541,15 @@ impl Host {
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
             Plan::DevToolsConsole => self.devtools_console(),
+            Plan::PasteAndGo => {
+                let text = self.w.window.upgrade().and_then(|window| {
+                    self.clipboard
+                        .load(window.window(), crate::clipboard::Buffer::Clipboard)
+                });
+                if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+                    self.paste_and_go(crate::menu::AddressField::Pill, &text);
+                }
+            }
             Plan::FocusSearch => self.focus_search(),
             Plan::SavePage { tab, url } => self.save_as(tab, url),
             Plan::OpenFile => self.open_file(),

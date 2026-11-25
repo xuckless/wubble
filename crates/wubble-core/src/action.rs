@@ -67,6 +67,9 @@ pub enum Action {
     Fullscreen,
     TogglePinTab,
     CopyUrl,
+    /// Load the clipboard's text in the visible tab, as typed in the address (Chromium
+    /// `IDC_PASTE_AND_GO`, the omnibox menu's "Paste and go"); Chrome binds no key to it.
+    PasteAndGo,
     /// Save the visible page as a PDF in the downloads folder.
     Print,
     /// Save Page As: download the visible page, asking where (Chromium `IDC_SAVE_PAGE`).
@@ -141,7 +144,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 81] = [
+const FIXED: [(&str, Action); 82] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("duplicate-tab", Action::DuplicateTab),
@@ -185,6 +188,7 @@ const FIXED: [(&str, Action); 81] = [
     ("fullscreen", Action::Fullscreen),
     ("toggle-pin-tab", Action::TogglePinTab),
     ("copy-url", Action::CopyUrl),
+    ("paste-and-go", Action::PasteAndGo),
     ("print", Action::Print),
     ("save-page", Action::SavePage),
     ("open-file", Action::OpenFile),
@@ -320,7 +324,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 43] = [
+pub const PALETTE: [ActionInfo; 44] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -538,6 +542,11 @@ pub const PALETTE: [ActionInfo; 43] = [
         title: "Minimize window",
         keywords: "hide dock taskbar",
     },
+    ActionInfo {
+        action: Action::PasteAndGo,
+        title: "Paste and go",
+        keywords: "clipboard open address search",
+    },
 ];
 
 #[cfg(test)]
@@ -547,7 +556,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 99);
+        assert_eq!(all.len(), 100);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -580,7 +589,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 99);
+        assert_eq!(ids.len(), 100);
     }
 
     #[test]

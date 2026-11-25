@@ -9,8 +9,8 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
-    self, Bookmark, Candidates, Disposition, HistoryEntry, Kind, OmniResult, OpenTab,
-    SearchClosed, SearchEngine, SearchTab, Target,
+    self, Bookmark, Candidates, Disposition, HistoryEntry, Kind, OmniResult, OpenTab, SearchClosed,
+    SearchEngine, SearchTab, Target,
 };
 use wubble_core::space::SpaceKind;
 use wubble_core::tab::TabId;
@@ -101,7 +101,10 @@ pub enum Choice {
     /// Store the search engine (first run).
     SetEngine(SearchEngine),
     /// Take this entry off the recently-closed list and open it (tab search).
-    ReopenClosed { url: String, closed_at_ms: i64 },
+    ReopenClosed {
+        url: String,
+        closed_at_ms: i64,
+    },
     /// Shift+Enter: a new window, then this URL in a new tab there.
     NewWindow(String),
 }
