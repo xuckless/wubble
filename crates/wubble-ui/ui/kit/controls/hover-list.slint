@@ -1,0 +1,31 @@
+// derived: Flickable, Thumb (kit/controls/scroller.slint): the popovers' list, whose thumb shows while the pointer is over it and its rows overflow (`.wb-thumb` on hover)
+// The thumb's hover is the list's own (a scroll bar of the list, no surface of its own), so the
+// shell files that use it decide no visibility (tests/surface_lock.rs).
+
+import { Thumb } from "scroller.slint";
+
+// A list `list-height` tall, `pad` in from this element's edges, its rows (the children)
+// `content-height` tall: it scrolls when they overflow, the thumb showing while the pointer is
+// over it.
+export component HoverList inherits TouchArea {
+    in property <length> pad;
+    in property <length> list-height;
+    in property <length> content-height;
+
+    flick := Flickable {
+        x: root.pad;
+        y: root.pad;
+        width: root.width - 2 * root.pad;
+        height: root.list-height;
+        content-height: root.content-height;
+        interactive: root.content-height > root.list-height;
+        @children
+    }
+    Thumb {
+        y: root.pad;
+        height: root.list-height;
+        shown: root.has-hover && flick.content-height > flick.height;
+        top: flick.content-height > 0 ? -flick.content-y * flick.height / flick.content-height : 0px;
+        length: flick.content-height > 0 ? flick.height * min(1, flick.height / flick.content-height) : 0px;
+    }
+}

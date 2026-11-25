@@ -5,7 +5,7 @@ import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { ExtensionAction, GlassKeys } from "model.slint";
 import { APopover } from "../kit/overlay/a/a-popover.slint";
 import { Scrim } from "../kit/controls/menu.slint";
-import { Thumb } from "../kit/controls/scroller.slint";
+import { HoverList } from "../kit/controls/hover-list.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { AExtensionRow } from "../kit/overlay/a/a-extension-row.slint";
 
@@ -65,48 +65,36 @@ export component ExtensionsPopover inherits Rectangle {
         origin-x: max(0px, min(root.anchor-x - self.x, self.width));
         origin-y: max(0px, min(root.anchor-y - self.y, self.height));
 
-        hover := TouchArea {
+        HoverList {
             enabled: root.open;
-            flick := Flickable {
-                x: Shell.menu-pad;
-                y: Shell.menu-pad;
-                width: parent.width - 2 * Shell.menu-pad;
-                height: root.list-height;
-                content-height: root.lines * root.line-h;
-                interactive: root.lines * root.line-h > root.list-height;
+            pad: Shell.menu-pad;
+            list-height: root.list-height;
+            content-height: root.lines * root.line-h;
 
-                for item[i] in root.items: OverlapLayer {
-                    shown: root.open;
-                    index: i;
-                    y: i * root.line-h;
-                    height: root.line-h;
-                    AExtensionRow {
-                        item: item;
-                        pressed(id) => {
-                            root.pressed(id);
-                        }
-                    }
-                }
-                OverlapLayer {
-                    shown: root.open;
-                    index: root.items.length;
-                    y: root.items.length * root.line-h;
-                    height: root.line-h;
-                    AExtensionRow {
-                        item: { id: "manage", title: "Manage extensions", has-icon: false, badge: "", usable: true };
-                        leading-icon: Glyph.settings;
-                        pressed(id) => {
-                            root.manage();
-                        }
+            for item[i] in root.items: OverlapLayer {
+                shown: root.open;
+                index: i;
+                y: i * root.line-h;
+                height: root.line-h;
+                AExtensionRow {
+                    item: item;
+                    pressed(id) => {
+                        root.pressed(id);
                     }
                 }
             }
-            Thumb {
-                y: Shell.menu-pad;
-                height: root.list-height;
-                shown: hover.has-hover && flick.content-height > flick.height;
-                top: flick.content-height > 0 ? -flick.content-y * flick.height / flick.content-height : 0px;
-                length: flick.content-height > 0 ? flick.height * min(1, flick.height / flick.content-height) : 0px;
+            OverlapLayer {
+                shown: root.open;
+                index: root.items.length;
+                y: root.items.length * root.line-h;
+                height: root.line-h;
+                AExtensionRow {
+                    item: { id: "manage", title: "Manage extensions", has-icon: false, badge: "", usable: true };
+                    leading-icon: Glyph.settings;
+                    pressed(id) => {
+                        root.manage();
+                    }
+                }
             }
         }
     }
