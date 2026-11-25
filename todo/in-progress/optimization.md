@@ -2,7 +2,7 @@
 
 Legend: `[ ]` open · `[~]` in progress. Loaded from [01-optimization.md](../upcoming/01-optimization.md) by the owner (2026-11-25); built and tested, one at a time.
 
-- [ ] The Mac's refresh rate read as 60 Hz on the owner's 120 Hz ProMotion display (`CEF frame rate 60 (display Some(60000) mHz)`, [video-dropped-frames.md](../shelved/video-dropped-frames.md)): read it right and pace CEF to it
+- [~] The Mac's refresh rate read as 60 Hz on the owner's 120 Hz ProMotion display (`CEF frame rate 60 (display Some(60000) mHz)`, [video-dropped-frames.md](../shelved/video-dropped-frames.md)): read it right and pace CEF to it; written blind on sprint/perf, not compiled: `NSScreen.maximumFramesPerSecond` of the window's screen (`monitor_refresh_mhz`, main.rs), polled on screen change by `follow_frame_rate` as before
 - [ ] 2. CEF's own begin-frame source while a page is on its layer (no shell timer), and the Core Animation transaction only when a route or placement changes (no engine patch). Its zero-copy half waits for the engine build: [engine-build.md](engine-build.md#optimization).
 - [ ] Page frame rate on the layer under glass: 49 a second for a 60 fps video (62 before the fix); likely the shell presenting with the transaction for each snapshot render while the main thread is CEF's; measure `copy_wait` on the Mac, then present with the transaction only while a route or placement changes
 - [ ] A frame dropped for a busy pool is lost: a burst's last leaves the layer one frame behind until the page paints again (ask CEF to repaint, or keep it)

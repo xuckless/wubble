@@ -1250,13 +1250,37 @@ fn quit_asked() {
 pub fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Option<u32> {
     window
         .current_monitor()
-        .and_then(|m| m.refresh_rate_millihertz())
+        .and_then(|m| monitor_refresh_mhz(&m))
         .or_else(|| {
             window
                 .available_monitors()
-                .filter_map(|m| m.refresh_rate_millihertz())
+                .filter_map(|m| monitor_refresh_mhz(&m))
                 .max()
         })
+}
+
+/// A monitor's refresh rate in millihertz. macOS: the screen's `maximumFramesPerSecond`
+/// (macOS 12+), because winit's `CGDisplayModeGetRefreshRate` reads a ProMotion display's
+/// 120 Hz as 60 (the owner's MacBook Pro: `CEF frame rate 60 (display Some(60000) mHz)`).
+/// Everywhere else, and when the screen is not found, winit's.
+fn monitor_refresh_mhz(monitor: &slint::winit_030::winit::monitor::MonitorHandle) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        use slint::winit_030::winit::platform::macos::MonitorHandleExtMacOS;
+        // SAFETY: winit's pointer to the monitor's live `NSScreen`, read on the main thread
+        // (every caller runs in the event loop); retained for the call.
+        let screen = monitor.ns_screen().and_then(|screen| unsafe {
+            objc2::rc::Retained::retain(screen.cast::<objc2_app_kit::NSScreen>())
+        });
+        if let Some(fps) = screen
+            .map(|screen| screen.maximumFramesPerSecond())
+            .and_then(|fps| u32::try_from(fps).ok())
+            .filter(|&fps| fps > 0)
+        {
+            return Some(fps.saturating_mul(1000));
+        }
+    }
+    monitor.refresh_rate_millihertz()
 }
 
 pub fn slint_int(pixels: u32) -> i32 {
