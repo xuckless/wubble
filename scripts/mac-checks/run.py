@@ -476,6 +476,7 @@ def check(item, name, needs_video=False):
                 ok, why = fn(h, ctx)
             except Skip as e:
                 h.results.append((item, name, "SKIP", str(e), "", ""))
+                print(f"  SKIP {item:>3} {name}: {e}", flush=True)
                 return
             except Exception as e:  # a broken step is that check's failure, the run goes on
                 ok, why = False, f"error: {e}"
@@ -677,7 +678,10 @@ def cb(h, ctx):
     else:
         rest = (box[0] + box[2] + 16 * s, box[1], h.win[3] * s - (box[0] + box[2] + 16 * s), box[3])
         st = h.stats(p, rest)
-        if st["black"] > 0.6 or st["sd"] < 8:
+        other = [c for c in (A, B, D) if (b := h.bbox(p, c)) and b[4] > 0.1]
+        if other:
+            bad.append(f"the pane beside the page is a fixture page ({other[0]}), not Settings: a tab left over")
+        elif st["black"] > 0.6 or st["sd"] < 8:
             bad.append(f"Settings pane flat or black (sd {st['sd']:.0f})")
     h.key("cmd+shift+backslash", 1)
     h.key("cmd+4", 1)
@@ -1070,6 +1074,8 @@ def ce(h, ctx):
     step("Ctrl+A, Ctrl+K", ["ctrl+a", "ctrl+k"], "")
     # Cmd+Left outside a text field: Back (from a fresh edit page if a step above went wrong)
     if bad:
+        if h.bbox(h.shot("edit-close"), A):  # the failed edit tab still shows: close it, not another
+            h.key("cmd+w", 1)
         h.reset("cmd+1")
         h.open_tab(ctx["base"] + "/edit.html")
         p = h.shot("edit-again")
