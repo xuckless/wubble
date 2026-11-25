@@ -9,8 +9,6 @@ Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../REA
 - [ ] Pop-ups: an allowed site's pop-up opened without a click has no `window.opener` (the factory cannot see site permissions; pass it the decision if sign-ins need it); after a click a cross-origin frame can navigate the top page (Chrome's rule with a gesture)
 
 ## The built-in content blocker
-- [ ] Content blocker: uBO scriptlet coverage
-- [ ] Content blocker start-up race: with no compiled-engine cache (first run, list change), requests pass until the lists compile (seconds); hold the first main-frame navigation at the host until the blocker reports ready (a start-up state, bounded by an event), since CEF's IO thread must never wait
 
 ## Build-out features (2026-11-22)
 
@@ -150,56 +148,6 @@ Build:
 - Effects: history and recently-closed through the store's existing range delete; downloads list rows in range (wubble-store downloads.rs); passwords created in range (wubble-store logins.rs); site_permissions and content settings with `decided_at` in range; cert exceptions; cookies created in range through a cookie visitor that deletes when `creation >= from` (`ImplCookieVisitor` with `delete_cookie=1`, in crates/wubble-engine/src/storage.rs); site storage per origin visited in range (Storage.clearDataForOrigin through a page of the container, the site-data-viewer helper); and the HTTP cache. CEF has no ranged cache clear, so the row says "all time" for cache when the range is not All. Use `storage::clear`'s ClearHttpCache.
 - UI: a sheet (overlay `Kind::Dialog`) with a range select, kit check boxes, a container choice (This container / All), and "Delete data". It replaces the menu, and the History page's clear opens it preset.
 
-## HTTPS-First and HTTPS-Only mode (`https-upgrade-mode`)
-
-Key: `https-upgrade-mode` · engine patch: no · state: not written.
-
-Chrome's "Always use secure connections" setting tries https for every http navigation. If https fails, it shows an interstitial ("Connection is not secure" … "Continue to site") and remembers the choice per site for a while. Chrome also upgrades automatically with a silent fallback (HTTPS-Upgrades). wubble only upgrades typed scheme-less public hosts (decision "Typed local addresses") and has no mode.
-
-Build:
-- Add a setting `privacy.https_mode`: off|upgrade|only. The default is "upgrade", to match Chrome's automatic upgrades; it makes no new request to a new party. Put it in crates/wubble-core/src/settings.rs.
-- Add a pure module `wubble_core::https`: `plan(url, mode, exempt) -> Upgrade|Keep` (exempt: IP literals, localhost, single labels, .local, non-default ports, the per-container allow list) and a lifecycle enum per navigation (Upgraded → Loaded | Failed → Fallback or Warn) with `transition`. Unit-test it.
-- Engine path: main-frame Document requests go through the request filter (crates/wubble-engine/src/filter.rs `RequestAction::Redirect`). The host's ContentFilter (crates/wubble/src/blocking.rs) consults an Arc snapshot of the mode and the allow list and redirects http→https, recording the upgrade per browser_id.
-- On a load or certificate error of an upgraded navigation: in upgrade mode, reload the http URL marked exempt for that navigation. In only mode, show a new `PageError::HttpsOnly { url }` in crates/wubble/src/page_error.rs with "Go back" and "Continue to site". Continue adds the host to the container's allow list (session plus 15 days, as Chrome does) and loads http.
-- Set Chromium's own prefs `https_only_mode_enabled`/`https_upgrades` false so the two do not both act.
-
-## Secure DNS (DNS-over-HTTPS) setting (`secure-dns`)
-
-Key: `secure-dns` · engine patch: no · state: not written.
-
-Chrome Settings > Security > "Use secure DNS" offers Off, "With your current service provider" (automatic upgrade), or a chosen provider (Cloudflare, Google, Quad9, CleanBrowsing, NextDNS, OpenDNS, …) or a custom template. wubble has no row, and Chromium's default (automatic) applies silently.
-
-Build:
-- Add a setting `privacy.secure_dns`: automatic|off|provider:<id>|custom:<template>. The default is automatic, matching Chromium's default (decision "Network stack: Chromium's defaults stay"); choosing a provider is the user's own act.
-- wubble-core: a provider table ported from Chromium `net/dns/public/doh_provider_entry.cc` (BSD-3-Clause, with a source comment and a THIRD_PARTY_NOTICES.md entry), with id, display name, template and privacy-policy link. Add `fn validate_template(s)` (https, parses as a URI template with `{?dns}` or a POST form, like Chromium's `dns_over_https_config`) and `fn prefs(setting) -> (mode: &str, templates: String)`. Unit-test it.
-- Engine: these are local-state (global) prefs. Apply `dns_over_https.mode` ("off"/"automatic"/"secure") and `dns_over_https.templates` with `cef::preference_manager_get_global()` and `set_preference` after CEF starts and on change. Add `Engine::set_global_pref` in crates/wubble-engine/src/app.rs.
-- UI: a Settings Privacy row with a select and a custom-template field (the kit select and input that already exist for settings rows), with an error text when invalid.
-- net_audit.rs smokes must allow the chosen provider's host only when it is set; only note this, write no test.
-
-## Privacy preferences table: Do Not Track, preload pages, ad privacy, WebRTC IP (`privacy-prefs-table`)
-
-Key: `privacy-prefs-table` · engine patch: no · state: not written.
-
-Chrome's privacy settings are profile prefs: "Send a Do Not Track request" (`enable_do_not_track`, off by default), "Preload pages" (`net.network_prediction_options`), "Allow sites to check if you have payment methods saved" (`payments.can_make_payment_enabled`), the Ad privacy toggles (`privacy_sandbox.m1.topics_enabled`, `privacy_sandbox.m1.fledge_enabled`, `privacy_sandbox.m1.ad_measurement_enabled`), and the WebRTC IP handling policy (`webrtc.ip_handling_policy`, with no UI in Chrome; Brave exposes it). wubble sets one pref only (`webkit.webprefs.minimum_font_size`, crates/wubble-engine/src/view.rs:848) and exposes none of these.
-
-Build:
-- wubble-core: a data table `privacy::PREFS: &[(setting key, chromium pref, Value mapping)]` with matching SettingDefs in settings.rs (Section::Privacy). Defaults: DNT off (Chrome), preload "standard" (Chrome's default, since no request of wubble's own is added), can-make-payment on, Privacy Sandbox APIs off (Chrome asks for consent; wubble never shows the consent), WebRTC `default`. Unit-test that every row has a SettingDef and a valid mapping.
-- Engine: a generic `Engine::set_profile_pref(container, name, value: PrefValue)` that lifts the `set_preference` code out of view.rs to a request-context helper in storage.rs or app.rs. Apply the whole table when each container context comes up (`Profiles::get`) and on each setting change, and keep the min-font-size path on the same helper.
-- UI: the rows come from the settings table automatically.
-
-## Global Privacy Control (Sec-GPC header and navigator.globalPrivacyControl) (`global-privacy-control`)
-
-Key: `global-privacy-control` · engine patch: no · state: not written.
-
-GPC sends `Sec-GPC: 1` on every request and exposes `navigator.globalPrivacyControl === true`. Brave and Firefox ship it, and Chrome has it behind a feature. wubble has neither.
-
-Build:
-- Add a setting `privacy.gpc` (bool, default off, Section::Privacy) in crates/wubble-core/src/settings.rs.
-- First check whether the prebuilt libcef 156 has Chromium's feature: search the CEF binary for the feature name ("GlobalPrivacyControl") with `strings` on the downloaded libcef. If present, add it to the PageFeatures enable list in crates/wubble-engine/src/app.rs (it takes effect at the next start; say so on the row). Otherwise, use the embedder route:
-  (a) A request header. Extend welding's request filter (vendor/welding/src, OnBeforeResourceLoad) and `wubble_engine::filter::RequestAction` with a header set. Simplest is an `extra_headers: &'static [(&str,&str)]` returned by a new `ContentFilter::headers(&RequestInfo)` that defaults to none, mark it a wubble change, and have crates/wubble/src/blocking.rs return Sec-GPC when the setting is on (an Arc atomic read on the IO thread).
-  (b) The script: a main-world getter `navigator.globalPrivacyControl` installed in every frame at context creation through the helper's page scripts (crates/wubble/src/pagescripts.rs and wubble-helper), only when on. The engine passes the flag with the frame `hello`, like cosmetic.js.
-- Write unit tests for the header decision.
-
 ## Mark downloaded files with their origin (quarantine / MOTW / xattr) (`download-source-marks`)
 
 Key: `download-source-marks` · engine patch: no · state: not written.
@@ -211,20 +159,6 @@ Build:
 - Add one shared trait `Quarantine` with a per-platform implementation (AGENTS.md: per-platform code implements one shared trait) in crates/wubble (or wubble-sysmem-style OS code). Linux uses `xattr` setxattr (the `xattr` crate, MIT/Apache). macOS uses setxattr `com.apple.quarantine` with the `0081;<hex time>;wubble;<uuid>` format plus the WhereFroms plist. Windows writes `<path>:Zone.Identifier`. It runs only when the mark is missing, so a CEF-written mark is kept.
 - Call it from crates/wubble/src/host/downloads.rs on the Complete transition and from the media downloader's finish.
 - A failure is logged, never fatal.
-
-## Dangerous-site interstitial for blocker badware/malware document blocks (`dangerous-site-interstitial`)
-
-Key: `dangerous-site-interstitial` · engine patch: no · state: not written.
-
-Chrome shows a red full-page "Dangerous site" warning with "Back to safety" and, under Details, "visit this unsafe site". uBlock Origin's strict blocking does the same for `$doc` and badware rules. wubble's blocker ships the uBO badware list (crates/wubble-blocker/src/catalog.rs `ublock-badware`). A blocked main-frame document ends as ERR_BLOCKED_BY_CLIENT in the generic error panel (crates/wubble-core/src/neterror.rs -20), with no way through and no explanation.
-
-Build:
-- wubble-blocker: decisions for Document requests report which list matched (`Decision` in crates/wubble-blocker/src/decision.rs gets a `list: Option<&'static str>` or a `Category {Badware, Privacy, Ads}`). Unit-test it.
-- crates/wubble/src/blocking.rs keeps the last document block per browser_id, holding the URL, list and rule.
-- crates/wubble/src/page_error.rs: when the load error is -20 and a document block is recorded for that URL, the panel becomes `PageError::Blocked { url, category, rule }`. Its text is Chrome's register ("Dangerous site" for badware, "Page blocked" for others), with "Go back" (the default) and "Proceed anyway" under Advanced.
-- Proceed adds a session exception (per container and host) that the filter consults for Document requests only, then reloads. The site's Shields toggle (`blocker.exceptions`) stays the permanent way.
-- UI: reuse kit a-error-panel with a danger tint if the kit has one, else a derived piece on derived-review.md.
-- No network lookups: Safe Browsing stays out.
 
 ## Auto-revoke permissions of unused sites (Safety check) (`permission-auto-revoke`)
 
@@ -238,20 +172,4 @@ Build:
 - Host: at start, after the store loads (crates/wubble/src/persist.rs), compute it with the history store's last visit per origin (add a query in wubble-store history.rs: max visit time grouped by origin). Delete those rows, and record them in a new store table `revoked_permissions` (container, origin, kind, revoked_at) so they can be undone.
 - UI: a Settings > Sites row "Permissions removed from unused sites" listing them, with Restore (put the row back) and Dismiss (forget the record).
 - Depends on permissions-per-container for the container key.
-
-## Content blocker start-up gate holds the first navigation (`blocker-startup-gate`)
-
-Key: `blocker-startup-gate` · engine patch: no · state: not written.
-
-With no compiled-engine cache (first run, or after a list change), requests go through unfiltered for several seconds until the lists compile. Chrome extensions such as uBO hold requests at start-up. wubble cannot wait on CEF's IO thread, so the hold belongs at the host. The swap point is `Blocking::swap` around crates/wubble/src/blocking.rs:477-481 (`measure::Stage::BlockerReady`).
-
-To build: a pure lifecycle in wubble-core (for example `blocker_gate.rs`: `enum Gate { Waiting { held: Vec<Held> }, Ready }`, `fn transition(Gate, GateEvent) -> (Gate, Vec<GateEffect>)`). The events are Navigate { view, url } (a main-frame load the host is about to start: restored active tab, typed address, start URL, `wubble <url>` from the instance socket), BlockerReady, BlockerOff, ListsFailed and Deadline. The effects are Load(view, url) and ShowWaiting(view). It is Ready from the start when the cache loaded or the blocker is off (store `BlockerEnabled`). While Waiting, the host creates the view but delays `load_url`, and the pane shows the existing loading state. The gate is bounded by events: blocker ready, compile failure, or a deadline (for example 10 s) that loads anyway and logs it. Page-initiated navigations inside already-loaded pages are not held. Wire it into crates/wubble/src/host.rs where views get their first URL, and send BlockerReady from blocking.rs through the existing UI-thread channel. Unit tests for the transition. All platforms.
-
-## Blocker scriptlets run at document start (`blocker-scriptlets-at-start`)
-
-Key: `blocker-scriptlets-at-start` · engine patch: no · state: not written.
-
-uBO injects scriptlets (`##+js(...)`) at document_start, before any page script runs. In wubble the frame's `cosmetic.js` sends `hello` when its context is created; the browser answers, and only then runs the scriptlets with `run_script_in` (crates/wubble-engine/src/view.rs `answer_cosmetic`, around line 1099). By then the page's own scripts have often run, so many scriptlets (set-constant, abort-on-property-read, json-prune, no-fetch-if) come too late. That is the "uBO scriptlet coverage" gap.
-
-To build: when a view's main frame is about to navigate (`OnBeforeBrowse`/nav commit start in crates/wubble-engine/src/nav.rs or view.rs), ask the filter for the target URL's scriptlets (`filter.frame_cosmetic(top, url).script`, which comes from `Cosmetic::scriptlets` in crates/wubble-blocker/src/blocker.rs). Register them through the view's DevTools channel with `Page.addScriptToEvaluateOnNewDocument` (with `runImmediately` where supported), and remove the previous identifier with `Page.removeScriptToEvaluateOnNewDocument`. Same-site subframes are covered by the same registration. For cross-site subframes, keep the current hello path as a fallback, and skip it when the document-start copy has already run (the scriptlet wrapper sets a guard global inside its closure scope, in the page world). Respect per-site off (`SiteOverrides`) and agent tabs. Add a page fixture to the block smoke with a set-constant rule that is checked by an inline script running before load. All platforms.
 

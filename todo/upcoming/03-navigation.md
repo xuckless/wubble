@@ -9,49 +9,6 @@ Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../REA
 
 ## Build-out features (2026-11-22)
 
-## Command bar: inline autocomplete and Chrome's omnibox keys (`omni-inline-autocomplete`)
-
-Key: `omni-inline-autocomplete` · engine patch: no · state: written on `feat/omni-inline-autocomplete`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
-
-Chrome finishes a typed address inside the field. Type 'git' and it shows 'github.com/' with the added part selected. Right or End accepts it, Backspace drops it, Enter goes to the completed URL. Only a history entry whose host or URL starts with the typed text and whose typed_count is above 0 (or that has a high visit_count) is offered. wubble has no inline completion. CommandHead (crates/wubble-ui/ui/kit/chrome/command-head.slint) handles only Up, Down, Enter and Escape, and omnibox::rank (crates/wubble-core/src/omnibox.rs) returns rows only.
-
-Add a pure fn `inline_completion(query, &[HistoryEntry], &[Bookmark]) -> Option<String>` to wubble-core/omnibox.rs, ported from Chromium's HistoryURLProvider and ShortcutsProvider inline rules (BSD-3, behaviour only). It returns the suffix, which is never offered for a query that ends in a space or right after a deletion. Make rank's first row the completed URL when there is one. Add an `inline` property to CommandHead and set the selection with TextInput.set-selection-offsets.
-
-Add Chrome's keys there, passed up as new callbacks:
-- Tab and Shift+Tab move between rows.
-- Shift+Delete on a History row removes it: HistoryClear::Url through host/pages.rs history_deleted, then re-rank.
-- Alt+Enter (Option on macOS) opens in a new tab: BarMode::NewTab in bar.rs target_command.
-- Shift+Enter opens a new window.
-- Ctrl+Enter wraps a bare word as www.<word>.com before classify.
-
-Wire it in crates/wubble/src/bar.rs and the host's command-bar handling. Add unit tests in omnibox.rs for the completion rule and Ctrl+Enter.
-
-## Command bar: local calculator and unit conversion answers (`omni-calculator-units`)
-
-Key: `omni-calculator-units` · engine patch: no · state: written on `feat/omni-calculator-units`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
-
-Chrome's omnibox answers '12*7+3', 'sqrt(2)', '5 km in miles' and '70 F to C' as a row above the search. Chrome gets these from the server; wubble must compute them on the device with no request. Today omnibox::Kind (crates/wubble-core/src/omnibox.rs) has OpenTab/History/Bookmark/Search/Action and there is no answer row.
-
-Add a pure module wubble-core/src/answer.rs with:
-- a small expression parser: + - * / ^ %, parentheses, unary minus, constants pi and e, the functions sqrt, sin, cos, tan, log, ln, abs and round, and percent-of. Write it new or port an MIT/Apache crate such as `meval` (licence check, source comment, THIRD_PARTY_NOTICES entry).
-- a units table as data: length, mass, volume, temperature, speed, area, data size and time, with the forms '<n> <unit> in|to <unit>'.
-- number formatting that trims trailing zeros.
-
-Add Kind::Answer and Target::Copy(String). Choosing the row copies the result through crates/wubble/src/clipboard.rs and shows a toast. Map Kind::Answer to a new CommandKind `answer` in crates/wubble-ui/ui/components/model.slint and kit command-row.slint, reusing an existing glyph (equals/calculator from kit gen icons if present, else note it on derived-review.md). In rank, the answer goes first when the query parses as math with at least one operator, and second, under the search intent, for unit forms. A query that is only a number gives no answer. No currency: it would need a network rate source. Unit tests for parsing, precedence, division by zero (no row) and each unit family.
-
-## Search engines: more built-ins, custom engines with keywords, management in Settings (`search-engines-keywords`)
-
-Key: `search-engines-keywords` · engine patch: no · state: written on `feat/search-engines-keywords`, awaiting integration (its report: [batch-1-reports.md](batch-1-reports.md)).
-
-Chrome keeps a list of search engines, each with a name, a keyword and a URL with %s. You can set any of them as the default, add and edit your own, and site searches are picked up from pages. wubble has only `ENGINES: [EngineInfo; 2]` (Google, DuckDuckGo) in crates/wubble-core/src/omnibox.rs, chosen by the `search.engine` Select in settings.rs.
-
-1. Extend ENGINES with Bing, Brave Search, Ecosia, Startpage, Qwant, Kagi and Wikipedia (search and suggest templates from Chromium's prepopulated_engines.json, BSD-3), each with a default keyword. Never rename the shipped ids.
-2. Add a setting `search.custom` as a list setting (the list-editor kind with columns_of in pages.rs: name, keyword, URL with %s or {q}). Validate it in a pure fn: exactly one placeholder, http(s) only, unique keyword.
-3. Let the default be any built-in or custom engine. Replace the SearchEngine enum where it is used (bar.rs, suggest.rs suggest_url, the start page capsule, menu.rs search_label) with an `EngineRef` resolved from settings. Live suggestions stay behind `suggest.live`, and only for engines with a suggest URL.
-4. OpenSearch discovery: a page script reads <link rel=search type=application/opensearchdescription+xml>. Fetching the OSDD (crates/wubble-engine/src/fetch.rs) happens only behind a new setting `search.discover_sites`, off by default. Discovered engines are listed as inactive in Settings, never made the default.
-
-The Settings section shows the default engine, the built-in list and the custom list editor. Unit tests for the template checks and engine resolution.
-
 ## Command bar: keyword mode (tab to search) and @tabs/@bookmarks/@history scopes (`omni-keyword-mode`)
 
 Key: `omni-keyword-mode` · engine patch: no · state: not written.
