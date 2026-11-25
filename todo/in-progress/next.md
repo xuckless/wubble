@@ -220,4 +220,7 @@ Build:
 - [ ] Picture-in-picture and the video frame rows for a video inside a subframe
 - [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
 - [ ] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH
-- [ ] macOS Keychain prompts (owner, 2026-11-25: on a new device, and on every test build): test builds and the harness use Chromium's mock keychain and a separate vault entry; check the release signature's designated requirement is team and bundle id (not a cdhash) so updates never ask again; consider the data-protection keychain with an access group
+- [ ] macOS Keychain prompts (owner, 2026-11-25: twice on a first install, again on every test build). Found on the Mac: the release's signature requirement is team and bundle id (`identifier "dev.wubble.browser" ... OU = "2MGLZ5685D"`), so signed updates keep their grant; an ad hoc build's is its cdhash, so every rebuild asks. Two items, so two prompts: `wubble`/`vault-wubble` (the vault key) and `Chromium Safe Storage`/`Chromium` (CEF's cookie and password key, named for Chromium, so shared with any Chromium-branded app on the machine).
+  - [ ] A `--profile DIR` run can be throwaway (honour the `.wubble-smoke-profile` marker or a flag), so the harness and test apps use Chromium's mock keychain and a test vault
+  - [ ] One prompt, not two: the vault's key kept in wubble's own item next to the cookie key, or derived from one item
+  - [ ] "wubble Safe Storage" instead of "Chromium Safe Storage" (CEF has no setting for the service name: an engine patch, `KeychainPassword::GetServiceName`, as Electron does): goes to the engine build list
