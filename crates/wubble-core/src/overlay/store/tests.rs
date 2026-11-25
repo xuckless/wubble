@@ -1246,7 +1246,7 @@ fn one_grab_per_window() {
     alphabet.extend([ESC, Action::Lost { w: W1 }, Action::WindowGone(W1)]);
     let e = env(A);
     let grabs = |ui: &Ui| {
-        ui.live(&e, W1)
+        ui.live(W1)
             .into_iter()
             .filter(|l| l.kind.row().pointer == Pointer::Grab)
             .count()
@@ -1289,7 +1289,7 @@ fn window_lost_table() {
         let (ui, _) = run(&e, &[open(l)]);
         let (ui, fx) = reduce(ui, &e, Action::Lost { w: W1 });
         assert!(fx.contains(&Cancel(l)), "{kind:?} cancelled: {fx:?}");
-        assert_eq!(ui.live(&e, W1), vec![], "{kind:?} gone");
+        assert_eq!(ui.live(W1), vec![], "{kind:?} gone");
     }
 }
 
