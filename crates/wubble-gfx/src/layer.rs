@@ -464,13 +464,18 @@ mod wayland {
     }
 
     impl Subsurface {
-        /// A hidden subsurface under `parent` (the shell window's `wl_surface`) on `display`.
+        /// A hidden subsurface of `parent` (the shell window's `wl_surface`) on `display`: under
+        /// it (`below`: the shell clears a hole where the page shows) or over it.
         ///
         /// # Safety
         ///
         /// `display` and `parent` are winit's live `wl_display` and the window's `wl_surface`,
         /// which outlive the layer (the host drops a window's layers before the window).
-        pub unsafe fn new(display: NonNull<c_void>, parent: NonNull<c_void>) -> Result<Self, GfxError> {
+        pub unsafe fn new(
+            display: NonNull<c_void>,
+            parent: NonNull<c_void>,
+            below: bool,
+        ) -> Result<Self, GfxError> {
             // SAFETY: the caller's display.
             let shared = unsafe { Compositor::get(display) }?;
             // SAFETY: the caller's live surface.
@@ -481,7 +486,12 @@ mod wayland {
             let qh = shared.handle();
             let surface = shared.compositor.create_surface(&qh, ());
             let sub = shared.subcompositor.get_subsurface(&surface, &parent, &qh, ());
-            sub.place_below(&parent);
+            // a later one goes next to the shell's, past the earlier ones (none overlap)
+            if below {
+                sub.place_below(&parent);
+            } else {
+                sub.place_above(&parent);
+            }
             let region = shared.compositor.create_region(&qh, ());
             surface.set_input_region(Some(&region));
             region.destroy();

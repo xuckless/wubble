@@ -1530,6 +1530,10 @@ impl Host {
     }
 
     pub fn pump(&mut self, wake: Wake) {
+        // the compositor's buffer releases first, so the paint callbacks in this work find the
+        // page layers' free slots (Wayland; nothing without a layer)
+        #[cfg(target_os = "linux")]
+        wubble_gfx::layer::read_compositor();
         let outcome = match wake {
             Wake::Schedule(delay_ms) => self.engine.schedule_pump(delay_ms),
             Wake::TimerFired => self.engine.pump_timer_fired(),

@@ -1,4 +1,4 @@
-//! The page on its own OS layer (`wubble_core::page_layer`, macOS; `--page-layer=fullscreen`: a
+//! The page on its own OS layer (`wubble_core::page_layer`, macOS and Wayland; `--page-layer=fullscreen`: a
 //! page in fullscreen and the picture-in-picture window, over the shell; `--page-layer=window`:
 //! every pane, under the shell, which draws a hole where the pane's layer shows: its
 //! `SplitPane.hole`, from [`PageLayers::holed`]; glass over it blurs a snapshot of the layer, which
@@ -10,9 +10,10 @@
 //! (`mounted-changed`) and a snapshot (its pixels). What keeps a page on the shell's path is read
 //! from its owners on every call ([`Host::layer_needs`]), never kept.
 //!
-//! With the mode off (`--page-layer=off`, Settings' row off, any platform but macOS, every smoke
-//! and measurement that does not ask) no layer is made, so no pane has an entry and every frame
-//! goes to `present_frame` as before. The route lines and the per-second summary print only with
+//! With the mode off (`--page-layer=off`, Settings' row off, any platform but macOS and Linux,
+//! every smoke and measurement that does not ask) no layer is made, so no pane has an entry and
+//! every frame goes to `present_frame` as before; an X11 or XWayland window fails to make one once
+//! and keeps the shell's path too. The route lines and the per-second summary print only with
 //! `WUBBLE_TRACE` (`crate::trace`); failures always do.
 
 use std::collections::BTreeMap;
@@ -45,14 +46,17 @@ pub(crate) struct PageLayers {
     panes: BTreeMap<TabId, LayerPane>,
     /// Layers that went while the shell's last frame still has their pane's hole (a tab left, a
     /// layer failed): still shown under the shell until the window's next present, which draws
-    /// no hole there, then hidden with it and dropped (`Host::presenting`).
+    /// no hole there, then hidden with it (`Host::presenting`).
     retired: Vec<Box<dyn PageLayer>>,
+    /// Retired layers hidden in the last present, dropped at the next: a Wayland subsurface is
+    /// unmapped the moment it is destroyed, before the shell's commit its hide waits for.
+    hidden: Vec<Box<dyn PageLayer>>,
 }
 
 impl PageLayers {
-    /// No pane of the window has a layer, and none is retired.
+    /// No pane of the window has a layer, and none is retired or waiting to be dropped.
     pub(super) fn is_empty(&self) -> bool {
-        self.panes.is_empty() && self.retired.is_empty()
+        self.panes.is_empty() && self.retired.is_empty() && self.hidden.is_empty()
     }
 
     /// A layer of the window is visible (a retired one too): the shell presents with its
@@ -273,14 +277,17 @@ impl Host {
                 }
             }
         }
-        // all hidden in this present's transaction (this render still presents with it: it was
-        // acquired so), only then the shell's layer told what the next render does; then dropped
+        // the ones hidden a present ago go; all retired ones hidden in this present's
+        // transaction (this render still presents with it: it was acquired so), only then the
+        // shell's layer told what the next render does; dropped at the next present
+        self.w.layers.hidden.clear();
         let mut retired = std::mem::take(&mut self.w.layers.retired);
         let on = self.w.layers.on_layer();
         retired.iter_mut().for_each(|layer| layer.hide());
         retired
             .iter_mut()
             .for_each(|layer| layer.present_in_transaction(on));
+        self.w.layers.hidden = retired;
         self.enter(here);
     }
 
@@ -493,7 +500,17 @@ impl Host {
             for effect in effects {
                 match effect {
                     Effect::Buffers(on) => {
-                        if let Some(Err(e)) = self.tab_view(tab).map(|v| v.set_os_buffers(on)) {
+                        // the formats the compositor takes the buffers in (Wayland)
+                        let formats = self
+                            .w
+                            .layers
+                            .panes
+                            .get(&tab)
+                            .map(|p| p.layer.buffer_formats())
+                            .unwrap_or_default();
+                        if let Some(Err(e)) =
+                            self.tab_view(tab).map(|v| v.set_os_buffers(on, &formats))
+                        {
                             eprintln!("wubble: page layer buffers: {e}");
                             failed = true;
                         }
@@ -718,7 +735,14 @@ impl Host {
         let buffer = (size.width, size.height);
         let shown = (clip.width, clip.height);
         let p = page_layer::place(pane_rect, root_h, flipped, scale, buffer, shown);
-        let (f, c) = (p.frame, p.contents);
+        // Wayland places a subsurface in whole points: rounded outwards, under the shell's edge
+        let f = if pane.layer.whole_points() {
+            let [x, y, w, h] = page_layer::covering(p.frame).map(f64::from);
+            page_layer::Rect { x, y, w, h }
+        } else {
+            p.frame
+        };
+        let c = p.contents;
         pane.layer
             .place([f.x, f.y, f.w, f.h], [c.x, c.y, c.w, c.h], p.scale, radius);
     }
@@ -745,10 +769,60 @@ fn make_layer(window: &AppWindow, below: bool) -> Result<Box<dyn PageLayer>, Str
     Ok(Box::new(layer))
 }
 
+/// A `wl_subsurface` of `window`'s surface, under it (`below`) or over it; none for an X11 or
+/// XWayland window (no subsurfaces: the shell draws every frame there).
+#[cfg(target_os = "linux")]
+fn make_layer(window: &AppWindow, below: bool) -> Result<Box<dyn PageLayer>, String> {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{
+        HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+    };
+    let (display, surface) = window
+        .window()
+        .with_winit_window(|w| {
+            let RawDisplayHandle::Wayland(d) = w.display_handle().ok()?.as_raw() else {
+                return None;
+            };
+            let RawWindowHandle::Wayland(s) = w.window_handle().ok()?.as_raw() else {
+                return None;
+            };
+            Some((d.display, s.surface))
+        })
+        .flatten()
+        .ok_or("not a Wayland window (X11 and XWayland have no page layer)")?;
+    // SAFETY: winit's live display and this window's surface, alive while the window is; the
+    // window's host drops its panes' layers before the window goes (`Host::close_window`).
+    let layer = unsafe { wubble_gfx::layer::Subsurface::new(display, surface, below) }
+        .map_err(|e| e.to_string())?;
+    Ok(Box::new(layer))
+}
+
 /// No page layer here: the shell draws every frame.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn make_layer(_window: &AppWindow, _below: bool) -> Result<Box<dyn PageLayer>, String> {
     Err("no page layer on this platform".into())
+}
+
+impl Host {
+    /// How `window`'s shell presents (the vendored surface's hook, before each frame): paced
+    /// Mailbox while a layer of it exists where the platform needs it
+    /// (`page_layer::shell_present`), never more often than the display's refresh.
+    pub(crate) fn present_mode(
+        &self,
+        window: &slint::Window,
+    ) -> i_slint_renderer_skia::present_mode::PresentMode {
+        use i_slint_renderer_skia::present_mode::PresentMode;
+        let layers = self
+            .window_where(|w| std::ptr::eq(w.handle.window(), window) && !w.layers.is_empty())
+            .is_some();
+        match page_layer::shell_present(std::env::consts::OS, layers) {
+            page_layer::Present::Vsync => PresentMode::Vsync,
+            page_layer::Present::Paced => PresentMode::Paced(
+                self.refresh()
+                    .unwrap_or(std::time::Duration::from_millis(16)),
+            ),
+        }
+    }
 }
 
 #[cfg(test)]

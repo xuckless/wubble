@@ -2411,6 +2411,14 @@ fn run(
                 Err(_) => window.request_redraw(),
             });
         });
+        // and says how each window presents: paced Mailbox while a Wayland layer of it exists
+        // (busy: as before)
+        i_slint_renderer_skia::present_mode::set_hook(|window| {
+            HOST.with(|cell| {
+                let host = cell.try_borrow().ok()?;
+                host.as_ref().map(|host| host.present_mode(window))
+            })
+        });
     }
     // The browser checks for an update as it opens (the setting and the policy permitting) and
     // counts the start as healthy after a while (`update::install`); smokes do neither.
