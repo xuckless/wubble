@@ -165,12 +165,14 @@ use wubble_core::window::{WindowId, WindowKind};
 /// window.
 static PACING: std::sync::OnceLock<Pacing> = std::sync::OnceLock::new();
 
-/// This run's pacing: the command line's, else the platform's.
+/// This run's pacing: the command line's, else the platform's for where this run's pages are
+/// drawn (on their own layer under the shell, or by it): read once the page layer mode is set.
 pub fn pacing() -> Pacing {
+    let layered = page_layer().row().order == wubble_core::page_layer::Order::Below;
     PACING
         .get()
         .copied()
-        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
+        .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS, layered))
 }
 
 /// This run's page layer mode: the command line's `--page-layer`, else the run's own default
@@ -523,7 +525,10 @@ fn install_shell_driver(
             // Queued: the render may run while the host is busy (snapshots). This window's
             // driver: each window paces the pages it shows.
             let _ = slint::invoke_from_event_loop(move || {
-                with_host_in(id, |host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+                with_host_in(id, |host| {
+                    host.pace(wubble_gfx::pacing::PaceEvent::Vsync);
+                    host.skia_cache(wubble_core::skia_cache::Event::Rendered(Instant::now()));
+                })
             });
         },
     )?;
@@ -1251,13 +1256,37 @@ fn quit_asked() {
 pub fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Option<u32> {
     window
         .current_monitor()
-        .and_then(|m| m.refresh_rate_millihertz())
+        .and_then(|m| monitor_refresh_mhz(&m))
         .or_else(|| {
             window
                 .available_monitors()
-                .filter_map(|m| m.refresh_rate_millihertz())
+                .filter_map(|m| monitor_refresh_mhz(&m))
                 .max()
         })
+}
+
+/// A monitor's refresh rate in millihertz. macOS: the screen's `maximumFramesPerSecond`
+/// (macOS 12+), because winit's `CGDisplayModeGetRefreshRate` reads a ProMotion display's
+/// 120 Hz as 60 (the owner's MacBook Pro: `CEF frame rate 60 (display Some(60000) mHz)`).
+/// Everywhere else, and when the screen is not found, winit's.
+fn monitor_refresh_mhz(monitor: &slint::winit_030::winit::monitor::MonitorHandle) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        use slint::winit_030::winit::platform::macos::MonitorHandleExtMacOS;
+        // SAFETY: winit's pointer to the monitor's live `NSScreen`, read on the main thread
+        // (every caller runs in the event loop); retained for the call.
+        let screen = monitor.ns_screen().and_then(|screen| unsafe {
+            objc2::rc::Retained::retain(screen.cast::<objc2_app_kit::NSScreen>())
+        });
+        if let Some(fps) = screen
+            .map(|screen| screen.maximumFramesPerSecond())
+            .and_then(|fps| u32::try_from(fps).ok())
+            .filter(|&fps| fps > 0)
+        {
+            return Some(fps.saturating_mul(1000));
+        }
+    }
+    monitor.refresh_rate_millihertz()
 }
 
 pub fn slint_int(pixels: u32) -> i32 {
@@ -1919,7 +1948,6 @@ fn run(
         mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
-        begin_frames: pacing() == Pacing::Shell,
     };
     let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);

@@ -486,6 +486,10 @@ pub struct CpuBitmap {
 pub struct PendingFrameSlot {
     frame: Option<NativeFrame>,
     next_generation: u64,
+    /// wubble change (67): the view is hidden (`set_visible(false)`): its frame went, and the
+    /// paint callback copies none until it is shown (a full-size texture per hidden tab
+    /// otherwise, held until taken, which a hidden tab never is).
+    hidden: bool,
 }
 
 impl PendingFrameSlot {
@@ -504,6 +508,19 @@ impl PendingFrameSlot {
 
     pub fn has_frame(&self) -> bool {
         self.frame.is_some()
+    }
+
+    /// wubble change (67): hides or shows the view's frames; hiding drops the one waiting.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.hidden = hidden;
+        if hidden {
+            self.frame = None;
+        }
+    }
+
+    /// wubble change (67): the paint callback copies nothing while this is true.
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
     }
 }
 

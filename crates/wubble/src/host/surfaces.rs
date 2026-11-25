@@ -1028,7 +1028,11 @@ impl Host {
                 };
                 self.layer_placed(Kind::Popup, tab, rect);
             }
-            _ => window.set_popup_frame(slint::Image::default()),
+            // no popup: its ring goes with it
+            _ => {
+                window.set_popup_frame(slint::Image::default());
+                self.w.popup_presenter.release();
+            }
         }
         window.set_page_fullscreen(matches!(self.w.screen, Screen::Page { .. }));
         self.render_autofill(window, tab);

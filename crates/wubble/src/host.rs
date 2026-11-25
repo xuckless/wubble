@@ -100,6 +100,7 @@ use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, S
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::{FingerInput, InputEvent};
+use wubble_core::skia_cache;
 use wubble_core::window::{Geometry, WindowId, WindowKind, WindowState};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -334,8 +335,6 @@ pub struct Checks {
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
-    /// Views paint on external begin frames from [`Host::pace`].
-    pub begin_frames: bool,
 }
 
 /// The last frame shown in a pane: the image, the part of it to show, and what the pane shows
@@ -546,6 +545,10 @@ pub struct Host {
     /// `Pacing::Shell`: the begin frames of agent pages no window shows, at
     /// [`pacing::UNSHOWN_FRAME_RATE`], running while there is one.
     unshown: slint::Timer,
+    /// Pages on a layer whose newest frame was dropped for a busy pool, to paint again.
+    lost_frames: page_layer::LostFrames,
+    /// The shell's Skia caches (`wubble_core::skia_cache`): when they are cleaned.
+    skia_cache: wubble_core::skia_cache::Cache,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
     /// When each tab's page's clipboard read started, until it is answered; one past
@@ -665,7 +668,9 @@ impl Host {
         let mut engine = engine;
         let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
         engine.set_request_mode(RequestMode::AskHost);
-        let begin_frames = checks.begin_frames;
+        // views paint on external begin frames from `Host::pace` (read here: the run's page
+        // layer mode, which picks it, is known once the store loaded)
+        let begin_frames = crate::pacing() == Pacing::Shell;
         let videos = match checks.sponsor_endpoint.clone() {
             Some(endpoint) => {
                 videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
@@ -789,6 +794,8 @@ impl Host {
                 Pacing::CefTimer
             },
             unshown: slint::Timer::default(),
+            lost_frames: Default::default(),
+            skia_cache: Default::default(),
             clipboard,
             clipboard_reads: Default::default(),
             archive_after: ArchiveAfter::Off,
@@ -1313,7 +1320,7 @@ impl Host {
         self.layers_gone(&window, |_, t| !kept.contains(&t));
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
-        window::free_slots(&mut self.w.slots, &kept);
+        self.w.release_slots(|t| !kept.contains(&t));
         if self.w.frames.len() != before {
             self.set_page_cursor(&window, Cursor::Default);
             for tab in self.shown_tabs() {
@@ -1545,6 +1552,8 @@ impl Host {
             let timer = self.engine.page_painted(period).timer;
             self.arm_pump(timer);
         }
+        // a frame CEF painted in this work may have been dropped for a busy pool
+        self.layer_frames_lost();
         measure::count(measure::Count::PumpWorked);
         for (view, event) in events {
             if let Some(window) = self.enter_view(view) {
@@ -2942,6 +2951,18 @@ impl Host {
         self.follow_desktop();
         self.devtools_tick();
         let pressure = self.read_pressure();
+        self.skia_cache(skia_cache::Event::Pressure(pressure));
+        self.skia_cache(skia_cache::Event::Tick(now));
+        // each window's cache bounded for the largest window (setting the same does nothing)
+        let px = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .map(|w| {
+                let size = w.handle.window().size();
+                u64::from(size.width) * u64::from(size.height)
+            })
+            .max()
+            .unwrap_or(0);
+        i_slint_renderer_skia::cache::set_limit(skia_cache::limit(px));
         let wall_ms = now_ms();
         self.dispatch(Command::Tick {
             now,
@@ -2959,6 +2980,20 @@ impl Host {
         self.gpu_check();
         self.look_tick();
         self.ax_tick();
+    }
+
+    /// The Skia caches' policy hears `event`; its cleanup runs on every window's cache.
+    pub(crate) fn skia_cache(&mut self, event: skia_cache::Event) {
+        use i_slint_renderer_skia::cache::{self, CacheCleanup};
+        let (state, cleanup) = skia_cache::next(self.skia_cache, event);
+        self.skia_cache = state;
+        match cleanup {
+            Some(skia_cache::Cleanup::Deferred(unused)) => {
+                cache::cleanup(CacheCleanup::Deferred(unused));
+            }
+            Some(skia_cache::Cleanup::PurgeAll) => cache::cleanup(CacheCleanup::PurgeAll),
+            None => {}
+        }
     }
 
     // ----- smokes
@@ -3908,6 +3943,10 @@ impl Host {
     /// would be suspended) and an agent's (screenshots) keep painting.
     fn occlusion(&mut self, hidden: bool) {
         self.w.hidden = hidden;
+        // every window hidden: the shell draws nothing, its caches go
+        if hidden && self.parked.values().all(|w| w.hidden) {
+            self.skia_cache(skia_cache::Event::Hidden);
+        }
         if hidden {
             for tab in self.shown_tabs() {
                 let audible = self
@@ -4251,6 +4290,13 @@ impl Host {
                 let shown = shown.contains(&tab) || !self.agent_drives(tab);
                 if let Some(view) = self.engine.view(id) {
                     view.set_frame_rate(pacing::view_frame_rate(rate, shown));
+                }
+            }
+            // the views of no tab (an extension's popup, the DevTools panel) follow too: they
+            // kept the rate they opened with
+            for id in [self.ext_ui.popup, self.devtools.view].into_iter().flatten() {
+                if let Some(view) = self.engine.view(id) {
+                    view.set_frame_rate(rate);
                 }
             }
         }

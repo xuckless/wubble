@@ -812,6 +812,13 @@ impl Renderer {
         overlay_over(&self.scene.surfaces(), &page)
     }
 
+    /// Lets `P`'s textures go ([`PageBlur::Free`]); the next need builds it again.
+    pub fn free_page(&mut self) {
+        if let Some(sz) = &mut self.sized {
+            sz.page = None;
+        }
+    }
+
     /// Whether to build `P` on the next frame, from the glass and panes as they are now and no
     /// new backdrop: the host's `scene_due` input (`Build`) and its wake-up (`After`).
     pub fn page_verdict(&self, now: Instant) -> PageBlur {

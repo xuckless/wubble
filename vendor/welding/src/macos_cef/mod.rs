@@ -509,6 +509,19 @@ impl CefSurfaceProducer for MacosCefProducer {
         }
     }
 
+    /// wubble change (66): the pool's flag, taken.
+    fn take_os_buffers_lost(&mut self) -> bool {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let mut pool = self.os_buffers.lock().unwrap();
+            return pool.as_mut().is_some_and(|pool| std::mem::take(&mut pool.lost));
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            false
+        }
+    }
+
     fn acquire_native_frame(&mut self) -> Option<NativeFrame> {
         self.frame_slot.lock().unwrap().take()
     }
@@ -680,6 +693,8 @@ impl CefSurfaceProducer for MacosCefProducer {
     }
 
     fn set_visible(&mut self, visible: bool) -> Result<(), WeldError> {
+        // wubble change (67): a hidden view keeps no frame and copies none
+        self.frame_slot.lock().unwrap().set_hidden(!visible);
         #[cfg(feature = "cef-runtime")]
         if let Some(host) = self.browser.host() {
             host.was_hidden(if visible { 0 } else { 1 });

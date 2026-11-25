@@ -101,7 +101,7 @@ pub(super) struct ExtUi {
     panel: Option<Panel>,
     prompt: Option<Extension>,
     /// The open popup's view.
-    popup: Option<ViewId>,
+    pub(super) popup: Option<ViewId>,
     /// The question to the popup's page the next answer is for.
     size_poll: SizePoll,
     timer: slint::Timer,
@@ -500,11 +500,7 @@ impl Host {
             self.key_pane = None;
         }
         self.w.frames.remove(&POPUP_TAB);
-        self.w.slots.iter_mut().for_each(|s| {
-            if *s == Some(POPUP_TAB) {
-                *s = None;
-            }
-        });
+        self.w.release_slots(|t| t == POPUP_TAB);
         if let Some(window) = self.w.window.upgrade() {
             self.sync_focus(&window);
         }

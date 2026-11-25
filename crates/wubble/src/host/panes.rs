@@ -411,6 +411,7 @@ impl Host {
         let stretching = self.step_stretch(window, &rects, dt);
         let bowed = self.mask_panes(window, &rects);
         // what this render draws over a page on its layer, and whether it still may stay there
+        self.w.layers.render_began();
         self.layers_changed(window, false);
         self.render_panes_with(window, &rects);
         self.layers_drawn();
@@ -803,6 +804,7 @@ impl Host {
             view.set_layout(layout);
             let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
+            let calm = view.content_rate() == wubble_gfx::pacing::ContentRate::Calm;
             // The popup's placement comes from its events (`render_surfaces`).
             let popup = (Some(tab) == keys)
                 .then(|| view.take_popup_frame())
@@ -819,6 +821,9 @@ impl Host {
                 continue;
             };
             measure::count(measure::Count::CefFrame);
+            if calm {
+                measure::count(measure::Count::CefFrameCalm);
+            }
             self.pace(PaceEvent::FrameArrived);
             if let Some(refresh) = self.refresh() {
                 let timer = self.engine.page_painted(refresh).timer;

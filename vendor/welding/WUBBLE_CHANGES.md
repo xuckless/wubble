@@ -622,7 +622,22 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     pool's count and zeroes it. For wubble's page layer diagnostics (its per-second
     summary line). Linux and Windows unchanged.
 
-66. **A download's speed.** `surface.rs`: `NavigationEvent::DownloadProgress`
+66. **A frame dropped for a busy pool, reported (macOS).** `native_frame/metal.rs`:
+    `OsBufferPool::lost`, set where `next` returns `Next::Busy`, cleared where it hands a
+    buffer. `surface.rs`: new `CefSurfaceProducer::take_os_buffers_lost` (default false);
+    `macos_cef` returns the pool's flag and clears it. wubble asks CEF to paint again
+    (`invalidate`) a refresh later, so the layer is not left a frame behind when a burst's
+    last frame was the one dropped. Linux and Windows unchanged.
+
+67. **A hidden view keeps no frame (Linux, macOS).** `native_frame/mod.rs`:
+    `PendingFrameSlot::set_hidden`/`is_hidden`; hiding drops the frame waiting there.
+    `linux_cef`/`macos_cef` `set_visible` sets it before `was_hidden`; their
+    `on_accelerated_paint` returns before the copy for a hidden view's own frames (a
+    popup's still go). A hidden tab no longer holds a full-size copied texture until it
+    is shown; showing it asks CEF for a frame as before. For wubble's
+    `hidden-tabs-free-gpu`. Windows unchanged.
+
+68. **A download's speed.** `surface.rs`: `NavigationEvent::DownloadProgress`
     gains `bytes_per_second: Option<u64>`; `handlers.rs` (`on_download_updated`)
     fills it from `CefDownloadItem::current_speed` (0 while stalled; none for a
     negative value).

@@ -816,6 +816,12 @@ impl View {
                 self.held_keys.push((key.physical, up));
             }
         }
+        // The OS's editing commands ride on DevTools input, the one way to send them;
+        // its reply carries nothing (an unknown id to `PageEvent::CdpReply`'s readers).
+        if let Some(params) = input::edit_command_key(key) {
+            self.cdp("Input.dispatchKeyEvent", &params);
+            return;
+        }
         for event in input::key_events(key) {
             let event = cef::KeyEvent::from(event);
             self.send(|host| host.send_key_event(Some(&event)));
@@ -919,6 +925,12 @@ impl View {
     /// [`Self::set_os_buffers`] was in use (0 without them; macOS only).
     pub fn take_os_buffers_busy(&mut self) -> u64 {
         self.producer.take_os_buffers_busy()
+    }
+
+    /// Whether this view's newest frame was dropped for a busy pool with none after it, since
+    /// the last call: what the layer shows is a frame behind until the page paints again.
+    pub fn take_os_buffers_lost(&mut self) -> bool {
+        self.producer.take_os_buffers_lost()
     }
 
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
@@ -1041,6 +1053,11 @@ impl View {
         self.ceiling = frame_rate;
         let rate = self.content.frame_rate(frame_rate);
         self.send(|host| host.set_windowless_frame_rate(rate as i32));
+    }
+
+    /// How lively the page's content is now (`--measure`'s calm frames).
+    pub fn content_rate(&self) -> ContentRate {
+        self.content
     }
 
     /// Input or a frame: the page's frame rate follows what changes in it

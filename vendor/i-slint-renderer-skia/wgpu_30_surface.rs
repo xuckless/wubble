@@ -42,7 +42,8 @@ pub(crate) fn sampled_texture_color_space(texture: &wgpu::Texture) -> skia_safe:
 /// Skia rendering surface backed by WGPU. Supports both on-screen rendering (with a
 /// window surface) and offscreen rendering into caller-provided textures.
 pub struct WGPUSurface {
-    pub(crate) gr_context: RefCell<skia_safe::gpu::DirectContext>,
+    // wubble change (4): shared with `cache.rs`, which bounds and cleans it.
+    pub(crate) gr_context: Rc<RefCell<skia_safe::gpu::DirectContext>>,
     wgpu: Rc<SharedWgpuState>,
     surface_config: RefCell<Option<wgpu::SurfaceConfiguration>>,
     surface: Option<wgpu::Surface<'static>>,
@@ -151,8 +152,11 @@ impl WGPUSurface {
             .make_context(adapter, device, queue)
             .ok_or_else(|| PlatformError::from("Failed to create Skia context from WGPU"))?;
 
+        // wubble change (4): the window's cache, bounded and cleaned by the application
+        let gr_context = Rc::new(RefCell::new(gr_context));
+        crate::cache::register(&gr_context);
         Ok(Self {
-            gr_context: gr_context.into(),
+            gr_context,
             wgpu,
             surface_config: Some(surface_config).into(),
             surface: Some(surface),
@@ -175,7 +179,7 @@ impl WGPUSurface {
         gr_context: skia_safe::gpu::DirectContext,
     ) -> Self {
         Self {
-            gr_context: RefCell::new(gr_context),
+            gr_context: Rc::new(RefCell::new(gr_context)),
             wgpu: Rc::new(SharedWgpuState { instance, adapter, device, queue }),
             surface_config: None.into(),
             surface: None,

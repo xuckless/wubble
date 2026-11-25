@@ -558,6 +558,8 @@ impl CefSurfaceProducer for LinuxCefProducer {
     }
 
     fn set_visible(&mut self, visible: bool) -> Result<(), WeldError> {
+        // wubble change (67): a hidden view keeps no frame and copies none
+        self.frame_slot.lock().unwrap().set_hidden(!visible);
         #[cfg(feature = "cef-runtime")]
         if let Some(host) = self.browser.host() {
             host.was_hidden(if visible { 0 } else { 1 });

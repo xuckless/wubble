@@ -80,8 +80,8 @@ impl Route {
         }
     }
 
-    /// The layer is visible (the invariant): the shell's drawable must land with its changes
-    /// (`presentsWithTransaction` on macOS).
+    /// The layer is visible (the invariant): hiding it must land with a shell frame that
+    /// covers it ([`hide_at`]).
     pub fn on_layer(self) -> bool {
         matches!(self, Route::Layer { .. } | Route::Leaving { .. })
     }
@@ -130,10 +130,15 @@ pub enum Need {
     /// Glass over the page blurs it (`overlay::covers` is [`Coverage::Glass`]): a snapshot of the
     /// page will do.
     Frosted,
+    /// The pane moved under its hole at the start of a render whose drawable is presented on its
+    /// own, not with the Core Animation transaction ([`transacts`] was off as it was acquired):
+    /// its layer cannot move in the same frame as the hole, so the shell draws the page for that
+    /// render, over the layer left where the shell's last frame has the hole.
+    Moved,
 }
 
 /// How many [`Need`]s there are (a [`ModeRow`] has a hold for each).
-pub const NEEDS: usize = Need::Frosted as usize + 1;
+pub const NEEDS: usize = Need::Moved as usize + 1;
 
 impl Need {
     /// Every need, in bit order.
@@ -145,6 +150,7 @@ impl Need {
         Need::Sampled,
         Need::Unplaced,
         Need::Frosted,
+        Need::Moved,
     ];
 }
 
@@ -201,6 +207,7 @@ impl Needs {
             .covered(o.coverage)
             .with(Need::Resizing, !o.view_live)
             .with(Need::Pixels, o.pixels)
+            .with(Need::Moved, o.moved_alone)
     }
 
     /// The needs of where the page is: the window's whole content (`whole`) or a pane among the
@@ -242,6 +249,9 @@ pub struct Owners {
     pub view_live: bool,
     /// A shot, a pixel check or a snapshot wants the page's pixels in the shell's textures.
     pub pixels: bool,
+    /// The pane moved under its hole at the start of a render presented on its own
+    /// ([`Need::Moved`]).
+    pub moved_alone: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,6 +287,9 @@ pub enum Effect {
     PresentLatest,
     /// The shell renders and presents the page's area once more (no new frame may come).
     Redraw,
+    /// The page paints its frame again (CEF's invalidate): it may go on its layer now, and only a
+    /// frame in an OS buffer takes it there, which a still page never sends by itself.
+    Repaint,
     /// The layer's latest frame copied into the shell's texture of the pane, which only its glass
     /// reads (the pane is a hole): the glass blurs it, nothing else is drawn again.
     Snapshot,
@@ -305,7 +318,10 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
         (Unsupported, Frame { .. }) => (route, vec![Present]),
         // a layer to use: the copy goes to OS buffers once nothing holds the page on the shell
         (Unsupported | Composited, Capable(true) | Changed) if held => (Composited, vec![]),
-        (Unsupported | Composited, Capable(true) | Changed) => (entering, vec![Buffers(true)]),
+        // and the page paints once into them: a still page sends no frame by itself
+        (Unsupported | Composited, Capable(true) | Changed) => {
+            (entering, vec![Buffers(true), Repaint])
+        }
         (Composited, Capable(false)) => (Unsupported, vec![]),
         (Composited, Frame { .. }) => (route, vec![Present]),
         // nothing is on the layer to fail
@@ -313,6 +329,10 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
 
         (Entering { .. }, Capable(false)) => (Unsupported, vec![Buffers(false)]),
         (Entering { .. }, Capable(true) | Changed) if lasting => (Composited, vec![Buffers(false)]),
+        // a brief hold ended: the page paints again for its way back to the layer
+        (Entering { expires: Some(_) }, Capable(true) | Changed | Presenting { .. }) if !held => {
+            (entering, vec![Repaint])
+        }
         (Entering { .. }, Capable(true) | Changed | Presenting { .. }) => (entering, vec![]),
         (Entering { .. }, Frame { os: true, .. }) if lasting => {
             (Composited, vec![Buffers(false), Present])
@@ -373,8 +393,14 @@ pub fn transition(route: Route, hold: Hold, now: u64, event: Event) -> (Route, V
         (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until && lasting => {
             (Composited, vec![Hide, Buffers(false)])
         }
-        // held briefly or not at all: the next frame free of it goes back to the layer
-        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until => (entering, vec![Hide]),
+        // held briefly: the next frame free of it goes back to the layer
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until && held => {
+            (entering, vec![Hide])
+        }
+        // free: back to the layer at the page's next frame, which it paints for that
+        (Leaving { until }, Presenting { drawn: Some(d) }) if d >= until => {
+            (entering, vec![Hide, Repaint])
+        }
         // the shell has not drawn it yet: once more, the layer stays
         (Leaving { .. }, Presenting { .. }) => (route, vec![Redraw]),
     }
@@ -400,6 +426,48 @@ fn frosted(
         snap
     };
     (Route::Layer { shown, snap }, effects)
+}
+
+/// When a pane's layer is hidden ([`Effect::Hide`]), from the route it had (`before`) and whether
+/// the hide comes in the present hook of a render presented with the Core Animation transaction
+/// (`transacted`: its drawable lands in the same commit as the hide).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HideAt {
+    /// Hidden, nothing on screen depends on it (it showed nothing, or the frame that covers it
+    /// lands with the hide).
+    Now,
+    /// The shell's last frame still has its hole: the layer stays under it, retired, until a
+    /// transacted present that draws no hole there.
+    Retire,
+    /// Visible with no hole (it was leaving, or it is over the shell): hidden at the next
+    /// transacted present of its window.
+    Due,
+}
+
+/// Where a hide goes (the table of [`HideAt`]).
+pub fn hide_at(before: Route, mode: Mode, transacted: bool) -> HideAt {
+    match (before.holed(mode), before.on_layer() && !transacted) {
+        (true, _) => HideAt::Retire,
+        (false, true) => HideAt::Due,
+        (false, false) => HideAt::Now,
+    }
+}
+
+/// Whether the shell's next render of the window presents with the Core Animation transaction
+/// (`presentsWithTransaction` on macOS), for one pane: only while a change of its layer must
+/// land with the shell's frame: it is leaving (its hide comes in a present), a hide is due, or it
+/// moved under its hole this render. A layer that only shows new frames, and a render that only
+/// redraws glass over it, present on their own, so the main thread (also CEF's) never waits in
+/// that commit for the shell's GPU work (docs/research/page-layer.md, "The frame rate on the
+/// layer"). The window's is any of its panes', or a retired layer.
+///
+/// `moved`: the pane's place changed at the start of the last render. Counted while the page is
+/// on its layer or on its way there (a frame may put it there mid-move), so every render of a
+/// move after its first lands the layer with its hole; the first was acquired before the move
+/// was known, and holds the page on the shell for it ([`Need::Moved`]).
+pub fn transacts(route: Route, hide_due: bool, moved: bool) -> bool {
+    let near = matches!(route, Route::Entering { .. } | Route::Layer { .. });
+    matches!(route, Route::Leaving { .. }) || hide_due || (moved && near)
 }
 
 /// Whether a pane's layer has no use left: it is hidden (not [`Route::on_layer`]) and where the
@@ -535,8 +603,8 @@ pub const MODES: &[ModeRow] = &[
     ModeRow { name: "fullscreen", mode: Mode::Fullscreen, order: Order::Above, holds: [Hold::Long; NEEDS] },
     // under the shell: its UI is drawn over the hole, its glass blurs a snapshot of the layer;
     // what needs the live page in the shell holds it briefly
-    //                                                         Windowed    Covered     Resizing     Pixels       Sampled      Unplaced    Frosted
-    ModeRow { name: "window", mode: Mode::Window, order: Order::Below, holds: [Hold::Free, Hold::Free, Hold::Brief, Hold::Brief, Hold::Brief, Hold::Long, Hold::Frost] },
+    //                                                         Windowed    Covered     Resizing     Pixels       Sampled      Unplaced    Frosted      Moved
+    ModeRow { name: "window", mode: Mode::Window, order: Order::Below, holds: [Hold::Free, Hold::Free, Hold::Brief, Hold::Brief, Hold::Brief, Hold::Long, Hold::Frost, Hold::Brief] },
 ];
 
 /// The mode `name` names.
@@ -618,7 +686,7 @@ mod tests {
         let rows: &[RouteRow] = &[
             // Unsupported: the shell draws every frame, nothing else happens
             ("unsupported: stays without a layer", Unsupported, false, Capable(false), Unsupported, &[]),
-            ("unsupported: a layer, nothing needs the shell", Unsupported, false, Capable(true), IN, &[Buffers(true)]),
+            ("unsupported: a layer, nothing needs the shell: buffers, and a frame into them", Unsupported, false, Capable(true), IN, &[Buffers(true), Repaint]),
             ("unsupported: a layer, the shell is needed", Unsupported, true, Capable(true), Composited, &[]),
             ("unsupported: needs ignored", Unsupported, false, Changed, Unsupported, &[]),
             ("unsupported: needs ignored (holding)", Unsupported, true, Changed, Unsupported, &[]),
@@ -628,9 +696,9 @@ mod tests {
             ("unsupported: a failure ignored", Unsupported, false, Failed, Unsupported, &[]),
             // Composited
             ("composited: loses the layer", Composited, false, Capable(false), Unsupported, &[]),
-            ("composited: capable again, clear", Composited, false, Capable(true), IN, &[Buffers(true)]),
+            ("composited: capable again, clear", Composited, false, Capable(true), IN, &[Buffers(true), Repaint]),
             ("composited: capable again, needed", Composited, true, Capable(true), Composited, &[]),
-            ("composited: the needs clear", Composited, false, Changed, IN, &[Buffers(true)]),
+            ("composited: the needs clear", Composited, false, Changed, IN, &[Buffers(true), Repaint]),
             ("composited: still needed", Composited, true, Changed, Composited, &[]),
             ("composited: a frame to the shell", Composited, false, copied(7), Composited, &[Present]),
             ("composited: a late os frame to the shell", Composited, true, os(7), Composited, &[Present]),
@@ -669,8 +737,8 @@ mod tests {
             ("leaving: a render of an older frame: once more", FOR7, false, drew(5), FOR7, &[Redraw]),
             ("leaving: one short, still needed", FOR7, true, drew(6), FOR7, &[Redraw]),
             ("leaving: drawn, still needed", FOR5, true, drew(5), Composited, &[Hide, Buffers(false)]),
-            ("leaving: drawn, nothing needs the shell", FOR5, false, drew(5), IN, &[Hide]),
-            ("leaving: a newer one drawn", FOR5, false, drew(7), IN, &[Hide]),
+            ("leaving: drawn, nothing needs the shell: the page paints for its return", FOR5, false, drew(5), IN, &[Hide, Repaint]),
+            ("leaving: a newer one drawn", FOR5, false, drew(7), IN, &[Hide, Repaint]),
             ("leaving: fails", FOR7, false, Failed, Unsupported, &[Buffers(false), Hide]),
         ];
         for &(name, route, blocked, event, next, effects) in rows {
@@ -759,12 +827,17 @@ mod tests {
             ("past it, at a frame", due, Hold::Brief, T + 500, os(7), Composited, &[Buffers(false), Present]),
             ("past it, a render: the deadline kept for the next read", due, Hold::Brief, T + 500, BLANK, due, &[]),
             ("past it, a frame copied without buffers", due, Hold::Brief, T + 500, copied(7), due, &[Present]),
-            ("the hold ended late: nothing expired", due, Hold::Free, T + 500, Changed, IN, &[]),
+            ("the hold ended late: nothing expired, the page paints", due, Hold::Free, T + 500, Changed, IN, &[Repaint]),
+            ("the hold ended: a still page paints for its way back", HELD, Hold::Free, T + 1, Changed, IN, &[Repaint]),
+            ("the hold ended at a render", HELD, Hold::Free, T + 1, BLANK, IN, &[Repaint]),
+            ("the hold ended, capable again", HELD, Hold::Free, T + 1, Capable(true), IN, &[Repaint]),
+            ("the hold ended, only glass left", HELD, Hold::Frost, T + 1, Changed, IN, &[Repaint]),
+            ("asked once: entering with no hold asks no more", IN, Hold::Free, T + 1, Changed, IN, &[]),
             ("the hold ended late, a frame: on the layer", due, Hold::Free, T + 500, os(7), ON7, &[Show]),
             ("only glass left: on the layer with a snapshot", due, Hold::Frost, T, os(7), snapped(7, 7, T), &[Show, Snapshot]),
             ("a long hold needs no deadline", due, Hold::Long, T - 1, Changed, Composited, &[Buffers(false)]),
             ("expired and composited: stays while held", Composited, Hold::Brief, T, Changed, Composited, &[]),
-            ("free again: the buffers asked for", Composited, Hold::Free, T, Changed, IN, &[Buffers(true)]),
+            ("free again: the buffers asked for", Composited, Hold::Free, T, Changed, IN, &[Buffers(true), Repaint]),
             ("a new brief hold gets a new deadline", IN, Hold::Brief, T, Changed, HELD, &[]),
         ];
         for &(name, route, hold, now, event, next, effects) in rows {
@@ -808,8 +881,8 @@ mod tests {
             ("the tab leaves under glass", snapped(5, 5, T), Hold::Frost, T, Capable(false), Unsupported, &[Buffers(false), PresentLatest, Hide]),
             ("entering under glass: stays for its frame", IN, Hold::Frost, T, Changed, IN, &[]),
             ("entering under glass: on the layer with a snapshot", IN, Hold::Frost, T, os(6), snapped(6, 6, T), &[Show, Snapshot]),
-            ("composited under glass: the buffers asked for", Composited, Hold::Frost, T, Changed, IN, &[Buffers(true)]),
-            ("leaving under glass: back to it when drawn", FOR5, Hold::Frost, T, drew(5), IN, &[Hide]),
+            ("composited under glass: the buffers asked for", Composited, Hold::Frost, T, Changed, IN, &[Buffers(true), Repaint]),
+            ("leaving under glass: back to it when drawn", FOR5, Hold::Frost, T, drew(5), IN, &[Hide, Repaint]),
         ];
         for &(name, route, hold, now, event, next, effects) in rows {
             assert_eq!(
@@ -865,7 +938,7 @@ mod tests {
                     }
                     Present => self.given = painted.max(self.given),
                     PresentLatest => self.given = self.layer.max(self.given),
-                    Redraw => {}
+                    Redraw | Repaint => {}
                     // the layer's frame into the shell's texture, for its glass
                     Snapshot => {
                         assert!(
@@ -1070,6 +1143,23 @@ mod tests {
                 ],
             ),
             (
+                "a still page enters: its first frame copied, the one it repaints on the layer",
+                16,
+                &[(free, Capable(true)), (free, copied(1)), (free, os(2)), (free, drew(1))],
+            ),
+            (
+                "moved in a render presented alone, then back at the repaint's frame",
+                16,
+                &[
+                    (free, Capable(true)),
+                    (free, os(1)),
+                    (brief, Changed),
+                    (free, drew(1)),
+                    (free, Changed),
+                    (free, os(2)),
+                ],
+            ),
+            (
                 "a resize that holds for more than a second lets the buffers go",
                 300,
                 &[
@@ -1130,6 +1220,7 @@ mod tests {
             coverage: Coverage::None,
             view_live: true,
             pixels: false,
+            moved_alone: false,
         };
         let only = |n: &[Need]| n.iter().fold(Needs::NONE, |s, &n| s.with(n, true));
         #[rustfmt::skip]
@@ -1143,8 +1234,9 @@ mod tests {
             ("the picture-in-picture window", Owners { page_fullscreen: false, pip_window: true, ..clear }, Needs::NONE),
             ("a pane among the chrome", Owners { page_fullscreen: false, ..clear }, only(&[Windowed])),
             ("a shot pending", Owners { pixels: true, ..clear }, only(&[Pixels])),
-            ("everything", Owners { page_fullscreen: false, pip_window: false, placed: false, coverage: Coverage::Pixels, view_live: false, pixels: true },
-                only(&[Windowed, Covered, Resizing, Pixels, Sampled, Unplaced])),
+            ("moved in a render presented alone", Owners { moved_alone: true, ..clear }, only(&[Moved])),
+            ("everything", Owners { page_fullscreen: false, pip_window: false, placed: false, coverage: Coverage::Pixels, view_live: false, pixels: true, moved_alone: true },
+                only(&[Windowed, Covered, Resizing, Pixels, Sampled, Unplaced, Moved])),
         ];
         for &(name, owners, want) in rows {
             assert_eq!(Needs::from_owners(&owners), want, "{name}");
@@ -1181,6 +1273,8 @@ mod tests {
             ("glass over a resizing page", only(&[Covered, Frosted, Resizing]), Long, Brief),
             ("a resize", only(&[Resizing]), Long, Brief),
             ("a shot", only(&[Pixels]), Long, Brief),
+            ("moved under its hole in a render presented alone", only(&[Moved]), Long, Brief),
+            ("moved alone under glass: the shell draws it", only(&[Covered, Frosted, Moved]), Long, Brief),
             ("no pane of its own", only(&[Windowed, Unplaced]), Long, Long),
             ("the strongest wins", only(&[Covered, Resizing, Unplaced]), Long, Long),
             ("a windowed pane under glass", only(&[Windowed, Covered, Frosted]), Long, Frost),
@@ -1229,6 +1323,52 @@ mod tests {
         ];
         for &(route, on) in rows {
             assert_eq!(route.on_layer(), on, "{route:?}");
+        }
+    }
+
+    /// A hide never shows the desktop through a hole, nor the shell's old frame where the
+    /// layer was: it waits for a transacted present unless nothing shows it.
+    #[test]
+    fn page_layer_hide_at() {
+        use HideAt::{Due, Now, Retire};
+        use Mode::{Fullscreen, Window};
+        #[rustfmt::skip]
+        let rows: &[(Route, Mode, bool, HideAt)] = &[
+            // (before, mode, in a transacted present, where)
+            (Unsupported, Window, false, Now), (Composited, Window, false, Now),
+            (IN, Window, false, Now), (IN, Window, true, Now),
+            (ON5, Window, false, Retire), (ON5, Window, true, Retire),
+            (FOR5, Window, false, Due), (FOR5, Window, true, Now),
+            (ON5, Fullscreen, false, Due), (ON5, Fullscreen, true, Now),
+            (FOR5, Fullscreen, false, Due), (FOR5, Fullscreen, true, Now),
+            (Composited, Fullscreen, false, Now),
+        ];
+        for &(before, mode, transacted, at) in rows {
+            assert_eq!(hide_at(before, mode, transacted), at, "{before:?} {mode:?} {transacted}");
+        }
+    }
+
+    /// Steady frames on the layer and glass redrawn over it present on their own.
+    #[test]
+    fn page_layer_transacts_only_for_a_change() {
+        #[rustfmt::skip]
+        let rows: &[(&str, Route, bool, bool, bool)] = &[
+            // (name, route, hide due, moved, transacts)
+            ("frames on the layer", ON5, false, false, false),
+            ("moved under its hole", ON5, false, true, true),
+            ("moving under glass", snapped(5, 5, T), false, true, true),
+            ("moving on its way to the layer (a frame may put it there)", IN, false, true, true),
+            ("moving on the shell's path: nothing to land", Composited, false, true, false),
+            ("moving with no layer", Unsupported, false, true, false),
+            ("moving while leaving", FOR5, false, true, true),
+            ("leaving", FOR5, false, false, true),
+            ("a hide due", Composited, true, false, true),
+            ("the shell's path", Composited, false, false, false),
+            ("entering", IN, false, false, false),
+            ("no layer", Unsupported, false, false, false),
+        ];
+        for &(name, route, due, moved, on) in rows {
+            assert_eq!(transacts(route, due, moved), on, "{name}");
         }
     }
 
