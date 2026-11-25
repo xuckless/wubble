@@ -440,6 +440,13 @@ class Harness:
             end = time.time() + 15
             while time.time() < end and str(self.profile) in sh("ps", "-A", "-o", "command=", check=False):
                 time.sleep(0.5)
+            # and nothing still holds the store: a relaunch that finds wubble.db locked runs without
+            # a saved session, every setting at its default (the seeded Pip row never read)
+            db = self.profile / "wubble.db"
+            while time.time() < end + 15 and db.exists() and sh("lsof", "-t", str(db), check=False).strip():
+                time.sleep(0.5)
+            if db.exists() and (held := sh("lsof", str(db), check=False).strip()):
+                print(f"mac-checks: wubble.db still held after quit:\n{held}", flush=True)
         self.proc = None
 
     def open_tab(self, url):
@@ -1204,9 +1211,14 @@ def main():
         h.launch(url(A), trace=False)
         h.quit()
         db = h.profile / "wubble.db"
-        with sqlite3.connect(db) as con:
+        # closed before the relaunch: an open connection to a WAL database keeps a shared lock, and
+        # wubble's store (Turso) wants the file to itself; without it the run has no saved session
+        con = sqlite3.connect(db)
+        with con:
             con.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('pip.on_tab_switch', '1')")
+        con.close()
         h.launch(url(A))
+        print(f"mac-checks: profile {h.profile}", flush=True)
         h.sampler = Sampler(h, out / "samples.csv")
         h.sampler.start()
         h.t0 = time.time()
@@ -1214,6 +1226,9 @@ def main():
         idle = h.sampler.summary(h.t0, time.time())
         print(f"idle, one still page: {idle}", flush=True)
         ctx["idle"] = idle
+        lost = [l for l in (out / "wubble.log").read_text(errors="replace").splitlines() if "running without a saved session" in l]
+        if lost:
+            print(f"mac-checks: WARNING, the store did not load, settings are defaults: {lost[-1]}", flush=True)
         for c in (B, C):
             h.open_tab(url(c))
         h.key("cmd+1", 2)
