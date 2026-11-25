@@ -49,7 +49,12 @@ pub const CLIENT: Client = Client {
 /// The player API's endpoint.
 pub const PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 
-/// The video id of a watch, shorts, embed or youtu.be URL.
+/// Eleven-character path words of an embed that name no video: a playlist (`videoseries`) or a
+/// channel's live stream (`live_stream?channel=`), as yt-dlp's `_VALID_URL` leaves them out.
+const NOT_VIDEOS: [&str; 2] = ["videoseries", "live_stream"];
+
+/// The video id of a watch, shorts, live, embed (also `youtube-nocookie.com`, the privacy
+/// embed) or youtu.be URL.
 pub fn video_id(url: &str) -> Option<String> {
     let parsed = ::url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
@@ -58,14 +63,14 @@ pub fn video_id(url: &str) -> Option<String> {
         .or_else(|| host.strip_prefix("m."))
         .unwrap_or(&host);
     let id = match host {
-        "youtube.com" | "music.youtube.com" => {
+        "youtube.com" | "music.youtube.com" | "youtube-nocookie.com" => {
             let mut segments = parsed.path_segments()?;
             match segments.next()? {
                 "watch" => parsed
                     .query_pairs()
                     .find(|(k, _)| k == "v")
                     .map(|(_, v)| v.into_owned())?,
-                "shorts" | "embed" | "live" => segments.next()?.to_owned(),
+                "shorts" | "embed" | "live" | "v" | "e" => segments.next()?.to_owned(),
                 _ => return None,
             }
         }
@@ -73,6 +78,7 @@ pub fn video_id(url: &str) -> Option<String> {
         _ => return None,
     };
     let valid = id.len() == 11
+        && !NOT_VIDEOS.contains(&id.as_str())
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
@@ -303,20 +309,44 @@ mod tests {
 
     #[test]
     fn video_ids_from_urls() {
-        let id = Some("dQw4w9WgXcQ".to_owned());
-        assert_eq!(
-            video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1"),
-            id
-        );
-        assert_eq!(
-            video_id("https://m.youtube.com/watch?feature=x&v=dQw4w9WgXcQ"),
-            id
-        );
-        assert_eq!(video_id("https://youtu.be/dQw4w9WgXcQ?si=1"), id);
-        assert_eq!(video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"), id);
-        assert_eq!(video_id("https://www.youtube.com/watch?v=short"), None);
-        assert_eq!(video_id("https://www.youtube.com/feed/trending"), None);
-        assert_eq!(video_id("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), None);
+        let cases = [
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1", true),
+            ("https://m.youtube.com/watch?feature=x&v=dQw4w9WgXcQ", true),
+            ("https://youtu.be/dQw4w9WgXcQ?si=1", true),
+            ("https://www.youtube.com/shorts/dQw4w9WgXcQ", true),
+            ("https://www.youtube.com/live/dQw4w9WgXcQ", true),
+            // embeds, as an iframe's `src` names them
+            ("https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=1", true),
+            ("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ", true),
+            (
+                "https://youtube-nocookie.com/embed/dQw4w9WgXcQ?start=30",
+                true,
+            ),
+            ("https://www.youtube.com/v/dQw4w9WgXcQ", true),
+            ("https://www.youtube.com/e/dQw4w9WgXcQ", true),
+            (
+                "https://www.youtube.com/embed/videoseries?list=PL1234",
+                false,
+            ),
+            (
+                "https://www.youtube.com/embed/live_stream?channel=UC1",
+                false,
+            ),
+            ("https://www.youtube-nocookie.com/watch?v=short", false),
+            ("https://www.youtube.com/embed/", false),
+            ("https://www.youtube.com/watch?v=short", false),
+            ("https://www.youtube.com/feed/trending", false),
+            ("https://notyoutube.com/watch?v=dQw4w9WgXcQ", false),
+            (
+                "https://youtube-nocookie.com.evil.test/embed/dQw4w9WgXcQ",
+                false,
+            ),
+            ("about:blank", false),
+        ];
+        for (url, found) in cases {
+            let want = found.then(|| "dQw4w9WgXcQ".to_owned());
+            assert_eq!(video_id(url), want, "{url}");
+        }
     }
 
     #[test]

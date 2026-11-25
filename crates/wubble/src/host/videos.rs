@@ -417,6 +417,16 @@ impl Host {
 
     fn media_snapshot(&mut self, tab: TabId, json: Value) {
         let now = now_ms() as u64;
+        // An embedded player's address (`kit.js` `bigFrame`): a YouTube embed is looked up as
+        // its watch page would be (behind `media.youtube`), before the frame's strip asks
+        // whether the downloader lists anything. The id is checked by `youtube::video_id`.
+        if let Some(src) = json
+            .pointer("/v/src")
+            .and_then(Value::as_str)
+            .filter(|s| s.len() <= 2048)
+        {
+            self.media_youtube_page(tab, src);
+        }
         // A frame's area is a strip only over what the downloader saw of the page.
         let video = json
             .get("v")

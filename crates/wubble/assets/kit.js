@@ -124,7 +124,8 @@
 
   // The largest visible embedded frame (a cross-origin player the kit cannot run in): where the
   // strip offers the save control over what the downloader saw of the page. The host shows it
-  // only when the downloader lists something, so an ad frame gets nothing.
+  // only when the downloader lists something, so an ad frame gets nothing. Its address goes
+  // with it: an embedded YouTube player is looked up as its watch page would be.
   function bigFrame() {
     let best = null, bestArea = 0;
     for (const f of document.querySelectorAll("iframe, embed, object")) {
@@ -132,7 +133,7 @@
       const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
       const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
       if (w < 200 || h < 112 || getComputedStyle(f).visibility === "hidden") continue;
-      if (w * h > bestArea) { best = r; bestArea = w * h; }
+      if (w * h > bestArea) { best = { r, src: String(f.src || f.data || "").slice(0, 2048) }; bestArea = w * h; }
     }
     return best;
   }
@@ -159,12 +160,13 @@
         drm: !!v.mediaKeys,
       };
     } else if (window === window.top) {
-      const r = bigFrame();
-      if (r) {
+      const f = bigFrame();
+      if (f) {
+        const r = f.r;
         out.v = {
           x: r.left, y: r.top, w: r.width, h: r.height, t: 0, dur: null, paused: true,
           rate: 1, loop: false, muted: false, doc: performance.timeOrigin, drm: false,
-          frame: true,
+          frame: true, src: f.src,
         };
       }
     }

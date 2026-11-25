@@ -271,9 +271,10 @@ impl Host {
         self.video_save_redraw(save);
     }
 
-    /// A YouTube video's page: listed to be looked up (`media.youtube` on), else listed as
-    /// off, with no request.
-    fn media_youtube_page(&mut self, tab: TabId, url: &str) {
+    /// A YouTube video's page, or a player embedding one (an iframe's `src`, seen on every poll
+    /// of the page kit; the list keeps it once): listed to be looked up (`media.youtube` on),
+    /// else listed as off, with no request.
+    pub(super) fn media_youtube_page(&mut self, tab: TabId, url: &str) {
         if !self.media.settings.enabled || youtube::video_id(url).is_none() {
             return;
         }
