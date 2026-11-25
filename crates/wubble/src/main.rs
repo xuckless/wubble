@@ -172,10 +172,11 @@ pub fn pacing() -> Pacing {
         .unwrap_or_else(|| pacing::platform_pacing(std::env::consts::OS))
 }
 
-/// The command line's `--page-layer`. Set once, before any window.
+/// This run's page layer mode: the command line's `--page-layer`, else the run's own default
+/// (`run`). Set once, before any window.
 static PAGE_LAYER: std::sync::OnceLock<wubble_core::page_layer::Mode> = std::sync::OnceLock::new();
 
-/// This run's page layer mode (off unless the command line said otherwise).
+/// This run's page layer mode (off until it is set).
 pub fn page_layer() -> wubble_core::page_layer::Mode {
     PAGE_LAYER.get().copied().unwrap_or_default()
 }
@@ -191,7 +192,9 @@ fn main() -> ExitCode {
             if let Some(pacing) = flags.pacing {
                 let _ = PACING.set(pacing);
             }
-            let _ = PAGE_LAYER.set(flags.page_layer);
+            if let Some(mode) = flags.page_layer {
+                let _ = PAGE_LAYER.set(mode);
+            }
             command
         }
         Err(e) => e.exit(),
@@ -547,16 +550,21 @@ pub fn drain(engine: &mut Engine) {
 /// `WUBBLE_TRACE=1`: stage lines on stderr with the time since the first one, for finding where
 /// a run that hangs (once, 300 s, right after a rebuild: never reproduced) is stuck. Take
 /// `eu-stack -p <pid>` of the process and its children next to the last line. Off by default.
-fn trace(stage: &str) {
-    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
-    let start = START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()));
-    if let Some(start) = start {
+pub(crate) fn trace(stage: &str) {
+    if let Some(start) = tracing() {
         eprintln!(
             "wubble: trace +{}ms pid {}: {stage}",
             start.elapsed().as_millis(),
             std::process::id()
         );
     }
+}
+
+/// `WUBBLE_TRACE` is set (read once): when its first line's clock began. The diagnostics that
+/// print only then (the page layer's route lines and summary, the scene's run state) ask here.
+pub(crate) fn tracing() -> Option<Instant> {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    *START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()))
 }
 
 /// The browser on its profile: `--profile`, else the per-user one, which
@@ -997,7 +1005,7 @@ struct Outcome {
 
 /// What the window is for.
 enum Mode {
-    /// `url`, or the bundled page if `None`; downloads go to `downloads`.
+    /// `url`, else the saved session, else the start page; downloads go to `downloads`.
     Browse {
         url: Option<String>,
         downloads: Option<PathBuf>,
@@ -1066,6 +1074,19 @@ enum Mode {
         /// `--measure-page`: the page instead of the scenario's own.
         page: Option<String>,
     },
+}
+
+/// The tab a run opens on a profile with none: the browser's start page (a fresh install's first
+/// start), a smoke's bundled page; `--measure memory` opens its tabs itself.
+fn fresh_profile_page(mode: &Mode) -> Option<String> {
+    match mode {
+        Mode::Browse { .. } => Some(wubble_core::pages::InternalPage::Start.url().into()),
+        Mode::Measure {
+            scenario: measure::Scenario::Memory,
+            ..
+        } => None,
+        _ => Some(page_url(SMOKE_PAGE)),
+    }
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -1141,6 +1162,12 @@ impl WindowFactory {
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
+        // the page hole's image (kit `PageHole`), when the mode's layers sit under the shell
+        if page_layer().row().order == wubble_core::page_layer::Order::Below {
+            window
+                .global::<wubble_ui::PageHoleSource>()
+                .set_image(i_slint_renderer_skia::hole::image());
+        }
         if let Some(g) = &geometry {
             host::place_window(&window, g);
         }
@@ -1886,8 +1913,8 @@ fn run(
         Mode::Browse { downloads, .. } => downloads.clone(),
         _ => Some(profile.join("downloads")),
     };
-    // `url` is opened in a new tab; without one a fresh profile gets the
-    // bundled page and a restored session opens nothing new.
+    // `url` is opened in a new tab; without one a fresh profile gets
+    // `fresh_profile_page` and a restored session opens nothing new.
     let (url, checks) = match &*mode {
         Mode::Browse { url, .. } => (url.clone(), none),
         Mode::Frames { frames, url } => {
@@ -2142,6 +2169,14 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
+    // without `--page-layer` (set already, kept): the browser's is its platform's unless Settings
+    // turned it off; every smoke and measurement keeps the shell's path
+    let browsing = matches!(&*mode, Mode::Browse { .. }) && loaded.settings.page_layer();
+    let _ = PAGE_LAYER.set(if browsing {
+        wubble_core::page_layer::platform_mode(std::env::consts::OS)
+    } else {
+        wubble_core::page_layer::Mode::Off
+    });
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.
     let mut loaded = loaded;
@@ -2237,7 +2272,14 @@ fn run(
         blocking.start(profile, &loaded.settings.blocker);
     }
     measure::mark(measure::Stage::BlockerStarted);
-    let url = url.or_else(|| (loaded.model.tabs.is_empty() && !memory_run).then(bundled));
+    let url = url.or_else(|| {
+        loaded
+            .model
+            .tabs
+            .is_empty()
+            .then(|| fresh_profile_page(mode))
+            .flatten()
+    });
     if let Some(port) = autofill_port.filter(|_| memory_run) {
         // `{}` is each tab's own site (`*.localhost` is loopback in Chromium).
         memory::begin(format!("http://{{}}.localhost:{port}/memory"));
@@ -2461,6 +2503,27 @@ mod tests {
         let off = session_phase_args("session-phase=2", profile, true);
         assert!(app::no_sandbox_requested(&off));
         assert_eq!(off[3], "/tmp/p");
+    }
+
+    #[test]
+    fn a_fresh_profile_opens_the_start_page_and_a_smoke_its_bundled_one() {
+        let browse = Mode::Browse {
+            url: None,
+            downloads: None,
+            listener: None,
+        };
+        assert_eq!(
+            fresh_profile_page(&browse).as_deref(),
+            Some(wubble_core::pages::InternalPage::Start.url())
+        );
+        assert_eq!(fresh_profile_page(&Mode::Nav), Some(page_url(SMOKE_PAGE)));
+        let memory = Mode::Measure {
+            scenario: measure::Scenario::Memory,
+            out: None,
+            load: None,
+            page: None,
+        };
+        assert_eq!(fresh_profile_page(&memory), None);
     }
 
     #[test]

@@ -5,7 +5,7 @@ work without patching Chromium or CEF, how wubble loads unpacked and .crx extens
 Status: Loading (unpacked and .crx), Manifest V3 service workers, runtime messaging and content scripts work and are
 smoked (`--smoke extensions`); tabs/windows/action/permission prompts need patches P1 to P4 (section 4).
 
-Date: 2026-11-20. Sources: the CEF checkout `~/Dev/wubble-wt/cef-build/chromium_git/cef` (HEAD 6028375a4, CEF 156.0.30),
+Date: 2026-11-20. Sources: the CEF checkout `.local/engine/cef-build/chromium_git/cef` (HEAD 6028375a4, CEF 156.0.30),
 Chromium `.../chromium/src` (156.0.8078.96), cef-rs `cef-156.6.0+156.0.30`, samuelmaddock/electron-browser-shell @3817c42,
 runs of `--smoke extensions` / `extensions-none` on the own CEF build (`CEF_PATH`, Linux, NVIDIA, headless display).
 Tags: **[V]** read in the cited source or seen in a run; **[I]** inferred, to be confirmed before relying on it.
@@ -79,7 +79,7 @@ grepped for every non-loopback URL [V]:
   migration, external components); with it the extensions-on log has **no host the extensions-off log lacks** [V].
 - Command-line extensions are never auto-updated (`Manifest::IsAutoUpdateableLocation`, `manifest.h:72-77`;
   `extension_updater.cc:422`) [V], so no update check is made for anything wubble loads.
-- **Pre-existing, with or without extensions** (not this lane's to fix, recorded in TODO.md): the component updater
+- **Pre-existing, with or without extensions** (not this lane's to fix, recorded in the roadmap, todo/): the component updater
   (`update.googleapis.com/service/update2/json`), network time (`clients2.google.com/time/1/current`), a component diff
   from `edgedl.me.gvt1.com`, the spellcheck dictionary (`redirector.gvt1.com/edgedl/chrome/dict/en-us-10-2.bdic`) and
   `www.google.com/async/folae` (an omnibox/AI Mode prefetch [I]) are requested on a throwaway profile in both modes.
@@ -125,7 +125,7 @@ test and developer extensions, and the UI should say so.
 
 wubble's patches live in `patches/chromium/` ([patches/README.md](../../patches/README.md)), applied by
 `scripts/build-cef.sh WORK patch` after CEF's hook, and built beside the CEF in use (`CEF_INSTALL`; the lane's
-build is `~/Dev/wubble-wt/cef-ext`). No translated CEF API: cef-dll-sys ships pregenerated bindings for API
+build is `.local/engine/cef-ext`). No translated CEF API: cef-dll-sys ships pregenerated bindings for API
 15600, so the patches export one plain C function, `cef_wubble_ext_v1` (libcef.lst exports every `cef_*`), which
 `crates/wubble-engine/src/ext_api.rs` looks up at run time. A stock CEF lacks it and wubble behaves as before.
 
@@ -181,7 +181,7 @@ incognito-enabled extension in a *non-primary* off-the-record profile at all is 
 
 ## Acceptance
 
-Hand check, 2026-11-20, Linux, the patched CEF (`CEF_PATH=~/Dev/wubble-wt/cef-ext`), `scripts/headless.sh` under
+Hand check, 2026-11-20, Linux, the patched CEF (`CEF_PATH=.local/engine/cef-ext`), `scripts/headless.sh` under
 `timeout`, a throwaway profile per extension. Extensions downloaded by hand from their GitHub releases into a scratch
 directory outside the repo (never committed, never fetched by wubble): Bitwarden `oss-dist-chrome-2026.11.0.zip`
 (bitwarden/clients, tag `browser-v2026.11.0`) and uBlock Origin Lite `uBOLite_2026.1116.1650.chromium.zip`
@@ -197,7 +197,7 @@ and a window PNG per step. The page's and the extension's own state came from th
 and the page, and their console (`Runtime.enable` replays the console, and announces each isolated world). Pages: a
 loopback login form (`python3 -m http.server`, `127.0.0.1`). No Bitwarden account exists here: the check stops at the
 sign-in screen (the email field takes typing; no login was attempted). Screenshots and the driver's patch:
-`~/Dev/wubble-wt/notes/xm/acc/` (`p1-prompt.png`, `p2-panel.png`, `p8-typed.png`, `u2-popup.png`, `u3-dashboard.png`,
+`~/Dev/wubble-wt/notes/xm/acc/ (deleted 2026-11-25)` (`p1-prompt.png`, `p2-panel.png`, `p8-typed.png`, `u2-popup.png`, `u3-dashboard.png`,
 `driver-and-fix.patch`).
 
 | Check | Bitwarden 2026.11.0 | uBlock Origin Lite 2026.1116.1650 |

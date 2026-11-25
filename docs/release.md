@@ -70,7 +70,10 @@ version (a plain version: stable); every release is published to both channels.
    `preview.json` and `stable.json` (with their `.minisig`; `gh release upload updates ... --clobber`):
    from then on installs on either channel offer the update.
 7. Check: a fresh `install.sh` from GitHub gives `<V>`; an install of the previous version, run
-   once, stages `<V>` (`updates/launch.json`) and starts as it the next time.
+   once, stages `<V>` (`updates/launch.json`) and starts as it the next time. Both first starts
+   (the fresh install's, the updated one's) open no tab but the start page:
+   `scripts/release/first-start-check.sh <throwaway HOME>` starts it headless and compares the
+   saved session's tab rows before and after (0.6.1 opened `--smoke frames`' bundled page there).
 8. macOS, after the tag is pushed: the owner runs `package-macos.sh` on the Mac (step 3); its
    archive is signed here, added to `latest.json` (`make-manifest` again with both archives in
    `dist/`), and the manifest, its signature and the Mac files are uploaded; `preview.json` and

@@ -155,7 +155,7 @@ pub enum Input<P> {
     /// A timer while the pointer rests (the dwell runs on).
     Tick { now: Instant },
     /// The button came up.
-    Released(Over),
+    Released { over: Over, now: Instant },
     /// `tab` named what a drop at the pointer would do.
     Cursor { tab: TabId, op: DragOps },
     /// The pointer left the window with the button held, where the platform can hand the drag
@@ -334,14 +334,17 @@ fn dwell<P>(mut d: Dragging<P>, now: Instant) -> (Dragging<P>, Vec<Effect<P>>) {
 }
 
 impl<P> Dragging<P> {
-    /// Whether a rest would still do something: the host keeps a timer for [`Input::Tick`].
-    pub fn awaits_dwell(&self) -> bool {
-        self.dropping
+    /// When a rest would do something, for the host's timer ([`Input::Tick`]): a [`DWELL`]
+    /// after the pointer came over a row's middle or the switcher, or after the release over a
+    /// page. A move on the same target never pushes it back.
+    pub fn due(&self) -> Option<Instant> {
+        let rests = self.dropping
             || !self.dwelt
                 && matches!(
                     self.over,
                     Over::Shell(Shell::List { row: Some(_), .. } | Shell::SpacesTrigger)
-                )
+                );
+        rests.then(|| self.since + DWELL)
     }
 }
 
@@ -403,7 +406,8 @@ pub fn transition<P: Payload>(
         PageDrag::Outside { source } => {
             return match input {
                 Input::OsEnded(op) => (None, vec![E::End(op)]),
-                Input::Cancelled => (None, vec![E::End(DragOps::NONE)]),
+                // a button-up the window saw: the OS drag never took the pointer
+                Input::Cancelled | Input::Released { .. } => (None, vec![E::End(DragOps::NONE)]),
                 Input::Gone(t) if t == source => (None, vec![E::End(DragOps::NONE)]),
                 // the OS has the pointer
                 _ => (Some(PageDrag::Outside { source }), vec![]),
@@ -456,7 +460,7 @@ pub fn transition<P: Payload>(
             d.chosen = Some(op);
             (Some(PageDrag::Dragging(d)), vec![E::Feedback(op)])
         }
-        Input::Released(at) => {
+        Input::Released { over: at, now } => {
             let at = confine(&d, at);
             let mut fx = if at == d.over {
                 vec![]
@@ -480,6 +484,7 @@ pub fn transition<P: Payload>(
                     d.over = at;
                     d.chosen = None;
                     d.dropping = true;
+                    d.since = now;
                     return (Some(PageDrag::Dragging(d)), fx);
                 }
                 Over::Shell(s) => {
@@ -562,7 +567,7 @@ fn dropping<P>(d: Dragging<P>, input: Input<P>) -> (Option<PageDrag<P>>, Vec<Eff
             };
             (Some(PageDrag::Dragging(d)), vec![])
         }
-        Input::Tick { .. } => {
+        Input::Tick { now } if now.saturating_duration_since(d.since) >= DWELL => {
             let op = d.chosen.unwrap_or_else(|| drop_operation(d.allowed));
             (None, drop(&d, op))
         }
@@ -641,6 +646,11 @@ mod tests {
         (s.expect("still dragging"), fx)
     }
 
+    /// The button up over `over`, at the start.
+    fn up(over: Over) -> Input<Data> {
+        Input::Released { over, now: t0() }
+    }
+
     fn mv(s: PageDrag<Data>, over: Over, at: u64) -> (PageDrag<Data>, Vec<Effect<Data>>) {
         step(s, Input::Moved { over, now: ms(at) })
     }
@@ -686,7 +696,7 @@ mod tests {
                 allowed: ALL
             }]
         );
-        let (s, fx) = step(s, Input::Released(Over::Page(A)));
+        let (s, fx) = step(s, up(Over::Page(A)));
         assert_eq!(
             fx,
             [E::Over {
@@ -710,9 +720,9 @@ mod tests {
 
     #[test]
     fn a_slow_or_refusing_page_gets_the_drop_after_a_while() {
-        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let (s, _) = step(started(link()), up(Over::Page(A)));
         let PageDrag::Dragging(d) = &s else { panic!() };
-        assert!(d.awaits_dwell());
+        assert_eq!(d.due(), Some(t0() + DWELL));
         // none said (maybe an answer to an earlier move): wait on
         let (s, fx) = step(
             s,
@@ -726,11 +736,11 @@ mod tests {
         assert!(s.is_none());
         assert_eq!(fx, [E::Drop { tab: A }, E::End(DragOps::NONE)]);
         // no answer at all: Chromium's default
-        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let (s, _) = step(started(link()), up(Over::Page(A)));
         let (_, fx) = transition(s, Input::Tick { now: ms(600) });
         assert_eq!(fx, [E::Drop { tab: A }, E::End(DragOps::COPY)]);
         // Escape while waiting
-        let (s, _) = step(started(link()), Input::Released(Over::Page(A)));
+        let (s, _) = step(started(link()), up(Over::Page(A)));
         let (s, fx) = transition(s, Input::Cancelled);
         assert!(s.is_none());
         assert_eq!(fx, [E::Leave { tab: A }, E::End(DragOps::NONE)]);
@@ -770,7 +780,7 @@ mod tests {
             },
         );
         assert_eq!(fx, [E::Feedback(DragOps::MOVE)]);
-        let (s, fx) = step(s, Input::Released(Over::Page(B)));
+        let (s, fx) = step(s, up(Over::Page(B)));
         assert_eq!(
             fx,
             [E::Over {
@@ -836,7 +846,7 @@ mod tests {
                 E::Feedback(DragOps::COPY)
             ]
         );
-        let (s, fx) = transition(s, Input::Released(list(3, None)));
+        let (s, fx) = transition(s, up(list(3, None)));
         assert!(s.is_none());
         assert_eq!(
             fx,
@@ -854,7 +864,7 @@ mod tests {
     #[test]
     fn text_on_the_new_tab_row_and_the_bar() {
         let (s, _) = mv(started(text()), Over::Shell(Shell::NewTab), 5);
-        let (_, fx) = transition(s, Input::Released(Over::Shell(Shell::NewTab)));
+        let (_, fx) = transition(s, up(Over::Shell(Shell::NewTab)));
         assert_eq!(
             fx.last(),
             Some(&E::OpenTab {
@@ -864,13 +874,13 @@ mod tests {
         );
         let (s, fx) = mv(started(text()), Over::Shell(Shell::Bar), 5);
         assert!(fx.contains(&E::Mark(Some(Shell::Bar))));
-        let (_, fx) = transition(s, Input::Released(Over::Shell(Shell::Bar)));
+        let (_, fx) = transition(s, up(Over::Shell(Shell::Bar)));
         assert_eq!(fx.last(), Some(&E::FillBar("words".into())));
     }
 
     #[test]
     fn released_on_a_target_not_yet_entered_arrives_there_first() {
-        let (_, fx) = transition(started(link()), Input::Released(Over::Shell(Shell::Bar)));
+        let (_, fx) = transition(started(link()), up(Over::Shell(Shell::Bar)));
         assert_eq!(
             fx,
             [
@@ -880,7 +890,7 @@ mod tests {
             ]
         );
         let (s, _) = mv(started(link()), Over::Elsewhere, 5);
-        let (_, fx) = transition(s, Input::Released(Over::Page(B)));
+        let (_, fx) = transition(s, up(Over::Page(B)));
         assert_eq!(
             fx,
             [
@@ -905,7 +915,7 @@ mod tests {
         let empty = Data::default();
         let (s, fx) = mv(started(empty), Over::Shell(Shell::NewTab), 5);
         assert_eq!(fx, [E::Leave { tab: A }, E::Feedback(DragOps::NONE)]);
-        let (_, fx) = transition(s, Input::Released(Over::Shell(Shell::NewTab)));
+        let (_, fx) = transition(s, up(Over::Shell(Shell::NewTab)));
         assert_eq!(fx, [E::Mark(None), E::End(DragOps::NONE)]);
     }
 
@@ -915,9 +925,12 @@ mod tests {
         let (s, fx) = mv(started(link()), row, 100);
         assert!(!fx.contains(&E::Activate(B)));
         let PageDrag::Dragging(d) = &s else { panic!() };
-        assert!(d.awaits_dwell());
+        assert_eq!(d.due(), Some(ms(100) + DWELL));
+        // a move on the row keeps the rest's end where it was
         let (s, fx) = mv(s, row, 300);
         assert!(!fx.contains(&E::Activate(B)));
+        let PageDrag::Dragging(d) = &s else { panic!() };
+        assert_eq!(d.due(), Some(ms(100) + DWELL));
         let (s, fx) = step(s, Input::Tick { now: ms(600) });
         assert_eq!(fx, [E::Activate(B)]);
         let (s, fx) = step(s, Input::Tick { now: ms(1200) });
@@ -939,7 +952,7 @@ mod tests {
         let space = Over::Shell(Shell::Space(SpaceId(4)));
         let (s, fx) = mv(s, space, 800);
         assert!(fx.contains(&E::Mark(Some(Shell::Space(SpaceId(4))))));
-        let (_, fx) = transition(s, Input::Released(space));
+        let (_, fx) = transition(s, up(space));
         assert_eq!(
             fx,
             [
@@ -956,7 +969,7 @@ mod tests {
 
     #[test]
     fn released_elsewhere_or_cancelled_ends_with_nothing_done() {
-        let (_, fx) = transition(started(link()), Input::Released(Over::Elsewhere));
+        let (_, fx) = transition(started(link()), up(Over::Elsewhere));
         assert_eq!(fx, [E::Leave { tab: A }, E::End(DragOps::NONE)]);
         let (s, fx) = transition(started(link()), Input::Cancelled);
         assert!(s.is_none());
@@ -988,11 +1001,12 @@ mod tests {
         assert_eq!(fx, [E::Leave { tab: A }, E::StartOs(link(), ALL)]);
         let (s, fx) = step(s, Input::LeftWindow);
         assert!(fx.is_empty());
-        let (s, fx) = step(s, Input::Released(Over::Page(A)));
-        assert!(fx.is_empty(), "the OS has the drag");
-        let (s, fx) = transition(s, Input::OsEnded(DragOps::COPY));
-        assert!(s.is_none());
+        let (_, fx) = transition(s.clone(), Input::OsEnded(DragOps::COPY));
         assert_eq!(fx, [E::End(DragOps::COPY)]);
+        // a button-up the window sees: the OS drag never took the pointer
+        let (s, fx) = transition(s, up(Over::Page(A)));
+        assert!(s.is_none());
+        assert_eq!(fx, [E::End(DragOps::NONE)]);
         let (s, fx) = transition(PageDrag::Outside { source: A }, Input::<Data>::Cancelled);
         assert!(s.is_none());
         assert_eq!(fx, [E::End(DragOps::NONE)]);
@@ -1010,9 +1024,9 @@ mod tests {
         let (s, fx) = step(s, Input::LeftWindow);
         assert!(matches!(s, PageDrag::Dragging(_)));
         assert!(fx.is_empty());
-        let (_, fx) = transition(s.clone(), Input::Released(Over::Shell(Shell::Bar)));
+        let (_, fx) = transition(s.clone(), up(Over::Shell(Shell::Bar)));
         assert_eq!(fx, [E::End(DragOps::NONE)]);
-        let (_, fx) = transition(s, Input::Released(Over::Page(A)));
+        let (_, fx) = transition(s, up(Over::Page(A)));
         assert!(fx.contains(&E::Over {
             tab: A,
             allowed: ALL
@@ -1025,7 +1039,7 @@ mod tests {
         let (s, _) = mv(started(link()), Over::Page(B), 5);
         let (s, fx) = step(s, Input::Gone(B));
         assert_eq!(fx, [E::Leave { tab: B }, E::Feedback(DragOps::NONE)]);
-        let (_, fx) = transition(s.clone(), Input::Released(Over::Elsewhere));
+        let (_, fx) = transition(s.clone(), up(Over::Elsewhere));
         assert_eq!(fx, [E::End(DragOps::NONE)]);
         // the source's: the drag ends with nothing
         let (s, _) = mv(s, Over::Page(TabId(3)), 6);
@@ -1057,7 +1071,7 @@ mod tests {
             })
             .unwrap()
             .0,
-            Input::Released(Over::Shell(Shell::NewTab)),
+            up(Over::Shell(Shell::NewTab)),
         );
         assert_eq!(fx, [E::Leave { tab: A }, E::End(DragOps::NONE)]);
     }
@@ -1067,7 +1081,7 @@ mod tests {
         let at = Over::Shell(Shell::Bookmarks { folder: Some(7) });
         let (s, fx) = mv(started(link()), at, 5);
         assert!(fx.contains(&E::Mark(Some(Shell::Bookmarks { folder: Some(7) }))));
-        let (_, fx) = transition(s, Input::Released(at));
+        let (_, fx) = transition(s, up(at));
         assert_eq!(
             fx.last(),
             Some(&E::Bookmark {
@@ -1078,7 +1092,7 @@ mod tests {
         );
         let (s, fx) = mv(started(text()), at, 5);
         assert!(fx.contains(&E::Feedback(DragOps::NONE)));
-        let (_, fx) = transition(s, Input::Released(at));
+        let (_, fx) = transition(s, up(at));
         assert_eq!(fx.last(), Some(&E::End(DragOps::NONE)));
     }
 }

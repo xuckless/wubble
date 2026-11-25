@@ -214,8 +214,10 @@ pub enum Coverage {
     None,
     /// Shell pixels over part of the page (or all of it): the page shows around and under them.
     Part,
-    /// The shell needs the page's own pixels: glass blurring it, an entrance moving it, a mask
-    /// cutting it.
+    /// Glass blurring the page: a slowly refreshed copy of it will do (a page on its OS layer
+    /// stays there, `page_layer::Hold::Frost`).
+    Glass,
+    /// The shell draws the page's own pixels: an entrance moving it, a mask cutting it.
     Pixels,
 }
 
@@ -576,8 +578,9 @@ impl Stack {
 /// What a page's pane is covered by that its owner, not the stack, knows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Facts {
-    /// The scene draws the overlays' glass in this window (`GlassLayer.over-on`): a glass
-    /// surface reads the page's pixels.
+    /// The scene draws the overlays' glass in this window (`GlassLayer.over-on`) and some of it
+    /// lies over the pane asked about: a glass surface there reads the page's pixels. Per pane:
+    /// a menu or a toast over the sidebar is no glass over a page (the host's `page_covers`).
     pub glass: bool,
     /// The window's peek is open or leaving (`Model::glance_of`, its card's exit).
     pub glance: bool,
@@ -591,26 +594,39 @@ pub struct Facts {
 /// What the shell draws over the page in pane `pane` of the window `stack` and `facts` describe:
 /// the most any visible surface over it needs, a leaving one included.
 pub fn covers(stack: &Stack, facts: &Facts, pane: TabId) -> Coverage {
+    coverers(stack, facts, pane)
+        .map(|(_, cover)| cover)
+        .max()
+        .unwrap_or(Coverage::None)
+}
+
+/// Each visible surface over pane `pane`, a leaving one included, with what it needs there:
+/// [`covers`] is the most of them; the page layer's log names them.
+pub fn coverers<'a>(
+    stack: &'a Stack,
+    facts: &Facts,
+    pane: TabId,
+) -> impl Iterator<Item = (Kind, Coverage)> + 'a {
     let owned = [
         facts.glance.then(|| Layer::new(Kind::Glance, None)),
         facts.pip_card.map(|t| Layer::new(Kind::PipCard, Some(t))),
     ];
+    let glass = facts.glass;
     stack
         .layers
         .iter()
         .chain(&stack.leaving)
         .copied()
         .chain(owned.into_iter().flatten())
-        .filter(|l| stack.visible(l) && (l.kind.scope() != Scope::Pane || l.tab == Some(pane)))
-        .map(|l| {
+        .filter(move |l| stack.visible(l) && (l.kind.scope() != Scope::Pane || l.tab == Some(pane)))
+        .map(move |l| {
             let row = l.kind.row();
-            match row.glass {
-                Some(_) if facts.glass && row.cover != Coverage::None => Coverage::Pixels,
+            let cover = match row.glass {
+                Some(_) if glass && row.cover != Coverage::None => Coverage::Glass,
                 _ => row.cover,
-            }
+            };
+            (l.kind, cover)
         })
-        .max()
-        .unwrap_or(Coverage::None)
 }
 
 #[cfg(test)]
@@ -725,16 +741,17 @@ mod tests {
     /// of the window (B), with the scene's glass on. A match, so a new kind needs its line.
     #[rustfmt::skip]
     fn over(kind: Kind) -> (Coverage, Coverage) {
-        use Coverage::{None as No, Part, Pixels};
+        use Coverage::{Glass, None as No, Part, Pixels};
         match kind {
             Notice | Permission | Find | Dialog | BookmarkSheet | PrintSheet | ExtensionSheet
             | AgentSheet | Region | CommandBar | Downloads | Extensions | Spaces | Menu => {
-                (Pixels, Pixels)
+                (Glass, Glass)
             }
             Hints => (No, No),
             ErrorPanel | Toast | Preview | AutofillMenu | AutofillPrompt | PipStrip | Reader
-            | Boost | Glance | Peek | Entrance | SeamBow => (Pixels, Pixels),
-            VideoStrip | VideoTab | VideoSpeeds => (Pixels, No),
+            | Boost | Glance | Peek => (Glass, Glass),
+            Entrance | SeamBow => (Pixels, Pixels),
+            VideoStrip | VideoTab | VideoSpeeds => (Glass, No),
             Status | DevTools => (Part, No),
             Popup | Tooltip | AutofillChip | PipCard | Swipe | ExitPage | SplitRing | SplitSeams
             | TabGhost | DropZone | PageGhost | DropMark | Autoscroll | Specimen => (Part, Part),
@@ -785,14 +802,16 @@ mod tests {
         let rows: &[(&str, Stack, Facts, Coverage)] = &[
             ("nothing", stack(&[]), lit, Coverage::None),
             ("a tooltip: the pointer passes, its pixels cover", stack(&[win(Tooltip)]), lit, Coverage::Part),
-            ("the find bar's glass reads the page", stack(&[on(Find, A)]), lit, Coverage::Pixels),
+            ("the find bar's glass reads the page", stack(&[on(Find, A)]), lit, Coverage::Glass),
             ("the find bar without the scene's glass", stack(&[on(Find, A)]), plain, Coverage::Part),
-            ("a sheet fading out still covers", leaving(&[on(PrintSheet, A)]), lit, Coverage::Pixels),
+            ("a sheet fading out still covers", leaving(&[on(PrintSheet, A)]), lit, Coverage::Glass),
             ("a menu fading out, no glass", leaving(&[win(Menu)]), plain, Coverage::Part),
             ("another tab's find bar is not drawn", stack(&[on(Find, B)]), lit, Coverage::None),
             ("nor its fading sheet", leaving(&[on(PrintSheet, B)]), lit, Coverage::None),
             ("link hints are the page's own", stack(&[on(Hints, A)]), lit, Coverage::None),
-            ("the most of several", stack(&[win(Tooltip), on(Find, A)]), lit, Coverage::Pixels),
+            ("the most of several", stack(&[win(Tooltip), on(Find, A)]), lit, Coverage::Glass),
+            ("glass and an entrance: the entrance draws the page", stack(&[on(Find, A), win(Entrance)]), lit, Coverage::Pixels),
+            ("a window's glass not over this pane (the host's fact)", stack(&[win(Menu)]), plain, Coverage::Part),
             ("another pane's status bubble", stack(&[Layer::new(Status, Some(B))]), lit, Coverage::None),
             ("an entrance moves the page, glass or not", stack(&[win(Entrance)]), plain, Coverage::Pixels),
             ("the card of a tab not shown", stack(&[]), Facts { pip_card: Some(B), ..lit }, Coverage::None),

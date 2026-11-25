@@ -42,6 +42,8 @@ mod itemrenderer;
 pub mod partial;
 // wubble change (2): the application's hook before a present, see `presenting.rs`.
 pub mod presenting;
+// wubble change (3): the page hole, see `hole.rs`.
+pub mod hole;
 
 #[cfg(skia_backend_software)]
 pub mod software_surface;

@@ -3,7 +3,7 @@
 //!
 //! Run by hand (opens a window for a few dozen frames, then exits by itself):
 //!
-//!     ~/Dev/wubble-wt/cargo.sh run -p wubble-gfx --example hdr_surface [-- hdr10|hlg|scrgb|extended-srgb|srgb]
+//!     .local/bin/cargo.sh run -p wubble-gfx --example hdr_surface [-- hdr10|hlg|scrgb|extended-srgb|srgb]
 //!
 //! It prints the surface capabilities, the display info wgpu reports and the
 //! choice it made. With a working HDR output the top row of the pattern shows

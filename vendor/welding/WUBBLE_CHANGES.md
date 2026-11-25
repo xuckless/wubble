@@ -616,6 +616,12 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     (`wubble_core::page_layer`). Tests: none here (a Metal device is needed); the
     slot choice is wubble-core's `pick_slot`.
 
+65. **Frames dropped for a busy pool, counted (macOS).** `native_frame/metal.rs`:
+    `OsBufferPool::busy`, raised where `next` returns `Next::Busy`. `surface.rs`: new
+    `CefSurfaceProducer::take_os_buffers_busy` (default 0); `macos_cef` returns the
+    pool's count and zeroes it. For wubble's page layer diagnostics (its per-second
+    summary line). Linux and Windows unchanged.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

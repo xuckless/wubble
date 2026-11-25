@@ -1,0 +1,17 @@
+// derived: a Slint Image of the renderer's hole sentinel (vendored Skia change 3, `hole.rs`), shaped by the clip of the pane it is drawn in (SplitView's rounded pane, `Radius.md`)
+// The page hole (owner-approved primitive, 2026-11-23; docs/research/page-layer.md "Stage 2"):
+// where it is drawn the shell's pixels are cleared to transparent, so the page's own OS layer,
+// under the shell's surface, shows through (`--page-layer=window`, wubble_core::page_layer). It
+// has no look of its own: its shape is its pane's clip, its place the pane's, and the host draws
+// it only while that pane's layer shows the page (`SplitPane.hole`).
+
+// The renderer's sentinel image (`i_slint_renderer_skia::hole::image()`), set by the host once per
+// window when the mode's layers sit under the shell; empty otherwise (a hole then draws nothing).
+export global PageHoleSource {
+    in property <image> image;
+}
+
+export component PageHole inherits Image {
+    source: PageHoleSource.image;
+    image-fit: fill;
+}

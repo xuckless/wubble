@@ -6,6 +6,8 @@
 //! dropped, as an OS refuses a second drag), and tab-row input during a page drag is not a
 //! tab drag: the pointer belongs to the drag that has it.
 
+use std::time::Instant;
+
 use crate::overlay::Kind;
 use crate::pagedrag::{self, DragOps, Over, PageDrag, Payload};
 use crate::tabdrag::{self, DropTarget};
@@ -57,6 +59,39 @@ impl<P> Drag<P> {
     }
 }
 
+impl<P> Drag<P> {
+    /// The state's name for `WUBBLE_TRACE`'s lines (never what is dragged).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Drag::Idle => "idle",
+            Drag::Tab(tabdrag::Drag::Idle | tabdrag::Drag::Pressed { .. }) => "tab pressed",
+            Drag::Tab(_) => "tab dragging",
+            Drag::Page(PageDrag::Dragging(d)) if d.dropping => "page dropping",
+            Drag::Page(PageDrag::Dragging(_)) => "page dragging",
+            Drag::Page(PageDrag::Outside { .. }) => "page outside",
+        }
+    }
+}
+
+impl<P> Input<P> {
+    /// The input's name for `WUBBLE_TRACE`'s lines (never what is dragged).
+    pub fn name(&self) -> &'static str {
+        use pagedrag::Input as I;
+        match self {
+            Input::Tab(_) => "tab input",
+            Input::Page(I::Started { .. }) => "start",
+            Input::Page(I::Moved { .. }) => "move",
+            Input::Page(I::Tick { .. }) => "tick",
+            Input::Page(I::Released { .. }) => "release",
+            Input::Page(I::Cursor { .. }) => "page answer",
+            Input::Page(I::LeftWindow) => "left the window",
+            Input::Page(I::OsEnded(_)) => "OS drag ended",
+            Input::Page(I::Cancelled) => "cancel",
+            Input::Page(I::Gone(_)) => "page gone",
+        }
+    }
+}
+
 /// Every surface a drag can show: the host closes the ones [`surfaces`] does not name.
 pub const SURFACES: [Kind; 4] = [
     Kind::TabGhost,
@@ -90,14 +125,15 @@ pub fn surfaces<P>(d: &Drag<P>) -> &'static [Kind] {
 /// A left release seen by a window other than the drag's own (`same_window` false) ends the
 /// drag as cancelled: a release always ends a drag, whichever window sees it. The drag's own
 /// window routes its release by the pointer (`None`).
-pub fn release_input<P>(d: &Drag<P>, same_window: bool) -> Option<Input<P>> {
+pub fn release_input<P>(d: &Drag<P>, same_window: bool, now: Instant) -> Option<Input<P>> {
     match d {
         _ if same_window => None,
         Drag::Idle | Drag::Page(PageDrag::Outside { .. }) => None,
         Drag::Tab(_) => Some(Input::Tab(tabdrag::Input::Cancel)),
-        Drag::Page(PageDrag::Dragging(_)) => {
-            Some(Input::Page(pagedrag::Input::Released(Over::Elsewhere)))
-        }
+        Drag::Page(PageDrag::Dragging(_)) => Some(Input::Page(pagedrag::Input::Released {
+            over: Over::Elsewhere,
+            now,
+        })),
     }
 }
 
@@ -187,7 +223,7 @@ mod tests {
             data: Data(Some("https://a.test/".into())),
             allowed: DragOps::COPY,
             confined: false,
-            now: Instant::now(),
+            now: now(),
         })
     }
 
@@ -213,7 +249,13 @@ mod tests {
         let (d, fx) = transition(Drag::Idle, page_start());
         assert!(d.page_dragging().is_some());
         assert_eq!(fx.len(), 2);
-        let (d, fx) = transition(d, Input::Page(PI::Released(Over::Elsewhere)));
+        let (d, fx) = transition(
+            d,
+            Input::Page(PI::Released {
+                over: Over::Elsewhere,
+                now: now(),
+            }),
+        );
         assert_eq!(d, Drag::Idle);
         assert_eq!(fx.last(), Some(&Effect::Page(PE::End(DragOps::NONE))));
     }
@@ -283,7 +325,10 @@ mod tests {
     fn page_dropping() -> Drag<Data> {
         feed(
             page_dragging(),
-            Input::Page(PI::Released(Over::Page(TabId(1)))),
+            Input::Page(PI::Released {
+                over: Over::Page(TabId(1)),
+                now: now(),
+            }),
         )
     }
 
@@ -391,7 +436,7 @@ mod tests {
             ends.push((
                 format!("page release over {over:?}"),
                 page_dragging(),
-                Input::Page(PI::Released(over)),
+                Input::Page(PI::Released { over, now: now() }),
             ));
         }
         ends.push((
@@ -457,11 +502,103 @@ mod tests {
         }
     }
 
+    /// Press, the page's drag starts, a move, the release: the drag ends, its ghost gone at the
+    /// release, the drop delivered or cancelled. A hand moving on after the release (each move a
+    /// run of the host, which arms its timer at [`pagedrag::Dragging::due`]) never holds the drop
+    /// past a dwell from the release, and a release outside the window ends it too.
+    #[test]
+    fn a_release_always_ends_a_page_drag() {
+        use std::time::Duration;
+        /// (name, the moves before the release, the release and what follows it, the last effects)
+        type Row = (
+            &'static str,
+            Vec<Input<Data>>,
+            Vec<Input<Data>>,
+            Vec<Effect<Data>>,
+        );
+        let at = |ms: u64| now() + Duration::from_millis(ms);
+        let page = Over::Page(TabId(1));
+        let moved = |over, ms| Input::Page(PI::Moved { over, now: at(ms) });
+        let released = |over, ms| Input::Page(PI::Released { over, now: at(ms) });
+        let answer = |op| Input::Page(PI::Cursor { tab: TabId(1), op });
+        let tick = |ms| Input::Page(PI::Tick { now: at(ms) });
+        let dropped = |op| {
+            vec![
+                Effect::Page(PE::Drop { tab: TabId(1) }),
+                Effect::Page(PE::End(op)),
+            ]
+        };
+        let none = vec![Effect::Page(PE::End(DragOps::NONE))];
+        let table: [Row; 5] = [
+            (
+                "on its page, the page says none, the pointer moving on",
+                vec![moved(page, 10)],
+                vec![
+                    released(page, 100),
+                    answer(DragOps::NONE),
+                    moved(Over::Elsewhere, 200),
+                    tick(300),
+                    moved(page, 450),
+                    moved(page, 590),
+                    tick(600),
+                ],
+                dropped(DragOps::NONE),
+            ),
+            (
+                "on its page, the page takes it",
+                vec![moved(page, 10)],
+                vec![released(page, 100), moved(page, 150), answer(DragOps::COPY)],
+                dropped(DragOps::COPY),
+            ),
+            (
+                "on its page, the page never answers",
+                vec![moved(page, 10)],
+                vec![released(page, 100), moved(page, 300), tick(600)],
+                dropped(DragOps::COPY),
+            ),
+            (
+                "over shell that takes none, or outside a window that still sees the pointer",
+                vec![moved(Over::Elsewhere, 10)],
+                vec![released(Over::Elsewhere, 100)],
+                none.clone(),
+            ),
+            (
+                "outside the window, the OS drag never took the pointer",
+                vec![Input::Page(PI::LeftWindow)],
+                vec![released(Over::Elsewhere, 100)],
+                none,
+            ),
+        ];
+        for (name, before, after, want) in table {
+            let d = before.into_iter().fold(page_dragging(), feed);
+            assert!(d.page().is_some(), "{name}: dragging before the release");
+            let (mut d, mut last) = (d, vec![]);
+            for input in after {
+                (d, last) = transition(d, input);
+                assert!(
+                    surfaces(&d).is_empty(),
+                    "{name}: no ghost after the release"
+                );
+                if let Some(p) = d.page_dragging() {
+                    let due = Some(at(100) + pagedrag::DWELL);
+                    assert_eq!(
+                        p.due(),
+                        due,
+                        "{name}: a dwell from the release, moves or not"
+                    );
+                }
+            }
+            assert_eq!(d, Drag::Idle, "{name}");
+            assert_eq!(last, want, "{name}");
+        }
+    }
+
     /// A release seen by another window ends the drag as cancelled; the drag's own window routes it.
     #[test]
     fn a_release_in_another_window_cancels() {
         /// (name, state, released in the drag's own window, what runs)
         type ReleaseRow = (&'static str, Drag<Data>, bool, Option<Input<Data>>);
+        let now = now();
         let table: [ReleaseRow; 7] = [
             (
                 "tab, own window",
@@ -486,13 +623,16 @@ mod tests {
                 "page, other window",
                 page_dragging(),
                 false,
-                Some(Input::Page(PI::Released(Over::Elsewhere))),
+                Some(Input::Page(PI::Released {
+                    over: Over::Elsewhere,
+                    now,
+                })),
             ),
             ("page outside, other window", page_outside(), false, None),
             ("idle, other window", Drag::Idle, false, None),
         ];
         for (name, d, same, want) in table {
-            assert_eq!(release_input(&d, same), want, "{name}");
+            assert_eq!(release_input(&d, same, now), want, "{name}");
         }
     }
 

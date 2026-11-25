@@ -3,12 +3,13 @@
 //! with no presenter blit and no shell render. One trait, [`PageLayer`]; macOS implements it
 //! with a `CALayer` ([`CaLayer`]), every other platform has none ([`Unsupported`]).
 //!
-//! macOS, stage 1: the layer sits over the shell's `CAMetalLayer` (wgpu's, a sublayer of
-//! winit's view's layer) and is shown only while the page is the window's whole content (page
-//! fullscreen, the picture-in-picture window), so the shell's frame under it is never seen. With
-//! the hole of stage 2 it goes under the shell's layer instead (`insertSublayer:below:`). Every
-//! change is one `CATransaction` with its implicit animations off, on the main thread; a hide
-//! while the shell presents with the transaction joins the shell's own instead.
+//! macOS: the layer sits beside the shell's `CAMetalLayer` (wgpu's, a sublayer of winit's view's
+//! layer): over it in stage 1, shown only while the page is the window's whole content (page
+//! fullscreen, the picture-in-picture window), so the shell's frame under it is never seen; under
+//! it in stage 2, where the shell clears a hole over the pane (`insertSublayer:below:`). Every
+//! change has its implicit animations off, on the main thread, in a `CATransaction` of its own;
+//! while the shell presents with the transaction (a layer of the window is visible) it joins the
+//! shell's instead, so a hide, a move and the shell's frame that matches them land together.
 
 use crate::import::{GfxError, NativeFrame};
 
@@ -21,7 +22,7 @@ pub trait PageLayer {
     /// Where the layer sits (`frame`: x, y, width, height in points), what of its buffer it
     /// shows (`contents`: the same in the buffer's unit square), the buffer's pixels per point
     /// and the corner radius in points. A placement the layer already has commits nothing (the
-    /// host places it at each frame).
+    /// host places it at each frame, and at each render while the shell draws its hole).
     fn place(&mut self, frame: [f64; 4], contents: [f64; 4], scale: f64, radius: f64);
 
     /// `frame`'s OS buffer onto the layer, shown. Fails for a frame copied without one.
@@ -76,17 +77,23 @@ mod mac {
         CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
     }
 
-    /// `change` in one transaction with the implicit animations off: a moved layer or new
-    /// contents would otherwise animate for a quarter second.
-    fn transaction(change: impl FnOnce()) {
+    /// `change` with the implicit animations off (a moved layer or new contents would otherwise
+    /// animate for a quarter second): in the transaction the shell's drawable is presented with
+    /// while `metal` presents with one (it lands with the shell's frame), else in one of its own.
+    fn transaction(metal: &CAMetalLayer, change: impl FnOnce()) {
+        if metal.presentsWithTransaction() {
+            CATransaction::setDisableActions(true);
+            change();
+            return;
+        }
         CATransaction::begin();
         CATransaction::setDisableActions(true);
         change();
         CATransaction::commit();
     }
 
-    /// A plain `CALayer` over the shell's `CAMetalLayer`, its contents the page's IOSurface.
-    /// Main thread only (it is not `Send`).
+    /// A plain `CALayer` over or under the shell's `CAMetalLayer`, its contents the page's
+    /// IOSurface. Main thread only (it is not `Send`).
     pub struct CaLayer {
         layer: Retained<CALayer>,
         root: Retained<CALayer>,
@@ -99,12 +106,13 @@ mod mac {
     }
 
     impl CaLayer {
-        /// A hidden layer over the `CAMetalLayer` in `ns_view`'s layer.
+        /// A hidden layer over the `CAMetalLayer` in `ns_view`'s layer, or under it (`below`: the
+        /// shell clears a hole where the page shows).
         ///
         /// # Safety
         ///
         /// `ns_view` is a live `NSView` (winit's view of the window), and outlives the layer.
-        pub unsafe fn new(ns_view: NonNull<c_void>) -> Result<Self, GfxError> {
+        pub unsafe fn new(ns_view: NonNull<c_void>, below: bool) -> Result<Self, GfxError> {
             let fail = |why: &str| GfxError::Layer(why.into());
             MainThreadMarker::new()
                 .ok_or_else(|| fail("the page layer is made off the main thread"))?;
@@ -120,12 +128,17 @@ mod mac {
                 .find_map(|layer| layer.downcast::<CAMetalLayer>().ok())
                 .ok_or_else(|| fail("the window's view has no CAMetalLayer"))?;
             let layer = CALayer::new();
-            transaction(|| {
+            transaction(&metal, || {
                 layer.setHidden(true);
                 layer.setOpaque(true);
                 // SAFETY: Core Animation's own constant.
                 layer.setContentsGravity(unsafe { kCAGravityResize });
-                root.insertSublayer_above(&layer, Some(&**metal));
+                // a later one goes next to the shell's, over the earlier ones (none overlap)
+                if below {
+                    root.insertSublayer_below(&layer, Some(&**metal));
+                } else {
+                    root.insertSublayer_above(&layer, Some(&**metal));
+                }
             });
             Ok(Self {
                 layer,
@@ -154,7 +167,7 @@ mod mac {
             if same {
                 return;
             }
-            transaction(|| {
+            transaction(&self.metal, || {
                 self.layer.setFrame(frame);
                 self.layer.setContentsRect(contents);
                 self.layer.setContentsScale(scale);
@@ -170,7 +183,7 @@ mod mac {
             // SAFETY: an IOSurfaceRef is an Objective-C object (toll-free bridged with
             // `IOSurface`), which `contents` takes and retains; `buffer` keeps it alive here.
             let surface: &AnyObject = unsafe { buffer.io_surface().cast::<AnyObject>().as_ref() };
-            transaction(|| {
+            transaction(&self.metal, || {
                 // SAFETY: an IOSurface is one of the kinds of `contents` Core Animation draws.
                 unsafe { self.layer.setContents(Some(surface)) };
                 self.layer.setHidden(false);
@@ -186,14 +199,9 @@ mod mac {
                 // SAFETY: no contents is always valid.
                 unsafe { self.layer.setContents(None) };
             };
-            // the shell's drawable is presented with the current transaction: join it, so the
-            // layer goes in the same commit as the frame that shows the page instead
-            if self.metal.presentsWithTransaction() {
-                CATransaction::setDisableActions(true);
-                hide();
-            } else {
-                transaction(hide);
-            }
+            // while the shell's drawable is presented with the current transaction, the layer
+            // goes in the same commit as the frame that shows the page instead
+            transaction(&self.metal, hide);
             self.shown = [None, None];
         }
 
@@ -206,7 +214,7 @@ mod mac {
 
     impl Drop for CaLayer {
         fn drop(&mut self) {
-            transaction(|| self.layer.removeFromSuperlayer());
+            transaction(&self.metal, || self.layer.removeFromSuperlayer());
         }
     }
 }

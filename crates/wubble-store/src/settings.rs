@@ -236,6 +236,8 @@ settings! {
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;
+    /// Read at start: off, every page goes through the shell (`wubble_core::page_layer`).
+    PageLayerOn: bool = defs::PAGE_LAYER;
     /// The memory and process rows: CEF start switches, read before the engine starts.
     MemoryBackForwardCache: defs::BackForwardCache = defs::MEMORY_BACK_FORWARD_CACHE;
     MemoryMaxDecodedImageMb: u32 = defs::MEMORY_MAX_DECODED_IMAGE_MB;

@@ -217,10 +217,19 @@ pub enum Count {
     WakeAmbience,
     WakeStart,
     WakeChange,
+    /// The page layer (`host/page_layer.rs`): a frame shown on a pane's layer; a layered pane's
+    /// frame (or its layer's latest) presented through the shell; the shell asked to draw its
+    /// page once more (`Effect::Redraw`); a pane's route changed; the layer's frame copied for
+    /// the glass over it (`Effect::Snapshot`).
+    LayerShow,
+    LayerPresent,
+    LayerRedraw,
+    LayerRoute,
+    LayerSnapshot,
 }
 
 impl Count {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 26] = [
         Self::CefFrame,
         Self::CefFrameDamaged,
         Self::SlintRender,
@@ -242,6 +251,11 @@ impl Count {
         Self::WakeAmbience,
         Self::WakeStart,
         Self::WakeChange,
+        Self::LayerShow,
+        Self::LayerPresent,
+        Self::LayerRedraw,
+        Self::LayerRoute,
+        Self::LayerSnapshot,
     ];
 
     pub fn name(self) -> &'static str {
@@ -267,6 +281,11 @@ impl Count {
             Self::WakeAmbience => "scene_wake_ambience",
             Self::WakeStart => "scene_wake_start",
             Self::WakeChange => "scene_wake_change",
+            Self::LayerShow => "layer_shows",
+            Self::LayerPresent => "layer_presents",
+            Self::LayerRedraw => "layer_redraws",
+            Self::LayerRoute => "layer_routes",
+            Self::LayerSnapshot => "layer_snapshots",
         }
     }
 
@@ -1231,6 +1250,29 @@ thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// The page layer's counts since its last summary began (`None`: none yet).
+    static LAYER_SECOND: RefCell<(Option<Instant>, Recorder)> = RefCell::default();
+}
+
+/// The page layer's summary (`host/page_layer.rs`, from its frame path): once a second has
+/// passed since the last one began, how long it was and every count in it (then a new one
+/// begins); `None` before. The first call only begins one.
+pub fn layer_second(now: Instant) -> Option<(Duration, Recorder)> {
+    LAYER_SECOND.with_borrow_mut(|(since, r)| {
+        // the first begins clean: what was counted before any layer is no one's
+        let Some(began) = *since else {
+            (*since, *r) = (Some(now), Recorder::default());
+            return None;
+        };
+        let took = now.saturating_duration_since(began);
+        (took >= Duration::from_secs(1)).then(|| {
+            *since = Some(now);
+            (took, std::mem::take(r))
+        })
+    })
+}
+
 fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
     SESSION.with(|cell| cell.try_borrow_mut().ok()?.as_mut().map(f))
 }
@@ -1247,8 +1289,13 @@ pub fn shell_page() {
     with_session(|s| s.shell_page = true);
 }
 
-/// Counts `count` while a session records (a thread-local lookup and nothing else otherwise).
+/// Counts `count` while a session records (a thread-local lookup and nothing else otherwise),
+/// and, with a page layer mode on and `WUBBLE_TRACE` set, into the page layer's second
+/// ([`layer_second`]).
 pub fn count(count: Count) {
+    if crate::page_layer() != wubble_core::page_layer::Mode::Off && crate::tracing().is_some() {
+        LAYER_SECOND.with_borrow_mut(|(_, r)| r.record(Event::Count(count)));
+    }
     with_session(|s| {
         if s.recording(Instant::now()) {
             s.recorder.record(Event::Count(count));

@@ -1241,6 +1241,12 @@ pub trait CefSurfaceProducer {
         ))
     }
 
+    /// wubble change (65): frames dropped since the last call because every OS buffer was in
+    /// use ([`Self::set_os_buffers`]); 0 without OS buffers. macOS only.
+    fn take_os_buffers_busy(&mut self) -> u64 {
+        0
+    }
+
     /// CPU `OnPaint` frames CEF delivered instead of a shared texture, since
     /// the producer was created. `None` when this producer does not count them
     /// (never a made-up 0). wubble change, see `WUBBLE_CHANGES.md`.

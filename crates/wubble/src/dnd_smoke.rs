@@ -161,6 +161,71 @@ pub const ITEMS: &[Item] = &[
             J("eq(seen.dragend, 'copy')")
         ]
     ),
+    // A release ends the drag without Escape, wherever it is: on the page where nothing takes
+    // the drop (the pointer moving on after it, as a hand does: the moves reach the page once
+    // the drop is done), over shell that takes none, and outside the window.
+    item!(
+        "dnd.released-on-the-page-ends",
+        [
+            Js("parity.select(0, 5)"),
+            WORD[0],
+            WORD[1],
+            WORD[2],
+            WORD[3],
+            Until(H(C::Ghost(true))),
+            MoveTo(at::EMPTY),
+            Settle(6),
+            Release(at::EMPTY),
+            Host(HostOp::Drift(at::EMPTY)),
+            Until(J(
+                "seen.after >= 5 || `${seen.after} moves reached the page after the drag ended`"
+            ))
+        ],
+        [H(C::Drag(false)), J("eq(seen.dragend, 'none')")]
+    ),
+    item!(
+        "dnd.released-on-the-sidebar-ends",
+        [
+            IMG[0],
+            IMG[1],
+            IMG[2],
+            IMG[3],
+            Until(H(C::Ghost(true))),
+            MoveToSpot(Spot::SidebarTop),
+            Settle(6),
+            ReleaseAt(Spot::SidebarTop)
+        ],
+        [H(C::Drag(false)), J("eq(seen.dragend, 'none')")]
+    ),
+    item!(
+        "dnd.released-outside-the-window-ends",
+        [
+            Js("parity.select(0, 5)"),
+            WORD[0],
+            WORD[1],
+            WORD[2],
+            WORD[3],
+            MoveToSpot(Spot::Outside),
+            Settle(6),
+            ReleaseAt(Spot::Outside)
+        ],
+        [H(C::Drag(false))]
+    ),
+    item!(
+        "dnd.released-where-no-pane-hears-it-ends",
+        [
+            IMG[0],
+            IMG[1],
+            IMG[2],
+            IMG[3],
+            Until(H(C::Ghost(true))),
+            MoveTo(at::EMPTY),
+            Settle(6),
+            Host(HostOp::WindowRelease),
+            Settle(10)
+        ],
+        [H(C::Drag(false)), J("eq(seen.dragend, 'none')")]
+    ),
     item!(
         "dnd.escape-cancels",
         [

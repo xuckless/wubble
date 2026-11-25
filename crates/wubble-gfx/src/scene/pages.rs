@@ -110,6 +110,13 @@ pub fn overlaps(item: &Rect, pages: &[PageRect]) -> bool {
     pages.iter().any(|p| intersect(item, &p.rect))
 }
 
+/// Whether an overlay's glass (one drawn in an [`OverLayer`]) lies over any of `pages`.
+pub fn overlay_over(surfaces: &[GlassSurface], pages: &[PageRect]) -> bool {
+    surfaces
+        .iter()
+        .any(|s| s.layer.is_some() && overlaps(&rect_of(s), pages))
+}
+
 /// A surface's rectangle.
 pub fn rect_of(s: &GlassSurface) -> Rect {
     Rect::new(s.x as f32, s.y as f32, s.w as f32, s.h as f32)

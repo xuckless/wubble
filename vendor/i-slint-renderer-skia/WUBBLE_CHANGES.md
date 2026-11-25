@@ -4,7 +4,7 @@ Vendored from crates.io `i-slint-renderer-skia` 1.19.0 (repository slint-ui/slin
 `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`; wubble
 takes it under GPL-3.0-only. Copied unmodified: everything the published crate ships
 (`Cargo.toml` is the registry's normalised manifest). Added: `partial.rs`, `rustfmt.toml` and
-this file (and `presenting.rs`, change 2). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
+this file (and `presenting.rs`, change 2; `hole.rs`, change 3). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
 
 The copy is excluded from the wubble workspace, so `cargo clippy --workspace` does not lint it;
 `rustfmt.toml` sets `disable_all_formatting = true` to keep upstream formatting and a diff
@@ -61,3 +61,16 @@ Every change is marked `wubble change` in the source.
    - `wgpu_30_surface.rs` `render`: the window parameter (unused upstream, `_window`) is passed to
      `presenting::notify` right after `pre_present_callback`, before both `queue.present` calls.
    - `lib.rs`: `pub mod presenting`.
+
+3. **The page hole.** wubble shows a pane's page on an OS layer under the window's surface
+   (`wubble_core::page_layer`, stage 2) and needs the shell's frame transparent there, though the
+   window's ground, glass and the pane's fill were drawn under the pane first: a draw that removes
+   pixels, which Slint has no element for.
+   - `hole.rs` (new): a sentinel image (`image()`: one 1x1 RGBA8 buffer per thread; an image is
+     the hole when it equals it, i.e. shares its buffer) and the `BlendMode::Clear` paint.
+   - `itemrenderer.rs` `draw_image`: an image element showing the sentinel draws its geometry with
+     that paint instead of the image, so it clears to transparent within the current clip (a
+     rounded clip gives rounded, anti-aliased corners).
+   - `lib.rs`: `pub mod hole`.
+   wubble's kit draws it as `PageHole` (`crates/wubble-ui/ui/kit/material/page-hole.slint`); tested
+   by wubble-ui's `partial_render` (its last rows: the hole and the window around it).

@@ -22,17 +22,25 @@ if the asset names change, `ASSETS` beside it.
 
 | File | What |
 |---|---|
-| `index.html` | The page: hero, the app window, Features, How it works, Install, footer |
+| `index.html` | The page: hero, the app window, who it's for (swipe cards), Features, Compare, Questions, Install, footer |
 | `assets/css/site.css` | All styles |
-| `assets/js/site.js` | Version and links, OS detection, copy, the download button's stretch, section entrances |
+| `assets/js/site.js` | Version and links, OS detection, copy, the download button's stretch, the card row's arrows, section entrances |
 | `assets/js/hero.js` | Mounts the living bubble where the mark is laid out; skipped under `prefers-reduced-motion` or without WebGL2; paused off-screen |
 | `assets/js/living.js` | The design's living bubble, bundled (below) |
 | `assets/img/start-*`, `settings-*`, `command-bar-*`, `agent-*` | Shot from the app: `--shot-dir DIR --smoke gallery` at `SLINT_SCALE_FACTOR=2` (scenes 77, 58, 56, 93), resized to WebP and JPEG |
-| `assets/img/*.svg` (diagrams) | Copies of `docs/readme/` |
+| `assets/img/sidebar.svg`, `sleep.svg`, `split.svg` | Copies of `docs/readme/` (the README keeps the engine diagrams; the site does not show them) |
 | `assets/img/liquid.webp` | A still of the liquid (the design's fluid, 1100 frames, no bubble): the hero's backdrop before the shader starts, without WebGL2 and under reduced motion |
-| `assets/img/social-preview.png` | Copy of `docs/readme/social-preview.png` (Open Graph) |
+| `assets/img/social-preview.png` | Copy of `docs/readme/social-preview.png` (Open Graph): the headline and tagline beside the app windows |
+| `robots.txt`, `sitemap.xml`, `llms.txt` | Crawlers allowed; the one page; a plain-text summary of what wubble is, has and lacks, for AI assistants. Keep `llms.txt` in step with the page |
 | `assets/img/favicon.svg`, `favicon-32.png`, `apple-touch-icon.png` | The mark (small-size variant for the favicon) |
-| `assets/fonts/` | Fredoka, Geist, Geist Mono (SIL OFL 1.1, latin subsets from `@fontsource-variable` 5.3.0, licences beside them) |
+| `assets/fonts/` | Fredoka, Geist (SIL OFL 1.1, latin subsets from `@fontsource-variable` 5.3.0, licences beside them) |
+
+## Writing for the page
+
+The page answers what someone asks before switching browsers: who it is for, what it does, how it
+compares (Arc, Zen, Chrome, Brave, gaps included) and the common questions. It names benefits, not
+the engine; how wubble is built is one footer line linking to GitHub. No monospace type. Every claim
+has to be true of the released build; the comparison table carries the month it was checked.
 
 ## Where the design values come from
 
@@ -54,7 +62,7 @@ the design is ("light mode comes later", its README).
 | Icons | `pages/touch-kit.tsx` lines 128-153 (`download`, `duplicate`, `check`) |
 
 Made here, not in the design: the bottom fade of the hero's liquid into the page, the two-column
-feature layout, and the light tint on the detected platform's card (the Space colour at 7%, as the
+feature layout, the swipe-card row, the comparison table, the questions list, and the light tint on the detected platform's card (the Space colour at 7%, as the
 glass shader mixes its tint).
 
 ### Rebuilding `living.js`

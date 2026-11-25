@@ -78,7 +78,7 @@ impl Runner {
         if next != self.state {
             self.changed = true;
             crate::measure::count(crate::measure::Count::RunChange);
-            if std::env::var_os("WUBBLE_TRACE").is_some() {
+            if crate::tracing().is_some() {
                 eprintln!(
                     "wubble: scene run state {:?} -> {next:?} on {event:?}",
                     self.state

@@ -9,6 +9,7 @@ import { SidePeek, SideMode, PeekCue } from "kit/chrome/sidebar.slint";
 import { Seam } from "kit/controls/seam.slint";
 import { GlassPanel } from "kit/material/glass.slint";
 import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
+import { PageHoleSource } from "kit/material/page-hole.slint";
 // The generated kit (tools/fidelity/extract.mjs), imported so every build compiles it; the
 // lanes move call sites onto it.
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
@@ -64,7 +65,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted }
+export { AutofillAnswer, AutofillPart, AutofillView, PageScroll, NavScroll, Tips, TipView, Calm, Shell, GlanceView, Mounted, PageHoleSource }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { TabSound } from "components/model.slint";
 export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, AgentSheetView, AgentBindingItem, AgentLogItem, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, AgentsView, AgentAppItem, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem, PageGhost, DropMarkView, DropGeometry, DropMarkKind }

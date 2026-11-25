@@ -2,7 +2,7 @@
 # Builds CEF with proprietary codecs (H.264, AAC, MPEG-TS, native HLS; HEVC through a platform
 # decoder only) at the exact version the pinned `cef` crate expects (same commit, so the same
 # version string and API hashes), and installs it where cef-dll-sys finds it through CEF_PATH.
-# Linux x64 only; the macOS arm64 recipe is in TODO.md Decided "Video codecs".
+# Linux x64 only; the macOS arm64 recipe is in docs/decisions.md "Video codecs" and docs/research/cef-codec-build.md.
 #
 #   scripts/build-cef.sh WORK [STEP...]   # steps: fetch hook patch build distrib install (default: all)
 #

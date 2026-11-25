@@ -1,7 +1,7 @@
 //! HDR probe: what does CEF's windowless mode report to a page, and what
 //! pixel values arrive for HDR content? Run by hand, no window opens:
 //!
-//!     ~/Dev/wubble-wt/cargo.sh run -p wubble-engine --example hdr_probe
+//!     .local/bin/cargo.sh run -p wubble-engine --example hdr_probe
 //!     WUBBLE_PROBE_SWITCHES='force-color-profile=hdr10' ... (see `app::probe_switches`)
 //!
 //! The page (`hdr_probe/page.html`) logs what media queries, CSS and canvas

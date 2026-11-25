@@ -14,7 +14,7 @@
 //   node tools/fidelity/extract.mjs --coverage INV  also list the inventory's A-rows whose cited
 //                                                   lines produced no generated value
 //
-// The clone is `$WUBBLE_DESIGN` or ~/Dev/wubble-wt/ref/the-wallpaper-project; it is only read.
+// The clone is `$WUBBLE_DESIGN` or `.local/the-wallpaper-project` in the checkout; it is only read.
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';

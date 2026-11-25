@@ -454,14 +454,14 @@ Also noted: 9 of 10 sites loaded in 0.4 to 1.0 s (The Verge 2.4 s); the on-scree
 about 2 minutes (fullscreen included), the 30 fps one 3; a background 60 fps VP9 video (hardware decode) dropped 130 of
 about 10,300 frames, more on tab switches; pausing the videos freed about 2 GB in the GPU process; the main process's
 footprint went from about 850 MB at the start to 1.18 GB after everything closed. The main process's 26 % for one video
-was 37 to 40 % on preview.1 by the same hand. What follows from it: TODO.md, "From the owner's Mac run of preview.5".
+was 37 to 40 % on preview.1 by the same hand. What follows from it: todo/upcoming/01-optimization.md, "From the owner's Mac run of preview.5".
 
 ## The owner's Mac, preview.5, Low Power Mode, with stack samples (2026-11-21)
 
 The same workflow (`tools/mcp-bench` on branch `bench/mcp-workflow`, about 9 minutes), run over ssh through the
 owner's MCP bridge, the Mac in Low Power Mode on its adapter (80 to 88 %, charging by the end), one run. Beside the
 sampler, `sample` took 5 s of the main process and of the GPU process 8 s into each phase (1 ms interval; under load
-it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo).
+it got 1400 to 3450 samples in the 5 s). Raw data: `~/Dev/wubble-wt/notes/mac-bench-1/` (not in the repo; deleted 2026-11-25).
 
 | phase | main CPU % | GPU proc % | tabs % | total % (p95) | main MB | GPU proc MB | GPU util % |
 |---|---|---|---|---|---|---|---|
@@ -509,7 +509,7 @@ What the samples show and do not:
 
 `--measure` runs of the installed app, started by the owner (`/Users/Shared/wubble-frames.sh`), 10 s each, Low
 Power Mode on, on the adapter, window 2560x1600@2, one run each (scroll twice). The first two runs reported a
-120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo).
+120 Hz display, the rest 60 Hz. Raw output: `~/Dev/wubble-wt/notes/mac-bench-3/` (not in the repo; deleted 2026-11-25).
 
 | run | page frames /s | shell renders /s | missed refreshes | frame interval p50 / p95 / max ms | pump gap p50 / p95 ms | main % | GPU proc % |
 |---|---|---|---|---|---|---|---|
@@ -539,7 +539,7 @@ resize: 428 stale frames, longest run 90.)
 
 ## Why the pump woke late on the Mac (2026-11-21)
 
-From the owner's frame runs above (the CSVs in `~/Dev/wubble-wt/notes/mac-bench-3/`), the gap from each run of CEF
+From the owner's frame runs above (the CSVs were in `~/Dev/wubble-wt/notes/mac-bench-3/`, deleted 2026-11-25), the gap from each run of CEF
 work to the next, split by how long the run took (CEF's time slice is 10 ms):
 
 | run | runs | of them 10 ms or longer | gap after one, p50 / p90 ms | gap after a shorter one, p50 / p90 ms |

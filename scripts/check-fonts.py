@@ -5,7 +5,7 @@
 
 Needs fonttools and brotli (`pip install fonttools brotli`). The design's faces are the
 @fontsource-variable 5.3.0 packages of the owner's design repo (default
-~/Dev/wubble-wt/ref/the-wallpaper-project), shipped as latin-subset woff2, which Slint cannot
+.local/the-wallpaper-project in the checkout), shipped as latin-subset woff2, which Slint cannot
 import; wubble embeds the upstream variable TTFs. For each family this checks the version
 string, the variation axes (tag, min, default, max; the design uses wght, Fredoka's wdth is not
 selectable from Slint) and that every code point of the design's latin subset is in the TTF.
@@ -37,7 +37,7 @@ def version(font):
 
 def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else
-                os.path.expanduser("~/Dev/wubble-wt/ref/the-wallpaper-project"))
+                Path(__file__).resolve().parent.parent / ".local/the-wallpaper-project")
     failed = False
     for family, (ttf, package) in FACES.items():
         ours = TTFont(FONTS / ttf)

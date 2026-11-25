@@ -9,6 +9,7 @@ use slint::platform::{PointerEventButton, WindowEvent as SlintEvent};
 use slint::winit_030::EventResult;
 use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::winit::keyboard::{Key as WinitKey, NamedKey};
+use wubble_core::overlay::{Kind, Layer, Phase};
 use wubble_engine::input::{KeyInput, Point};
 use wubble_ui::{AppWindow, CommandBarState};
 
@@ -513,6 +514,8 @@ impl Host {
                 g.new_tab_y + g.new_tab_h / 2.0,
             ),
             Spot::Bar => (g.pill_x + g.pill_w / 2.0, g.pill_y + g.pill_h / 2.0),
+            Spot::SidebarTop => (g.list_x + g.list_w / 2.0, 6.0),
+            Spot::Outside => (-40.0, window.get_content_height() / 2.0),
             Spot::CommandField => (
                 window.get_command_field_x() + window.get_command_field_w() / 2.0,
                 window.get_command_field_y() + window.get_command_field_h() / 2.0,
@@ -583,6 +586,29 @@ impl Host {
                 match crate::shot::take_scene(window, index, name) {
                     Ok(path) => println!("smoke: shot {}", path.display()),
                     Err(e) => println!("smoke: shot {name}: {e}"),
+                }
+            }
+            HostOp::WindowRelease => {
+                use slint::winit_030::winit::event::{DeviceId, ElementState, MouseButton};
+                self.window_event(&WindowEvent::MouseInput {
+                    device_id: DeviceId::dummy(),
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                });
+            }
+            HostOp::Drift(from) => {
+                for n in 1..=parity::DRIFT_MOVES {
+                    let at = Point {
+                        x: from.x + 10.0 * n as f32,
+                        y: from.y,
+                    };
+                    slint::Timer::single_shot(parity::DRIFT_EVERY * n, move || {
+                        with_host(|h| {
+                            if let Some(window) = h.w.window.upgrade() {
+                                h.parity_input(&window, Step::MoveTo(at));
+                            }
+                        })
+                    });
                 }
             }
             HostOp::CloseBar => {
@@ -853,8 +879,13 @@ impl Host {
                 )
             }
             HostCheck::Drag(want) => {
-                let dragging = !self.drag_idle();
-                is(dragging == want, format!("page drag running: {dragging}"))
+                let ghost = self.ui.phase(self.w.id, Layer::new(Kind::PageGhost, None))
+                    == Some(Phase::Open);
+                let dragging = !self.drag_idle() || ghost;
+                is(
+                    dragging == want,
+                    format!("page drag running: {}, ghost: {ghost}", !self.drag_idle()),
+                )
             }
             HostCheck::DragPicture => {
                 let got = self.drag_picture();
