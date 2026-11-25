@@ -1309,7 +1309,8 @@ impl Host {
                 .file_stem()
                 .map_or(file.clone(), |s| s.to_string_lossy().into_owned())
         });
-        let file_name = name::subtitle_file_name(&stem, variant.lang.as_deref(), variant.container);
+        let file_name =
+            name::subtitle_file_name(&stem, variant.lang.as_deref(), variant.container);
         let url = detected.url.clone();
         let Some(container) = self.model.container_of(tab) else {
             return;

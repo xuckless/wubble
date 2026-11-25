@@ -72,7 +72,7 @@ pub fn variants(text: &str, base: &str) -> Result<Resolution, Refusal> {
         .ok_or_else(|| Refusal::Failed("the manifest has no period".into()))?;
     let (main_reps, protected) = &periods[main];
     if main_reps.is_empty() {
-        return Err(match protected {
+        return Err(match *protected {
             0 => Refusal::Failed("the manifest lists no audio or video".into()),
             _ => Refusal::Protected,
         });
@@ -101,8 +101,8 @@ pub fn variants(text: &str, base: &str) -> Result<Resolution, Refusal> {
         .zip(&chains)
         .filter(|((_, v), chain)| {
             let spans = chain.iter().zip(&content).all(|(m, c)| m.is_some() || !c);
-            let periods = content.iter().filter(|c| **c).count();
-            spans && (v.track != Track::Subtitle || periods == 1)
+            let programme = content.iter().filter(|c| **c).count();
+            spans && (v.track != Track::Subtitle || programme == 1)
         })
         .map(|((_, v), chain)| {
             let mut segments = Vec::new();
