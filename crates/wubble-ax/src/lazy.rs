@@ -100,7 +100,13 @@ mod tests {
         };
         // (name, before, event, after, push's answer)
         for (name, mut lazy, (json, location), after, push) in [
-            ("the first", Lazy::default(), ("{}", false), queued(&[("{}", false)]), Push::Kept),
+            (
+                "the first",
+                Lazy::default(),
+                ("{}", false),
+                queued(&[("{}", false)]),
+                Push::Kept,
+            ),
             (
                 "after another, in order",
                 queued(&[("a", false)]),
@@ -108,9 +114,27 @@ mod tests {
                 queued(&[("a", false), ("bb", true)]),
                 Push::Kept,
             ),
-            ("the same twice", queued(&[("a", false)]), ("a", false), queued(&[("a", false), ("a", false)]), Push::Kept),
-            ("one past the count", full, ("y", false), Lazy::Dropped, Push::Overflowed),
-            ("one past the bytes", heavy.clone(), ("yy", false), Lazy::Dropped, Push::Overflowed),
+            (
+                "the same twice",
+                queued(&[("a", false)]),
+                ("a", false),
+                queued(&[("a", false), ("a", false)]),
+                Push::Kept,
+            ),
+            (
+                "one past the count",
+                full,
+                ("y", false),
+                Lazy::Dropped,
+                Push::Overflowed,
+            ),
+            (
+                "one past the bytes",
+                heavy.clone(),
+                ("yy", false),
+                Lazy::Dropped,
+                Push::Overflowed,
+            ),
             (
                 "up to the bytes",
                 heavy,
@@ -121,7 +145,13 @@ mod tests {
                 },
                 Push::Kept,
             ),
-            ("one while dropped", Lazy::Dropped, ("z", false), Lazy::Dropped, Push::Kept),
+            (
+                "one while dropped",
+                Lazy::Dropped,
+                ("z", false),
+                Lazy::Dropped,
+                Push::Kept,
+            ),
         ] {
             assert_eq!(lazy.push(json, location), push, "{name}");
             assert_eq!(lazy, after, "{name}");
@@ -138,11 +168,19 @@ mod tests {
                 queued(&[("a", false), ("b", true)]),
                 Settle::Apply(vec![("a".to_owned(), false), ("b".to_owned(), true)]),
             ),
-            ("dropped: CEF's tree on again", Lazy::Dropped, Settle::Reopen),
+            (
+                "dropped: CEF's tree on again",
+                Lazy::Dropped,
+                Settle::Reopen,
+            ),
         ] {
             assert_eq!(lazy.settle(), settle, "{name}");
             assert_eq!(lazy, Lazy::default(), "{name}: empty after");
-            assert_eq!(lazy.settle(), Settle::Apply(vec![]), "{name}: a second read");
+            assert_eq!(
+                lazy.settle(),
+                Settle::Apply(vec![]),
+                "{name}: a second read"
+            );
         }
     }
 }

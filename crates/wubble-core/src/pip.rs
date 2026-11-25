@@ -301,14 +301,56 @@ mod tests {
         };
         let plays = |tab: TabId| move |t: TabId| t == tab;
         /// (name, panes before, panes after, the tab that plays aloud, the state then, effects)
-        type Row = (&'static str, Vec<TabId>, Vec<TabId>, TabId, Pip, Vec<PipEffect>);
+        type Row = (
+            &'static str,
+            Vec<TabId>,
+            Vec<TabId>,
+            TabId,
+            Pip,
+            Vec<PipEffect>,
+        );
         let rows: Vec<Row> = vec![
-            ("one page left", vec![A], vec![B], A, Pip::Entering { tab: A }, vec![OpenWindow(A)]),
-            ("the split's middle pane plays", vec![A, B, C], vec![D], B, Pip::Entering { tab: B }, vec![OpenWindow(B)]),
-            ("its last pane plays", vec![A, B, C], vec![D], C, Pip::Entering { tab: C }, vec![OpenWindow(C)]),
+            (
+                "one page left",
+                vec![A],
+                vec![B],
+                A,
+                Pip::Entering { tab: A },
+                vec![OpenWindow(A)],
+            ),
+            (
+                "the split's middle pane plays",
+                vec![A, B, C],
+                vec![D],
+                B,
+                Pip::Entering { tab: B },
+                vec![OpenWindow(B)],
+            ),
+            (
+                "its last pane plays",
+                vec![A, B, C],
+                vec![D],
+                C,
+                Pip::Entering { tab: C },
+                vec![OpenWindow(C)],
+            ),
             ("nothing plays", vec![A, B, C], vec![D], D, Pip::Off, vec![]),
-            ("a pane focused in the split is no switch", vec![A, B, C], vec![A, B, C], B, Pip::Off, vec![]),
-            ("a pane closed out of the split, another stays", vec![A, B, C], vec![A, C], C, Pip::Off, vec![]),
+            (
+                "a pane focused in the split is no switch",
+                vec![A, B, C],
+                vec![A, B, C],
+                B,
+                Pip::Off,
+                vec![],
+            ),
+            (
+                "a pane closed out of the split, another stays",
+                vec![A, B, C],
+                vec![A, C],
+                C,
+                Pip::Off,
+                vec![],
+            ),
         ];
         for (name, before, after, playing, state, fx) in rows {
             let inputs = switched(&before, &after, true, plays(playing));

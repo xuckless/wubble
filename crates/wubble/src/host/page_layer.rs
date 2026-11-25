@@ -88,7 +88,8 @@ impl PageLayers {
                 .values()
                 .any(|p| page_layer::transacts(p.route, p.hide_due, p.moved));
         self.transacting = on;
-        self.layers().for_each(|layer| layer.present_in_transaction(on));
+        self.layers()
+            .for_each(|layer| layer.present_in_transaction(on));
     }
 
     /// Every layer of the window, a retired one too.

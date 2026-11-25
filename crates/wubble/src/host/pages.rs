@@ -425,12 +425,9 @@ impl Host {
     /// the shown split that is one (a split holds one, `Model::split_with`).
     pub(super) fn page_tab(&self) -> Option<TabId> {
         let internal = |t: &TabId| self.model.is_internal(*t);
-        self.shown().filter(internal).or_else(|| {
-            self.model
-                .window_tabs(self.w.id)
-                .into_iter()
-                .find(internal)
-        })
+        self.shown()
+            .filter(internal)
+            .or_else(|| self.model.window_tabs(self.w.id).into_iter().find(internal))
     }
 
     /// The built-in page the window draws ([`Host::page_tab`]).

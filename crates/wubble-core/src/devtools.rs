@@ -57,9 +57,7 @@ impl Dock {
     pub fn tab(&self) -> Option<TabId> {
         match self {
             Self::Closed => None,
-            Self::Resolving { tab, .. } | Self::Open { tab } | Self::Detached { tab } => {
-                Some(*tab)
-            }
+            Self::Resolving { tab, .. } | Self::Open { tab } | Self::Detached { tab } => Some(*tab),
         }
     }
 
@@ -179,9 +177,7 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
             });
             (Dock::Detached { tab }, effects)
         }
-        TargetId(tab, id)
-            if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) =>
-        {
+        TargetId(tab, id) if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) => {
             let console = matches!(dock, Dock::Resolving { console: true, .. });
             let url = match mode {
                 Mode::Docked { port } => frontend_url_on(port, &id, console),
@@ -196,14 +192,10 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
                 ),
             }
         }
-        TargetFailed(tab)
-            if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) =>
-        {
-            (
-                Dock::Detached { tab },
-                vec![OpenDetached { tab, inspect: None }],
-            )
-        }
+        TargetFailed(tab) if dock.tab() == Some(tab) && matches!(dock, Dock::Resolving { .. }) => (
+            Dock::Detached { tab },
+            vec![OpenDetached { tab, inspect: None }],
+        ),
         // the panel never came up: nothing to close, the window instead
         OpenFailed(tab) if dock == (Dock::Open { tab }) => (
             Dock::Detached { tab },

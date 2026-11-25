@@ -1145,7 +1145,12 @@ mod tests {
             (
                 "a still page enters: its first frame copied, the one it repaints on the layer",
                 16,
-                &[(free, Capable(true)), (free, copied(1)), (free, os(2)), (free, drew(1))],
+                &[
+                    (free, Capable(true)),
+                    (free, copied(1)),
+                    (free, os(2)),
+                    (free, drew(1)),
+                ],
             ),
             (
                 "moved in a render presented alone, then back at the repaint's frame",
@@ -1344,7 +1349,11 @@ mod tests {
             (Composited, Fullscreen, false, Now),
         ];
         for &(before, mode, transacted, at) in rows {
-            assert_eq!(hide_at(before, mode, transacted), at, "{before:?} {mode:?} {transacted}");
+            assert_eq!(
+                hide_at(before, mode, transacted),
+                at,
+                "{before:?} {mode:?} {transacted}"
+            );
         }
     }
 

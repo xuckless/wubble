@@ -9,8 +9,7 @@ use slint::ComponentHandle;
 use std::collections::BTreeMap;
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::overlay::{
-    self, Action, Cue, Effect, Env, Facts, Key, KeyOwner, Kind, Layer, Phase, Scope, Stack,
-    Surface,
+    self, Action, Cue, Effect, Env, Facts, Key, KeyOwner, Kind, Layer, Phase, Scope, Stack, Surface,
 };
 
 use wubble_core::agent::SessionId;
@@ -21,8 +20,7 @@ use wubble_core::tab::TabId;
 use wubble_core::window::{WindowId, WindowKind};
 use wubble_ui::{
     AgentWidgets, AppWindow, CommandBarState, CommandPlacement, FocusOwner, GlassLayer, Mounted,
-    PeekCue,
-    SidebarMode,
+    PeekCue, SidebarMode,
 };
 
 use super::Host;
@@ -735,11 +733,7 @@ impl Host {
     /// Escape never answers a notice or a permission prompt); whether one closed.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
         let w = self.w.id;
-        if self
-            .ui
-            .escape_target(&self.env(), w)
-            .is_none()
-        {
+        if self.ui.escape_target(&self.env(), w).is_none() {
             return false;
         }
         self.act(Action::Escape { w });

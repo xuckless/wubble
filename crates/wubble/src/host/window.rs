@@ -215,7 +215,10 @@ mod tests {
         pick_slot(&mut slots, t(9), Some(PEEK_SLOT), &framed);
         assert_eq!(page_panes(&slots), 2);
         // unsplit, peek closed
-        assert_eq!(free_slots(&mut slots, |tab| tab != t(1)), vec![1, PEEK_SLOT]);
+        assert_eq!(
+            free_slots(&mut slots, |tab| tab != t(1)),
+            vec![1, PEEK_SLOT]
+        );
         assert_eq!(page_panes(&slots), 1);
         assert_eq!(slots[PEEK_SLOT], None);
     }

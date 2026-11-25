@@ -2343,8 +2343,18 @@ fn a_split_holds_one_internal_page() {
     /// (name, focused, split with, the split's panes after: none, refused)
     type Row = (&'static str, TabId, TabId, Option<Vec<TabId>>);
     let rows: [Row; 4] = [
-        ("the focused page is internal", settings, ids[0], Some(vec![settings, ids[0]])),
-        ("the page split with is", ids[0], settings, Some(vec![ids[0], settings])),
+        (
+            "the focused page is internal",
+            settings,
+            ids[0],
+            Some(vec![settings, ids[0]]),
+        ),
+        (
+            "the page split with is",
+            ids[0],
+            settings,
+            Some(vec![ids[0], settings]),
+        ),
         ("both are", settings, history, None),
         ("two web pages", ids[0], ids[1], Some(vec![ids[0], ids[1]])),
     ];

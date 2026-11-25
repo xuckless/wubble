@@ -97,10 +97,10 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::region::{Region, next_region};
 use wubble_core::site::{PrivateChoices, SiteChange, SitePermissions, SiteView, Stored};
+use wubble_core::skia_cache;
 use wubble_core::space::{ContainerId, Item, Side, SpaceId, Storage};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::{FingerInput, InputEvent};
-use wubble_core::skia_cache;
 use wubble_core::window::{Geometry, WindowId, WindowKind, WindowState};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -2465,8 +2465,7 @@ impl Host {
     }
 
     fn choose_as(&mut self, target: &RowTarget, disposition: omnibox::Disposition) {
-        let choice =
-            bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
+        let choice = bar::target_command_as(target, self.bar.mode, self.search_engine, disposition);
         match choice {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
@@ -4294,7 +4293,10 @@ impl Host {
             }
             // the views of no tab (an extension's popup, the DevTools panel) follow too: they
             // kept the rate they opened with
-            for id in [self.ext_ui.popup, self.devtools.view].into_iter().flatten() {
+            for id in [self.ext_ui.popup, self.devtools.view]
+                .into_iter()
+                .flatten()
+            {
                 if let Some(view) = self.engine.view(id) {
                     view.set_frame_rate(rate);
                 }

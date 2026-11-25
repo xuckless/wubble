@@ -510,7 +510,11 @@ mod tests {
             ("seeded on", &[("pip.on_tab_switch", "1")][..], true),
             ("seeded off", &[("pip.on_tab_switch", "0")], false),
             ("no row: the default", &[], false),
-            ("not a Bool's text: the default", &[("pip.on_tab_switch", "true")], false),
+            (
+                "not a Bool's text: the default",
+                &[("pip.on_tab_switch", "true")],
+                false,
+            ),
             ("another key", &[("pip.auto", "1")], false),
         ] {
             assert_eq!(

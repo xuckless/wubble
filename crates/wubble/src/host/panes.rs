@@ -43,8 +43,8 @@ pub(super) struct GlanceRect {
 
 use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
-use crate::measure;
 use crate::clipboard::Bridge as _;
+use crate::measure;
 use crate::menu;
 use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
@@ -1077,12 +1077,13 @@ impl Host {
         let entries = if let Some(folder) = crate::shell::folder_of_row(id) {
             menu::folder_entries(&self.model, folder)
         } else if let Some(tab) = crate::shell::tab_id(id) {
-            let facts = wubble_core::tabmenu::Facts {
-                muted: self.audio.get(&tab).is_some_and(|a| a.muted),
-                site_muted: self.model.tabs.get(&tab).is_some_and(|t| {
-                    wubble_core::sitesound::is_muted(&self.muted_sites, &t.url)
-                }),
-            };
+            let facts =
+                wubble_core::tabmenu::Facts {
+                    muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+                    site_muted: self.model.tabs.get(&tab).is_some_and(|t| {
+                        wubble_core::sitesound::is_muted(&self.muted_sites, &t.url)
+                    }),
+                };
             menu::tab_entries(&self.model, tab, facts, &self.keymap)
         } else {
             return;
