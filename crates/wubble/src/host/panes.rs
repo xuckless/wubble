@@ -1114,6 +1114,26 @@ impl Host {
         self.sidebar_menu(entries, x, y);
     }
 
+    /// A shell button's click: its action, or the one a held Shift, Ctrl or Cmd makes of it
+    /// (`perform::clicked`: a hard reload).
+    pub fn shell_clicked(&mut self, action: wubble_core::action::Action) {
+        let keys = self.input.keys;
+        let held = keys.shift_key() || keys.control_key() || keys.super_key();
+        self.perform(crate::perform::clicked(action, held));
+    }
+
+    /// A right click on a shell button at `x, y` (window, logical): the reload button's menu,
+    /// with the empty-cache row while DevTools inspects the page. Other buttons have none.
+    pub fn shell_action_menu(&mut self, action: wubble_core::action::Action, x: f32, y: f32) {
+        use wubble_core::action::Action;
+        if !matches!(action, Action::Reload | Action::Stop) {
+            return;
+        }
+        let devtools = self.shown().is_some() && self.devtools.dock.tab() == self.shown();
+        let entries = menu::reload_entries(devtools, &self.keymap);
+        self.sidebar_menu(entries, x, y);
+    }
+
     /// The shell's menu at `x, y` (window, logical), on the focused page.
     fn sidebar_menu(&mut self, entries: Vec<menu::Entry>, x: f32, y: f32) {
         self.hover_dismiss();

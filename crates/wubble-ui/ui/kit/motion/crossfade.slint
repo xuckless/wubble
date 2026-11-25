@@ -11,6 +11,7 @@ import { TextRole, Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
 import { Tween } from "tween.slint";
 import { OverlapLook } from "overlap.slint";
+import { Icon } from "../controls/icon.slint";
 
 // One item of a Swap, any content: in while `shown`, out otherwise (`.tp-sw-i`, `data-s`).
 export component SwapItem inherits OverlapLook {
@@ -77,4 +78,42 @@ export component CrossfadeText inherits Rectangle {
     }
     la := SwapLayer { shown: root.front; text: root.a; role: root.role; ink: root.ink; align: root.align; along-x: root.along-x; }
     lb := SwapLayer { shown: !root.front; text: root.b; role: root.role; ink: root.ink; align: root.align; along-x: root.along-x; }
+}
+
+// wubble (derived: SwapItem and the kit Icon, docs/fidelity/derived-review.md): the Swap for an
+// icon, as CrossfadeText's for a label; the reload button's Reload and Stop.
+export component CrossfadeIcon inherits Rectangle {
+    in property <string> path;
+    in property <color> tint;
+    // which layer holds the current icon; the other leaves with the previous one
+    property <bool> front: true;
+    property <string> a;
+    property <string> b;
+    init => {
+        root.a = root.path;
+    }
+    changed path => {
+        if root.front {
+            root.b = root.path;
+        } else {
+            root.a = root.path;
+        }
+        root.front = !root.front;
+    }
+    width: ia.width;
+    height: ia.height;
+    SwapItem {
+        shown: root.front;
+        ia := Icon {
+            path: root.a;
+            tint: root.tint;
+        }
+    }
+    SwapItem {
+        shown: !root.front;
+        Icon {
+            path: root.b;
+            tint: root.tint;
+        }
+    }
 }

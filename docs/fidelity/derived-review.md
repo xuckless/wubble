@@ -411,3 +411,10 @@ Chrome marks an incognito window with a dark frame and an "Incognito" label; the
 |---|---|---|---|
 | Private chip (`PrivateChip` in `kit/chrome/private-mark.slint`, in `SpaceName`) | a private window's Space header shows its name ("Private") as a pill in place of the plain name: the header's own type (`wb-space-name`, 12 / 500) in lilac, on lilac at the Space capsule's .2 (`.wb-spaces-ind` opacity), 18 high (the header's height), the header's 10 padding each side, radius half its height; inert, named to assistive tech with "This window is private: nothing of it is saved". The private Space's colour is the lilac swatch | `.wb-space-name`, `.wb-spaces-ind`, Palette lilac | not yet shot (no gallery scene) |
 | Private tint (`PrivateTint` in `kit/chrome/private-mark.slint`, in `app.slint` over the glass) | the window's ground and glass darkened by abyss at .35 (`Shell.private-tint`), under the sidebar's content and the page card, with the window's radius; not drawn in page fullscreen. The window title reads "wubble (Private)" | Palette abyss, Chrome's dark incognito frame | not yet shot (no gallery scene) |
+
+## Features (written blind on sprint/features, 2026-11-25)
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Reload becomes Stop (`NavButtons`, `CrossfadeIcon` in `kit/motion/crossfade.slint`, `IconButton.swaps`) | while the visible page loads the fourth header button is Stop: the icon crossfades with the kit Swap (as `CrossfadeText` does a label), its label and tooltip action follow; the icon set has no stop glyph, so Stop wears Glyph.close | touch kit `Swap` (`.tp-sw-i`), Chrome's reload button | not yet shot |
+| Address menu (`address_entries` in crates/wubble/src/menu.rs, from the bar's field and the pill) | the kit Menu with Chromium's omnibox rows; a right click in the field or on the pill opens it; the bar stays open under it | the kit Menu, Chrome's omnibox menu | not yet shot |

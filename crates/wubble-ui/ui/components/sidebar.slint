@@ -242,6 +242,10 @@ export component Sidebar inherits Rectangle {
     callback window-maximise-requested();
     // The visible page's history, for the header's back and forward.
     in property <bool> can-go-back: false;
+    // the visible page is loading (the reload button is Stop)
+    in property <bool> loading: false;
+    // a right click on a header button (its action id), the menu at x, y
+    callback action-menu(string, length, length);
     in property <bool> can-go-forward: false;
     // A header button: the id of the wubble `Action` it runs.
     callback action(string);
@@ -325,8 +329,12 @@ export component Sidebar inherits Rectangle {
                             height: parent.height;
                             can-go-back: root.can-go-back;
                             can-go-forward: root.can-go-forward;
+                            loading: root.loading;
                             action(id) => {
                                 root.action(id);
+                            }
+                            menu-requested(id, x, y) => {
+                                root.action-menu(id, x, y);
                             }
                         }
                     }

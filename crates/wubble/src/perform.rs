@@ -20,6 +20,8 @@ use crate::surface::FindEvent;
 pub enum ViewOp {
     Reload,
     HardReload,
+    /// The HTTP cache cleared (CDP `Network.clearBrowserCache`), then a hard reload.
+    EmptyCacheHardReload,
     Stop,
     Back,
     Forward,
@@ -97,6 +99,16 @@ pub enum Plan {
     Nothing,
 }
 
+/// The action a click on a shell button runs, from the one it names and whether Shift, Ctrl or
+/// Cmd was held: Chrome's reload button hard-reloads on a Shift- or Ctrl-click
+/// (`ReloadButton::ButtonPressed`, the event's flags). Every other button runs its own.
+pub fn clicked(action: Action, held: bool) -> Action {
+    match (action, held) {
+        (Action::Reload, true) => Action::HardReload,
+        _ => action,
+    }
+}
+
 /// What `action` does to `model`. Exhaustive, without a catch-all: a new
 /// `Action` does not compile until it is placed here.
 pub fn plan(action: Action, model: &Model) -> Plan {
@@ -129,6 +141,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::PrevRegion => Plan::CycleRegion(true),
         Action::Reload => view(ViewOp::Reload),
         Action::HardReload => view(ViewOp::HardReload),
+        Action::EmptyCacheHardReload => view(ViewOp::EmptyCacheHardReload),
         Action::Stop => view(ViewOp::Stop),
         Action::Back => view(ViewOp::Back),
         Action::Forward => view(ViewOp::Forward),
@@ -376,6 +389,19 @@ mod tests {
         );
         assert_eq!(plan(Action::Reload, &m), Plan::View(ViewOp::Reload));
         assert_eq!(plan(Action::HardReload, &m), Plan::View(ViewOp::HardReload));
+        assert_eq!(
+            plan(Action::EmptyCacheHardReload, &m),
+            Plan::View(ViewOp::EmptyCacheHardReload)
+        );
+        for (action, held, want) in [
+            (Action::Reload, false, Action::Reload),
+            (Action::Reload, true, Action::HardReload),
+            (Action::Stop, true, Action::Stop),
+            (Action::Back, true, Action::Back),
+            (Action::ToggleSidebar, true, Action::ToggleSidebar),
+        ] {
+            assert_eq!(clicked(action, held), want, "{action:?} {held}");
+        }
         assert_eq!(plan(Action::ZoomIn, &m), Plan::View(ViewOp::ZoomIn));
         assert_eq!(plan(Action::ToggleMute, &m), Plan::View(ViewOp::ToggleMute));
         assert_eq!(plan(Action::Print, &m), Plan::Print);
@@ -417,6 +443,7 @@ mod tests {
             Action::SelectLastTab,
             Action::TogglePinTab,
             Action::Reload,
+            Action::EmptyCacheHardReload,
             Action::Back,
             Action::Find,
             Action::ZoomOut,

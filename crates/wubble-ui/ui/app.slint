@@ -188,6 +188,7 @@ export component AppWindow inherits Window {
     in property <bool> can-go-forward <=> sidebar.can-go-forward;
     // A shell button asks for a wubble `Action`, by its id (wubble-core action.rs).
     callback shell-action <=> sidebar.action;
+    callback shell-action-menu <=> sidebar.action-menu;
     // The platform can show a transparent window background (window.rs `Platform`).
     in property <bool> rounded-corners: false;
     // Square when full screen or maximised, or when the platform cannot show the corners.
@@ -1664,6 +1665,7 @@ export component AppWindow inherits Window {
             window-height: root.height;
 
             sidebar := Sidebar {
+                loading: root.address-loading;
                 x: Chrome.inset;
                 y: Chrome.inset;
                 width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-width;

@@ -836,6 +836,37 @@ const FIELD_ROWS: &[FieldRow] = &[
     },
 ];
 
+/// The key that runs `action`, as the keymap prints it; empty for none.
+fn key_text(keymap: &Keymap, action: Action) -> String {
+    keymap
+        .shortcut_for(action)
+        .map(|c| c.to_string())
+        .unwrap_or_default()
+}
+
+/// The reload button's menu (its right click): Chrome's `ReloadButton` menu
+/// (`chrome/browser/ui/views/toolbar/reload_button.cc`, `IDS_RELOAD_MENU_*`, BSD-3-Clause; rows
+/// and labels only), Normal and Hard Reload, and Empty Cache and Hard Reload while DevTools
+/// inspects the tab (`devtools`), each with its key.
+pub fn reload_entries(devtools: bool, keymap: &Keymap) -> Vec<Entry> {
+    [
+        (Action::Reload, "Normal Reload"),
+        (Action::HardReload, "Hard Reload"),
+        (Action::EmptyCacheHardReload, "Empty Cache and Hard Reload"),
+    ]
+    .into_iter()
+    .filter(|&(action, _)| devtools || action != Action::EmptyCacheHardReload)
+    .map(|(action, label)| Entry {
+        label: label.into(),
+        command: Command::Perform(action),
+        enabled: true,
+        icon: "",
+        shortcut: key_text(keymap, action),
+        danger: false,
+    })
+    .collect()
+}
+
 /// The address field's menu (`FIELD_ROWS`), each row's shortcut from the keymap.
 pub fn address_entries(facts: FieldFacts, keymap: &Keymap) -> Vec<Entry> {
     let rows = FIELD_ROWS.iter().filter(|r| (r.show)(&facts)).map(|r| {
@@ -847,11 +878,7 @@ pub fn address_entries(facts: FieldFacts, keymap: &Keymap) -> Vec<Entry> {
             enabled: (r.enabled)(&facts),
             // the switch's state, as a check
             icon: if on { "check" } else { "" },
-            shortcut: r
-                .key
-                .and_then(|a| keymap.shortcut_for(a))
-                .map(|c| c.to_string())
-                .unwrap_or_default(),
+            shortcut: r.key.map(|a| key_text(keymap, a)).unwrap_or_default(),
             danger: false,
         };
         (r.group, entry)
@@ -882,12 +909,7 @@ pub fn paste_label(clipboard: &str) -> String {
 /// order, with the split entries in the table's split slot and each row's shortcut from the
 /// keymap where an action does the same.
 pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> Vec<Entry> {
-    let key = |a: Action| {
-        keymap
-            .shortcut_for(a)
-            .map(|c| c.to_string())
-            .unwrap_or_default()
-    };
+    let key = |a: Action| key_text(keymap, a);
     let visible = model.visible_tab() == Some(tab);
     let mut out = vec![];
     for e in tabmenu::entries(model, tab, facts) {
@@ -953,12 +975,7 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
 /// The sidebar's own menu, a right click on its empty glass (QA LOW-02): what the sidebar
 /// already offers, a tab, a Space and a folder in the active Space, with their keys.
 pub fn sidebar_entries(model: &Model, keymap: &Keymap) -> Vec<Entry> {
-    let key = |a: Action| {
-        keymap
-            .shortcut_for(a)
-            .map(|c| c.to_string())
-            .unwrap_or_default()
-    };
+    let key = |a: Action| key_text(keymap, a);
     let entry = |label: &str, command, shortcut| Entry {
         label: label.into(),
         command,
@@ -1960,6 +1977,27 @@ mod tests {
             );
             assert_eq!(e[1].command, Command::CancelDownloadsAndClose(closing));
             assert_eq!(e[2].command, Command::Dismiss);
+        }
+    }
+
+    #[test]
+    fn the_reload_menu_offers_the_empty_cache_reload_with_devtools() {
+        let km = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        for (devtools, want) in [
+            (false, vec!["Normal Reload", "Hard Reload"]),
+            (
+                true,
+                vec![
+                    "Normal Reload",
+                    "Hard Reload",
+                    "Empty Cache and Hard Reload",
+                ],
+            ),
+        ] {
+            let e = reload_entries(devtools, &km);
+            assert_eq!(labels(&e), want, "devtools {devtools}");
+            assert_eq!(e[1].command, Command::Perform(Action::HardReload));
+            assert_eq!(e[0].shortcut, "Ctrl+R");
         }
     }
 

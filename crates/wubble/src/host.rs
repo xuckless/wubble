@@ -2510,6 +2510,11 @@ impl Host {
                 match op {
                     ViewOp::Reload => view.reload(),
                     ViewOp::HardReload => view.hard_reload(),
+                    // DevTools' empty-cache reload: the clear goes to the browser first
+                    ViewOp::EmptyCacheHardReload => {
+                        view.cdp("Network.clearBrowserCache", &serde_json::json!({}));
+                        view.hard_reload();
+                    }
                     ViewOp::Stop => view.stop(),
                     ViewOp::Back => view.back(),
                     ViewOp::Forward => view.forward(),

@@ -1458,8 +1458,13 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     });
     // The sidebar's buttons name their action; it runs like its shortcut.
     window.on_shell_action(move |id| match wubble_core::action::Action::from_id(&id) {
-        Some(action) => with_host_in(win, |host| host.perform(action)),
+        Some(action) => with_host_in(win, |host| host.shell_clicked(action)),
         None => eprintln!("wubble: the shell asked for an unknown action {id:?}"),
+    });
+    window.on_shell_action_menu(move |id, x, y| {
+        if let Some(action) = wubble_core::action::Action::from_id(&id) {
+            with_host_in(win, |host| host.shell_action_menu(action, x, y));
+        }
     });
 }
 

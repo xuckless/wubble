@@ -37,7 +37,7 @@ The pill's menu adds Copy address (Action::CopyUrl), Edit address (open the bar 
 
 ## Reload button turns into Stop while loading; reload menu with hard reload and empty cache (`nav-stop-reload`)
 
-Key: `nav-stop-reload` · engine patch: no · state: not written.
+Key: `nav-stop-reload` · engine patch: no · state: [~] written blind on sprint/features, not compiled.
 
 While a page loads, Chrome's reload button turns into an X (Stop), and back into Reload when the load ends. Shift-click or Ctrl-click does a hard reload. With DevTools open, a right-click or long press gives Normal reload, Hard reload and 'Empty cache and hard reload'. wubble has Action::Stop (Escape, Cmd+.), Action::HardReload (ViewOp::HardReload, reload_ignore_cache in crates/wubble-engine/src/view.rs) and an `address-loading` property in app.slint, but NavButtons (crates/wubble-ui/ui/components/nav-buttons.slint) always shows Reload.
 

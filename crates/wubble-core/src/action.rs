@@ -38,6 +38,8 @@ pub enum Action {
     PrevRegion,
     Reload,
     HardReload,
+    /// DevTools' "Empty cache and hard reload": the cache cleared, then a hard reload.
+    EmptyCacheHardReload,
     Stop,
     Back,
     Forward,
@@ -144,7 +146,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 82] = [
+const FIXED: [(&str, Action); 83] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("duplicate-tab", Action::DuplicateTab),
@@ -164,6 +166,7 @@ const FIXED: [(&str, Action); 82] = [
     ("prev-region", Action::PrevRegion),
     ("reload", Action::Reload),
     ("hard-reload", Action::HardReload),
+    ("empty-cache-hard-reload", Action::EmptyCacheHardReload),
     ("stop", Action::Stop),
     ("back", Action::Back),
     ("forward", Action::Forward),
@@ -324,7 +327,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 44] = [
+pub const PALETTE: [ActionInfo; 45] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -547,6 +550,11 @@ pub const PALETTE: [ActionInfo; 44] = [
         title: "Paste and go",
         keywords: "clipboard open address search",
     },
+    ActionInfo {
+        action: Action::EmptyCacheHardReload,
+        title: "Empty cache and hard reload",
+        keywords: "refresh clear cache devtools",
+    },
 ];
 
 #[cfg(test)]
@@ -556,7 +564,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 100);
+        assert_eq!(all.len(), 101);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -589,7 +597,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 100);
+        assert_eq!(ids.len(), 101);
     }
 
     #[test]
