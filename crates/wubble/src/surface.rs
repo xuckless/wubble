@@ -19,7 +19,7 @@
 use wubble_engine::page::{JsDialogKind, PageEvent, Rect, RequestId};
 
 use crate::chooser::{self, DialogSpec};
-use crate::menu::MenuEvent;
+use crate::menu::{MenuEvent, NavFlags};
 use crate::page_error::PageError;
 use crate::prompt::{self, AuthEvent, AuthRequest, PermissionEvent, PermissionRequest};
 
@@ -401,7 +401,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::ContextMenuRequested { id, menu } => Routed::Menu(MenuEvent::Requested {
             id,
             menu,
-            nav: menu::NavFlags::default(),
+            nav: NavFlags::default(),
             extra: vec![],
         }),
         PageEvent::ContextMenuDismissed => Routed::Menu(MenuEvent::Reset),
@@ -640,7 +640,7 @@ mod tests {
         // reuses an id, so sequences requesting one twice are skipped.
         let n = events.len();
         'sequence: for code in 0..n.pow(4) {
-            let mut s = None;
+            let mut s: Option<OpenDialog> = None;
             let mut answered = vec![];
             let mut engine_answered = vec![];
             let mut requested = vec![];

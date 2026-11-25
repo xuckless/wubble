@@ -176,6 +176,7 @@ fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
             E::LoadFailed {
                 url: failed,
                 code: c,
+                ..
             },
         ) if s.url() == Some(&failed) && neterror::is_cert(c) => (s, vec![]),
         // the own reload failed again: the next attempt, later
@@ -587,10 +588,7 @@ mod tests {
             "Proceed to a.test (unsafe)"
         );
         // Not a certificate panel: nothing to proceed past.
-        let load = PageError::Load {
-            url: URL.into(),
-            code: -105,
-        };
+        let load = load(-105, Retry::Never);
         assert_eq!(transition(load.clone(), E::Proceed), (load, vec![]));
     }
 

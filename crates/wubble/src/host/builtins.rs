@@ -74,7 +74,6 @@ impl Default for Builtins {
             reader_prefs: ReaderPrefs::default(),
             pdf: BTreeSet::new(),
             kind_probes: BTreeMap::new(),
-            hints: None,
             alphabet: hints::alphabet(""),
             shot: None,
             output: ShotOutput::Both,

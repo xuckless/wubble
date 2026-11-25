@@ -78,7 +78,7 @@ export component CommandHead inherits Rectangle {
             min-width: BrowserCss.wb-cmd-in--min-width;
             // under the input: the right click it leaves (it takes the left and middle ones)
             TouchArea {
-                mouse-cursor: text;
+                mouse-cursor: MouseCursor.text;
                 pointer-event(e) => {
                     if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
                         root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);

@@ -621,9 +621,8 @@ mod tests {
     fn the_engine_answering_closes_without_an_answer() {
         let t = SitePermissions::default();
         let (open, _) = permission(None, ask(1, &[CameraStream]), &t);
-        for e in [PermissionEvent::Dismissed(vec![RequestId(1)])] {
-            assert_eq!(permission(open.clone(), e, &t), (None, vec![]));
-        }
+        let gone = PermissionEvent::Dismissed(vec![RequestId(1)]);
+        assert_eq!(permission(open.clone(), gone, &t), (None, vec![]));
         let (s, a) = permission(
             open.clone(),
             PermissionEvent::Dismissed(vec![RequestId(9)]),
@@ -856,7 +855,7 @@ mod tests {
         ];
         let n = events.len();
         'sequence: for code in 0..n.pow(4) {
-            let mut s = None;
+            let mut s: Option<AuthRequest> = None;
             let (mut answered, mut engine, mut requested) = (vec![], vec![], vec![]);
             let mut c = code;
             for _ in 0..4 {

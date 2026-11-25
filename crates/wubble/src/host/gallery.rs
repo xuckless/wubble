@@ -20,7 +20,7 @@ use super::autofill::shell_view;
 use super::layers::Content;
 use crate::gallery_smoke::{self, Action, Event, Ground, Long, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
-use crate::page_error::PageError;
+use crate::page_error::{PageError, Retry};
 use crate::prompt::{Ask, PermissionPrompt, PermissionRequest};
 use crate::surface::{DialogContent, FindBar, OpenDialog, Surfaces};
 use crate::{quit, shot, with_host};
@@ -360,6 +360,7 @@ impl Host {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
                     code: -105,
+                    retry: Retry::Never,
                 }
             }
             Overlay::CertError => {

@@ -239,20 +239,11 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
     rows
 }
 
-/// What choosing `target` in a bar opened in `mode` does. A search needs an
-/// engine: without one it is `None` (the first-run rows replace it).
-pub fn target_command(
-    target: &RowTarget,
-    mode: BarMode,
-    engine: Option<SearchEngine>,
-) -> Option<Choice> {
-    target_command_as(target, mode, engine, Disposition::AsOpened)
-}
-
-/// [`target_command`] with the keys Enter was pressed with (`omnibox::disposition`): Alt+Enter
-/// loads in a new tab, Shift+Enter in a new window, whatever the bar was opened for. A bar
-/// choosing a page beside the focused one keeps doing that; a switch to an open tab and an
-/// action are what they are.
+/// What choosing `target` in a bar opened in `mode` does, with the keys Enter was pressed with
+/// (`omnibox::disposition`): Alt+Enter loads in a new tab, Shift+Enter in a new window, whatever
+/// the bar was opened for. A bar choosing a page beside the focused one keeps doing that; a switch
+/// to an open tab and an action are what they are. A search needs an engine: without one it is
+/// `None` (the first-run rows replace it).
 pub fn target_command_as(
     target: &RowTarget,
     mode: BarMode,
@@ -639,7 +630,7 @@ mod tests {
         ];
         for (target, mode, engine, want) in cases {
             assert_eq!(
-                target_command(target, mode, engine),
+                target_command_as(target, mode, engine, Disposition::AsOpened),
                 want,
                 "{target:?} {mode:?} {engine:?}"
             );
