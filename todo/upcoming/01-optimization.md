@@ -16,7 +16,11 @@ The main process under 5 % CPU in steady states (idle, video, scrolling, typing)
 Measured: 26 to 31 % for windowed video on the Mac; on Linux 8 to 9 % for video or a spinner at 60 Hz, 14 % on the
 300 Hz display, 1 to 2 % idle. Roads, in this order (decisions.md "Main-process target", "Page roads"):
 
-- 1. Layer: windowed: shipped in 0.6.2, on by default on macOS. Measured on the owner's M2 with windowed 1080p60 video: 10 to 15 % main on its layer (off: 28 to 37 %), the page staying on its layer through overlays. Follow-ups: [page-layer.md](../in-progress/page-layer.md)
+- 1. Layer: windowed: shipped in 0.6.2, on by default on macOS. Measured on the owner's M2 with windowed 1080p60 video: 10 to 15 % main on its layer (off: 28 to 37 %), the page staying on its layer through overlays. Follow-ups: [docs/research/page-layer.md](../../docs/research/page-layer.md)
+  Done: the owner's 18 hand checks of the default-on layer passed (2026-11-25, `docs/research/page-layer.md` "Default on macOS (0.6.2)"). Its open follow-ups:
+  - [ ] `set_page_fullscreen`'s window ownership; a fullscreen tab moved to another window leaves its old window in page fullscreen until the page's own exit (no two-window smoke)
+  - [ ] Page frame rate on the layer under glass: 49 a second for a 60 fps video (62 before the fix); likely the shell presenting with the transaction for each snapshot render while the main thread is CEF's; measure `copy_wait` on the Mac, then present with the transaction only while a route or placement changes
+  - [ ] A frame dropped for a busy pool is lost: a burst's last leaves the layer one frame behind until the page paints again (ask CEF to repaint, or keep it)
 - [ ] Measure first what the remaining 10 to 15 % is made of, on the 0.6.2 build with the page on its layer (frame receipt, the pool copy, the layer commit, the begin-frame timer, the accessibility mirror); every road below is judged against it
 - Dropped video frames on the layer, shelved for 0.6.2: [video-dropped-frames.md](../shelved/video-dropped-frames.md)
 - [ ] 2. CEF's own begin-frame source while a page is on its layer (no shell timer), and the Core Animation transaction only when a route or placement changes (no engine patch). Its zero-copy half waits for the engine build: [engine-build.md](engine-build.md#optimization).

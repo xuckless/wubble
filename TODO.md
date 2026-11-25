@@ -10,11 +10,10 @@ The goal stays the main process under 5 % CPU in steady states; 0.6.2 brought wi
 3. **The engine patch queue** (owner: "do all the things that require engine repatch first and then build engine once"): write unbuilt in `patches/chromium/` all 21 items of [`todo/upcoming/engine-build.md`](todo/upcoming/engine-build.md) (road 2's zero-copy, road 3's `CALayerHost`, the extension queue and the rest); then the one engine build; then road 3's three experiments on it
 4. In parallel when the build lock is free: compile and test the blind overlays of `untested/store-step2` ([surface-manager.md](todo/in-progress/surface-manager.md))
 
-Owner, by hand on the Mac: the hand-check list for the default-on page layer ("Default on macOS (0.6.2)" in
-[docs/research/page-layer.md](docs/research/page-layer.md)); whether your 0.6.1 install updates itself to 0.6.2.
+Owner, by hand on the Mac: whether your 0.6.1 install updated itself to 0.6.2. (The page layer's 18 hand checks passed on 2026-11-25.)
 
 ## Working on
-- [~] Page layer, shipped on by default on macOS in 0.6.2: open follow-ups ([page-layer.md](todo/in-progress/page-layer.md))
+- [~] Fix round from the owner's 0.6.2 hand checks: the pointer after a drop, picture-in-picture from a split pane, built-in pages in split view ([fix-round.md](todo/in-progress/fix-round.md))
 - [~] Surface manager: tested parts shipped in 0.6.2; blind overlays, command bar and focus left ([surface-manager.md](todo/in-progress/surface-manager.md))
 - Open owner decisions: [decisions.md](todo/in-progress/decisions.md)
 
