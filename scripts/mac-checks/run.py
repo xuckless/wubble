@@ -1081,6 +1081,12 @@ def ce(h, ctx):
     step("type", ["type:hello world foo"], "hello world foo")
     step("Option+Delete", ["alt+delete"], "hello world ")
     step("Cmd+Delete", ["cmd+delete"], "")
+    known = []
+    if bad and bad[0].startswith("Cmd+Delete"):
+        # a known failure on some builds: clear the field another way and go on, so the keys after
+        # it (typing first of all) are still checked
+        known.append(bad.pop().replace("; later steps not run", ""))
+        step("Cmd+A, Delete", ["cmd+a", "delete"], "")
     step("retype", ["type:hello world foo"], "hello world foo")
     step("Cmd+Left, type", ["cmd+left", "type:X"], "Xhello world foo")
     step("Shift+Cmd+Left", ["cmd+right", "shift+cmd+left"], "0,16/16", key="sel")
@@ -1112,7 +1118,8 @@ def ce(h, ctx):
         if not back or back["page"] != "edit":
             bad.append("Cmd+Left outside a field did not go Back")
     h.key("cmd+w", 1)
-    return not bad, "; ".join(bad) or "; ".join(seen)
+    bad = known + bad
+    return not bad, "; ".join(bad + ([f"then: {', '.join(seen[3:])}"] if known else [])) or "; ".join(seen)
 
 
 @check("r", "CEF frame rate matches the built-in display")
