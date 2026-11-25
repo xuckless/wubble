@@ -605,10 +605,12 @@ fn browse(
         cache_dir: profile.cef_cache(),
         ..config
     });
+    let downloads_fixed = downloads.is_some();
     let downloads = profile::downloads_dir(downloads);
     let mode = Mode::Browse {
         url,
         downloads,
+        downloads_fixed,
         listener,
     };
     let primary = matches!(
@@ -1016,6 +1018,8 @@ enum Mode {
     Browse {
         url: Option<String>,
         downloads: Option<PathBuf>,
+        /// `--downloads` named the folder: the Downloads setting does not move it.
+        downloads_fixed: bool,
         /// Later starts on the same profile (`instance.rs`).
         listener: Option<interprocess::local_socket::Listener>,
     },
@@ -1588,6 +1592,9 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
             host.write_setting(&key, &value);
         })
     });
+    window.on_setting_folder_requested(move |key| {
+        with_host_in(win, |host| host.setting_folder_requested(&key))
+    });
     // the Sidebar row and the peek follow the shell's own mode; later, outside whatever
     // changed it
     window.on_sidebar_mode_seen(move || {
@@ -1964,10 +1971,14 @@ fn run(
         Mode::Measure { out, .. } => out.clone(),
         _ => None,
     };
-    // Smokes download into their throwaway profile.
-    let downloads = match &mode {
-        Mode::Browse { downloads, .. } => downloads.clone(),
-        _ => Some(profile.join("downloads")),
+    // Smokes download into their throwaway profile, whatever its settings say.
+    let (downloads, downloads_fixed) = match &mode {
+        Mode::Browse {
+            downloads,
+            downloads_fixed,
+            ..
+        } => (downloads.clone(), *downloads_fixed),
+        _ => (Some(profile.join("downloads")), true),
     };
     // `url` is opened in a new tab; without one a fresh profile gets
     // `fresh_profile_page` and a restored session opens nothing new.
@@ -2374,6 +2385,7 @@ fn run(
         url,
         checks,
         downloads,
+        downloads_fixed,
         blocking,
         media_observer,
     );
@@ -2570,6 +2582,7 @@ mod tests {
         let browse = Mode::Browse {
             url: None,
             downloads: None,
+            downloads_fixed: false,
             listener: None,
         };
         assert_eq!(

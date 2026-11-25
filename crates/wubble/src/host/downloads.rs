@@ -40,6 +40,11 @@ pub(super) struct Downloads {
     /// Where files go; `None`: no downloads directory, every download is
     /// declined.
     dir: Option<PathBuf>,
+    /// What `dir` is without the setting (`settings::DOWNLOADS_DIR`): the command line's
+    /// folder or the OS one.
+    default_dir: Option<PathBuf>,
+    /// The command line (or a smoke) named the folder: the setting does not move it.
+    fixed: bool,
     /// Newest first.
     list: Vec<DownloadEntry>,
     next_id: i64,
@@ -62,13 +67,24 @@ pub(super) struct Downloads {
 }
 
 impl Downloads {
-    pub fn new(dir: Option<PathBuf>, list: Vec<DownloadEntry>) -> Self {
+    /// Downloads into `dir`; `fixed`: the command line named it, so the setting cannot move it.
+    pub fn new(dir: Option<PathBuf>, fixed: bool, list: Vec<DownloadEntry>) -> Self {
         let next_id = list.iter().map(|e| e.id).max().unwrap_or(0) + 1;
         Self {
+            default_dir: dir.clone(),
             dir,
+            fixed,
             list,
             next_id,
             ..Self::default()
+        }
+    }
+
+    /// The setting's folder (`settings::DOWNLOADS_DIR`; `None`: the default), unless the
+    /// command line named one.
+    pub(super) fn set_dir(&mut self, dir: Option<PathBuf>) {
+        if !self.fixed {
+            self.dir = dir.or_else(|| self.default_dir.clone());
         }
     }
 
@@ -834,7 +850,7 @@ mod tests {
 
     #[test]
     fn a_pdf_being_printed_keeps_its_name() {
-        let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), vec![]);
+        let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), false, vec![]);
         let first = d.unique_path("Page.pdf").unwrap();
         d.reserve(&first);
         let second = d.unique_path("Page.pdf").unwrap();
@@ -847,13 +863,30 @@ mod tests {
     fn ids_continue_after_the_loaded_ones() {
         let d = Downloads::new(
             None,
+            false,
             vec![
                 entry(7, DownloadState::Complete),
                 entry(3, DownloadState::Complete),
             ],
         );
         assert_eq!(d.next_id, 8);
-        assert_eq!(Downloads::new(None, vec![]).next_id, 1);
+        assert_eq!(Downloads::new(None, false, vec![]).next_id, 1);
+    }
+
+    #[test]
+    fn the_setting_moves_the_folder_unless_the_command_line_named_one() {
+        let mut d = Downloads::new(Some("/os/Downloads".into()), false, vec![]);
+        d.set_dir(Some("/chosen".into()));
+        assert_eq!(d.dir(), Some(Path::new("/chosen")));
+        d.set_dir(None);
+        assert_eq!(
+            d.dir(),
+            Some(Path::new("/os/Downloads")),
+            "back to the default"
+        );
+        let mut cli = Downloads::new(Some("/cli".into()), true, vec![]);
+        cli.set_dir(Some("/chosen".into()));
+        assert_eq!(cli.dir(), Some(Path::new("/cli")));
     }
 
     #[test]

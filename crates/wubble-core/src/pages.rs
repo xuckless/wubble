@@ -721,6 +721,8 @@ pub enum Control {
     MapEditor,
     /// One line of text, applied on Enter.
     TextField,
+    /// A folder's path and a Change button (the OS folder chooser).
+    Folder,
 }
 
 /// The search engines' stored ids, the words of the engine's segmented control.
@@ -746,6 +748,7 @@ pub fn control_for(kind: SettingKind) -> Control {
         SettingKind::List => Control::ListEditor,
         SettingKind::Map => Control::MapEditor,
         SettingKind::Text => Control::TextField,
+        SettingKind::Folder => Control::Folder,
         // picked from a Select; custom shows its template's field (`wubble_ui::settings`)
         SettingKind::SecureDns => Control::Segmented(&crate::secure_dns::WORDS),
     }
@@ -890,9 +893,10 @@ pub struct SectionView {
 }
 
 /// The order the page lists its sections in; `Hidden` is never listed.
-pub const SECTION_ORDER: [Section; 4] = [
+pub const SECTION_ORDER: [Section; 5] = [
     Section::General,
     Section::Privacy,
+    Section::Downloads,
     Section::Appearance,
     Section::Performance,
 ];
@@ -952,6 +956,10 @@ fn row_text(section: settings::Section, row: &SettingRow) -> String {
     let mut text = format!("{} {} {}", row.label, row.key, section.title());
     if row.restart {
         text.push_str(" applies after a restart");
+    }
+    // the design's words for a folder row (`settings.tsx` dlPath's `find`)
+    if row.control == Control::Folder {
+        text.push_str(" folder location directory");
     }
     if let Control::Segmented(words) = row.control {
         for word in words {
@@ -1383,6 +1391,7 @@ mod tests {
             (SettingKind::List, Control::ListEditor),
             (SettingKind::Map, Control::MapEditor),
             (SettingKind::Text, Control::TextField),
+            (SettingKind::Folder, Control::Folder),
             (
                 SettingKind::SecureDns,
                 Control::Segmented(&crate::secure_dns::WORDS),

@@ -124,6 +124,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         Control::ListEditor => item.control = SettingControl::List,
         Control::MapEditor => item.control = SettingControl::Map,
         Control::TextField => item.control = SettingControl::Text,
+        Control::Folder => item.control = SettingControl::Folder,
     }
     item
 }
@@ -248,6 +249,7 @@ mod tests {
                 Control::ListEditor => SettingControl::List,
                 Control::MapEditor => SettingControl::Map,
                 Control::TextField => SettingControl::Text,
+                Control::Folder => SettingControl::Folder,
             };
             assert_eq!(item.control, want, "{}", item.key);
         }
@@ -256,7 +258,16 @@ mod tests {
             .filter(|i| i.first)
             .map(|i| i.section.as_str())
             .collect();
-        assert_eq!(headers, ["General", "Privacy", "Appearance", "Performance"]);
+        assert_eq!(
+            headers,
+            [
+                "General",
+                "Privacy",
+                "Downloads",
+                "Appearance",
+                "Performance"
+            ]
+        );
         assert!(items.last().unwrap().last);
         let engine = setting_item(
             page.iter()

@@ -8,6 +8,7 @@
 //! made of them. The page is drawn from them each time they or the model change.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use wubble_blocker::ListRow;
 use wubble_blocker::catalog::Selection;
@@ -170,6 +171,9 @@ impl Host {
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
+            Applied::DownloadsDir(dir) => self
+                .downloads
+                .set_dir((!dir.is_empty()).then(|| PathBuf::from(dir))),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
             Applied::Video {
                 controls,
@@ -296,6 +300,42 @@ impl Host {
     fn answer(&mut self, key: &str, note: &'static str) {
         let serial = self.settings.answer.1.wrapping_add(1);
         self.settings.answer = (key.to_owned(), serial, note);
+    }
+
+    /// A folder row's Change: the OS folder chooser, starting at the row's folder (else the
+    /// downloads folder); the folder picked is stored, a cancel changes nothing.
+    pub(crate) fn setting_folder_requested(&mut self, key: &str) {
+        let Some(def) = defs::find(key).filter(|d| d.kind == defs::SettingKind::Folder) else {
+            return;
+        };
+        let current = apply::value_of(def, &self.settings.stored)
+            .trim()
+            .to_owned();
+        let start = match current.as_str() {
+            "" => self.downloads.dir().map(PathBuf::from).unwrap_or_default(),
+            dir => PathBuf::from(dir),
+        };
+        let spec = crate::chooser::dialog_spec(
+            wubble_engine::page::FileChooserMode::OpenFolder,
+            def.label,
+            &start,
+            &[],
+        );
+        let window = self.w.window.upgrade();
+        let dialog =
+            crate::chooser::dialog(&spec, window.as_ref().map(slint::ComponentHandle::window));
+        let key = def.key;
+        let task = slint::spawn_local(async move {
+            let picked = crate::chooser::pick(spec, dialog).await;
+            if let Some(folder) = picked.and_then(|p| p.into_iter().next()) {
+                crate::with_host(|host| {
+                    host.write_setting(key, &folder.to_string_lossy());
+                });
+            }
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the folder dialog: {e}");
+        }
     }
 
     /// The lists' state changed on the blocker's thread (a rebuild or an update ended).

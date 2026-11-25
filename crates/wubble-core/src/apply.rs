@@ -183,6 +183,8 @@ pub enum Applied {
     BoostsEnabled(bool),
     /// Every download asks where to save it (`settings::DOWNLOADS_ASK_WHERE`).
     AskWhereToSave(bool),
+    /// Where downloads go (`settings::DOWNLOADS_DIR`, trimmed); empty: the OS folder.
+    DownloadsDir(String),
     /// Calmer motion: the setting (the host combines it with the OS preference).
     ReduceMotion(crate::motion::Calm),
     /// Pages for screen readers: the setting (the host combines it with whether a screen reader
@@ -355,6 +357,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
+        k if k == s::DOWNLOADS_DIR.key => Applied::DownloadsDir(v.trim().to_owned()),
         k if k == s::REDUCE_MOTION.key => Applied::ReduceMotion(crate::motion::Calm::parse(v)),
         k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),

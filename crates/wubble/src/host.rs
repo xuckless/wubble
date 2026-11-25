@@ -639,6 +639,7 @@ impl Host {
         open: Option<String>,
         checks: Checks,
         downloads_dir: Option<PathBuf>,
+        downloads_fixed: bool,
         blocking: Arc<Blocking>,
         media_observer: Arc<media::MediaObserver>,
     ) -> Self {
@@ -787,7 +788,7 @@ impl Host {
             never_sleep_sites: vec![],
             private_choices: PrivateChoices::default(),
             cert_exceptions: CertExceptions::default(),
-            downloads: downloads::Downloads::new(downloads_dir, downloads),
+            downloads: downloads::Downloads::new(downloads_dir, downloads_fixed, downloads),
             media: media::Media::new(media_observer),
             pacing: if begin_frames {
                 Pacing::Shell

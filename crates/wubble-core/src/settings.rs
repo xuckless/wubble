@@ -27,6 +27,8 @@ pub enum SettingKind {
     Map,
     /// Any one line of text (a folder path; empty for the default).
     Text,
+    /// A folder's path; empty for the default. Picked with the OS folder chooser.
+    Folder,
     /// Secure DNS: `automatic`, `off`, a provider's word or `custom:` and a template
     /// (`secure_dns::SecureDns::parse`).
     SecureDns,
@@ -49,7 +51,7 @@ impl SettingKind {
             SettingKind::Map => {
                 serde_json::from_str::<std::collections::BTreeMap<String, u32>>(text).is_ok()
             }
-            SettingKind::Text => !text.contains(['\n', '\r']),
+            SettingKind::Text | SettingKind::Folder => !text.contains(['\n', '\r']),
             SettingKind::SecureDns => crate::secure_dns::SecureDns::parse(text).is_ok(),
         }
     }
@@ -72,6 +74,8 @@ pub enum Section {
     Appearance,
     /// Tab sleep and glass quality.
     Performance,
+    /// Where downloads and saved media go (the design's Downloads section).
+    Downloads,
     /// Stored but not a row on the page (it has its own editor or is dragged).
     Hidden,
 }
@@ -84,6 +88,7 @@ impl Section {
             Section::Privacy => "Privacy",
             Section::Appearance => "Appearance",
             Section::Performance => "Performance",
+            Section::Downloads => "Downloads",
             Section::Hidden => "",
         }
     }
@@ -433,7 +438,7 @@ pub const MEDIA_ENABLED: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "1",
     label: "Offer to save videos and audio",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Ask YouTube's player API for a video's formats (a request wubble makes itself, so off by
@@ -443,7 +448,7 @@ pub const MEDIA_YOUTUBE: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "0",
     label: "Look up YouTube video formats (asks YouTube)",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// The quality a download takes when the menu is not asked (`media::select::Quality`).
@@ -452,16 +457,26 @@ pub const MEDIA_QUALITY: SettingDef = SettingDef {
     kind: SettingKind::Choice(&crate::media::select::QUALITY_WORDS),
     default: "720p",
     label: "Video quality",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Where saved media goes; empty: the downloads folder.
 pub const MEDIA_SAVE_DIR: SettingDef = SettingDef {
     key: "media.save_dir",
-    kind: SettingKind::Text,
+    kind: SettingKind::Folder,
     default: "",
     label: "Save videos to (empty: the downloads folder)",
-    section: Section::General,
+    section: Section::Downloads,
+    restart: false,
+};
+/// Where downloads go (Chrome's Downloads > Location); empty: the OS downloads folder. A
+/// `--downloads` folder on the command line wins over it.
+pub const DOWNLOADS_DIR: SettingDef = SettingDef {
+    key: "downloads.dir",
+    kind: SettingKind::Folder,
+    default: "",
+    label: "Save files to",
+    section: Section::Downloads,
     restart: false,
 };
 /// Every download asks where to save it (the Save ... As rows always ask).
@@ -470,7 +485,7 @@ pub const DOWNLOADS_ASK_WHERE: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "0",
     label: "Always ask where to save",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// The glyph opens the menu of qualities; off, it saves the default quality at once.
@@ -479,7 +494,7 @@ pub const MEDIA_ASK_EACH_TIME: SettingDef = SettingDef {
     kind: SettingKind::Bool,
     default: "1",
     label: "Ask which quality each time",
-    section: Section::General,
+    section: Section::Downloads,
     restart: false,
 };
 /// Segments one media download fetches at once.
@@ -1067,6 +1082,7 @@ pub const ALL: &[&SettingDef] = &[
     &MEDIA_ASK_EACH_TIME,
     &MEDIA_CONCURRENCY,
     &MEDIA_MIN_BYTES,
+    &DOWNLOADS_DIR,
     &DOWNLOADS_ASK_WHERE,
     &PAGE_THEME,
     &PAGE_THEME_SITES,
@@ -1208,7 +1224,7 @@ mod tests {
         assert!(MEDIA_QUALITY.kind.accepts("1080p") && !MEDIA_QUALITY.kind.accepts("4k"));
         assert_eq!(
             find("media.save_dir").map(|d| d.kind),
-            Some(SettingKind::Text)
+            Some(SettingKind::Folder)
         );
         assert!(MEDIA_CONCURRENCY.kind.accepts("8") && !MEDIA_CONCURRENCY.kind.accepts("0"));
     }
@@ -1237,6 +1253,30 @@ mod tests {
         }
         // A row of its own now that the Pip window exists.
         assert_eq!(PIP_ON_TAB_SWITCH.section, Section::General);
+    }
+
+    #[test]
+    fn the_downloads_section_holds_its_rows_under_their_old_keys() {
+        for d in [
+            &DOWNLOADS_DIR,
+            &DOWNLOADS_ASK_WHERE,
+            &MEDIA_ENABLED,
+            &MEDIA_YOUTUBE,
+            &MEDIA_QUALITY,
+            &MEDIA_SAVE_DIR,
+            &MEDIA_ASK_EACH_TIME,
+        ] {
+            assert_eq!(d.section, Section::Downloads, "{}", d.key);
+        }
+        // moved, not renamed
+        assert_eq!(DOWNLOADS_ASK_WHERE.key, "downloads.ask_where");
+        assert_eq!(MEDIA_SAVE_DIR.key, "media.save_dir");
+        assert_eq!(Section::Downloads.title(), "Downloads");
+        // empty: the OS downloads folder
+        assert_eq!(
+            (DOWNLOADS_DIR.key, DOWNLOADS_DIR.kind, DOWNLOADS_DIR.default),
+            ("downloads.dir", SettingKind::Folder, "")
+        );
     }
 
     #[test]
@@ -1293,6 +1333,9 @@ mod tests {
             (SettingKind::Text, "", true),
             (SettingKind::Text, "/home/x/Videos", true),
             (SettingKind::Text, "a\nb", false),
+            (SettingKind::Folder, "", true),
+            (SettingKind::Folder, "/home/x/Downloads", true),
+            (SettingKind::Folder, "/a\n/b", false),
             (SettingKind::SecureDns, "automatic", true),
             (SettingKind::SecureDns, "off", true),
             (SettingKind::SecureDns, "provider:quad9", true),

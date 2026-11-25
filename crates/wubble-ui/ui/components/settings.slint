@@ -112,6 +112,8 @@ component SettingRow inherits VerticalLayout {
     callback reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
+    // a folder row's Change: the host opens the OS folder chooser for the setting
+    callback folder-requested(string);
     out property <bool> menu-mounted;
 
     property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
@@ -185,6 +187,16 @@ component SettingRow inherits VerticalLayout {
                 placeholder: "Default";
                 accepted(t) => {
                     root.changed(root.setting.key, t);
+                }
+            }
+            // the design's `.st-path`: the folder in mono, and Change
+            if root.setting.control == SettingControl.folder: MonoNote {
+                text: root.setting.value == "" ? "The downloads folder" : root.setting.value;
+            }
+            if root.setting.control == SettingControl.folder: Button {
+                text: "Change";
+                clicked => {
+                    root.folder-requested(root.setting.key);
                 }
             }
             if root.setting.control == SettingControl.slider: slider := ElasticSlider {
@@ -340,6 +352,7 @@ global SectionIcons {
         if title == "Privacy" { return Glyph.shield; }
         if title == "Appearance" { return Glyph.palette; }
         if title == "Performance" { return Glyph.gauge; }
+        if title == "Downloads" { return Glyph.download; }
         return Glyph.globe;
     }
 }
@@ -599,6 +612,7 @@ export component SettingsPage inherits Rectangle {
     callback setting-reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
+    callback folder-requested(string);
     callback binding-record(string);
     callback binding-reset(string);
     callback binding-clear(string);
@@ -884,6 +898,9 @@ export component SettingsPage inherits Rectangle {
                             }
                             entry-added(k, e) => {
                                 root.entry-added(k, e);
+                            }
+                            folder-requested(k) => {
+                                root.folder-requested(k);
                             }
                         }
                     }
