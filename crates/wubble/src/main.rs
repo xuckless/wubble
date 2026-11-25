@@ -2414,6 +2414,11 @@ fn run(
         // and says how each window presents: paced Mailbox while a Wayland layer of it exists
         // (busy: as before)
         i_slint_renderer_skia::present_mode::set_hook(|window| {
+            // once, at the first frame: what the surface offers and which mode each takes
+            static SAID: std::sync::Once = std::sync::Once::new();
+            if let Some(summary) = i_slint_renderer_skia::present_mode::summary() {
+                SAID.call_once(|| trace(&summary));
+            }
             HOST.with(|cell| {
                 let host = cell.try_borrow().ok()?;
                 host.as_ref().map(|host| host.present_mode(window))

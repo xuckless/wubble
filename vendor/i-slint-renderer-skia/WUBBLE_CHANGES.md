@@ -96,7 +96,9 @@ Every change is marked `wubble change` in the source.
    - `present_mode.rs` (new): a thread-local hook (`set_hook`) asked with the window before each
      frame (`PresentMode::Vsync` or `Paced(period)`; `None` keeps the last answer), `wait` (what
      is left of the period since the last present) and `wgpu_mode` (Mailbox only where the
-     surface offers it, else `AutoVsync`); table tests.
+     surface offers it, else `AutoVsync`); table tests. `summary` says, for a log line, what the
+     last surface made on the thread offers (`offered`, recorded as it is made) and which mode
+     each `PresentMode` takes there.
    - `wgpu_30_surface.rs`: the surface keeps its offered present modes, its current mode and its
      last present's time; `render` first calls `follow_present_mode` (reconfigures the swapchain
      on a change, before the frame is acquired; a paced Mailbox frame sleeps out the rest of the

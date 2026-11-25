@@ -29,6 +29,34 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// The present modes the last surface made on this thread offers (its swapchain's).
+    static OFFERED: RefCell<Option<Vec<wgpu::PresentMode>>> = const { RefCell::new(None) };
+}
+
+/// A surface on this thread offers `modes`.
+pub(crate) fn offered(modes: &[wgpu::PresentMode]) {
+    OFFERED.with(|o| *o.borrow_mut() = Some(modes.to_vec()));
+}
+
+/// What the surface offers and which mode each [`PresentMode`] takes there (`AutoVsync` resolved
+/// as wgpu does: FifoRelaxed where offered, else Fifo), for a log line; `None` before a surface.
+pub fn summary() -> Option<String> {
+    use wgpu::PresentMode::{AutoVsync, Fifo, FifoRelaxed};
+    let offers = OFFERED.with(|o| o.borrow().clone())?;
+    let taken = |mode| match wgpu_mode(mode, &offers) {
+        AutoVsync if offers.contains(&FifoRelaxed) => FifoRelaxed,
+        AutoVsync => Fifo,
+        other => other,
+    };
+    let paced = PresentMode::Paced(Duration::ZERO);
+    Some(format!(
+        "present modes offered {offers:?}; vsync takes {:?}, paced takes {:?}",
+        taken(PresentMode::Vsync),
+        taken(paced)
+    ))
+}
+
 /// `hook` says, before each frame of a window on this thread, how it presents; `None`: as the
 /// frame before (the application could not tell now).
 pub fn set_hook(hook: impl Fn(&Window) -> Option<PresentMode> + 'static) {

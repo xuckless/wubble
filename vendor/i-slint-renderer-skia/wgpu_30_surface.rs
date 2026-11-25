@@ -173,7 +173,10 @@ impl WGPUSurface {
             reference: RefCell::new(None),
             retained_valid: Cell::new(false),
             retain,
-            present_modes: swapchain_capabilities.present_modes,
+            present_modes: {
+                crate::present_mode::offered(&swapchain_capabilities.present_modes);
+                swapchain_capabilities.present_modes
+            },
             present_mode: Cell::new(crate::present_mode::PresentMode::Vsync),
             presented: Cell::new(None),
         })
