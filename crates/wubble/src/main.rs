@@ -2258,7 +2258,7 @@ fn run(
         );
     }
     // What the startup mode opens of the session (`wubble_core::startup`); smokes keep theirs.
-    if matches!(mode, Mode::Browse { .. }) {
+    if matches!(&*mode, Mode::Browse { .. }) {
         host::open_session(&mut loaded, &store, url.is_some());
     }
     let blocking = blocking::Blocking::new();
