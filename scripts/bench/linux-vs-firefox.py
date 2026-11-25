@@ -67,7 +67,7 @@ PAGES = {
     # video-page.sh's clip and shape: 1080p60 VP9 looping muted at 854x480
     "video": """<video id=v src="clip-1080p60.webm" autoplay muted loop playsinline style="width:854px;height:480px;display:block"></video>
 <script>const v = document.getElementById('v'); let shown = 0;
-const seen = () => { shown++; v.requestVideoFrameCallback(seen); }; v.requestVideoFrameCallback(seen);
+const seen = (_, m) => { shown = m.presentedFrames; v.requestVideoFrameCallback(seen); }; v.requestVideoFrameCallback(seen);
 v.addEventListener('timeupdate', every(1000, () => { const q = v.getVideoPlaybackQuality();
   log({video: q.totalVideoFrames, dropped: q.droppedVideoFrames, shown}); }));</script>""",
     "long": "".join(f"<h2>Section {i}</h2>{PROSE}<div style='height:120px;background:hsl({i * 7 % 360} 60% 70%)'></div>"
