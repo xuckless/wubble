@@ -5,7 +5,9 @@ Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../REA
 The page on its own OS layer, the first road to the under-5 % CPU goal ([01-optimization.md](../upcoming/01-optimization.md)).
 Research: [docs/research/page-layer.md](../../docs/research/page-layer.md).
 Shipped in 0.6.2 ([done/0.6.2.md](../done/0.6.2.md)): fullscreen and window modes, window mode on by default on macOS.
-Test apps on the Mac: `/Users/Shared/wubble-store-test/wubble.app` and `/Users/Shared/wubble-layer-test/wubble.app`.
+Measured on the 0.6.2 candidate (owner, 2026-11-24, M2, windowed 1080p60 video, window mode by default): page on its layer for the whole capture with the popup up or down, main process 14 to 15 %, 8 shell renders a second, 71 frames a second shown, none delivered left unshown.
+Not yet confirmed: the Mac update path from 0.6.1 to 0.6.2 (Linux checked end to end).
+Test apps on the Mac: `/Users/Shared/wubble-rc/wubble.app` (the 0.6.2 candidate), `/Users/Shared/wubble-layer-test/wubble.app`, `/Users/Shared/wubble-store-test/wubble.app`.
 
 - Dropped video frames on the layer (shelved by the owner for 0.6.2): [video-dropped-frames.md](../shelved/video-dropped-frames.md)
 - [ ] `set_page_fullscreen`'s window ownership; a fullscreen tab moved to another window leaves its old window in page fullscreen until the page's own exit (no two-window smoke)
