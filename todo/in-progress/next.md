@@ -224,3 +224,8 @@ Build:
   - [ ] A `--profile DIR` run can be throwaway (honour the `.wubble-smoke-profile` marker or a flag), so the harness and test apps use Chromium's mock keychain and a test vault
   - [ ] One prompt, not two: the vault's key kept in wubble's own item next to the cookie key, or derived from one item
   - [ ] "wubble Safe Storage" instead of "Chromium Safe Storage" (CEF has no setting for the service name: an engine patch, `KeychainPassword::GetServiceName`, as Electron does): goes to the engine build list
+
+## H. Linux performance and reach (owner, 2026-11-25, after the first Linux-vs-Firefox run: wubble loses 1.5x on video, 2-3x on scroll and animation)
+- [~] A Linux page layer: Chromium's frame as its own Wayland subsurface below the shell, no copy and no shell draw per page frame. Feasibility research first (`docs/research/linux-page-layer.md` on `research/linux-layer`), then a one-day experiment, then the build
+- [ ] Linux releases built in an older container (for example Ubuntu 22.04, glibc 2.35), not on Fedora 44 (today's release needs glibc 2.43, so only 2026 distros run it)
+- [ ] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merge with the next round
