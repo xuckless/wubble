@@ -362,20 +362,26 @@ impl Host {
             });
     }
 
-    /// Each page that lost its newest frame paints it again (CEF's `invalidate`; with the shell's
-    /// begin frames, its window's driver woken for it). One dropped again is reported again.
+    /// Each page that lost its newest frame paints it again (`repaint_page`). One dropped again
+    /// is reported again.
     fn repaint_lost(&mut self) {
         for tab in std::mem::take(&mut self.lost_frames.tabs) {
-            if let Some(view) = self.tab_view(tab) {
-                view.repaint();
-            }
             if let Some(id) = self.model.window_of(tab)
                 && self.enter(id)
             {
-                self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+                self.repaint_page(tab);
             }
         }
         self.enter_focused();
+    }
+
+    /// `tab`'s page, in this window, paints its frame again: CEF's `invalidate`; with the shell's
+    /// begin frames, the window's driver woken for it.
+    fn repaint_page(&mut self, tab: TabId) {
+        if let Some(view) = self.tab_view(tab) {
+            view.repaint();
+        }
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
     }
 
     /// The window (the current one or a parked one) `holds` picks.
@@ -675,6 +681,7 @@ impl Host {
                         }
                         window.window().request_redraw();
                     }
+                    Effect::Repaint => self.repaint_page(tab),
                 }
             }
             // the hole opened or closed: the shell's panes say so
@@ -826,6 +833,7 @@ mod tests {
             Effect::PresentLatest => "Effect::PresentLatest =>",
             Effect::Redraw => "Effect::Redraw =>",
             Effect::Snapshot => "Effect::Snapshot =>",
+            Effect::Repaint => "Effect::Repaint =>",
         }
     }
 
@@ -845,6 +853,7 @@ mod tests {
             Effect::PresentLatest,
             Effect::Redraw,
             Effect::Snapshot,
+            Effect::Repaint,
         ];
         for effect in effects {
             let arm = arm(effect);
