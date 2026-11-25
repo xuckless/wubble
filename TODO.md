@@ -7,7 +7,7 @@ are built, the one engine build). Decisions: [docs/decisions.md](docs/decisions.
 The goal stays the main process under 5 % CPU in steady states; 0.6.2 brought windowed video on the Mac from 28 to 37 % to 10 to 15 %.
 1. **Measure what the remaining 10 to 15 % is** on the 0.6.2 build with the page on its layer (`scripts/bench/profile.sh`, `breakdown.py`; owner's Mac): frame receipt, the pool copy, the layer commit, the begin-frame timer, the accessibility mirror (estimated 3 to 8 %, unverified). Every later step is judged against this ([01](todo/upcoming/01-optimization.md))
 2. **Road 2, the part with no engine patch:** CEF's own begin-frame source while a page is on its layer (no shell timer), and present inside a Core Animation transaction only when a route or placement changes. Touches two suspects of the shelved dropped frames ([video-dropped-frames.md](todo/shelved/video-dropped-frames.md))
-3. **The engine patch queue** (owner: "do all the things that require engine repatch first and then build engine once"): write unbuilt in `patches/chromium/` road 2's zero-copy patch, road 3's `CALayerHost` patch and the 22 upcoming features marked "waits for the one engine build"; then the one engine build; then road 3's three experiments on it
+3. **The engine patch queue** (owner: "do all the things that require engine repatch first and then build engine once"): write unbuilt in `patches/chromium/` all 21 items of [`todo/upcoming/engine-build.md`](todo/upcoming/engine-build.md) (road 2's zero-copy, road 3's `CALayerHost`, the extension queue and the rest); then the one engine build; then road 3's three experiments on it
 4. In parallel when the build lock is free: compile and test the blind overlays of `untested/store-step2` ([surface-manager.md](todo/in-progress/surface-manager.md))
 
 Owner, by hand on the Mac: the hand-check list for the default-on page layer ("Default on macOS (0.6.2)" in
@@ -27,5 +27,7 @@ Owner, by hand on the Mac: the hand-check list for the default-on page layer ("D
 5. [Media and downloads](todo/upcoming/05-media-downloads.md) · 6. [Privacy and security](todo/upcoming/06-privacy-security.md) · 7. [Web platform UI](todo/upcoming/07-web-platform-ui.md)
 8. [Passwords, autofill and import](todo/upcoming/08-passwords-autofill-import.md) · 9. [Extensions](todo/upcoming/09-extensions.md) · 10. [MCP server](todo/upcoming/10-mcp-server.md)
 11. [Translation and OCR](todo/upcoming/11-translate-ocr.md) · 12. [Small tools](todo/upcoming/12-small-tools.md) · 13. [Release, updater and website](todo/upcoming/13-release-updater-site.md)
+
+Everything that waits for the one engine build: [engine-build.md](todo/upcoming/engine-build.md) (21 items; shelved ones: [todo/shelved/engine-build.md](todo/shelved/engine-build.md))
 
 Shelved: [todo/shelved/](todo/shelved/) · done: [todo/done/](todo/done/) · risks: [todo/risks.md](todo/risks.md)

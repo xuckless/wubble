@@ -1,12 +1,14 @@
 # 05 Media and downloads
 
+Items of this area that need an engine rebuild: [engine-build.md](engine-build.md#media-and-downloads).
+
 Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../README.md).
 
-Discarded by the owner on 2026-11-23 (not shelved): the Widevine CDM loader, Cast and live captions. HDR is shelved, and so is DRM through a WebKit tab: [ideas.md](../shelved/ideas.md).
+Discarded by the owner on 2026-11-23 (not shelved): the Widevine CDM loader, Cast and live captions. HDR is shelved, and so is DRM through a WebKit tab: [engine-build.md](../shelved/engine-build.md).
 
 ## From the old roadmap (M1)
 - [ ] Page context menu: the Picture in Picture row; media rows act through a page script (no `MediaPlayerAction`)
-- [ ] Media session (metadata, action handlers, OS controls); a real audible signal (CEF patch, M6; waits for the one engine build)
+- [ ] Media session (metadata, action handlers, OS controls); its real audible signal is `audible-signal-patch` in [engine-build.md](engine-build.md#media-and-downloads)
 
 ## Build-out features (2026-11-22)
 
@@ -33,14 +35,6 @@ Key: `download-multiple-permission` · engine patch: no · state: not written.
 When a page starts a second download with no gesture, Chrome's DownloadRequestLimiter asks "This site is trying to download multiple files" (Allow / Block). The answer is remembered per site, and Site settings has an "Automatic downloads" row. In CEF 156 this arrives as CEF_PERMISSION_TYPE_MULTIPLE_DOWNLOADS (1 << 14) on OnShowPermissionPrompt. In wubble the bit is broken today: vendor/welding/src/permissions.rs does not name it, so it decodes to PermissionKind::Other(16384), and wubble_core::site::Permission denies every request naming an unknown kind. A site's second automatic download is therefore always refused, silently. Separately, welding's `can_download` (vendor/welding/src/handlers.rs ~1081) ignores its url argument.
 
 What to build: (1) In welding, mark the changes `wubble change` and list them in WUBBLE_CHANGES.md. Add MULTIPLE_DOWNLOADS = 1 << 14 and `PermissionKind::MultipleDownloads`, with a decode test. Pass the url and the browser id from can_download through a host hook (a `CanDownload` question answered synchronously from a host-set table), so a per-site Block takes effect before anything starts. (2) In wubble-core/src/site.rs, add `Permission::AutomaticDownloads` (stored name "automatic-downloads") to ALL, with the prompt wording "Download multiple files" and tests. (3) In crates/wubble-engine/src/page.rs, map the new kind in the engine permission mapping. In the host's permission routing, use the existing permission prompt (components/permission-prompt.slint). (4) Add the row to Settings' Sites list, where it can be revoked like the others. (5) Agent-driven tabs keep refusing, as today. All platforms.
-
-## Resume interrupted downloads after a restart (`download-resume-restart`)
-
-Key: `download-resume-restart` · engine patch: yes: waits for the one engine build · state: not written.
-
-Chrome keeps an interrupted download's partial file and its validators: ETag, Last-Modified, received bytes and hash state, in the History DB. After a restart it resumes from there through DownloadManager::CreateDownloadItem. wubble cannot do this. wubble_core::download::lost_all fails every active entry at start ("Failed: Interrupted. Retry starts over"), and Retry restarts from zero through View::start_download. CEF 156 exposes neither the validators nor a way to recreate an item from history.
-
-What to build: (1) A patch, patches/chromium/50-cef-download-history.patch. In libcef's download manager delegate, export a marker symbol `cef_wubble_download_resume_v1` with two C entry points. One reads an item's etag, last_modified, the intermediate (.crdownload) path and the received bytes. The other creates and resumes an item from those fields, through DownloadManager::CreateDownloadItem, then DownloadItem::Resume, routed to the view's DownloadHandler. Follow the header and marker style of 40-cef-touchpad-pinch.patch and list the patch in patches/README.md. (2) Engine: a new crates/wubble-engine/src/download_resume.rs that finds the marker at run time, as ext_api.rs does. On a stock CEF it returns None and today's behaviour stays. (3) Store: add columns for etag, last_modified, partial path and mime in a new migration under crates/wubble-store/sql, filled from the patched item on each Interrupted or Paused save. (4) Core: replace the blanket `lost_all` with `restored(entry, can_resume) -> DownloadState`. An entry with validators and a partial file becomes Interrupted, and Resume can continue it. Without them it stays Failed. Write unit tests. (5) Host: the Resume of a restored entry calls the engine's resume in a live view of the entry's container. The patch cannot be built now; write it so that it applies to CEF 156.0.30. Linux first.
 
 ## Download speed and time remaining in rows (`download-speed-eta`)
 
@@ -130,12 +124,6 @@ Until a patched engine ships, wubble's audible probe (crates/wubble-engine/src/m
 
 What to build, without an engine change: (1) Shadow DOM. The probe walks open shadow roots as kit.js `shadowVideos` already does, capped as kit.js caps it. (2) WebAudio. kit.js wraps AudioContext and webkitAudioContext construction and `resume`, counting contexts in the `running` state with a non-zero destination connection. The probe reports `audible` when one is running and was started after a gesture. (3) iframes. The probe asks every frame, not just the main one: same-process frames through CEF frame iteration and `View::run_script_in`, and out-of-process frames through DevTools `Target.setAutoAttach {flatten:true}` and `Runtime.evaluate` with each attached session (the view's cdp() channel, crates/wubble-engine/src/cdp.rs). (4) Keep the ProbeState machine to one probe round in flight per view, and OR the per-frame answers in a pure fold with unit tests. When the engine audible patch exists (marker found), all of this is skipped. Measure by hand that the extra frames do not raise idle cost. Nothing in tests asserts timing. All platforms.
 
-## Engine patch: a real audible signal per tab (iframes, shadow DOM, WebAudio) (`audible-signal-patch`)
-
-Key: `audible-signal-patch` · engine patch: yes: waits for the one engine build · state: not written.
-
-TODO lines 122 and 162 (second half). The audible badge comes from a page probe that misses iframes, shadow DOM and WebAudio. CEF 156 has no audio-state callback: `CefAudioHandler` captures the stream and takes it from the output, so it cannot be used for a badge. Chrome uses `WebContentsObserver::OnAudioStateChanged` / `WebContents::IsCurrentlyAudible`. Write `patches/chromium/60-cef-audible.patch` (CEF side, `#if BUILDFLAG(ENABLE_CEF)`, wubble change marks, header per patches/README.md). Observe `OnAudioStateChanged` in CEF's browser host and call an exported callback registered through a new C table `cef_wubble_audible_v1` (set_callback(fn(browser_id, audible))), with its own marker symbol like patch 40. On the wubble side, look it up in `crates/wubble-engine/src/ext_api.rs` and turn it into `PageEvent::Audible(bool)`. Route it to the existing audible state (`wubble_core` tab facts, rail badge, media keys' first-sound trigger). Keep the probe as the fallback when the marker is absent. Do not build the engine (there are no Chromium rebuilds now).
-
 ## Tab alert indicators: recording, screen capture, PiP (`tab-alert-indicators`)
 
 Key: `tab-alert-indicators` · engine patch: no · state: not written.
@@ -159,14 +147,6 @@ Key: `pip-controls-complete` · engine patch: no · state: not written.
 Chrome's video PiP window has play/pause and back and forward 10 s. It adds previous and next track when the page has those media session handlers, plus mute and unmute, a progress bar with the current and total time, Skip Ad (skipad), the video-call buttons (togglemicrophone, togglecamera, hangup), back to tab and close. The window can be resized from its edges, and its size and position are remembered. In wubble, components/pip-controls.slint has back 10 s, play, forward 10 s, return and close only (host/videos.rs pip_command: play, seek-by, return, close). Resize and placement memory are not handled.
 
 What to build: (1) Host: feed the Pip window's controls from the same kit `meta` and `v` snapshot the strip uses, which already carries t, dur, muted and the next/prev flags. Extend kit.js `meta` with flags for skipad, togglemicrophone, togglecamera and hangup handlers. (2) pip-controls.slint: add the conditional buttons and a seek track. Reuse the video strip's track from video-controls.slint, and its kit parts, BDock and IconButton. Commands go out as new pip_command names: mute, next, prev, skipad, mic, camera, hangup, seek-to; route the media-session ones to `kit.act`. (3) Window: resizable from its edges, keeping the video's aspect ratio. Remember its size and position in settings (Section::Hidden) and restore them next time, clamped to the current display (wubble_core::window owns the Pip window's state). (4) Keys while the PiP window is focused: Space toggles, the arrows seek, M mutes. The design has no PiP (wubble-only.md §28), so add the new pieces to derived-review.md. All platforms.
-
-## Document Picture-in-Picture (CEF patch plus host window) (`document-pip`)
-
-Key: `document-pip` · engine patch: yes: waits for the one engine build · state: not written.
-
-Chrome supports `documentPictureInPicture.requestWindow({width, height})`. It opens an always-on-top window with a blank same-origin document the opener fills (Google Meet, Spotify and YouTube mini-player use it), and it fires `enter` and the window's pagehide. In CEF windowless (Alloy style) the request fails: Chromium routes it through //chrome's DocumentPictureInPictureWindowController and PictureInPictureWindowManager, which open a Browser of type PICTURE_IN_PICTURE that CEF never creates for OSR.
-
-What to build: (1) A patch, patches/chromium/5x-cef-document-pip.patch, in the queue's style. In CEF's WebContentsDelegate for Alloy-style browsers, treat the document-PiP WebContents creation as a popup: call CefLifeSpanHandler::OnBeforePopup with a new disposition flag, or with an exported marker table `cef_wubble_docpip_v1` that carries the requested size, and let it be windowless like other popups. Wire the controller's close to the browser close. List it in patches/README.md. (2) welding/engine: recognise that disposition (a `wubble change` in vendor/welding/src/popup.rs) and report `PageEvent::DocumentPip { size }`. (3) Model and host: show it in the existing Pip window kind (wubble_core::window WindowKind::Pip) as a CEF view with no strip, sized as asked, always on top, and closed when the opener navigates or closes. wubble_core::pip gets a `Document` variant so video PiP and document PiP never coexist. Unit tests. The patch cannot be built now; write it so that it applies to CEF 156.0.30.
 
 ## Media context menu: Picture in Picture, Mute, video frame rows (`media-context-menu`)
 

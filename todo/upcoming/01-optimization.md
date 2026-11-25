@@ -1,18 +1,11 @@
 # 01 Optimization: under 5 % CPU, then memory and battery
 
+Items of this area that need an engine rebuild: [engine-build.md](engine-build.md#optimization).
+
 Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../README.md).
 
-## The one engine build (owner, 2026-11-23)
-"Least amount of engine builds as possible"; chosen: one build, when CPU needs it. Engine patches are written and
-collected under `patches/chromium/` without building. The first CEF rebuild happens only when the under-5 % CPU patch
-(road 3 below) is ready, and it carries every collected patch. Every feature in `todo/upcoming/` that needs an engine
-patch is marked "waits for the one engine build". The owner, 2026-11-24: "we need to do all the things that require
-engine repatch first and then build engine once".
-
-The own engine (the old milestone M6: ungoogled Chromium + CEF, kept as a patch queue): the owner is "not sure what we
-do with our own engine build"; whatever it becomes rides on this one build. Its CPU items are in this file, its
-extension items in [09-extensions.md](09-extensions.md), its other items shelved in
-[own-engine.md](../shelved/own-engine.md).
+## Engine build and measuring
+The engine patches and the one engine build: [engine-build.md](engine-build.md). The own engine (the old milestone M6) rides on it; its other items are shelved in [own-engine.md](../shelved/own-engine.md).
 
 Measure with [scripts/bench/](../../scripts/bench/README.md) (`profile.sh`, `breakdown.py`, `runner.py`) so every step has a
 before and an after on the same build; the numbers to beat are in [docs/measurements.md](../../docs/measurements.md). Measured by
@@ -26,9 +19,8 @@ Measured: 26 to 31 % for windowed video on the Mac; on Linux 8 to 9 % for video 
 - 1. Layer: windowed: shipped in 0.6.2, on by default on macOS. Measured on the owner's M2 with windowed 1080p60 video: 10 to 15 % main on its layer (off: 28 to 37 %), the page staying on its layer through overlays. Follow-ups: [page-layer.md](../in-progress/page-layer.md)
 - [ ] Measure first what the remaining 10 to 15 % is made of, on the 0.6.2 build with the page on its layer (frame receipt, the pool copy, the layer commit, the begin-frame timer, the accessibility mirror); every road below is judged against it
 - Dropped video frames on the layer, shelved for 0.6.2: [video-dropped-frames.md](../shelved/video-dropped-frames.md)
-- [ ] 2. (Do first the part with no engine patch: CEF's own begin-frame source while a page is on its layer, and the Core Animation transaction only when a route or placement changes.) Zero-copy of CEF's IOSurface (Linux: dmabuf) and CEF's own begin-frame source (estimated 6 to 10 %). The copy, by a CEF patch: OSR keeps the frame's buffer until wubble releases it and delivers RGBA; wubble imports each pooled dmabuf (IOSurface) once and samples it, so the copy and its wait in the paint callback (`vendor/welding/src/native_frame/mod.rs`), the swizzle blit and the per-frame import go
-- [ ] 3. A CEF patch so the GPU process presents the page itself through a CAContext id / `CALayerHost` while off-screen mode stays (estimated 2 to 5 % main; the GPU process also loses its capture copy): about 300 lines in CEF, private API, no Wayland counterpart; three experiments listed in `docs/research/page-layer.md`. When it is ready it triggers the one engine build
-- HDR through the OS layer, and the idea that the page never leaves the OS layer (to be decided before the CEF patch of road 3 is built): [ideas.md](../shelved/ideas.md)
+- [ ] 2. CEF's own begin-frame source while a page is on its layer (no shell timer), and the Core Animation transaction only when a route or placement changes (no engine patch). Its zero-copy half waits for the engine build: [engine-build.md](engine-build.md#optimization).
+- HDR through the OS layer, and the idea that the page never leaves the OS layer (to be decided before the CEF patch of road 3 is built): [engine-build.md](../shelved/engine-build.md)
 - [ ] Check the unverified estimate that the accessibility mirror costs 3 to 8 % of the main process (item 2 under "From the owner's Mac run of preview.5" below)
 
 ## Then (owner, 2026-11-23)
@@ -87,7 +79,6 @@ process, the `--measure` counters, `scripts/bench/mac-energy.sh`), because the c
 - [ ] Spring spike: a per-frame spring (k 300 / c 15) with no missed frames while a page scrolls (M0)
 - [ ] Re-measure `--begin-frames` on a 120 Hz (and the 300 Hz) display on Linux: it was left off there in b2 for a worse video render interval at 240 Hz (M0)
 - [ ] Benchmark against Chrome and Zen: 200 tabs and after 1 h idle (Chromium and Firefox at 1/10/50 done) (M3)
-- [ ] CEF OSR patch: hide a view's compositor on `Hide()` (frees each hidden tab's backbuffer) (M6; waits for the one engine build)
 - [ ] Skia cache hygiene in Slint's renderer (Chromium's cache controller: a limit, deferred cleanup, free when idle) (M6)
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way (MCP)
 

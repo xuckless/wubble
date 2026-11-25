@@ -10,7 +10,6 @@ HDR is a shelved idea ([ideas.md](ideas.md)).
 
 ## From the old roadmap (M6: ungoogled Chromium + CEF)
 - [ ] macOS arm64 codec build (same recipe, `--arm64-build`)
-- [ ] Reproducible recipe: Chromium at the CEF branch + ungoogled patches + CEF patches, kept as a patch queue
 - [ ] Build with `enable_widevine` and codecs; ship no CDM; a CDM loader (installed CDM, else opt-in download)
 - [ ] Document DRM limits (Linux L3 around 720p; services that need a VMP-signed browser refuse us)
 - [ ] Build infrastructure: Linux and macOS local; Windows on a runner large enough for Chromium

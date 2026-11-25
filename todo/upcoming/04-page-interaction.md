@@ -1,5 +1,7 @@
 # 04 Page interaction: input, drags, menus, find
 
+Items of this area that need an engine rebuild: [engine-build.md](engine-build.md#page-interaction).
+
 Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../README.md).
 
 ## From the old roadmap (M0, M1)
@@ -122,10 +124,3 @@ TODO line 153 (second half). (1) Cursors: `crates/wubble-engine/src/nav.rs` (`im
 Key: `ime-caret-underlines` · engine patch: no · state: not written.
 
 TODO line 154. `crates/wubble/src/ime.rs` maps winit `Ime` events to `View::ime_set_composition(text, selection)` (crates/wubble-engine/src/view.rs ~1643), which passes no underlines and no replacement range. The candidate window is placed only once CEF reports `OnImeCompositionRangeChanged`, which comes after the first composed character. (1) Caret rect before composition: when a page field gains focus (CEF `on_virtual_keyboard_requested` or the helper's focus report), get the caret rect from a page script: the focused element's selection range `getClientRects()`, or for input and textarea a mirror-div measurement. Then call winit `set_ime_cursor_area` with it. Update on selection change (`OnTextSelectionChanged`). (2) Underlines: winit's `Ime::Preedit` gives only a cursor range. Build CEF `CompositionUnderline`s: a thin underline over the whole preedit and a thick one over the selected clause (the cursor range when non-empty), as Chromium's GTK input method context does. (3) Replacement range: pass `Range{from,to}` as the invalid range (u32::MAX) unless winit reports a surrounding-text replacement. Keep the mapping pure in ime.rs with unit tests.
-
-## Engine patch: macOS key repeats reach the page with repeat true (`mac-key-repeat-patch`)
-
-Key: `mac-key-repeat-patch` · engine patch: yes: waits for the one engine build · state: not written.
-
-TODO line 135. On macOS, CEF 156 builds its NSEvent from a `CefKeyEvent` with `isARepeat:NO`, so a held key's repeats reach the page with `KeyboardEvent.repeat == false` (YouTube's Space tap versus hold-for-2x breaks). Write a one-concern patch `patches/chromium/70-cef-mac-key-repeat.patch` (CEF side, `libcef/browser/osr/render_widget_host_view_osr_mac` or the key event conversion in `browser_platform_delegate_native_mac.mm`). Carry a repeat bit, either a new `EVENTFLAG` bit in `CefKeyEvent::modifiers` that wubble sets for winit's `repeat: true` or the existing `is_system_key` path, into `isARepeat:`. Mark it `wubble change`, give it a What/Why/Applies-in header, and list it in patches/README.md. In wubble, set the bit on repeats in `crates/wubble-engine/src/input.rs` only when the patch's marker is found. When it lands, drop parity's `A.space-repeat` Mac gap (`crates/wubble/src/parity.rs`). Do not build the engine.
-

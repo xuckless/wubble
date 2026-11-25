@@ -30,6 +30,5 @@ between panes, onto the shell and to and from other apps on Wayland worked befor
 - [ ] Pen: winit 0.30 has no pen type (Windows: a touch; Wayland and X11: the pointer; macOS: nothing): tablet readers per platform (build-out `pen-input`); touch selection handles need kit parts; a drag started by a long press gets no positions
 - [ ] Screen: no work area (`screen.availWidth` is the monitor's); a `<select>` that overflows the window slides over its control (no flip: the popup carries no anchor); `window.open`'s `left`/`top` without a size are dropped
 - [ ] Wayland clipboard: copied HTML lacks Blink's inlined styles, pasted HTML loses `<style>` formatting, screenshots still copy through arboard
-- [ ] Fling: stop it on the touchpad's hold gesture (`zwp_pointer_gesture_hold_v1` in the wl worker); momentum phases and elastic overscroll on macOS need a CEF patch
+- [ ] Fling: stop it on the touchpad's hold gesture (`zwp_pointer_gesture_hold_v1` in the wl worker)
 - [ ] Drags to and from other apps: none on X11 and Windows beyond dropped files (`wl::Null`), macOS written and never run; custom dataTransfer types leave the window nowhere; a page drag to a second wubble window (build-out `x11-xdnd`, `windows-drag-drop`, `drag-custom-types-out`, `cross-window-page-drag`)
-- [ ] Pointer lock: the permission prompt exists, nothing confines the pointer or sends relative motion (a CEF patch, likely)

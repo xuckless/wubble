@@ -28,7 +28,6 @@ Open, to build or check:
 - [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on a playing YouTube tab (tests pass; not reproduced)
 - [ ] The command bar's panel still takes clicks while it shrinks away (176 ms): a click on the page under it then is lost; check the design's exit (pointer-events)
 - [ ] In-place rename for a new Space in the sidebar (needs a design); Linux alternates for the chords GNOME takes
-- [ ] Audible badge: the probe misses iframes, shadow DOM and WebAudio (a real signal needs the CEF patch, M6)
 - [ ] Page copy buttons carry text only (no image items)
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
 - [ ] Settings against the web: Reset per section; rows folding while searching
@@ -40,7 +39,6 @@ Open, to build or check:
 - [ ] Rebinding the sidebar shortcut also unbinds its second chord, Mod+Alt+S (once compact mode's), and the shortcut editor shows only the first chord
 - [ ] Narrow Settings (content width 759 px or less): the slider and select rows do not wrap to full width as the design's narrow block does (`settings.css`:120-130); repro `WUBBLE_SHOT_SIZE=960x640 --smoke settings --shot`
 - [ ] The built-in pages' list rows take Tab and Enter but not Up/Down, and a focused row is not scrolled into view
-- [ ] macOS: a held key's repeats reach the page with `repeat: false` (CEF 156 builds its NSEvent with `isARepeat:NO`): a one-line CEF patch, then drop parity's `A.space-repeat` Mac gap; check YouTube's Space tap and hold-for-2x on the Mac
 - [ ] The settings search no longer finds "Your own filter lists" (the setting moved to `Section::Hidden`; the Filter lists section is not searchable)
 - [ ] A Space button opened by keyboard does not give the Spaces menu the keyboard focus
 - [ ] A popover's entrance marks the whole window dirty (the glass's scene scale and alpha change each frame), so partial rendering does not help during it

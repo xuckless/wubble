@@ -1,13 +1,14 @@
 # 02 Tabs and windows
 
+Items of this area that need an engine rebuild: [engine-build.md](engine-build.md#tabs-and-windows).
+
 Legend: `[ ]` open · `[~]` in progress. How items move: [todo/README.md](../README.md).
 
 ## How features are built (owner, standing rule)
 Written without compile and test, one branch per feature (`feat/<key>`). Then an integration pass per feature:
 compile, test, caveman review then adversarial review, merge. "1 feature gets integrated at once", grouped by
 feature, never by individual commit. Batch 1's written branches are integrated this way, one feature at a time
-(their reports: [batch-1-reports.md](batch-1-reports.md)). A feature marked "waits for the one engine build" ships
-after it ([01-optimization.md](01-optimization.md)).
+(their reports: [batch-1-reports.md](batch-1-reports.md)).
 
 Default browser is in [13-release-updater-site.md](13-release-updater-site.md).
 
@@ -94,10 +95,3 @@ Compared with Chromium's `chrome/browser/ui/accelerator_table.cc` (already a cit
 Key: `undo-close-split-entries` · engine patch: no · state: not written.
 
 TODO line 38. Today `wubble_core::closed` (`Closed { url, closed_at_ms, space, place }`) and the store's `ClosedTab` (`crates/wubble-store/src/closed.rs`: url, title, container, space) restore only the URL. Chrome's TabRestoreService restores the tab's place, its group and its navigation stack. Embedder half: (1) Split. When a tab that sat in a split (`wubble_core::split`) closes, record its partner tab and its side/ratio in `Closed` (an optional `split: Option<SplitPlace>`), keep it in the store row (a new nullable column with a migration in wubble-store), and on `Host::reopen_closed` (crates/wubble/src/host.rs ~2142) re-form the split with the partner if it is still open; else open as a plain tab. Do the same for a whole split pair closed together (Chrome restores a window's tabs together). (2) Navigation entries. On close, collect the view's entries through CEF `BrowserHost::get_navigation_entries` (a `NavigationEntryVisitor` in crates/wubble-engine/src/view.rs; URL, title, current index) and keep them in a new `closed_entries` table keyed by the closed row. Show them in the History page's recently-closed rows and the reopen menu as a tooltip/second line (for example "and 4 earlier pages"). Actually rebuilding the back/forward stack needs the engine patch (feature `nav-history-restore-patch`); until then the reopened tab loads the current entry only. Tests stay out; transition logic stays in `closed::transition`.
-
-## Engine patch: restore a tab's back/forward stack (reopen closed tab, session restore) (`nav-history-restore-patch`)
-
-Key: `nav-history-restore-patch` · engine patch: yes: waits for the one engine build · state: not written.
-
-TODO line 38, the half that cannot be done in the embedder. CEF 156 has no API to give a new browser a list of navigation entries. Chrome restores the stack through `content::NavigationController::Restore` and `NavigationEntryRestoreContext`. Write `patches/chromium/50-cef-restore-entries.patch` (CEF side, under `#if BUILDFLAG(ENABLE_CEF)`, header What/Why/Applies in, `wubble change` marks; follow `patches/README.md`). Export a C function in the style of `cef_wubble_ext_v1`, for example `cef_wubble_restore_v1(cef_browser_t*, const cef_string_t* urls, const cef_string_t* titles, size_t count, int current)`. It builds `NavigationEntry` objects with `NavigationController::CreateNavigationEntry`, calls `Restore(current, RestoreType::kRestored, &entries)`, then `LoadIfNecessary`. Add a marker like patch 40's. On the wubble side, look the symbol up at run time in `crates/wubble-engine/src/ext_api.rs` (stock CEF lacks it and wubble falls back to loading the URL). Add `View::restore_entries(entries, current)`, and use it from `Host::reopen_closed` and from session restore (`crates/wubble/src/persist.rs`, wubble-store `session.rs`) with the entries recorded by `undo-close-split-entries`. Do not build the engine (there are no Chromium rebuilds now): write the patch and the guarded embedder code so a later engine build picks it up.
-

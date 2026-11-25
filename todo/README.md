@@ -9,6 +9,10 @@ wubble's only roadmap. The root [TODO.md](../TODO.md) holds what is being worked
 | [shelved/](shelved/) | parked by the owner; each file starts with the owner's reason in one line |
 | [done/](done/) | one file per release, one line per shipped item |
 
+Engine rebuild split (owner, 2026-11-25): the area files in `upcoming/` hold only what builds on today's engine;
+[upcoming/engine-build.md](upcoming/engine-build.md) holds everything that waits for the one engine build;
+[shelved/engine-build.md](shelved/engine-build.md) holds the shelved items that would need it.
+
 The standing risks: [risks.md](risks.md). Batch 1's writer reports: [upcoming/batch-1-reports.md](upcoming/batch-1-reports.md).
 
 ## Legend and format
@@ -34,5 +38,4 @@ Batch 1's written branches are integrated this way, one feature at a time.
 ## Engine builds (owner, 2026-11-23)
 As few as possible: one, when CPU needs it. Engine patches are written and collected under `patches/chromium/` without
 building; the first CEF rebuild happens only when the under-5 % CPU patch is ready, and it carries every collected
-patch. A feature that needs an engine patch is marked "waits for the one engine build"
-([upcoming/01-optimization.md](upcoming/01-optimization.md)).
+patch. A feature that needs an engine patch lives in [upcoming/engine-build.md](upcoming/engine-build.md), not in its area file.
