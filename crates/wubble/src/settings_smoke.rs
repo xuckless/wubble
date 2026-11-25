@@ -744,7 +744,7 @@ mod tests {
         }
 
         fn press(&mut self, act: Do) {
-            let names: Vec<(&str, &str)> = wubble_core::omnibox::ENGINES
+            let names: Vec<(&str, &str)> = wubble_core::engines::ENGINES
                 .iter()
                 .map(|e| (e.id, e.name))
                 .collect();

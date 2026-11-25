@@ -1,4 +1,4 @@
-//! Search engines as data: the built-ins (`omnibox::ENGINES`), the user's own
+//! Search engines as data: the built-ins (`engines::ENGINES`), the user's own
 //! (`settings::SEARCH_CUSTOM`) and the site searches found on pages
 //! (`settings::SEARCH_DISCOVERED`, inactive), resolved from the stored rows into [`Engines`];
 //! keyword search (`bing.com cats` searches Bing); and the OpenSearch discovery machine
@@ -15,7 +15,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::omnibox::{ENGINES, EngineInfo, fill};
+use crate::engines::{self, ENGINES, EngineInfo, Reach};
+use crate::omnibox::fill;
 use crate::settings;
 use crate::tab::TabId;
 
@@ -55,14 +56,14 @@ impl EngineRef {
             name: e.name.to_owned(),
             keyword: e.keyword.to_owned(),
             search: e.search.to_owned(),
-            suggest: Some(e.suggest.to_owned()),
+            suggest: e.suggest.map(str::to_owned),
             image: e.image.map(str::to_owned),
         }
     }
 
     /// The built-in engine stored as `id`.
     pub fn builtin(id: &str) -> Option<Self> {
-        crate::omnibox::engine_info(id).map(Self::of_builtin)
+        engines::engine_info(id).map(Self::of_builtin)
     }
 
     /// The results page for `query`.
@@ -242,9 +243,10 @@ pub fn check(entry: &EngineEntry, taken: impl Fn(&str) -> bool) -> Result<(), Pr
     Ok(())
 }
 
-/// Whether `id` may be stored as the default: a built-in's id, or a user's engine's.
+/// Whether `id` may be stored as the default: a built-in's id but a keyword engine's
+/// ([`Reach::Site`]), or a user's engine's.
 pub fn is_engine_id(id: &str) -> bool {
-    crate::omnibox::engine_info(id).is_some()
+    engines::engine_info(id).is_some_and(|e| e.reach != Reach::Site)
         || id
             .strip_prefix(CUSTOM_PREFIX)
             .is_some_and(valid_keyword)
@@ -261,6 +263,9 @@ pub struct Engines {
     pub active: Vec<EngineRef>,
     /// Found on sites, inactive: listed, never searched.
     pub discovered: Vec<EngineEntry>,
+    /// The built-ins offered for the country (`settings::SEARCH_REGION`, `engines::region`), by
+    /// id, in Chrome's order: the first-run choice, and the head of the default's choices.
+    pub region: &'static [&'static str],
 }
 
 impl Engines {
@@ -291,21 +296,28 @@ impl Engines {
                 found.push(entry);
             }
         }
-        let default = active.iter().find(|e| e.id == default_id).cloned();
+        let default = active
+            .iter()
+            .find(|e| e.id == default_id && is_engine_id(&e.id))
+            .cloned();
         Engines {
             default,
             active,
             discovered: found,
+            region: engines::region(""),
         }
     }
 
     /// The engines of the stored rows (`key -> text`).
     pub fn from_stored(stored: &HashMap<String, String>) -> Engines {
-        Engines::resolve(
-            crate::apply::value_of(&settings::SEARCH_ENGINE, stored),
-            &crate::apply::list(&settings::SEARCH_CUSTOM, stored),
-            &crate::apply::list(&settings::SEARCH_DISCOVERED, stored),
-        )
+        Engines {
+            region: engines::region(crate::apply::value_of(&settings::SEARCH_REGION, stored)),
+            ..Engines::resolve(
+                crate::apply::value_of(&settings::SEARCH_ENGINE, stored),
+                &crate::apply::list(&settings::SEARCH_CUSTOM, stored),
+                &crate::apply::list(&settings::SEARCH_DISCOVERED, stored),
+            )
+        }
     }
 
     /// An active engine by its stored id.
@@ -338,11 +350,30 @@ impl Engines {
             .any(|k| k.to_lowercase() == keyword)
     }
 
-    /// The default engine's choices, `(stored id, name)`: every active engine. A site's engine is
-    /// never one.
+    /// The first-run choice: the region's engines, in its order (Chrome's choice screen).
+    pub fn first_run(&self) -> impl Iterator<Item = &EngineRef> {
+        self.region.iter().filter_map(|id| self.by_id(id))
+    }
+
+    /// The default engine's choices, `(stored id, name)`: the [`Reach::Everywhere`] engines in
+    /// table order (the same list in every country), the region's own engines, the user's own,
+    /// and the default wherever it is from (a region's engine kept after a move). A keyword
+    /// engine or a site's is never one.
     pub fn choices(&self) -> Vec<(String, String)> {
-        self.active
+        let everywhere = ENGINES
             .iter()
+            .filter(|e| e.reach == Reach::Everywhere)
+            .map(|e| e.id);
+        let mut ids: Vec<&str> = Vec::new();
+        let custom = self.active.iter().filter(|e| !e.is_builtin()).map(|e| e.id.as_str());
+        let default = self.default.iter().map(|e| e.id.as_str());
+        for id in everywhere.chain(self.region.iter().copied()).chain(custom).chain(default) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.into_iter()
+            .filter_map(|id| self.by_id(id))
             .map(|e| (e.id.clone(), e.name.clone()))
             .collect()
     }
@@ -819,8 +850,52 @@ mod tests {
     }
 
     #[test]
+    fn the_region_offers_its_engines() {
+        let stored = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        let first = |e: &Engines| -> Vec<String> { e.first_run().map(|e| e.id.clone()).collect() };
+        let choices = |e: &Engines| -> Vec<String> { e.choices().into_iter().map(|(id, _)| id).collect() };
+        let everywhere: Vec<String> = ENGINES
+            .iter()
+            .filter(|e| e.reach == Reach::Everywhere)
+            .map(|e| e.id.to_owned())
+            .collect();
+        // no region: Chromium's default list, and the Select is the everywhere engines
+        let e = Engines::from_stored(&stored(&[]));
+        assert_eq!(first(&e), ["google", "bing", "yahoo"]);
+        assert_eq!(choices(&e), everywhere);
+        // Germany: its list in its order, its Yahoo added to the Select after the others
+        let e = Engines::from_stored(&stored(&[("search.region", "DE")]));
+        assert_eq!(
+            first(&e),
+            ["google", "duckduckgo", "brave", "ecosia", "perplexity", "bing", "startpage", "yahoo_de"]
+        );
+        let mut want = everywhere.clone();
+        want.push("yahoo_de".into());
+        assert_eq!(choices(&e), want);
+        // the default from another region stays a choice; the user's own follow
+        let e = Engines::from_stored(&stored(&[
+            ("search.region", "US"),
+            ("search.engine", "yandex_ru"),
+            ("search.custom", r#"["Docs | d | https://d.test/?q=%s"]"#),
+        ]));
+        assert_eq!(e.default.as_ref().map(|d| d.id.as_str()), Some("yandex_ru"));
+        let mut want = everywhere.clone();
+        want.extend(["custom:d".to_owned(), "yandex_ru".to_owned()]);
+        assert_eq!(choices(&e), want);
+        // a keyword engine is never the default, even if stored as one
+        let e = Engines::from_stored(&stored(&[("search.engine", "wikipedia")]));
+        assert_eq!(e.default, None);
+        assert!(e.keyword_search("youtube.com cats").is_some());
+        assert!(e.keyword_search("github.com wubble").is_some());
+    }
+
+    #[test]
     fn engine_ids_are_built_ins_or_keywords() {
-        assert!(is_engine_id("google") && is_engine_id("wikipedia"));
+        assert!(is_engine_id("google") && is_engine_id("yandex_ru"));
+        // a keyword engine is searched by its keyword only, never the default
+        assert!(!is_engine_id("wikipedia") && !is_engine_id("github"));
         assert!(is_engine_id("custom:d"));
         assert!(!is_engine_id("custom:") && !is_engine_id("custom:a b") && !is_engine_id("x"));
     }

@@ -240,6 +240,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
             s::SEARCH_ENGINE.key,
             s::SEARCH_CUSTOM.key,
             s::SEARCH_DISCOVERED.key,
+            s::SEARCH_REGION.key,
         ]
         .contains(&k) =>
         {

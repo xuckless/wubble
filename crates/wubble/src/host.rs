@@ -2335,7 +2335,11 @@ impl Host {
 
     /// One event of the live suggestion fetch; re-renders the rows when its list changed.
     pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
-        let settings = self.suggest_settings();
+        // the fields, not `&self`: the fetch below is `self.suggest`'s
+        let settings = wubble_core::suggest::SuggestSettings {
+            engines: &self.search,
+            live: self.suggest_settings().live,
+        };
         if let Some(list) = self.suggest.event(event, &settings)
             && list != self.bar.suggestions
         {

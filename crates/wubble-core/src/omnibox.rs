@@ -19,111 +19,6 @@ use crate::url::percent_encode_into;
 
 // ---------------------------------------------------------------- engines
 
-/// One built-in search engine as data. Templates contain exactly one `{q}`. The user's own
-/// engines and the default are resolved from the settings (`search::Engines`).
-#[derive(Debug, PartialEq, Eq)]
-pub struct EngineInfo {
-    /// The text form stored in settings; never rename a shipped one.
-    pub id: &'static str,
-    pub name: &'static str,
-    /// Typed before a query (`bing.com cats`), it searches this engine (Chrome's keyword, the
-    /// engine's domain).
-    pub keyword: &'static str,
-    pub search: &'static str,
-    /// OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
-    pub suggest: &'static str,
-    /// Search by image URL, for the page menu's "Search <engine> for Image"; `None` for an
-    /// engine with no public one.
-    pub image: Option<&'static str>,
-}
-
-/// The built-in engines, in the order the first-run choice and the Select list them.
-///
-/// Search and suggestion templates from Chromium's
-/// `components/search_engines/prepopulated_engines.json` (BSD-3-Clause) for Google, Bing,
-/// DuckDuckGo, Brave, Ecosia and Qwant, with Chrome's partner codes left out; Startpage, Kagi
-/// and Wikipedia from each site's own OpenSearch description.
-pub const ENGINES: [EngineInfo; 9] = [
-    EngineInfo {
-        id: "google",
-        name: "Google",
-        keyword: "google.com",
-        search: "https://www.google.com/search?q={q}",
-        suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
-        // Google Lens by URL: `searchbyimage` was retired for it.
-        image: Some("https://lens.google.com/uploadbyurl?url={q}"),
-    },
-    EngineInfo {
-        id: "duckduckgo",
-        name: "DuckDuckGo",
-        keyword: "duckduckgo.com",
-        search: "https://duckduckgo.com/?q={q}",
-        suggest: "https://duckduckgo.com/ac/?type=list&q={q}",
-        image: None,
-    },
-    EngineInfo {
-        id: "bing",
-        name: "Bing",
-        keyword: "bing.com",
-        search: "https://www.bing.com/search?q={q}",
-        suggest: "https://www.bing.com/osjson.aspx?query={q}",
-        image: None,
-    },
-    EngineInfo {
-        id: "brave",
-        name: "Brave Search",
-        keyword: "search.brave.com",
-        search: "https://search.brave.com/search?q={q}",
-        suggest: "https://search.brave.com/api/suggest?q={q}",
-        image: None,
-    },
-    EngineInfo {
-        id: "ecosia",
-        name: "Ecosia",
-        keyword: "ecosia.org",
-        search: "https://www.ecosia.org/search?q={q}",
-        suggest: "https://ac.ecosia.org/autocomplete?q={q}&type=list",
-        image: None,
-    },
-    EngineInfo {
-        id: "startpage",
-        name: "Startpage",
-        keyword: "startpage.com",
-        search: "https://www.startpage.com/sp/search?query={q}",
-        suggest: "https://www.startpage.com/osuggestions?q={q}",
-        image: None,
-    },
-    EngineInfo {
-        id: "qwant",
-        name: "Qwant",
-        keyword: "qwant.com",
-        search: "https://www.qwant.com/?q={q}",
-        suggest: "https://api.qwant.com/api/suggest/?q={q}&client=opensearch",
-        image: None,
-    },
-    EngineInfo {
-        id: "kagi",
-        name: "Kagi",
-        keyword: "kagi.com",
-        search: "https://kagi.com/search?q={q}",
-        suggest: "https://kagi.com/api/autosuggest?q={q}",
-        image: None,
-    },
-    EngineInfo {
-        id: "wikipedia",
-        name: "Wikipedia",
-        keyword: "wikipedia.org",
-        search: "https://en.wikipedia.org/wiki/Special:Search?search={q}",
-        suggest: "https://en.wikipedia.org/w/api.php?action=opensearch&search={q}",
-        image: None,
-    },
-];
-
-/// The built-in engine stored as `id`.
-pub fn engine_info(id: &str) -> Option<&'static EngineInfo> {
-    ENGINES.iter().find(|e| e.id == id)
-}
-
 /// Substitutes the percent-encoded `query` for `{q}` in `template`.
 pub fn fill(template: &str, query: &str) -> String {
     let (head, tail) = template.split_once("{q}").unwrap_or((template, ""));
@@ -957,6 +852,7 @@ pub fn just_deleted(before: &str, after: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engines::engine_info;
 
     fn url(s: &str) -> Intent {
         Intent::Url(s.into())
@@ -1044,40 +940,13 @@ mod tests {
     }
 
     #[test]
-    fn engine_ids_and_keywords_are_unique() {
-        for (i, e) in ENGINES.iter().enumerate() {
-            assert_eq!(engine_info(e.id), Some(e));
-            assert!(ENGINES[..i].iter().all(|o| o.id != e.id), "dup {}", e.id);
-            assert!(
-                ENGINES[..i].iter().all(|o| o.keyword != e.keyword),
-                "dup {}",
-                e.keyword
-            );
-        }
-        // the shipped ids never change
-        assert_eq!(engine_info("google").map(|e| e.name), Some("Google"));
-        assert_eq!(engine_info("duckduckgo").map(|e| e.name), Some("DuckDuckGo"));
-        assert_eq!(engine_info(""), None);
-        assert_eq!(engine_info("altavista"), None);
-    }
-
-    #[test]
-    fn engines_table() {
-        for e in &ENGINES {
-            assert_eq!(e.search.matches("{q}").count(), 1, "{}", e.name);
-            assert_eq!(e.suggest.matches("{q}").count(), 1, "{}", e.name);
-            if let Some(image) = e.image {
-                assert_eq!(image.matches("{q}").count(), 1, "{}", e.name);
-            }
-            assert!(e.search.starts_with("https://"), "{}", e.name);
-            assert!(e.suggest.starts_with("https://"), "{}", e.name);
-        }
+    fn fill_percent_encodes_the_query() {
         assert_eq!(
             fill(engine_info("duckduckgo").unwrap().search, "c++ & rust"),
             "https://duckduckgo.com/?q=c%2B%2B%20%26%20rust"
         );
         assert_eq!(
-            fill(engine_info("google").unwrap().suggest, "ru"),
+            fill(engine_info("google").unwrap().suggest.unwrap(), "ru"),
             "https://suggestqueries.google.com/complete/search?client=firefox&q=ru"
         );
     }

@@ -89,6 +89,16 @@ impl Host {
                 self.apply_setting(applied);
             }
         }
+        // the search region, once: the country of the system's locale (Chrome keeps the country
+        // it was installed in); none known leaves Chromium's default list
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+        if apply::value_of(&defs::SEARCH_REGION, &self.settings.stored).is_empty()
+            && let Some(country) = locale.as_deref().and_then(wubble_core::engines::country_of_locale)
+        {
+            self.write_setting(defs::SEARCH_REGION.key, &country);
+        }
     }
 
     /// The one place a setting takes effect while the app runs.

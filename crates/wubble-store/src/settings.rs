@@ -199,6 +199,8 @@ settings! {
     SearchDiscovered: Vec<String> = defs::SEARCH_DISCOVERED;
     /// Off until the user turns it on: a request wubble makes itself.
     SearchDiscoverSites: bool = defs::SEARCH_DISCOVER_SITES;
+    /// The country whose engines are offered; empty until read from the locale.
+    SearchRegion: String = defs::SEARCH_REGION;
     /// The extended sidebar's width, logical px (the seam's `saved`).
     SidebarWidth: f32 = defs::SIDEBAR_WIDTH;
     /// Extended, rail or hidden.

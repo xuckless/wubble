@@ -3,7 +3,7 @@
 
 use slint::{Model, ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
-use wubble_core::omnibox::ENGINES;
+use wubble_core::engines::ENGINES;
 use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
 use wubble_core::settings::{Section, SettingKind};
 
@@ -262,7 +262,12 @@ mod tests {
             "no engine chosen yet: none is selected, so picking the first stores it"
         );
         let labels: Vec<String> = engine.labels.iter().map(|s| s.to_string()).collect();
-        let names: Vec<&str> = ENGINES.iter().map(|e| e.name).collect();
+        // no region stored: the everywhere engines (Chromium's default list adds none)
+        let names: Vec<&str> = ENGINES
+            .iter()
+            .filter(|e| e.reach == wubble_core::engines::Reach::Everywhere)
+            .map(|e| e.name)
+            .collect();
         assert_eq!(labels, names);
         assert!(engine.fixed, "the built-ins are listed under the Select");
         assert_eq!(engine.entries.row_count(), ENGINES.len());

@@ -24,6 +24,7 @@ pub mod dnd;
 pub mod download;
 pub mod drag;
 pub mod edit_keys;
+pub mod engines;
 pub mod extensions;
 pub mod external;
 pub mod favicon;

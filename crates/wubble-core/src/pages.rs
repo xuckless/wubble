@@ -724,11 +724,11 @@ pub enum Control {
 }
 
 /// The search engines' stored ids, the words of the engine's segmented control.
-const ENGINE_IDS: [&str; crate::omnibox::ENGINES.len()] = {
-    let mut ids = [""; crate::omnibox::ENGINES.len()];
+const ENGINE_IDS: [&str; crate::engines::ENGINES.len()] = {
+    let mut ids = [""; crate::engines::ENGINES.len()];
     let mut i = 0;
     while i < ids.len() {
-        ids[i] = crate::omnibox::ENGINES[i].id;
+        ids[i] = crate::engines::ENGINES[i].id;
         i += 1;
     }
     ids
@@ -834,7 +834,7 @@ fn list_cells(def: &settings::SettingDef, item: &str) -> Vec<String> {
 /// The search engine's row lists the built-in engines (each named by its id).
 fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> Vec<Entry> {
     match def.kind {
-        SettingKind::SearchEngine => crate::omnibox::ENGINES
+        SettingKind::SearchEngine => crate::engines::ENGINES
             .iter()
             .map(|e| {
                 let address = e.search.replace("{q}", "%s");
@@ -1017,7 +1017,7 @@ fn row_text(section: settings::Section, row: &SettingRow) -> String {
         for word in words {
             text.push(' ');
             text.push_str(
-                crate::omnibox::ENGINES
+                crate::engines::ENGINES
                     .iter()
                     .find(|e| e.id == *word)
                     .map_or(word, |e| e.name),
@@ -1531,7 +1531,7 @@ mod tests {
         let engine = row("search.engine");
         assert_eq!(engine.value, "custom:d");
         assert!(engine.entries_fixed && !engine.remove_only);
-        assert_eq!(engine.entries.len(), crate::omnibox::ENGINES.len());
+        assert_eq!(engine.entries.len(), crate::engines::ENGINES.len());
         assert_eq!(
             engine.entries[2].cells,
             ["Bing", "bing.com", "https://www.bing.com/search?q=%s"]

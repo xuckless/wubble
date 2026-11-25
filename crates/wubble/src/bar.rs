@@ -207,18 +207,6 @@ fn omni_row(r: OmniResult, keymap: &Keymap) -> BarRow {
     }
 }
 
-/// The first-run rows: one per engine in `omnibox::ENGINES`, each a search row (the search
-/// glyph): choosing one searches the query with it.
-fn engine_rows() -> impl Iterator<Item = BarRow> {
-    omnibox::ENGINES.iter().map(|e| BarRow {
-        kind: CommandKind::Search,
-        title: format!("Search with {}", e.name),
-        subtitle: "Choose the search engine".into(),
-        shortcut: String::new(),
-        target: RowTarget::PickEngine(e.id.to_owned()),
-    })
-}
-
 /// The rows for `query`. Once an engine is chosen: `omnibox::rank` (nothing
 /// for a blank query). Before: the engine choice instead of every search
 /// row, after the "open" row if the query is an address.
@@ -251,7 +239,16 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
         };
     let at = usize::from(leads);
     let at = at.min(rows.len());
-    rows.splice(at..at, engine_rows());
+    // the first-run rows: the region's engines (`Engines::first_run`), each a search row (the
+    // search glyph): choosing one searches the query with it
+    let choice = inputs.engines.first_run().map(|e| BarRow {
+        kind: CommandKind::Search,
+        title: format!("Search with {}", e.name),
+        subtitle: "Choose the search engine".into(),
+        shortcut: String::new(),
+        target: RowTarget::PickEngine(e.id.clone()),
+    });
+    rows.splice(at..at, choice);
     rows.truncate(MAX_ROWS);
     rows
 }
@@ -473,17 +470,17 @@ mod tests {
     }
 
     #[test]
-    fn the_first_run_offers_every_built_in_engine() {
+    fn the_first_run_offers_the_region_s_engines() {
         let picks = |r: &[BarRow]| -> Vec<RowTarget> {
             r.iter()
                 .filter(|r| matches!(r.target, RowTarget::PickEngine(_)))
                 .map(|r| r.target.clone())
                 .collect()
         };
-        let all: Vec<RowTarget> = omnibox::ENGINES
-            .iter()
-            .map(|e| RowTarget::PickEngine(e.id.into()))
-            .collect();
+        // no region stored: Chromium's default list
+        let all: Vec<RowTarget> = ["google", "bing", "yahoo"]
+            .map(|id| RowTarget::PickEngine(id.into()))
+            .to_vec();
         // A blank query and a search: the choice comes first, no search row.
         assert_eq!(targets(&rows("", &[], "")), all);
         let r = rows("", &[], "cats");

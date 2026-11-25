@@ -15,7 +15,7 @@ pub enum SettingKind {
     Count { min: u32, max: u32 },
     /// A finite number in `min..=max`.
     Float { min: f32, max: f32 },
-    /// `""` (ask on first run), one of `omnibox::ENGINES` by id, or one of the user's own
+    /// `""` (ask on first run), one of `engines::ENGINES` by id, or one of the user's own
     /// engines (`search::CUSTOM_PREFIX` and its keyword).
     SearchEngine,
     /// A JSON array of strings; entries are opaque here.
@@ -145,6 +145,17 @@ pub const SEARCH_DISCOVER_SITES: SettingDef = SettingDef {
     default: "0",
     label: "Find site searches on pages (fetches the search description a site links to)",
     section: Section::Privacy,
+    restart: false,
+};
+/// The country whose search engines are offered (`engines::region`): an ISO 3166 code, written
+/// once from the system's locale at start while empty (Chrome keeps the country it was
+/// installed in); empty or unknown: Chromium's default list.
+pub const SEARCH_REGION: SettingDef = SettingDef {
+    key: "search.region",
+    kind: SettingKind::Text,
+    default: "",
+    label: "Search engine region",
+    section: Section::Hidden,
     restart: false,
 };
 /// The extended sidebar's width, logical px (the seam's `saved`); the default is the design's
@@ -928,6 +939,7 @@ pub const ALL: &[&SettingDef] = &[
     &SEARCH_CUSTOM,
     &SEARCH_DISCOVERED,
     &SEARCH_DISCOVER_SITES,
+    &SEARCH_REGION,
     &SIDEBAR_WIDTH,
     &SIDEBAR_MODE,
     &REDUCE_MOTION,
