@@ -88,6 +88,10 @@ impl Host {
                 self.apply_setting(applied);
             }
         }
+        // the preferences no setting changes (Chromium's own HTTPS upgrades off)
+        for (name, value) in wubble_core::privacy::FIXED {
+            self.engine.set_profile_pref(name, value.clone());
+        }
     }
 
     /// The one place a setting takes effect while the app runs.
@@ -155,6 +159,7 @@ impl Host {
                 media,
             } => self.set_page_themes(default, sites, media),
             Applied::ProfilePref { name, value } => self.engine.set_profile_pref(name, value),
+            Applied::Https { mode, allowed } => self.blocking.https.set(mode, allowed),
             Applied::GlobalPrefs(prefs) => {
                 for (name, value) in prefs {
                     if let Err(e) = self.engine.set_global_pref(name, &value) {

@@ -17,6 +17,7 @@ mod extensions;
 mod extensions_smoke;
 mod gallery_smoke;
 mod host;
+mod https;
 mod ime;
 mod input;
 mod instance;

@@ -151,6 +151,8 @@ pub struct Blocking {
     cosmetic: Mutex<HashMap<String, Arc<Cosmetic>>>,
     /// Called (on a worker thread) when the lists' state changed.
     changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// HTTPS-Upgrades: main-frame `http://` requests go to `https://` first.
+    pub https: crate::https::Upgrades,
 }
 
 impl Blocking {
@@ -169,6 +171,7 @@ impl Blocking {
             updating: AtomicBool::new(false),
             cosmetic: Mutex::new(HashMap::new()),
             changed: Mutex::new(None),
+            https: crate::https::Upgrades::default(),
         })
     }
 
@@ -795,6 +798,10 @@ impl ContentFilter for Blocking {
         if request.kind == RequestKind::Document {
             self.counts()
                 .insert(request.browser_id, PageBlocks::default());
+            // the upgrade first: its https request comes back through here to be judged
+            if let Some(https) = self.https.document(request.browser_id, request.url) {
+                return RequestAction::Redirect(https);
+            }
         }
         if !is_web(request.url) {
             return RequestAction::Allow;

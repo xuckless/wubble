@@ -146,6 +146,11 @@ pub enum Applied {
         sites: ThemeTable,
         media: MediaPrefs,
     },
+    /// HTTPS-Upgrades: the mode and the allowlist (`https`).
+    Https {
+        mode: crate::https::HttpsMode,
+        allowed: ZoomTable,
+    },
     /// Chromium local-state preferences, process-wide, set in this order (secure DNS's
     /// `dns_over_https.templates`, then its `.mode`).
     GlobalPrefs(Vec<(&'static str, crate::privacy::PrefValue)>),
@@ -356,6 +361,12 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k == s::UI_FULL_URLS.key => Applied::FullUrls(flag(def, stored)),
         k if k == s::AGENT_MCP_ENABLED.key => Applied::McpHosting(flag(def, stored)),
+        k if [s::PRIVACY_HTTPS_MODE.key, s::PRIVACY_HTTPS_ALLOWED.key].contains(&k) => {
+            Applied::Https {
+                mode: crate::https::HttpsMode::from_word(value_of(&s::PRIVACY_HTTPS_MODE, stored))?,
+                allowed: map(&s::PRIVACY_HTTPS_ALLOWED, stored),
+            }
+        }
         k if k == s::PRIVACY_SECURE_DNS.key => {
             let (mode, templates) = crate::secure_dns::SecureDns::parse(v)
                 .unwrap_or(crate::secure_dns::SecureDns::Automatic)
@@ -585,6 +596,28 @@ mod tests {
         assert_eq!(effect_of("no.such", &empty), None);
         // The seam owns the width while the app runs.
         assert_eq!(effect_of(settings::SIDEBAR_WIDTH.key, &empty), None);
+    }
+
+    #[test]
+    fn https_mode_and_allowlist_apply_together() {
+        use crate::https::HttpsMode;
+        let s = stored(&[
+            ("privacy.https_mode", "only"),
+            ("privacy.https_allowed", r#"{"0/a.test": 99}"#),
+        ]);
+        let want = Some(Applied::Https {
+            mode: HttpsMode::Only,
+            allowed: [("0/a.test".to_owned(), 99)].into(),
+        });
+        assert_eq!(effect_of("privacy.https_mode", &s), want);
+        assert_eq!(effect_of("privacy.https_allowed", &s), want);
+        assert_eq!(
+            effect_of("privacy.https_mode", &HashMap::new()),
+            Some(Applied::Https {
+                mode: HttpsMode::Upgrade,
+                allowed: ZoomTable::new(),
+            })
+        );
     }
 
     #[test]

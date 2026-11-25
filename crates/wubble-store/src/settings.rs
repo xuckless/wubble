@@ -322,6 +322,9 @@ settings! {
     /// `wubble_core::secure_dns::SecureDns`'s stored text.
     PrivacySecureDns: String = defs::PRIVACY_SECURE_DNS;
     PrivacyGpc: bool = defs::PRIVACY_GPC;
+    PrivacyHttpsMode: String = defs::PRIVACY_HTTPS_MODE;
+    /// `container/host` to the Unix second it ends (`wubble_core::https`).
+    PrivacyHttpsAllowed: ZoomTable = defs::PRIVACY_HTTPS_ALLOWED;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

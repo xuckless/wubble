@@ -105,6 +105,17 @@ pub const PREFS: &[PrefRow] = &[
     },
 ];
 
+/// Preferences wubble sets the same in every profile, whatever the settings: Chromium's own
+/// HTTPS-First and HTTPS-Upgrades stay off, since wubble upgrades itself (`https`) and the two
+/// must not both act.
+pub const FIXED: &[(&str, PrefValue)] = &[
+    ("https_only_mode_enabled", PrefValue::Bool(false)),
+    (
+        "https_upgrades.policy.upgrades_enabled",
+        PrefValue::Bool(false),
+    ),
+];
+
 impl PrefRow {
     /// The preference's value for the setting's stored text (its default when absent or bad).
     pub fn value(&self, stored: &HashMap<String, String>) -> PrefValue {

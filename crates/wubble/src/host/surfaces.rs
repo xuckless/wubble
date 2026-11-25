@@ -209,15 +209,18 @@ impl Host {
             Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
             Routed::Zoomed => window.set_address_zoom(self.address_zoom()),
+            // a failed upgrade is HTTPS-Upgrades' own: it loads http or asks
             Routed::LoadFailed { url, code } => {
-                let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
-                let event = ErrorEvent::LoadFailed {
-                    url,
-                    code,
-                    now_ms: wall_ms(),
-                    shown,
-                };
-                self.apply_error(tab, event);
+                if !self.https_failed(tab, &url) {
+                    let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
+                    let event = ErrorEvent::LoadFailed {
+                        url,
+                        code,
+                        now_ms: wall_ms(),
+                        shown,
+                    };
+                    self.apply_error(tab, event);
+                }
             }
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => {
@@ -442,6 +445,16 @@ impl Host {
             }
             return;
         }
+        // an upgraded navigation's certificate error is a failed upgrade: refused, and http
+        // loads or the HTTPS-Only panel asks
+        let browser = self.tab_view(tab).map_or(0, |v| v.browser_id());
+        if self.blocking.https.owns(browser, &url) {
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_certificate(id, false);
+            }
+            self.https_failed(tab, &url);
+            return;
+        }
         if zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code)) {
             if let Some(view) = self.tab_view(tab) {
                 view.answer_certificate(id, true);
@@ -468,6 +481,10 @@ impl Host {
                 self.cert_exceptions.allow(host, *code);
                 continue;
             }
+            if effect == ErrorEffect::ContinueHttp {
+                self.https_continue(tab);
+                continue;
+            }
             let Some(view) = self.tab_view(tab) else {
                 continue;
             };
@@ -478,7 +495,7 @@ impl Host {
                 ErrorEffect::AnswerCert { request, proceed } => {
                     view.answer_certificate(request, proceed);
                 }
-                ErrorEffect::Allow { .. } => {}
+                ErrorEffect::Allow { .. } | ErrorEffect::ContinueHttp => {}
             }
         }
     }
@@ -1086,7 +1103,7 @@ impl Host {
             return;
         };
         let event = match self.surfaces.get(&tab).map(|s| &s.error) {
-            Some(PageError::Cert { .. }) => ErrorEvent::GoBack {
+            Some(PageError::Cert { .. } | PageError::HttpsOnly { .. }) => ErrorEvent::GoBack {
                 can_go_back: self.tab_view(tab).is_some_and(|v| v.nav().page.can_go_back),
             },
             _ => ErrorEvent::Reload,

@@ -33,6 +33,7 @@ pub mod gpu;
 pub mod highlight;
 pub mod hints;
 pub mod hovercard;
+pub mod https;
 pub mod import;
 pub mod keys;
 pub mod kit_gen;

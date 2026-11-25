@@ -35,6 +35,7 @@ mod gesture;
 mod gpu;
 mod harness;
 mod hosting;
+mod https;
 mod layers;
 mod look;
 mod media;
@@ -1404,16 +1405,21 @@ impl Host {
     /// Drops the blocker's counts of views that are gone.
     pub(super) fn forget_gone_blocks(&mut self) {
         let ids: Vec<_> = self.views.iter().map(|(&t, &id)| (t, id)).collect();
-        let (mut live, mut private) = (vec![], vec![]);
+        let (mut live, mut private, mut containers) = (vec![], vec![], vec![]);
         for (tab, id) in ids {
             if let Some(browser) = self.engine.view(id).map(|v| v.browser_id()) {
                 live.push(browser);
                 if self.model.side_of_tab(tab) == Side::Private {
                     private.push(browser);
                 }
+                if let Some(container) = self.model.container_of(tab) {
+                    containers.push((browser, container.0));
+                }
             }
         }
         self.blocking.keep_views(&live, &private);
+        // HTTPS-Upgrades reads each view's container (its allowlist) from its first request
+        self.blocking.https.keep_views(&containers);
     }
 
     /// The blocker's count for each tab with a view.

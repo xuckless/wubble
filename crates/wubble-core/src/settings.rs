@@ -994,6 +994,26 @@ pub const PRIVACY_GPC: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// Chrome's "Always use secure connections" (`https`): upgrade (Chrome's automatic
+/// HTTPS-Upgrades: https first, http without asking when it fails), only (ask first), or off.
+pub const PRIVACY_HTTPS_MODE: SettingDef = SettingDef {
+    key: "privacy.https_mode",
+    kind: SettingKind::Choice(&crate::https::HttpsMode::WORDS),
+    default: "upgrade",
+    label: "Secure connections (upgrade: https first; only: ask before http)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The sites Continue to site keeps on http (`https::allow`): `container/host` to the Unix
+/// second it ends.
+pub const PRIVACY_HTTPS_ALLOWED: SettingDef = SettingDef {
+    key: "privacy.https_allowed",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Sites allowed without a secure connection",
+    section: Section::Hidden,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -1084,6 +1104,8 @@ pub const ALL: &[&SettingDef] = &[
     &PDF_DOWNLOAD,
     &PRIVACY_SECURE_DNS,
     &PRIVACY_GPC,
+    &PRIVACY_HTTPS_MODE,
+    &PRIVACY_HTTPS_ALLOWED,
 ];
 
 /// The definition of `key`, if it is a setting.
