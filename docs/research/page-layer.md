@@ -314,3 +314,45 @@ over a composited page.
   first event free of holds. The host reads the clock once per event (`surface_now`, the store's clock).
 - Diagnostics: the summary line gains `layer_snapshots`; a route change by an expired hold ends in
   `(brief hold expired: Long)`.
+
+### As written (blind)
+Commits on `untested/page-layer-2` after 08b719e: this section; core (`Coverage::Glass`, `Need::Frosted`,
+`Hold::Frost`, `Effect::Snapshot`, `Route::Layer { snap }`, `Route::Entering { expires }`, `Route::hold`,
+`SNAPSHOT_MS`, `BRIEF_MS`, their tables and walks); gfx and host (`FramePresenter::refresh`, `pages::overlay_over`,
+`Renderer`/`Glass::overlay_over`, `Glass::pages_written(.., None)`, per-pane `page_covers`, the `Snapshot` executor,
+`layer_snapshots`, the expiry note on route lines). No kit or shell change: the hole and the glass images need none.
+`--page-layer=off` runs none of it (no pane has a layer); `fullscreen` holds every need for long, as before. Flags
+unchanged (`docs/smokes.md` untouched). Not done: a trailing snapshot after a page's last frame when nothing renders
+(the glass may show the page up to `SNAPSHOT_MS` behind until the next render); a per-kind glass rectangle (the
+per-pane fact is "some overlay glass meets the pane", so the log may name a toast elsewhere as `Glass` while a menu is
+over the pane).
+
+### Owner's hand-check list for this fix (macOS, release build)
+Command: `cargo run -p wubble --release -- --page-layer=window <1080p video page>`; stderr shows the route lines and
+the per-second summary (`wubble: page layer: 1.00s: ...; tab N Layer; ...`). Stage 2's item 5 changes: glass now
+blurs a snapshot refreshed about 4 times a second and the pane stays on its layer.
+1. A popup left up (SponsorBlock's sticky notice, or a permission prompt) over the playing video for 30 s: no route
+   line after the first `Entering -> Layer`; each summary has `layer_shows` near 60, `layer_snapshots 3` or `4`,
+   `slint_renders` about 4 to 10 and `tab N Layer`; main process near the 10-12 % of no overlay, not 30 %. The glass
+   shows the video moving, in steps.
+2. A toast (Mod+= for "125%") over the video: no route line; `layer_snapshots` while it shows, none a second after it
+   went.
+3. The pointer moved over the video and kept moving for 10 s (the strip shows): no `Layer -> Leaving` line;
+   `layer_snapshots` at most 4 a second; the strip's glass blurs the video under it.
+4. A tab's context menu over the sidebar, clear of the page: no `layer_snapshots` in the summary, no route line. The
+   page's context menu over the page: `layer_snapshots` appear while it shows.
+5. Resize: drag the window's edge and keep dragging for 2 s: `Layer -> Leaving on Changed; needs: Windowed, Resizing
+   Brief [stretch ...]`, `Leaving -> Entering on Presenting ...`, about a second later `Entering -> Composited on
+   Frame { os: true, ... }; needs: Windowed, Resizing Brief [stretch ...] (brief hold expired: Long)` (or `on
+   Changed`); on release `Composited -> Entering on Changed; needs: Windowed`, then `Entering -> Layer on Frame`.
+   A sidebar spring (under a second) shows `Leaving`, `Entering`, `Layer` and no `expired`.
+6. `--measure idle --seconds 4` with `window` and nothing over the page: 0 to 2 `slint_renders`; with a sticky notice
+   over a still page: one `layer_snapshots` as it opens, then nothing more.
+7. By eye against `--page-layer=off` on the same page: the glass over the page looks the same (blur, tint, its
+   shadow and rim over the live page at its edges, no seam); as a glass fades in, its first frame may blur an older
+   frame of the page [u]; the pane's rounded corners and the hole unchanged elsewhere.
+
+### Lines for TODO.md / decisions.md (not edited here)
+- decisions.md: "Page layer: glass over a page on its layer blurs a snapshot of the layer (`Coverage::Glass`,
+  `Hold::Frost`), refreshed at most every `SNAPSHOT_MS` (250); only glass whose rectangle meets the pane counts; a
+  brief hold expires to long after `BRIEF_MS` (1 s)."
