@@ -717,13 +717,24 @@ mod tests {
         }
     }
 
+    /// A row of the timed tables: name, route, hold, now (ms), event, route after, effects.
+    type HoldRow = (
+        &'static str,
+        Route,
+        Hold,
+        u64,
+        Event,
+        Route,
+        &'static [Effect],
+    );
+
     /// A brief hold that outlasts [`BRIEF_MS`] in `Entering` is a long one: the OS buffers go at
     /// the next event that reads it, and the pane stays composited until nothing holds it.
     #[test]
     fn page_layer_a_brief_hold_expires_to_long() {
         let due = Entering { expires: Some(T) };
         #[rustfmt::skip]
-        let rows: &[(&str, Route, Hold, u64, Event, Route, &[Effect])] = &[
+        let rows: &[HoldRow] = &[
             ("a ms before its deadline: still brief", due, Hold::Brief, T - 1, Changed, due, &[]),
             ("at its deadline: long, the buffers go", due, Hold::Brief, T, Changed, Composited, &[Buffers(false)]),
             ("past it, at a frame", due, Hold::Brief, T + 500, os(7), Composited, &[Buffers(false), Present]),
@@ -763,7 +774,7 @@ mod tests {
     fn page_layer_glass_over_a_layered_page_blurs_a_slow_snapshot() {
         let s = SNAPSHOT_MS;
         #[rustfmt::skip]
-        let rows: &[(&str, Route, Hold, u64, Event, Route, &[Effect])] = &[
+        let rows: &[HoldRow] = &[
             ("glass comes over a still page: a snapshot at once", ON5, Hold::Frost, T, Changed, snapped(5, 5, T), &[Snapshot]),
             ("glass over a playing page: the frame and a snapshot", ON5, Hold::Frost, T, os(6), snapped(6, 6, T), &[Show, Snapshot]),
             ("a frame before it is due: on the layer only", snapped(5, 5, T), Hold::Frost, T + 1, os(6), snapped(6, 5, T), &[Show]),
@@ -967,7 +978,8 @@ mod tests {
         // `window`: an entrance, a resize and a shot hold it briefly (for a second at most), glass
         // over it leaves it there; each walk with its time between events (ms)
         let (free, brief, frost) = (Hold::Free, Hold::Brief, Hold::Frost);
-        let held: &[(&str, u64, &[(Hold, Event)])] = &[
+        type HeldWalk<'a> = (&'a str, u64, &'a [(Hold, Event)]);
+        let held: &[HeldWalk<'_>] = &[
             (
                 "an entrance over the page, then gone",
                 16,
