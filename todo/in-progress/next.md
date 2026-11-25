@@ -220,3 +220,4 @@ Build:
 - [ ] Picture-in-picture and the video frame rows for a video inside a subframe
 - [ ] Auto-reload offline never repeats a form submission (a failed load does not say whether it was a POST: find where to learn it)
 - [ ] Rebuild the bundled FFmpeg with `concat` before the release that ships multi-period DASH
+- [ ] macOS Keychain prompts (owner, 2026-11-25: on a new device, and on every test build): test builds and the harness use Chromium's mock keychain and a separate vault entry; check the release signature's designated requirement is team and bundle id (not a cdhash) so updates never ask again; consider the data-protection keychain with an access group
