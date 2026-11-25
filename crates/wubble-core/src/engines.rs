@@ -576,7 +576,7 @@ pub fn region(country: &str) -> &'static [&'static str] {
     let code = ALIASES
         .iter()
         .find(|(c, _)| *c == country)
-        .map_or(country.as_str(), |(_, to)| to);
+        .map_or(country.as_str(), |(_, to)| *to);
     let list = |code: &str| REGIONS.iter().find(|(c, _)| *c == code).map(|(_, l)| *l);
     list(code)
         .or_else(|| list(DEFAULT_REGION))
