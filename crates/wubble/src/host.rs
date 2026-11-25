@@ -1690,7 +1690,7 @@ impl Host {
                 return Ok(());
             };
             let frame_rate = pacing::frame_rate_for(refresh);
-            eprintln!("wubble: CEF frame rate {frame_rate} (display {refresh:?} mHz)");
+            log_frame_rate(frame_rate, refresh);
             self.frame_rate = Some(frame_rate);
             let follow = self.flush();
             for command in follow {
@@ -2946,7 +2946,6 @@ impl Host {
 
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
-        self.follow_frame_rate();
         self.follow_desktop();
         self.devtools_tick();
         let pressure = self.read_pressure();
@@ -4268,21 +4267,22 @@ impl Host {
     }
 
     /// Tells every view the frame rate if the window is now on a display
-    /// with another refresh rate. Polled from the lifecycle tick: winit has
-    /// no event for a move to another monitor at the same scale, and on
-    /// Wayland the first rate comes from the fastest monitor because the
-    /// surface has not entered an output yet.
+    /// with another refresh rate (`follow_desktop`: a scale change, a move once it settles, the
+    /// lifecycle tick, since winit has no event for a move to another monitor at the same scale,
+    /// and on Wayland the first rate comes from the fastest monitor because the surface has not
+    /// entered an output yet).
     fn follow_frame_rate(&mut self) {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let rate = window
-            .window()
-            .with_winit_window(display_refresh_mhz)
-            .map(pacing::frame_rate_for);
-        if let (Some(current), Some(rate)) = (self.frame_rate, rate)
+        let Some(refresh) = window.window().with_winit_window(display_refresh_mhz) else {
+            return;
+        };
+        let rate = pacing::frame_rate_for(refresh);
+        if let Some(current) = self.frame_rate
             && rate != current
         {
+            log_frame_rate(rate, refresh);
             self.frame_rate = Some(rate);
             let shown = self.shown_tabs();
             for (tab, id) in self.views.iter().map(|(t, v)| (*t, *v)).collect::<Vec<_>>() {
@@ -4305,11 +4305,13 @@ impl Host {
     }
 
     /// Tells every view on screen where the window and its monitor are on the desktop when that
-    /// changed (the page's `screen.*` and `window.screenX`). Winit's `Moved` and
+    /// changed (the page's `screen.*` and `window.screenX`), and the display's frame rate
+    /// (`follow_frame_rate`). Winit's `Moved` and
     /// `ScaleFactorChanged` say the window moved or its scale changed; the lifecycle tick
     /// finds the rest (the window dragged to another monitor at the same scale, the first
     /// output a Wayland surface enters).
     fn follow_desktop(&mut self) {
+        self.follow_frame_rate();
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
@@ -4949,6 +4951,11 @@ fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
     };
     let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);
     external.then_some((opener, url.as_str()))
+}
+
+/// The run's CEF frame rate and the display refresh it comes from, as it is set or changes.
+fn log_frame_rate(rate: u32, refresh: Option<u32>) {
+    eprintln!("wubble: CEF frame rate {rate} (display {refresh:?} mHz)");
 }
 
 fn new_tab(url: String, opener: Option<TabId>) -> Command {
