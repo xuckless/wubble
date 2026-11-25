@@ -412,6 +412,10 @@ class Harness:
         env = dict(os.environ)
         if trace:
             env["WUBBLE_TRACE"] = "1"
+        # a throwaway profile: builds that know the marker use the mock keychain and a file vault
+        # (no Keychain prompt for a test build); older builds ignore it
+        self.profile.mkdir(parents=True, exist_ok=True)
+        (self.profile / ".wubble-smoke-profile").touch()
         f = open(self.log.path, "a")
         self.proc = subprocess.Popen([str(self.bin), "--profile", str(self.profile), url], stdout=f,
                                      stderr=subprocess.STDOUT, env=env, start_new_session=True)
