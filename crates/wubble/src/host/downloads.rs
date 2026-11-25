@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 
 use slint::ComponentHandle;
 use wubble_core::agent::log::Outcome;
+use wubble_core::click_guard::{self, Start};
+use wubble_core::site::Permission;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::model::Command;
 use wubble_core::space::{ContainerId, Side};
@@ -18,6 +20,7 @@ use wubble_engine::view::View;
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
 
 use super::{Host, now_ms};
+use crate::prompt::{Ask, PermissionEvent, PermissionRequest};
 
 /// A download the engine still runs, from its path being given until its
 /// entry ends.
@@ -59,6 +62,9 @@ pub(super) struct Downloads {
     save_as: Vec<(TabId, String)>,
     /// The downloads page's search filter (the popover stays unfiltered).
     query: String,
+    /// The sites (origins) that downloaded this run: their next download a click aimed at
+    /// goes ahead without asking (`click_guard::download`).
+    sites: BTreeSet<String>,
 }
 
 impl Downloads {
@@ -159,7 +165,7 @@ impl Host {
                 url,
                 original_url,
                 suggested_name,
-                ..
+                total,
             } => {
                 // An agent-driven tab's download is refused (no airlock yet: TODO.md, MCP server).
                 if self.agent_drives(tab) {
@@ -173,14 +179,52 @@ impl Host {
                     return;
                 }
                 let save_as = self.downloads.take_save_as(tab, &url, &original_url);
-                if download::asks_where(self.downloads.ask_where, save_as) {
-                    return self.ask_download_path(window, tab, id, download, &suggested_name);
+                // what the browser itself started (Save As) is the user's; a smoke without
+                // dialogs never asks
+                if save_as || self.downloads.never_ask {
+                    return self.download_go(window, tab, id, download, &suggested_name, save_as);
                 }
-                let path = self.download_path(&suggested_name);
-                if path.is_none() {
-                    self.toast(window, "Cannot download: no downloads folder");
+                let page = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .map(|t| t.url.clone())
+                    .unwrap_or_default();
+                let origin = wubble_core::site::origin_of(&page);
+                // a private window's tab reads its own choices over the stored ones
+                let remembered = origin
+                    .as_deref()
+                    .and_then(|o| self.site_view(tab).permissions().get(o, Permission::Downloads));
+                let aimed = self
+                    .tab_view(tab)
+                    .and_then(|v| v.last_click())
+                    .is_some_and(|(click, age)| click_guard::aimed(Some(&click), age));
+                let before = origin.as_ref().is_some_and(|o| self.downloads.sites.contains(o));
+                match click_guard::download(remembered, aimed, before) {
+                    Start::Go => {
+                        self.downloads.sites.extend(origin);
+                        self.download_go(window, tab, id, download, &suggested_name, false);
+                    }
+                    // never in silence: the user sees what was refused
+                    Start::Refuse => {
+                        let site = wubble_core::url::address_parts(&page).0.to_owned();
+                        self.toast(window, &format!("Blocked a download from {site}"));
+                        self.download_path_chosen(tab, id, download, None);
+                    }
+                    Start::Ask => {
+                        let request = PermissionRequest {
+                            origin: page,
+                            ask: Ask::Download {
+                                id,
+                                download,
+                                url,
+                                name: download::sanitize_file_name(&suggested_name),
+                                size: total,
+                            },
+                        };
+                        self.apply_permission(tab, PermissionEvent::Requested(request));
+                    }
                 }
-                self.download_path_chosen(tab, id, download, path);
             }
             PageEvent::DownloadStarted {
                 download,
@@ -267,6 +311,51 @@ impl Host {
                 }
             },
             _ => {}
+        }
+    }
+
+    /// A download that may go: to the downloads folder, or asked where (the settings, Save As).
+    fn download_go(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        suggested_name: &str,
+        save_as: bool,
+    ) {
+        if download::asks_where(self.downloads.ask_where, save_as) {
+            return self.ask_download_path(window, tab, id, download, suggested_name);
+        }
+        let path = self.download_path(suggested_name);
+        if path.is_none() {
+            self.toast(window, "Cannot download: no downloads folder");
+        }
+        self.download_path_chosen(tab, id, download, path);
+    }
+
+    /// The prompt's answer to "Allow <site> to download files?": the download goes ahead (and
+    /// the site's next aimed one needs no question this run), or is declined.
+    pub(super) fn download_answered(
+        &mut self,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        name: &str,
+        allow: bool,
+    ) {
+        let window = self.w.window.upgrade();
+        match (allow, window) {
+            (true, Some(window)) => {
+                let origin = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .and_then(|t| wubble_core::site::origin_of(&t.url));
+                self.downloads.sites.extend(origin);
+                self.download_go(&window, tab, id, download, name, false);
+            }
+            _ => self.download_path_chosen(tab, id, download, None),
         }
     }
 

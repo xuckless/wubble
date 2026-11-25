@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 
 use wubble_core::external;
 use wubble_core::site::{self, Decision, Permission, SitePermissions, Verdict};
-use wubble_engine::page::{PermissionKind, RequestId};
+use wubble_engine::page::{DownloadId, PermissionKind, RequestId};
 
 // ------------------------------------------------------------ permissions
 
@@ -60,6 +60,15 @@ pub enum Ask {
     /// A link to open in another app (`wubble_core::external`): the host's own question,
     /// never answered to the engine.
     ExternalLink { url: String },
+    /// A download no click asked for, or the site's first (`click_guard::download`): the
+    /// host's own question; the download waits for its path meanwhile.
+    Download {
+        id: RequestId,
+        download: DownloadId,
+        url: String,
+        name: String,
+        size: Option<u64>,
+    },
 }
 
 impl PermissionRequest {
@@ -68,7 +77,7 @@ impl PermissionRequest {
     pub fn site(&self) -> Option<String> {
         match &self.ask {
             Ask::ExternalLink { url } => external::key_for(url, &self.origin),
-            Ask::Engine { .. } => site::origin_of(&self.origin),
+            Ask::Engine { .. } | Ask::Download { .. } => site::origin_of(&self.origin),
         }
     }
 
@@ -77,6 +86,7 @@ impl PermissionRequest {
     pub fn asked(&self) -> Option<Vec<Permission>> {
         let kinds = match &self.ask {
             Ask::ExternalLink { .. } => return Some(vec![Permission::ExternalLinks]),
+            Ask::Download { .. } => return Some(vec![Permission::Downloads]),
             Ask::Engine { kinds, .. } => kinds,
         };
         let mut asked: Vec<Permission> = kinds
@@ -99,13 +109,14 @@ impl PermissionRequest {
                 (url, &self.origin).hash(&mut h);
                 h.finish() as i32
             }
+            Ask::Download { id, .. } => i32::try_from(id.0).unwrap_or(i32::MAX),
         }
     }
 
     fn engine_id(&self) -> Option<RequestId> {
         match self.ask {
             Ask::Engine { id, .. } => Some(id),
-            Ask::ExternalLink { .. } => None,
+            Ask::ExternalLink { .. } | Ask::Download { .. } => None,
         }
     }
 
@@ -160,6 +171,13 @@ pub enum Reply {
     },
     /// To the host: open the link in its app, or not.
     External { url: String, open: bool },
+    /// To the host: the download goes ahead (it is given a path), or is declined.
+    Download {
+        id: RequestId,
+        download: DownloadId,
+        name: String,
+        allow: bool,
+    },
 }
 
 impl PermissionAnswer {
@@ -172,6 +190,14 @@ impl PermissionAnswer {
             Ask::ExternalLink { url } => Reply::External {
                 url: url.clone(),
                 open: grant,
+            },
+            Ask::Download {
+                id, download, name, ..
+            } => Reply::Download {
+                id: *id,
+                download: *download,
+                name: name.clone(),
+                allow: grant,
             },
         };
         Self {
@@ -211,8 +237,9 @@ pub fn permission(
         (Some(PermissionPrompt { shown, queued }), Answer { allow, remember }) => {
             let mut answer = PermissionAnswer::new(&shown, allow);
             let mut table = table.clone();
-            // Chromium's "always" applies to Open only: a link refused once is asked again.
-            let remember = remember && (allow || matches!(shown.ask, Ask::Engine { .. }));
+            // Chromium's "always" applies to Open only: a link refused once is asked again. A
+            // download's Don't Allow is remembered as Safari's is.
+            let remember = remember && (allow || !matches!(shown.ask, Ask::ExternalLink { .. }));
             if remember && let (Some(site), Some(asked)) = (shown.site(), shown.asked()) {
                 let decision = if allow {
                     Decision::Allow
@@ -295,6 +322,27 @@ pub fn permission_text(r: &PermissionRequest) -> PromptText {
     let site = wubble_core::url::address_parts(&r.origin).0;
     let named = !(site.is_empty() || site.ends_with(':'));
     let rememberable = r.site().is_some();
+    if let Ask::Download { name, size, .. } = &r.ask {
+        // Safari's question; the file and its size when the server said
+        let file = match size {
+            Some(n) => format!("{name} ({})", wubble_core::download::format_bytes(*n)),
+            None => name.clone(),
+        };
+        return PromptText {
+            title: format!(
+                "Allow {} to download files?",
+                if named { site } else { "this page" }
+            ),
+            lines: vec![file],
+            remember: if rememberable {
+                "Remember for this site".into()
+            } else {
+                String::new()
+            },
+            allow: "Allow",
+            block: "Don't Allow",
+        };
+    }
     if let Ask::ExternalLink { url } = &r.ask {
         let scheme = external::scheme(url).unwrap_or_default();
         return PromptText {
@@ -455,7 +503,10 @@ mod tests {
             .filter(|&&p| {
                 !matches!(
                     p,
-                    Permission::SavePasswords | Permission::Popups | Permission::ExternalLinks
+                    Permission::SavePasswords
+                        | Permission::Popups
+                        | Permission::ExternalLinks
+                        | Permission::Downloads
                 )
             })
             .count();
@@ -637,6 +688,84 @@ mod tests {
         assert_eq!(t.title, "a.test wants to");
         assert_eq!(t.lines, ["Use your camera", "Use your microphone"]);
         assert_eq!((t.allow, t.block), ("Allow", "Block"));
+    }
+
+    fn download(id: u32, size: Option<u64>) -> PermissionRequest {
+        PermissionRequest {
+            origin: "https://a.test/files".into(),
+            ask: Ask::Download {
+                id: RequestId(id),
+                download: DownloadId(id),
+                url: "https://cdn.test/f.zip".into(),
+                name: "f.zip".into(),
+                size,
+            },
+        }
+    }
+
+    fn downloaded(id: u32, allow: bool) -> Reply {
+        Reply::Download {
+            id: RequestId(id),
+            download: DownloadId(id),
+            name: "f.zip".into(),
+            allow,
+        }
+    }
+
+    #[test]
+    fn a_download_asks_and_both_answers_are_remembered() {
+        let t = permission_text(&download(1, Some(2048)));
+        assert_eq!(t.title, "Allow a.test to download files?");
+        assert_eq!(t.lines.len(), 1);
+        assert!(t.lines[0].starts_with("f.zip ("), "{:?}", t.lines);
+        assert_eq!(t.remember, "Remember for this site");
+        assert_eq!((t.allow, t.block), ("Allow", "Don't Allow"));
+        assert_eq!(permission_text(&download(1, None)).lines, ["f.zip"]);
+
+        let table = SitePermissions::default();
+        for allow in [true, false] {
+            let (s, a) = permission(None, PermissionEvent::Requested(download(2, None)), &table);
+            assert!(a.is_empty() && s.is_some(), "asked");
+            let (s, a) = permission(
+                s,
+                PermissionEvent::Answer {
+                    allow,
+                    remember: true,
+                },
+                &table,
+            );
+            assert_eq!(s, None);
+            let decision = if allow {
+                Decision::Allow
+            } else {
+                Decision::Block
+            };
+            assert_eq!(
+                a,
+                vec![PermissionAnswer {
+                    reply: downloaded(2, allow),
+                    remember: Some((
+                        "https://a.test".into(),
+                        vec![Permission::Downloads],
+                        decision
+                    )),
+                }]
+            );
+        }
+        // remembered: answered at once, no prompt
+        let mut table = table;
+        table.set("https://a.test", Permission::Downloads, Decision::Block);
+        let (s, a) = permission(None, PermissionEvent::Requested(download(3, None)), &table);
+        assert_eq!(s, None);
+        assert_eq!(a[0].reply, downloaded(3, false));
+        // a page change never drops a download unanswered
+        let (s, _) = permission(
+            None,
+            PermissionEvent::Requested(download(4, None)),
+            &SitePermissions::default(),
+        );
+        let (s, a) = permission(s, PermissionEvent::PageChanged, &SitePermissions::default());
+        assert!(s.is_some() && a.is_empty());
     }
 
     fn mailto() -> PermissionRequest {

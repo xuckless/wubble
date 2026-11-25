@@ -385,6 +385,12 @@ impl Host {
                         view.answer_permission(id, &granted);
                     }
                 }
+                Reply::Download {
+                    id,
+                    download,
+                    name,
+                    allow,
+                } => self.download_answered(tab, id, download, &name, allow),
             }
         }
     }
