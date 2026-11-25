@@ -914,6 +914,12 @@ impl View {
         self.producer.take_os_buffers_busy()
     }
 
+    /// Whether this view's newest frame was dropped for a busy pool with none after it, since
+    /// the last call: what the layer shows is a frame behind until the page paints again.
+    pub fn take_os_buffers_lost(&mut self) -> bool {
+        self.producer.take_os_buffers_lost()
+    }
+
     /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
     /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
     /// set on this view's request context; Chromium pushes it to the profile's open pages.

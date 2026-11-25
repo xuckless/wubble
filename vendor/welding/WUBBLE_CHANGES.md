@@ -622,6 +622,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
     pool's count and zeroes it. For wubble's page layer diagnostics (its per-second
     summary line). Linux and Windows unchanged.
 
+66. **A frame dropped for a busy pool, reported (macOS).** `native_frame/metal.rs`:
+    `OsBufferPool::lost`, set where `next` returns `Next::Busy`, cleared where it hands a
+    buffer. `surface.rs`: new `CefSurfaceProducer::take_os_buffers_lost` (default false);
+    `macos_cef` returns the pool's flag and clears it. wubble asks CEF to paint again
+    (`invalidate`) a refresh later, so the layer is not left a frame behind when a burst's
+    last frame was the one dropped. Linux and Windows unchanged.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

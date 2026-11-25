@@ -380,6 +380,10 @@ pub(crate) struct OsBufferPool {
     /// wubble change (65): frames dropped as [`Next::Busy`] since the host last took the count
     /// (`CefSurfaceProducer::take_os_buffers_busy`).
     pub(crate) busy: u64,
+    /// wubble change (66): the newest frame was dropped as [`Next::Busy`] and none was copied
+    /// since, so what the host shows is a frame behind until the page paints again; taken by
+    /// `CefSurfaceProducer::take_os_buffers_lost`, which asks CEF for the frame again.
+    pub(crate) lost: bool,
 }
 
 impl OsBufferPool {
@@ -390,6 +394,7 @@ impl OsBufferPool {
             slots: Vec::new(),
             latest: None,
             busy: 0,
+            lost: false,
         }
     }
 
@@ -420,8 +425,11 @@ impl OsBufferPool {
         let Some(i) = chosen.filter(|&i| i < self.slots.len()) else {
             // wubble change (65): counted for the host.
             self.busy += 1;
+            self.lost = true;
             return Next::Busy;
         };
+        // wubble change (66): a frame copied, so none is lost
+        self.lost = false;
         self.latest = Some(i);
         Next::Buffer(self.slots[i].clone())
     }

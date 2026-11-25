@@ -509,6 +509,19 @@ impl CefSurfaceProducer for MacosCefProducer {
         }
     }
 
+    /// wubble change (66): the pool's flag, taken.
+    fn take_os_buffers_lost(&mut self) -> bool {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let mut pool = self.os_buffers.lock().unwrap();
+            return pool.as_mut().is_some_and(|pool| std::mem::take(&mut pool.lost));
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            false
+        }
+    }
+
     fn acquire_native_frame(&mut self) -> Option<NativeFrame> {
         self.frame_slot.lock().unwrap().take()
     }

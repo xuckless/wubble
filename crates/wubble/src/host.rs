@@ -536,6 +536,8 @@ pub struct Host {
     /// `Pacing::Shell`: the begin frames of agent pages no window shows, at
     /// [`pacing::UNSHOWN_FRAME_RATE`], running while there is one.
     unshown: slint::Timer,
+    /// Pages on a layer whose newest frame was dropped for a busy pool, to paint again.
+    lost_frames: page_layer::LostFrames,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
     /// When each tab's page's clipboard read started, until it is answered; one past
@@ -775,6 +777,7 @@ impl Host {
                 Pacing::CefTimer
             },
             unshown: slint::Timer::default(),
+            lost_frames: Default::default(),
             clipboard,
             clipboard_reads: Default::default(),
             archive_after: ArchiveAfter::Off,
@@ -1515,6 +1518,8 @@ impl Host {
             let timer = self.engine.page_painted(period).timer;
             self.arm_pump(timer);
         }
+        // a frame CEF painted in this work may have been dropped for a busy pool
+        self.layer_frames_lost();
         measure::count(measure::Count::PumpWorked);
         for (view, event) in events {
             if let Some(window) = self.enter_view(view) {

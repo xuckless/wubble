@@ -92,6 +92,15 @@ impl PageLayers {
     }
 }
 
+/// Pages on a layer whose newest frame welding dropped because every OS buffer was held (a burst
+/// of frames, docs/research/page-layer.md "Dropped frames"), and the timer that asks them for it
+/// again a refresh later, once the compositor has let a buffer go.
+#[derive(Default)]
+pub(crate) struct LostFrames {
+    tabs: std::collections::BTreeSet<TabId>,
+    timer: slint::Timer,
+}
+
 struct LayerPane {
     route: Route,
     layer: Box<dyn PageLayer>,
@@ -325,6 +334,48 @@ impl Host {
             window.request_redraw();
         }
         self.enter(here);
+    }
+
+    /// After CEF's work: the pages on a layer in any window that lost their newest frame to a busy
+    /// pool paint again a refresh from now (`repaint_lost`): else the layer shows the frame before
+    /// until the page paints by itself, which a still page never does.
+    pub(super) fn layer_frames_lost(&mut self) {
+        let tabs: Vec<TabId> = std::iter::once(&self.w)
+            .chain(self.parked.values())
+            .flat_map(|w| w.layers.panes.keys().copied())
+            .collect();
+        for tab in tabs {
+            if self.tab_view(tab).is_some_and(|v| v.take_os_buffers_lost()) {
+                self.lost_frames.tabs.insert(tab);
+            }
+        }
+        if self.lost_frames.tabs.is_empty() || self.lost_frames.timer.running() {
+            return;
+        }
+        let delay = self
+            .refresh()
+            .unwrap_or(std::time::Duration::from_millis(16));
+        self.lost_frames
+            .timer
+            .start(slint::TimerMode::SingleShot, delay, || {
+                crate::with_host(Host::repaint_lost)
+            });
+    }
+
+    /// Each page that lost its newest frame paints it again (CEF's `invalidate`; with the shell's
+    /// begin frames, its window's driver woken for it). One dropped again is reported again.
+    fn repaint_lost(&mut self) {
+        for tab in std::mem::take(&mut self.lost_frames.tabs) {
+            if let Some(view) = self.tab_view(tab) {
+                view.repaint();
+            }
+            if let Some(id) = self.model.window_of(tab)
+                && self.enter(id)
+            {
+                self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+            }
+        }
+        self.enter_focused();
     }
 
     /// The window (the current one or a parked one) `holds` picks.
