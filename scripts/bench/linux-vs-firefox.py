@@ -2,14 +2,15 @@
 """wubble against Firefox on Linux, state by state: the Mac harness's states
 (scripts/mac-checks on branch mac-checks) on the invisible display. Hand run only.
 
-    ~/Dev/wubble/.local/bin/run.sh timeout 900 scripts/headless.sh \\
+    WUBBLE_HEADLESS_SIZE=1360x880@300 ~/Dev/wubble/.local/bin/run.sh timeout 900 scripts/headless.sh \\
       python3 scripts/bench/linux-vs-firefox.py --wubble target/release/wubble
 
-States: a still page (idle), a looping 1080p60 VP9 video, the video under the find bar and under
+States: a still page (idle), a page asking for every frame (animation: the rate each browser
+draws at), a looping 1080p60 VP9 video, the video under the find bar and under
 the command bar (Firefox: its find bar, its address bar), scrolling a long page (wheel notches),
 typing into a textarea. Each runs `--seconds` (default 20) in a fresh launch of each browser on a
 throwaway profile, after the page reports it loaded and `--warmup` seconds more; wubble runs
-with WUBBLE_TRACE=1, Firefox with telemetry, updates and every Mozilla service off (user.js).
+with WUBBLE_TRACE=1 only under --trace, Firefox with telemetry, updates and every Mozilla service off (user.js).
 
 Input: mutter's RemoteDesktop on the headless display's own bus (found through its mutter
 process; never the desktop's), a virtual keyboard and pointer that reach Wayland windows
@@ -33,6 +34,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import shutil
 import signal
 import statistics
@@ -48,7 +50,9 @@ import common
 HERE = Path(__file__).resolve().parent
 TICK = os.sysconf("SC_CLK_TCK")
 KINDS = ("main", "gpu", "renderer", "other")
-SIZE = tuple(int(x) for x in os.environ.get("WUBBLE_HEADLESS_SIZE", "1360x880").split("x"))
+# headless.sh's virtual monitor, WxH or WxH@R (mutter's --virtual-monitor)
+_W, _H, _R = re.fullmatch(r"(\d+)x(\d+)(?:@(\d+))?", os.environ.get("WUBBLE_HEADLESS_SIZE", "1360x880")).groups()
+SIZE, HZ = (int(_W), int(_H)), int(_R or 60)
 
 # --- the fixture pages; each says when it loaded and what it saw, through `/log`
 HEAD = """<!doctype html><meta charset=utf-8><title>%s</title><style>body{margin:24px;font:16px sans-serif;background:#f4f4f4}</style>
@@ -62,12 +66,19 @@ PAGES = {
     "still": PROSE * 4,
     # video-page.sh's clip and shape: 1080p60 VP9 looping muted at 854x480
     "video": """<video id=v src="clip-1080p60.webm" autoplay muted loop playsinline style="width:854px;height:480px;display:block"></video>
-<script>const v = document.getElementById('v');
+<script>const v = document.getElementById('v'); let shown = 0;
+const seen = () => { shown++; v.requestVideoFrameCallback(seen); }; v.requestVideoFrameCallback(seen);
 v.addEventListener('timeupdate', every(1000, () => { const q = v.getVideoPlaybackQuality();
-  log({video: q.totalVideoFrames, dropped: q.droppedVideoFrames}); }));</script>""",
+  log({video: q.totalVideoFrames, dropped: q.droppedVideoFrames, shown}); }));</script>""",
     "long": "".join(f"<h2>Section {i}</h2>{PROSE}<div style='height:120px;background:hsl({i * 7 % 360} 60% 70%)'></div>"
                     for i in range(300))
-            + "<script>addEventListener('scroll', every(1000, () => log({y: Math.round(scrollY)})));</script>",
+            + "<script>let moved = 0; const say = every(1000, () => log({y: Math.round(scrollY), moved}));"
+            + "addEventListener('scroll', () => { moved++; say(); });</script>",
+    # a page asking for every frame (a spinning square): the rate each browser draws at and its cost
+    "anim": """<div id=d style="width:200px;height:200px;background:#36c"></div>
+<script>const d = document.getElementById('d'); let raf = 0; const say = every(1000, () => log({raf}));
+const tick = t => { raf++; d.style.transform = `rotate(${t / 10 % 360}deg)`; say(); requestAnimationFrame(tick); };
+requestAnimationFrame(tick);</script>""",
     "type": """<textarea id=t autofocus spellcheck=false style="box-sizing:border-box;width:100%;height:80vh;font:16px monospace"></textarea>
 <script>const t = document.getElementById('t'); addEventListener('load', () => t.focus());
 t.addEventListener('input', every(1000, () => log({len: t.value.length})));</script>""",
@@ -76,6 +87,7 @@ t.addEventListener('input', every(1000, () => log({len: t.value.length})));</scr
 # --- the states: (page, keys once it shows, per browser; what drives it while it is measured)
 STATES = {
     "idle": ("still", {}, None),
+    "animation": ("anim", {}, None),
     "video": ("video", {}, None),
     "video+find": ("video", {"wubble": "ctrl+f", "firefox": "ctrl+f"}, None),
     "video+command": ("video", {"wubble": "ctrl+k", "firefox": "ctrl+l"}, None),
@@ -136,7 +148,7 @@ FIREFOX_PREFS = {
 BROWSERS = {
     "wubble": {
         "cmd": lambda b, prof, url: [b, "--profile", prof, url],
-        "env": {"WUBBLE_TRACE": "1"},
+        "env": {},  # WUBBLE_TRACE=1 only with --trace
         # the zygote's children keep its command line: the GPU process has GpuWatchdog, a
         # renderer (the sandboxed zygote's) the child IO thread a zygote itself lacks
         "kinds": (("gpu", ("--type=gpu-process",)), ("gpu", ("GpuWatchdog",)), ("renderer", ("--type=renderer",)),
@@ -390,8 +402,8 @@ def run_one(a, ctx, browser, state, rnd):
     loop, seat, notes = ctx["loop"], ctx["seat"], []
     mark = loop.mark()
     with logpath.open("w") as log:
-        p = subprocess.Popen(b["cmd"](ctx["bin"][browser], prof, f"{loop.base}/{page}.html"),
-                             env=os.environ | b["env"], stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        env = os.environ | b["env"] | ({"WUBBLE_TRACE": "1"} if a.trace and browser == "wubble" else {})
+        p = subprocess.Popen(b["cmd"](ctx["bin"][browser], prof, f"{loop.base}/{page}.html"), env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         end = time.time() + 60
         while not any(e["page"] == page for e in loop.since(mark, "page")) and time.time() < end and p.poll() is None:
@@ -421,13 +433,22 @@ def run_one(a, ctx, browser, state, rnd):
             log.writelines(f"bench: {k} {pid} {common.ident(pid).split(chr(0))[0]}\n"
                            for pid, k in sorted(sampler.kind_of.items()))
         # what the page and the trace saw in the window
+        if browser == "wubble":
+            got = re.search(r"CEF frame rate (\d+)", logpath.read_text(errors="replace"))
+            notes.append(f"CEF frame rate {got.group(1) if got else '?'}")
         video = loop.since(ev, "video")
         if page == "video":
-            fps, drop = rate(video, "video"), rate(video, "dropped")
-            notes.append("video: no report" if fps is None else f"video {fps:.0f} frames/s decoded, {drop:.1f} dropped/s")
+            fps, drop, shown = rate(video, "video"), rate(video, "dropped"), rate(video, "shown")
+            notes.append("video: no report" if fps is None else
+                         f"video {fps:.0f} frames/s decoded, {shown:.0f} presented, {drop:.1f} dropped/s")
+        if page == "anim":
+            fps = rate(loop.since(ev, "raf"), "raf")
+            notes.append("animation: no report" if fps is None else f"animation {fps:.0f} frames/s")
         if driver == "scroll":
-            ys = [int(e["y"]) for e in loop.since(ev, "y")]
-            notes.append(f"scrolled to y {min(ys)}..{max(ys)}" if ys else "NOT SCROLLED (no wheel reached the page)")
+            ys = loop.since(ev, "y")
+            notes.append(f"scrolled y {min(int(e['y']) for e in ys)}..{max(int(e['y']) for e in ys)}, "
+                         f"{rate(ys, 'moved') or 0:.0f} frames/s moved the page" if ys
+                         else "NOT SCROLLED (no wheel reached the page)")
         if driver == "type":
             got = loop.since(ev, "len")
             notes.append(f"{got[-1]['len']} characters reached the page" if got else "NOTHING TYPED reached the page")
@@ -480,7 +501,7 @@ def write_report(a, ctx, results):
     shown = [m for m in METRICS if any(stat(rs, m[1], m[2]) is not None for rs, _ in results.values())]
     out = [f"# wubble against Firefox, Linux ({ctx['started']})", "",
            f"wubble: {ctx['version']['wubble']} ({a.wubble}); Firefox: {ctx['version']['firefox']}.",
-           f"Machine: {ctx['machine']}. Invisible display {SIZE[0]}x{SIZE[1]} at 60 Hz (scripts/headless.sh), "
+           f"Machine: {ctx['machine']}. Invisible display {SIZE[0]}x{SIZE[1]} at {HZ} Hz (scripts/headless.sh), "
            f"windows 1280x800. {a.seconds} s per state after load + {a.warmup} s, {a.rounds} round(s), "
            f"a fresh launch and profile each. Load average: {ctx['load0']} at the start, {ctx['load1']} at the end.",
            "", "Each cell is wubble / Firefox; CPU is % of one core over the whole process tree (main, GPU "
@@ -532,6 +553,8 @@ def main():
     ap.add_argument("--warmup", type=int, default=10, help="seconds after the page loaded before a state starts")
     ap.add_argument("--rounds", type=int, default=1, help="every state this many times, the browsers' order alternating")
     ap.add_argument("--states", default=",".join(STATES), help="comma-separated, of: " + ", ".join(STATES))
+    ap.add_argument("--trace", action="store_true",
+                    help="wubble with WUBBLE_TRACE=1 (its per-second summary; it costs CPU: off for numbers)")
     ap.add_argument("--out", help="results folder (default ~/Dev/wubble/.local/bench/<time>)")
     a = ap.parse_args()
     a.states = a.states.split(",")
