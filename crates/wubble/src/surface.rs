@@ -20,7 +20,7 @@ use wubble_engine::page::{JsDialogKind, PageEvent, Rect, RequestId};
 
 use crate::chooser::{self, DialogSpec};
 use crate::menu::MenuEvent;
-use crate::page_error::{ErrorEvent, PageError};
+use crate::page_error::PageError;
 use crate::prompt::{self, AuthEvent, AuthRequest, PermissionEvent, PermissionRequest};
 
 // ---------------------------------------------------------------- dialogs
@@ -322,7 +322,11 @@ pub enum Routed {
         url: String,
         code: i32,
     },
-    Error(ErrorEvent),
+    /// The page's load failed (the error panel's `ErrorEvent::LoadFailed`, timed by the host).
+    LoadFailed {
+        url: String,
+        code: i32,
+    },
     /// A download request, or news of one (`host/downloads.rs`).
     Download(PageEvent),
     /// A console line, for the debug log.
@@ -464,9 +468,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::CdpReply { .. }
         | PageEvent::EvalResult { .. }
         | PageEvent::ChooserIntercepted(_) => Routed::Ignore,
-        PageEvent::LoadFailed { url, code, .. } => {
-            Routed::Error(ErrorEvent::LoadFailed { url, code })
-        }
+        PageEvent::LoadFailed { url, code, .. } => Routed::LoadFailed { url, code },
         e @ (PageEvent::DownloadRequested { .. }
         | PageEvent::DownloadStarted { .. }
         | PageEvent::DownloadProgress { .. }
@@ -857,10 +859,10 @@ mod tests {
                 code: -105,
                 text: "x".into()
             }),
-            Routed::Error(ErrorEvent::LoadFailed {
+            Routed::LoadFailed {
                 url: "https://a.test/".into(),
                 code: -105
-            })
+            }
         );
         assert_eq!(
             route(PageEvent::Console {

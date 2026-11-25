@@ -207,7 +207,16 @@ impl Host {
             Routed::Auth(e) => self.apply_auth(tab, e),
             Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
-            Routed::Error(e) => self.apply_error(tab, e),
+            Routed::LoadFailed { url, code } => {
+                let shown = self.tab_view(tab).is_some_and(|v| v.is_visible());
+                let event = ErrorEvent::LoadFailed {
+                    url,
+                    code,
+                    now_ms: wall_ms(),
+                    shown,
+                };
+                self.apply_error(tab, event);
+            }
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => {
                 if std::env::var_os("WUBBLE_PARITY_TRACE").is_some() {
@@ -461,7 +470,7 @@ impl Host {
                 continue;
             };
             match effect {
-                ErrorEffect::Reload => view.reload(),
+                ErrorEffect::Reload { .. } => view.reload(),
                 ErrorEffect::Back => view.back(),
                 ErrorEffect::Blank => view.load("about:blank"),
                 ErrorEffect::AnswerCert { request, proceed } => {
@@ -470,6 +479,37 @@ impl Host {
                 ErrorEffect::Allow { .. } => {}
             }
         }
+    }
+
+    /// `event` for `tab`'s error panel, when it has one: the schedule's and the page's news
+    /// that only a panel cares about (its tab shown or hidden, a stop, a load's end).
+    pub(super) fn error_news(&mut self, tab: TabId, event: ErrorEvent) {
+        let Some(before) = self
+            .surfaces
+            .get(&tab)
+            .map(|s| s.error.clone())
+            .filter(|e| *e != PageError::None)
+        else {
+            return;
+        };
+        self.apply_error(tab, event);
+        // a tick that changes nothing draws nothing
+        if self.surfaces.get(&tab).map(|s| &s.error) != Some(&before) {
+            self.redraw_surfaces();
+        }
+    }
+
+    /// `event` for every tab's error panel: the tick, the network back.
+    pub(super) fn errors_news(&mut self, event: ErrorEvent) {
+        let tabs: Vec<TabId> = self.surfaces.keys().copied().collect();
+        for tab in tabs {
+            self.error_news(tab, event.clone());
+        }
+    }
+
+    /// The system came back online (`os_online`): a failed page reloads at once.
+    pub fn network_online(&mut self) {
+        self.errors_news(ErrorEvent::Online);
     }
 
     /// Shows the OS file dialog; its answer comes back on the event loop.
@@ -1633,4 +1673,9 @@ fn popup_view(window: &AppWindow, view: (f32, f32), popup: Option<Rect>) -> Popu
         origin_x: origin.x as f32 / scale,
         origin_y: origin.y as f32 / scale,
     }
+}
+
+/// The wall clock in ms, as the error panel's schedule counts it.
+pub(super) fn wall_ms() -> u64 {
+    u64::try_from(super::now_ms()).unwrap_or(0)
 }

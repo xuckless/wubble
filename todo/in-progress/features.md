@@ -47,7 +47,7 @@ Add Action::EmptyCacheHardReload (FIXED table and PALETTE). It sends the CDP cal
 
 ## Error panel: auto-reload when the network comes back (`offline-auto-reload`)
 
-Key: `offline-auto-reload` · engine patch: no · state: not written.
+Key: `offline-auto-reload` · engine patch: no · state: [~] written blind on sprint/features, not compiled.
 
 Chrome's NetErrorAutoReloader reloads a page that failed with a network error (ERR_INTERNET_DISCONNECTED, ERR_NAME_NOT_RESOLVED, ERR_NETWORK_CHANGED, ERR_CONNECTION_*, ERR_ADDRESS_UNREACHABLE, timeouts). It retries on an exponential backoff (1 s, 5 s, 30 s, 1 m, 5 m, 10 m), and at once when the system comes back online, but only while the tab is visible. It never retries certificate errors, a POST, or a load the user stopped. wubble's PageError::Load (crates/wubble/src/page_error.rs) stays until the user presses Reload.
 

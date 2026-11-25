@@ -1223,6 +1223,13 @@ impl Host {
                         view.set_frame_rate(pacing::view_frame_rate(frame_rate, visible));
                     }
                 }
+                // a failed page reloads on its own only while it is on screen
+                let news = if visible {
+                    ErrorEvent::Shown(surfaces::wall_ms())
+                } else {
+                    ErrorEvent::Hidden
+                };
+                self.error_news(tab, news);
                 // the driver of the window that shows it
                 let back = self.w.id;
                 if let Some(id) = self.model.window_of(tab) {
@@ -1846,6 +1853,7 @@ impl Host {
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
                     self.typed_nav.ended(tab);
+                    self.error_news(tab, ErrorEvent::LoadEnded);
                 }
                 self.report_busy(tab);
             }
@@ -2499,6 +2507,10 @@ impl Host {
                     return;
                 };
                 self.typed_nav.ended(tab);
+                // a stopped page is not reloaded on its own
+                if matches!(op, ViewOp::Stop) {
+                    self.error_news(tab, ErrorEvent::UserStopped);
+                }
                 if matches!(op, ViewOp::ToggleMute) {
                     self.toggle_mute(tab);
                     return;
@@ -2933,6 +2945,7 @@ impl Host {
             pressure,
         });
         self.archive_tick(wall_ms);
+        self.errors_news(ErrorEvent::Tick(surfaces::wall_ms()));
         self.save = self.save.ticked();
         if persist::should_save(self.save) {
             self.save_now();

@@ -33,6 +33,7 @@ mod nav_smoke;
 mod net_audit;
 mod orbs;
 mod os_motion;
+mod os_online;
 mod os_scope;
 mod overlay_smoke;
 mod page_error;
@@ -2425,6 +2426,10 @@ fn run(
             measure::count(measure::Count::AudibleProbe);
             with_host(Host::probe_audible)
         });
+        // a page that failed for want of a network reloads once it is back
+        os_online::watch(Box::new(|| {
+            let _ = slint::invoke_from_event_loop(|| with_host(Host::network_online));
+        }));
     }
     let measure_timer = slint::Timer::default();
     if measuring {
