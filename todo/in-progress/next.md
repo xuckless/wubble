@@ -229,3 +229,4 @@ Build:
 - [~] A Linux page layer: Chromium's frame as its own Wayland subsurface below the shell, no copy and no shell draw per page frame. Feasibility research first (`docs/research/linux-page-layer.md` on `research/linux-layer`), then a one-day experiment, then the build
 - [ ] Linux releases built in an older container (for example Ubuntu 22.04, glibc 2.35), not on Fedora 44 (today's release needs glibc 2.43, so only 2026 distros run it)
 - [ ] The Linux-vs-Firefox bench and the system requirements draft (`next/bench`): merge with the next round
+- [ ] A locked store falls back to defaults for the whole session, silently (Mac harness, 2026-11-25: a quick relaunch while the previous run still held `wubble.db` started with every setting at its default and no saved session). Wait and retry the lock for a few seconds at start, and if it stays locked, say so in a notice instead of only stderr; find what still holds the file after quit
