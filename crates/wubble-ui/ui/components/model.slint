@@ -386,9 +386,10 @@ export struct FindView {
 // What of each surface the kit still draws (open, or leaving: its exit not yet over), as
 // AppWindow's `mounted` reports it (the kit components' own `mounted` or `visible`): the host
 // reads it when it derives what covers a page (`wubble_core::overlay::Stack::leaving`), so the
-// end of an exit is the kit's to tell, timed by nobody else. The command bar is not here: its
-// exit is the driver's (`CommandBarState::Closing`).
+// end of an exit is the kit's to tell, timed by nobody else. The command bar's is the driver's
+// state (`CommandBarState::Closing`), over the page only (the overlay, not the start page's capsule).
 export struct Mounted {
+    command-bar: bool,
     permission: bool,
     find: bool,
     dialog: bool,

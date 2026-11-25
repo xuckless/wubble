@@ -93,9 +93,12 @@ impl Contents {
     }
 }
 
-/// The overlays the store owns so far: the kit draws each from its phase, which only the host
-/// writes (`settle_layers`). TRANSITIONAL: the others still belong to their machines.
-const STORED: [Kind; 28] = [
+/// The overlays the store owns: the kit draws each from its phase, which only the host writes
+/// (`settle_layers`; the command bar's motion is the driver's, its openness the store's,
+/// `Host::bar_state_changed`). The other kinds are free surfaces their owners write, which the
+/// stack takes from what the kit draws (`surface_stack`).
+const STORED: [Kind; 29] = [
+    Kind::CommandBar,
     Kind::ErrorPanel,
     Kind::Boost,
     Kind::Notice,
@@ -129,9 +132,6 @@ const STORED: [Kind; 28] = [
 /// What the store reads of the host's other owners as an action runs (never copied into it).
 struct HostEnv<'a> {
     host: &'a Host,
-    window: &'a AppWindow,
-    /// The tab whose menu and panels the current window shows (before a switch: the old one).
-    menu_tab: Option<TabId>,
 }
 
 impl HostEnv<'_> {
@@ -160,17 +160,6 @@ impl Env for HostEnv<'_> {
         self.window(w).is_some_and(|x| x.handle.get_web_focused())
     }
 
-    fn others(&self, w: WindowId) -> Vec<Layer> {
-        if w != self.host.w.id {
-            return vec![];
-        }
-        self.host.machine_layers(self.window, self.menu_tab)
-    }
-
-    fn machine(&self, kind: Kind) -> bool {
-        !STORED.contains(&kind)
-    }
-
     fn peeked(&self, w: WindowId) -> Option<TabId> {
         self.host.model.glance_of(w).map(|g| g.tab)
     }
@@ -180,9 +169,9 @@ impl Env for HostEnv<'_> {
 /// the one table `surface_stack` and the store's exits (`settle_layers`) read (the peek's is a
 /// fact of `page_covered`).
 #[rustfmt::skip]
-fn mounted(m: &Mounted) -> [(Kind, bool); 24] {
+fn mounted(m: &Mounted) -> [(Kind, bool); 25] {
     [
-        (Kind::Permission, m.permission), (Kind::Find, m.find), (Kind::Dialog, m.dialog),
+        (Kind::CommandBar, m.command_bar), (Kind::Permission, m.permission), (Kind::Find, m.find), (Kind::Dialog, m.dialog),
         (Kind::BookmarkSheet, m.bookmark_sheet), (Kind::PrintSheet, m.print_sheet),
         (Kind::ExtensionSheet, m.extension_sheet), (Kind::AgentSheet, m.agent_sheet),
         (Kind::Region, m.region), (Kind::Downloads, m.downloads), (Kind::Extensions, m.extensions),
@@ -203,28 +192,8 @@ impl Host {
             .find(|x| x.id == w)
     }
 
-    fn env<'a>(&'a self, window: &'a AppWindow, menu_tab: Option<TabId>) -> HostEnv<'a> {
-        HostEnv {
-            host: self,
-            window,
-            menu_tab,
-        }
-    }
-
-    /// TRANSITIONAL (until each kind moves into the store): the overlays open in this window
-    /// whose machine still owns their openness, each read from it (`menu_tab`: the tab whose
-    /// menu and panels count).
-    fn machine_layers(&self, window: &AppWindow, menu_tab: Option<TabId>) -> Vec<Layer> {
-        let mut layers = vec![];
-        let mut add = |kind, tab| layers.push(Layer::new(kind, tab));
-        // the start page's capsule is the page's own field, not an overlay
-        if window.get_command_bar_state() == CommandBarState::Open
-            && window.get_command_placement() == CommandPlacement::Overlay
-        {
-            add(Kind::CommandBar, None);
-        }
-        let _ = menu_tab;
-        layers
+    fn env(&self) -> HostEnv<'_> {
+        HostEnv { host: self }
     }
 
     /// Every surface on screen in this window now: the overlays from the store (with the
@@ -233,7 +202,7 @@ impl Host {
     /// machine's overlay leaves (`AppWindow::mounted`). Derived each time, never kept.
     fn surface_stack(&self, window: &AppWindow) -> Stack {
         let shown = self.shown();
-        let mut stack = self.ui.stack(&self.env(window, shown), self.w.id);
+        let mut stack = self.ui.stack(&self.env(), self.w.id);
         let mut add = |kind, tab| stack.layers.push(Layer::new(kind, tab));
         // ----- the free surfaces, from what their owners wrote into this window
         let key = self.model.window_key_tab(self.w.id);
@@ -261,26 +230,18 @@ impl Host {
                 add(kind, tab);
             }
         }
-        // ----- what the kit still draws of the machines' overlays and the free surfaces: open,
-        // or leaving (the store's own leave by their phase; the command bar's exit is the
-        // driver's, seen in its state)
-        let mut drawn = vec![];
-        if window.get_command_bar_state() != CommandBarState::Closed
-            && window.get_command_placement() == CommandPlacement::Overlay
-        {
-            drawn.push(Layer::new(Kind::CommandBar, None));
-        }
+        // ----- what the kit still draws of the free surfaces: open, or leaving (the store's own
+        // leave by their phase)
         let at = |kind: Kind| match kind.row().scope {
             Scope::Window => None,
             Scope::Tab => shown,
             Scope::Pane => key,
         };
-        drawn.extend(
-            mounted(&window.get_mounted())
-                .into_iter()
-                .filter(|&(kind, on)| on && !STORED.contains(&kind))
-                .map(|(kind, _)| Layer::new(kind, at(kind))),
-        );
+        let drawn: Vec<Layer> = mounted(&window.get_mounted())
+            .into_iter()
+            .filter(|&(kind, on)| on && !STORED.contains(&kind))
+            .map(|(kind, _)| Layer::new(kind, at(kind)))
+            .collect();
         stack.with_drawn(&drawn)
     }
 
@@ -313,19 +274,14 @@ impl Host {
     /// Runs `action` through the store, carries out its effects, writes the store's overlays
     /// into every window and ends the exits the kit no longer draws; returns the effects. The
     /// caller redraws the machines' surfaces.
-    pub(super) fn act(&mut self, window: &AppWindow, action: Action) -> Vec<Effect> {
-        self.act_with(window, action, None)
+    pub(super) fn act(&mut self, action: Action) -> Vec<Effect> {
+        self.act_with(action, None)
     }
 
     /// [`Host::act`] for an open that brings its overlay's content: its `Mount` puts it in the
     /// content map.
-    fn act_with(
-        &mut self,
-        window: &AppWindow,
-        action: Action,
-        content: Option<Content>,
-    ) -> Vec<Effect> {
-        let fx = self.step(window, action, content);
+    fn act_with(&mut self, action: Action, content: Option<Content>) -> Vec<Effect> {
+        let fx = self.step(action, content);
         self.settle_layers();
         fx
     }
@@ -333,22 +289,13 @@ impl Host {
     /// One reduce. The store is stored before any effect runs, so an owner that answers a
     /// `Cancel` by closing meets the new state (and its close is ignored). `content`: the opened
     /// overlay's, put in the content map by its `Mount`, the map's one insert.
-    fn step(
-        &mut self,
-        window: &AppWindow,
-        action: Action,
-        content: Option<Content>,
-    ) -> Vec<Effect> {
-        let menu_tab = match action {
-            Action::Switched { from, .. } => from,
-            _ => self.shown(),
-        };
+    fn step(&mut self, action: Action, content: Option<Content>) -> Vec<Effect> {
         // the window the effects' window overlays are in
-        let at = overlay::acting(&self.env(window, menu_tab), action).unwrap_or(self.w.id);
+        let at = overlay::acting(&self.env(), action).unwrap_or(self.w.id);
         let mut content = content;
         let before = self.ui.slots();
         let ui = std::mem::take(&mut self.ui);
-        let (ui, fx) = overlay::reduce(ui, &self.env(window, menu_tab), action);
+        let (ui, fx) = overlay::reduce(ui, &self.env(), action);
         self.ui = ui;
         for &effect in &fx {
             match effect {
@@ -386,8 +333,7 @@ impl Host {
     pub(super) fn hover(&mut self, kind: Kind, key: Key, cue: Cue) {
         let at = Surface { w: self.w.id, kind };
         let now = self.surface_now();
-        let window = self.w.handle();
-        self.step(&window, Action::Hover { at, key, cue, now }, None);
+        self.step(Action::Hover { at, key, cue, now }, None);
     }
 
     /// The hidden sidebar's peek: the shell's pointer cue as its slot's (chrome.tsx: the edge
@@ -413,8 +359,7 @@ impl Host {
     /// The store's one timer fired.
     fn surface_tick(&mut self) {
         let now = self.surface_now();
-        let window = self.w.handle();
-        self.step(&window, Action::Tick { now }, None);
+        self.step(Action::Tick { now }, None);
     }
 
     /// `Effect::Arm`: the one timer set for `at` on the store's clock, or stopped. It runs in
@@ -505,9 +450,9 @@ impl Host {
                 (Scope::Pane, _) => true,
                 _ => bits.contains(&(l.kind, true)),
             };
-            let gone = self.ui.gone(&self.env(&window, self.shown()), w, drawn);
+            let gone = self.ui.gone(&self.env(), w, drawn);
             for layer in gone {
-                self.step(&window, Action::Exited { w, layer }, None);
+                self.step(Action::Exited { w, layer }, None);
             }
         }
     }
@@ -520,17 +465,31 @@ impl Host {
     /// Asks to open `kind` (for `tab` when it is the tab's): whatever it replaces is closed;
     /// false when it may not open now (true when it is open already: its owner takes the ask).
     pub(super) fn overlay_open(&mut self, kind: Kind, tab: Option<TabId>) -> bool {
-        let Some(window) = self.w.window.upgrade() else {
-            return true;
-        };
         let (w, layer) = (self.w.id, Layer::new(kind, tab));
-        let env = self.env(&window, self.shown());
-        let already =
-            self.ui.phase(w, layer) == Some(Phase::Open) || env.others(w).contains(&layer);
-        already
+        self.ui.phase(w, layer) == Some(Phase::Open)
             || self
-                .act(&window, Action::Open { w, layer })
+                .act(Action::Open { w, layer })
                 .contains(&Effect::Mount(layer))
+    }
+
+    /// The shell driver moved the command bar (`command-bar-changed`; its motion is
+    /// `chrome::command`'s): a bar over the page is the store's to admit (refused, it closes
+    /// again), and one the driver closed (Escape, a pick, a press outside, the keys gone) or put in
+    /// the start page's capsule leaves the store, its exit ending with the kit's
+    /// (`Mounted::command_bar`). Each case is the same whenever it is asked again.
+    pub(crate) fn bar_state_changed(&mut self) {
+        let window = self.w.handle();
+        let over = window.get_command_bar_state() == CommandBarState::Open
+            && window.get_command_placement() == CommandPlacement::Overlay;
+        if !over {
+            return self.overlay_closed(Kind::CommandBar);
+        }
+        if !self.overlay_open(Kind::CommandBar, None) {
+            let _ = self
+                .w
+                .window
+                .upgrade_in_event_loop(|window| window.invoke_dismiss_command_bar());
+        }
     }
 
     /// The owner of a window's store overlay closed it (a pick, a dismissal, an empty list).
@@ -541,10 +500,8 @@ impl Host {
     /// The owner of window `w`'s store overlay `kind` closed it (an app-wide content, the
     /// extensions panel or an agent's sheet, closes in the window holding it).
     pub(super) fn window_closed(&mut self, w: WindowId, kind: Kind) {
-        if let Some(window) = self.w.window.upgrade() {
-            let layer = Layer::new(kind, None);
-            self.act(&window, Action::Close { w, layer });
-        }
+        let layer = Layer::new(kind, None);
+        self.act(Action::Close { w, layer });
     }
 
     /// `Unmount` of `layer` (a window overlay's in window `w`): its content goes, the content
@@ -589,7 +546,6 @@ impl Host {
         ask: bool,
     ) -> Option<Content> {
         let open = self.ui.phase(w, layer) == Some(Phase::Open);
-        let window = self.w.window.upgrade()?;
         match (next, open) {
             (Some(c), true) => {
                 if let Some(slot) = self.contents.get_mut(w, layer) {
@@ -602,11 +558,11 @@ impl Host {
                     true => Action::Ask { w, layer },
                     false => Action::Open { w, layer },
                 };
-                let fx = self.act_with(&window, action, Some(c.clone()));
+                let fx = self.act_with(action, Some(c.clone()));
                 (!fx.contains(&Effect::Mount(layer))).then_some(c)
             }
             (None, true) => {
-                self.act(&window, Action::Close { w, layer });
+                self.act(Action::Close { w, layer });
                 None
             }
             (None, false) => None,
@@ -616,24 +572,18 @@ impl Host {
     /// `kind` of `tab` is open or not, by what its owner (the engine's popup, a machine's view)
     /// says now: the store opens or closes its layer (a repeat of what it holds changes nothing).
     pub(super) fn layer_is(&mut self, kind: Kind, tab: TabId, open: bool) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let (w, layer) = (self.w.id, Layer::new(kind, Some(tab)));
         let action = if open {
             Action::Open { w, layer }
         } else {
             Action::Close { w, layer }
         };
-        self.act(&window, action);
+        self.act(action);
     }
 
     /// `kind`, a window surface its owner shows while some state holds (a drag, a swipe, an
     /// autoscroll), is open or not by what that state says now: only a change reaches the store.
     pub(super) fn surface_is(&mut self, kind: Kind, on: bool) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let (w, layer) = (self.w.id, Layer::new(kind, None));
         if (self.ui.phase(w, layer) == Some(Phase::Open)) != on {
             let action = if on {
@@ -641,7 +591,7 @@ impl Host {
             } else {
                 Action::Close { w, layer }
             };
-            self.act(&window, action);
+            self.act(action);
         }
     }
 
@@ -653,19 +603,15 @@ impl Host {
         tab: TabId,
         rect: wubble_core::tabdrag::Rect,
     ) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let (w, layer) = (self.w.id, Layer::new(kind, Some(tab)));
         if self.ui.rect(w, layer) != Some(rect) {
-            self.act(&window, Action::Placed { w, layer, rect });
+            self.act(Action::Placed { w, layer, rect });
         }
     }
 
     /// A pane's status bubble began or finished drawing: its fade over ends its exit.
     pub(crate) fn status_drawn(&mut self, pane: i32, drawn: bool) {
-        let (Some(tab), Some(window)) = (crate::shell::tab_id(pane), self.w.window.upgrade())
-        else {
+        let Some(tab) = crate::shell::tab_id(pane) else {
             return;
         };
         if drawn {
@@ -673,7 +619,7 @@ impl Host {
         } else {
             self.status_drawn.remove(&tab);
             let (w, layer) = (self.w.id, Layer::new(Kind::Status, Some(tab)));
-            self.act(&window, Action::Exited { w, layer });
+            self.act(Action::Exited { w, layer });
         }
     }
 
@@ -693,7 +639,7 @@ impl Host {
 
     /// `live` are the tabs drawn as panes now: a pane layer of any other tab (a bubble that was
     /// fading in a pane that went) goes, its element being gone cannot report.
-    pub(super) fn panes_gone(&mut self, window: &AppWindow, live: &[TabId]) {
+    pub(super) fn panes_gone(&mut self, live: &[TabId]) {
         let mut stale = self.ui.pane_tabs();
         stale.dedup();
         // a tab another window shows is that window's pane, not a stale one
@@ -702,7 +648,7 @@ impl Host {
         for tab in stale {
             self.status_drawn.remove(&tab);
             let w = self.w.id;
-            self.act(window, Action::PaneGone { w, tab });
+            self.act(Action::PaneGone { w, tab });
         }
     }
 
@@ -763,12 +709,12 @@ impl Host {
         let w = self.w.id;
         if self
             .ui
-            .escape_target(&self.env(window, self.shown()), w)
+            .escape_target(&self.env(), w)
             .is_none()
         {
             return false;
         }
-        self.act(window, Action::Escape { w });
+        self.act(Action::Escape { w });
         self.render_surfaces(window);
         true
     }

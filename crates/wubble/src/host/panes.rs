@@ -660,7 +660,7 @@ impl Host {
             .filter(|r| !self.start_page(r.tab))
             .map(|r| r.tab)
             .collect();
-        self.panes_gone(window, &live);
+        self.panes_gone(&live);
         let fullscreen = matches!(self.w.screen, Screen::Page { .. });
         let seams: Vec<SplitSeam> = if fullscreen {
             vec![]

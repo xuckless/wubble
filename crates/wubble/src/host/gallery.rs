@@ -191,7 +191,7 @@ impl Host {
                     .map(|k| Layer::new(k, Some(tab))),
             );
             for layer in layers {
-                self.act(window, StoreAction::Close { w, layer });
+                self.act(StoreAction::Close { w, layer });
             }
         }
         // The bookmark and print sheets are the host's own state, not the tab's: closed too.

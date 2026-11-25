@@ -184,7 +184,7 @@ impl Host {
                     self.fling(wubble_core::fling::FlingInput::Interrupt);
                 }
                 let w = self.w.id;
-                self.act(window, overlay::Action::Navigated { w, tab });
+                self.act(overlay::Action::Navigated { w, tab });
                 self.apply_permission(tab, PermissionEvent::PageChanged);
                 self.busy_page_started(tab);
             }
@@ -791,8 +791,7 @@ impl Host {
         self.print_tab_closed(tab);
         // its hover slots (a page tooltip, a card, its video strip) and its overlays go, with no
         // answer (welding answered every request the view held)
-        let window = self.w.handle();
-        self.act(&window, overlay::Action::ViewGone(tab));
+        self.act(overlay::Action::ViewGone(tab));
         // a window's menu of its page closes too, unanswered
         let menu = Layer::new(Kind::Menu, None);
         let menus: Vec<WindowId> = self
@@ -846,16 +845,13 @@ impl Host {
     /// The tab stopped being the visible one: the overlays follow their rules (menus and
     /// sheets close; dialogs, the find bar and a notice wait for the tab's return,
     /// wubble_core::overlay), its page leaves fullscreen.
-    fn left_visible(&mut self, window: &AppWindow, tab: TabId, now: Option<TabId>) {
+    fn left_visible(&mut self, tab: TabId, now: Option<TabId>) {
         let w = self.w.id;
-        self.act(
-            window,
-            overlay::Action::Switched {
-                w,
-                from: Some(tab),
-                to: now,
-            },
-        );
+        self.act(overlay::Action::Switched {
+            w,
+            from: Some(tab),
+            to: now,
+        });
         if matches!(self.w.screen, Screen::Page { tab: t, .. } if t == tab) {
             if let Some(v) = self.tab_view(tab) {
                 v.exit_fullscreen();
@@ -872,7 +868,7 @@ impl Host {
             && let Some(old) = self.w.drawn.tab
         {
             self.w.drawn.tab = tab;
-            self.left_visible(window, old, tab);
+            self.left_visible(old, tab);
         }
         let current = tab
             .and_then(|t| self.surfaces.get(&t))

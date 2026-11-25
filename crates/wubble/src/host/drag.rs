@@ -257,9 +257,9 @@ impl Host {
         if let Some(input) = drag::window_lost_actions(&self.drag, id, self.drag_window, closed) {
             self.run_drag(input);
         }
-        if !closed && let Some(window) = self.w.window.upgrade() {
+        if !closed {
             let w = self.w.id;
-            self.act(&window, wubble_core::overlay::Action::Lost { w });
+            self.act(wubble_core::overlay::Action::Lost { w });
         }
     }
 

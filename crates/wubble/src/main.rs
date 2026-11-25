@@ -1435,6 +1435,7 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.tab_track(id, kind, x, y))
     });
     window.on_command_dismissed(move || with_host_in(win, |host| host.bar_closed()));
+    window.on_command_bar_changed(move || with_host_in(win, |host| host.bar_state_changed()));
     let weak = window.as_weak();
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {

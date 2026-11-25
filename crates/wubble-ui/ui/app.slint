@@ -391,6 +391,11 @@ export component AppWindow inherits Window {
     // (`command-placement`), the start page's capsule is its field and the overlay stays shut.
     in property <CommandBarState> command-bar-state;
     in property <CommandPlacement> command-placement;
+    // The driver moved the bar: the host's store follows (a bar the driver closed is closed there).
+    callback command-bar-changed();
+    changed command-bar-state => {
+        root.command-bar-changed();
+    }
     // The OS window has the keyboard (the host, from winit, before Slint sees the change): a
     // text field loses its focus while the window is inactive, which is not leaving it.
     in property <bool> window-active: true;
@@ -701,6 +706,7 @@ export component AppWindow inherits Window {
     // What of each surface the kit still draws, open or leaving (`Mounted`): the host reads it
     // as it derives what covers a page. `mounted-changed` says one began or ended its exit.
     out property <Mounted> mounted: {
+        command-bar: root.overlay-state != CommandBarState.closed,
         permission: permission-ui.visible,
         find: find-ui.visible,
         dialog: sheet.visible,

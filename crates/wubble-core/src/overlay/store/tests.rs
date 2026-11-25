@@ -16,8 +16,6 @@ struct T {
     shown: BTreeMap<WindowId, Option<TabId>>,
     kinds: BTreeMap<WindowId, WindowKind>,
     page_keys: bool,
-    others: Vec<Layer>,
-    machine: Vec<Kind>,
     peeked: Option<TabId>,
 }
 
@@ -37,12 +35,6 @@ impl Env for T {
     fn page_has_keys(&self, _: WindowId) -> bool {
         self.page_keys
     }
-    fn others(&self, _: WindowId) -> Vec<Layer> {
-        self.others.clone()
-    }
-    fn machine(&self, kind: Kind) -> bool {
-        self.machine.contains(&kind)
-    }
     fn peeked(&self, _: WindowId) -> Option<TabId> {
         self.peeked
     }
@@ -54,8 +46,6 @@ fn env(tab: TabId) -> T {
         shown: [(W1, Some(tab))].into(),
         kinds: BTreeMap::new(),
         page_keys: false,
-        others: vec![],
-        machine: vec![],
         peeked: None,
     }
 }
@@ -335,29 +325,6 @@ fn store_table() {
         let (ui, got) = reduce(ui, &e, action);
         assert_eq!(got, fx, "{name}: effects");
         assert_eq!(sorted(ui.stack(&e, W1).layers), sorted(after), "{name}: open after");
-    }
-}
-
-/// Until each kind moves into the store, its machine owns it: the rules see it (`others`), a
-/// rule cancels it, an admitted open is a Mount the store keeps no entry for.
-#[test]
-#[rustfmt::skip]
-fn a_machine_s_overlay_meets_the_rules() {
-    let with = |others: Vec<Layer>, machine: Vec<Kind>| T { others, machine, ..env(A) };
-    // name, env, action, effects, what the store holds after
-    type MachineRow = (&'static str, T, Action, Vec<Effect>, Vec<Layer>);
-    let rows: Vec<MachineRow> = vec![
-        ("its dialog refuses Spaces", with(vec![on(Dialog, A)], vec![Dialog]), open(win(Spaces)), vec![], vec![]),
-        ("downloads replaces its menu", with(vec![win(Menu)], vec![Menu]), open(win(Downloads)),
-            vec![Cancel(win(Menu)), Mount(win(Downloads)), focus(Some(win(Downloads)))], vec![win(Downloads)]),
-        ("its kind admitted", with(vec![], vec![Find]), open(on(Find, A)), vec![Mount(on(Find, A))], vec![]),
-        ("its kind already open", with(vec![on(Find, A)], vec![Find]), open(on(Find, A)), vec![], vec![]),
-        ("Escape cancels it", with(vec![on(Find, A)], vec![Find]), ESC, vec![Cancel(on(Find, A))], vec![]),
-    ];
-    for (name, e, action, fx, held) in rows {
-        let (ui, got) = reduce(Ui::default(), &e, action);
-        let own = T { others: vec![], ..e };
-        assert_eq!((got, ui.stack(&own, W1).layers), (fx, held), "{name}");
     }
 }
 

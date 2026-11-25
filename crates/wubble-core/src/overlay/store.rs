@@ -115,11 +115,6 @@ pub trait Env {
     fn kind(&self, w: WindowId) -> WindowKind;
     /// The page has the keys (the shell's focus): its Escape never answers a `ShellOnly` row.
     fn page_has_keys(&self, w: WindowId) -> bool;
-    /// TRANSITIONAL (until each kind moves into the store): the overlays open in `w` whose
-    /// machine still owns their openness, read from it.
-    fn others(&self, w: WindowId) -> Vec<Layer>;
-    /// TRANSITIONAL: `kind`'s openness is still its machine's.
-    fn machine(&self, kind: Kind) -> bool;
     /// The window's peek tab, drawn over its shown one.
     fn peeked(&self, _: WindowId) -> Option<TabId> {
         None
@@ -244,19 +239,18 @@ impl Ui {
             })
     }
 
-    /// The open overlays in `w`, the store's and the machines' (`Env::others`).
-    fn live(&self, env: &impl Env, w: WindowId) -> Vec<Layer> {
+    /// The open overlays in `w`: its own and every tab's.
+    fn live(&self, w: WindowId) -> Vec<Layer> {
         self.in_window(w)
             .filter(|&(_, p)| p == Phase::Open)
             .map(|(l, _)| l)
-            .chain(env.others(w))
             .collect()
     }
 
     /// The open overlays drawn in `w` now (a hidden tab's are not).
     fn visible(&self, env: &impl Env, w: WindowId) -> Vec<Layer> {
         let (shown, peeked) = (env.shown(w), env.peeked(w));
-        let mut v = self.live(env, w);
+        let mut v = self.live(w);
         v.retain(|l| {
             l.kind.scope() == Scope::Pane || l.tab.is_none() || l.tab == shown || l.tab == peeked
         });
@@ -269,7 +263,7 @@ impl Ui {
         Stack {
             shown: env.shown(w),
             peeked: env.peeked(w),
-            layers: self.live(env, w),
+            layers: self.live(w),
             leaving: self
                 .in_window(w)
                 .filter(|&(_, p)| p == Phase::Leaving)
@@ -567,16 +561,14 @@ struct Step<'a, E> {
 
 impl<E: Env> Step<'_, E> {
     /// Closes `l` (`cancel`: by a rule, so its owner answers): leaving while its kit draws the
-    /// exit, else gone. A machine's overlay is only cancelled (its machine closes it).
+    /// exit, else gone. Only an open one closes.
     fn close(&mut self, l: Layer, cancel: bool) {
         let key = (home(self.w, l), l.kind);
-        let open = self.ui.entries.get(&key) == Some(&Phase::Open);
-        // a rule closes only live overlays: the store's open ones, or a machine's
-        if cancel && (open || self.env.machine(l.kind)) {
-            self.fx.push(Effect::Cancel(l));
-        }
-        if !open {
+        if self.ui.entries.get(&key) != Some(&Phase::Open) {
             return;
+        }
+        if cancel {
+            self.fx.push(Effect::Cancel(l));
         }
         let row = l.kind.row();
         if row.tail
@@ -598,7 +590,7 @@ impl<E: Env> Step<'_, E> {
         let key = (home(w, l), l.kind);
         let was = self.ui.entries.get(&key).copied();
         // already open: its owner takes the request (a second permission queues, Mod+F selects)
-        if was == Some(Phase::Open) || env.others(w).contains(&l) {
+        if was == Some(Phase::Open) {
             return;
         }
         if !row.windows.contains(&env.kind(w)) {
@@ -622,7 +614,7 @@ impl<E: Env> Step<'_, E> {
             .filter(|o| row.closes.contains(&o.kind.row().group))
             .collect();
         // what it ends is closed wherever it is; another grab it does not end refuses it
-        let live = self.ui.live(env, w);
+        let live = self.ui.live(w);
         let held = |o: &&Layer| o.kind != l.kind && o.kind.row().pointer == Pointer::Grab;
         if row.pointer == Pointer::Grab
             && live
@@ -642,7 +634,7 @@ impl<E: Env> Step<'_, E> {
             let here = |o: &Layer| o.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
             let same: Vec<Layer> = self
                 .ui
-                .live(env, w)
+                .live(w)
                 .into_iter()
                 .filter(|o| o.kind == l.kind && here(o) && !gone.contains(o))
                 .collect();
@@ -650,11 +642,6 @@ impl<E: Env> Step<'_, E> {
         }
         for g in gone {
             self.close(g, true);
-        }
-        if env.machine(l.kind) {
-            // admitted: its machine opens it
-            self.fx.push(Effect::Mount(l));
-            return;
         }
         // a surface whose content its owner rewrites in place keeps what it drew
         let again = was == Some(Phase::Leaving) && !row.remount;
@@ -812,7 +799,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         }
         Action::Switched { from, to, .. } => {
             let mut stays = vec![];
-            for l in s.ui.live(env, w).into_iter().filter(|_| from != to) {
+            for l in s.ui.live(w).into_iter().filter(|_| from != to) {
                 let mine = l.tab.is_some() && l.tab == from;
                 if l.kind.row().on_leave && (mine || l.tab.is_none()) {
                     s.close(l, true);
@@ -825,7 +812,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
             s.fx.extend(stays);
         }
         Action::Navigated { tab, .. } => {
-            for l in s.ui.live(env, w) {
+            for l in s.ui.live(w) {
                 if l.tab == Some(tab) && l.kind.row().on_nav {
                     s.close(l, true);
                 }
@@ -834,7 +821,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         Action::Lost { .. } => {
             // this window's: its own, its tab's and the hidden tabs' (another window's stay)
             let here = |l: &Layer| l.tab.is_none_or(|t| env.showing(t).is_none_or(|x| x == w));
-            for l in s.ui.live(env, w) {
+            for l in s.ui.live(w) {
                 if l.kind.row().on_lost && here(&l) {
                     s.close(l, true);
                 }
@@ -849,10 +836,7 @@ fn overlays(mut ui: Ui, env: &impl Env, action: Action) -> (Ui, Vec<Effect>) {
         }
     }
     if s.focus {
-        // a machine's overlay cancelled here is still in `others` until its machine closes it
-        let mut still = s.ui.visible(env, w);
-        still.retain(|l| !s.fx.contains(&Effect::Cancel(*l)));
-        s.fx.push(Effect::Focus(w, keys_among(still)));
+        s.fx.push(Effect::Focus(w, keys_among(s.ui.visible(env, w))));
     }
     (s.ui, s.fx)
 }

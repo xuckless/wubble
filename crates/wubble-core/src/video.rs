@@ -645,7 +645,7 @@ mod tests {
         }
     }
 
-    use crate::overlay::{self, Action, Effect, Env, Key, Kind, Layer, Surface};
+    use crate::overlay::{self, Action, Effect, Env, Key, Kind, Surface};
     use crate::tab::TabId;
     use crate::window::{WindowId, WindowKind};
 
@@ -662,12 +662,6 @@ mod tests {
             WindowKind::Main
         }
         fn page_has_keys(&self, _: WindowId) -> bool {
-            false
-        }
-        fn others(&self, _: WindowId) -> Vec<Layer> {
-            vec![]
-        }
-        fn machine(&self, _: Kind) -> bool {
             false
         }
     }

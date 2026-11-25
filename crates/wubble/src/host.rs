@@ -904,10 +904,8 @@ impl Host {
         self.window_lost(id, true);
         // its overlays go with it
         let here = self.w.id;
-        if self.enter(id)
-            && let Some(window) = self.w.window.upgrade()
-        {
-            self.act(&window, wubble_core::overlay::Action::WindowGone(id));
+        if self.enter(id) {
+            self.act(wubble_core::overlay::Action::WindowGone(id));
         }
         self.enter(here);
         // its pages' layers go while it is still a window (none with `--page-layer=off`)
@@ -2126,9 +2124,10 @@ impl Host {
     }
 
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
-        // the bar takes the place of another overlay, or goes again while a page's dialog waits
-        // (wubble_core::overlay)
-        if !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
+        // over the page the bar takes the place of another overlay, or goes again while a page's
+        // dialog waits (wubble_core::overlay); the start page's capsule is the page's own field
+        let over = window.get_command_placement() == wubble_ui::CommandPlacement::Overlay;
+        if over && !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
             let _ = self
                 .w
                 .window
