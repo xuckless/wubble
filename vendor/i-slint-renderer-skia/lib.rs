@@ -47,6 +47,9 @@ pub mod hole;
 // wubble change (4): Skia's resource cache, bounded and cleaned up, see `cache.rs`.
 #[cfg(feature = "wgpu-30")]
 pub mod cache;
+// wubble change (5): the application's present mode, paced, see `present_mode.rs`.
+#[cfg(feature = "wgpu-30")]
+pub mod present_mode;
 
 #[cfg(skia_backend_software)]
 pub mod software_surface;

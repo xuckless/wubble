@@ -59,6 +59,12 @@ pub struct WGPUSurface {
     /// Whether frames go through `retained`: partial rendering on and the swapchain image
     /// takes copies.
     retain: bool,
+    /// wubble change (5): the present modes the surface offers, how it presents now (the
+    /// application's `present_mode` hook) and when it last presented (a paced present waits
+    /// out the rest of a refresh period after it).
+    present_modes: Vec<wgpu::PresentMode>,
+    present_mode: Cell<crate::present_mode::PresentMode>,
+    presented: Cell<Option<std::time::Instant>>,
 }
 
 /// The alpha mode to composite the surface with: a translucent one when the window is
@@ -167,6 +173,9 @@ impl WGPUSurface {
             reference: RefCell::new(None),
             retained_valid: Cell::new(false),
             retain,
+            present_modes: swapchain_capabilities.present_modes,
+            present_mode: Cell::new(crate::present_mode::PresentMode::Vsync),
+            presented: Cell::new(None),
         })
     }
 
@@ -190,6 +199,33 @@ impl WGPUSurface {
             reference: RefCell::new(None),
             retained_valid: Cell::new(false),
             retain: false,
+            present_modes: Vec::new(),
+            present_mode: Cell::new(crate::present_mode::PresentMode::Vsync),
+            presented: Cell::new(None),
+        }
+    }
+
+    /// wubble change (5): the swapchain presents as the application says for `window` (kept
+    /// when it does not say), reconfigured only on a change; a paced mode then sleeps out what
+    /// is left of its period since the last present (Mailbox never waits by itself).
+    fn follow_present_mode(&self, window: &Window) {
+        use crate::present_mode::{self, PresentMode};
+        let mode = present_mode::asked(window).unwrap_or(self.present_mode.get());
+        let wanted = present_mode::wgpu_mode(mode, &self.present_modes);
+        if let (Some(surface), Some(config)) =
+            (&self.surface, self.surface_config.borrow_mut().as_mut())
+            && config.present_mode != wanted
+        {
+            config.present_mode = wanted;
+            surface.configure(&self.wgpu.device, config);
+        }
+        self.present_mode.set(mode);
+        if let (PresentMode::Paced(period), wgpu::PresentMode::Mailbox) = (mode, wanted) {
+            let wait =
+                present_mode::wait(self.presented.get(), period, std::time::Instant::now());
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
         }
     }
 
@@ -608,6 +644,9 @@ impl crate::Surface for WGPUSurface {
         ) -> Result<Option<DirtyRegion>, PlatformError>,
         pre_present_callback: &RefCell<Option<Box<dyn FnMut()>>>,
     ) -> Result<DrawOutcome, PlatformError> {
+        // wubble change (5): the application's present mode, the swapchain reconfigured on a
+        // change (before a frame is acquired); a paced one waits out the refresh period first
+        self.follow_present_mode(window);
         let (Some(surface), Some(surface_config)) = (&self.surface, &*self.surface_config.borrow())
         else {
             return Err("WGPUSurface::render() called on offscreen surface".into());
@@ -666,6 +705,8 @@ impl crate::Surface for WGPUSurface {
             // wubble change (2): the application's hook, just before the present.
             crate::presenting::notify(window);
             self.wgpu.queue.present(frame);
+            // wubble change (5): when, for the paced present
+            self.presented.set(Some(std::time::Instant::now()));
             return Ok(DrawOutcome::Success);
         }
 
@@ -733,6 +774,8 @@ impl crate::Surface for WGPUSurface {
         crate::presenting::notify(window);
 
         self.wgpu.queue.present(frame);
+        // wubble change (5): when, for the paced present
+        self.presented.set(Some(std::time::Instant::now()));
 
         Ok(DrawOutcome::Success)
     }

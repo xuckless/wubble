@@ -4,7 +4,7 @@ Vendored from crates.io `i-slint-renderer-skia` 1.19.0 (repository slint-ui/slin
 `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`; wubble
 takes it under GPL-3.0-only. Copied unmodified: everything the published crate ships
 (`Cargo.toml` is the registry's normalised manifest). Added: `partial.rs`, `rustfmt.toml` and
-this file (and `presenting.rs`, change 2; `hole.rs`, change 3; `cache.rs`, change 4). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
+this file (and `presenting.rs`, change 2; `hole.rs`, change 3; `cache.rs`, change 4; `present_mode.rs`, change 5). Patched in through the root `Cargo.toml`'s `[patch.crates-io]`.
 
 The copy is excluded from the wubble workspace, so `cargo clippy --workspace` does not lint it;
 `rustfmt.toml` sets `disable_all_formatting = true` to keep upstream formatting and a diff
@@ -87,3 +87,20 @@ Every change is marked `wubble change` in the source.
    - `lib.rs`: `pub mod cache` (with `wgpu-30`).
    wubble's policy is `wubble_core::skia_cache` (when), run by the host's lifecycle tick, its
    renders and its windows' occlusion. Not tested here (a GPU is needed).
+
+5. **A present mode the application sets, paced.** Upstream presents `AutoVsync` (FIFO)
+   always. wubble's Wayland page layer (`wubble_core::page_layer`, a `wl_subsurface` under the
+   window) needs Mailbox while a layer exists: FIFO with a synced subsurface stalled mutter's
+   headless display (wubble `docs/research/linux-page-layer.md`, section 7); Mailbox presents as
+   often as it is asked (7.x), so it is paced here.
+   - `present_mode.rs` (new): a thread-local hook (`set_hook`) asked with the window before each
+     frame (`PresentMode::Vsync` or `Paced(period)`; `None` keeps the last answer), `wait` (what
+     is left of the period since the last present) and `wgpu_mode` (Mailbox only where the
+     surface offers it, else `AutoVsync`); table tests.
+   - `wgpu_30_surface.rs`: the surface keeps its offered present modes, its current mode and its
+     last present's time; `render` first calls `follow_present_mode` (reconfigures the swapchain
+     on a change, before the frame is acquired; a paced Mailbox frame sleeps out the rest of the
+     period, as FIFO's acquire would block), and both present paths stamp the time.
+   - `lib.rs`: `pub mod present_mode` (with `wgpu-30`).
+   Without a hook every window presents as upstream.
+
