@@ -579,11 +579,11 @@ mod wayland {
             if self.placed == Some((rect, contents)) {
                 return;
             }
-            let viewport = self.placed.map(|(r, c)| (r[2], r[3], c)) != Some((rect[2], rect[3], contents));
+            let resized = self.placed.map(|(r, c)| (r[2], r[3], c)) != Some((rect[2], rect[3], contents));
             // the shell surface's state: lands with its next commit, synced or not
             self.sub.set_position(rect[0], rect[1]);
             self.placed = Some((rect, contents));
-            if viewport {
+            if resized {
                 // the layer's own state: synced, so it lands with the shell's frame too
                 self.sync(true);
                 self.viewport.set_destination(rect[2].max(1), rect[3].max(1));

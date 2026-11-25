@@ -327,18 +327,18 @@ mod tests {
     fn a_slot_takes_the_modifiers_both_sides_have() {
         let copy_and_sample = vk::FormatFeatureFlags::TRANSFER_DST | vk::FormatFeatureFlags::SAMPLED_IMAGE;
         let copy_only = vk::FormatFeatureFlags::TRANSFER_DST;
-        type Row = (&'static str, &'static [(u64, u32, vk::FormatFeatureFlags)], &'static [(u32, u64)], Vec<u64>);
+        type Row = (&'static str, Vec<(u64, u32, vk::FormatFeatureFlags)>, Vec<(u32, u64)>, Vec<u64>);
         let rows: Vec<Row> = vec![
-            ("the common one", &[(BLOCK, 1, copy_and_sample), (OTHER, 1, copy_and_sample)], &[(XR24, BLOCK)], vec![BLOCK]),
-            ("both common, both kept", &[(BLOCK, 1, copy_and_sample), (LINEAR, 1, copy_and_sample)], &[(XR24, LINEAR), (XR24, BLOCK)], vec![BLOCK, LINEAR]),
-            ("offered for another fourcc only: LINEAR", &[(BLOCK, 1, copy_and_sample)], &[(XB24, BLOCK)], vec![LINEAR]),
-            ("not samplable: LINEAR", &[(BLOCK, 1, copy_only)], &[(XR24, BLOCK)], vec![LINEAR]),
-            ("two planes: LINEAR", &[(BLOCK, 2, copy_and_sample)], &[(XR24, BLOCK)], vec![LINEAR]),
-            ("the compositor said nothing: LINEAR", &[(BLOCK, 1, copy_and_sample)], &[], vec![LINEAR]),
-            ("the driver has none: LINEAR", &[], &[(XR24, BLOCK)], vec![LINEAR]),
+            ("the common one", vec![(BLOCK, 1, copy_and_sample), (OTHER, 1, copy_and_sample)], vec![(XR24, BLOCK)], vec![BLOCK]),
+            ("both common, both kept", vec![(BLOCK, 1, copy_and_sample), (LINEAR, 1, copy_and_sample)], vec![(XR24, LINEAR), (XR24, BLOCK)], vec![BLOCK, LINEAR]),
+            ("offered for another fourcc only: LINEAR", vec![(BLOCK, 1, copy_and_sample)], vec![(XB24, BLOCK)], vec![LINEAR]),
+            ("not samplable: LINEAR", vec![(BLOCK, 1, copy_only)], vec![(XR24, BLOCK)], vec![LINEAR]),
+            ("two planes: LINEAR", vec![(BLOCK, 2, copy_and_sample)], vec![(XR24, BLOCK)], vec![LINEAR]),
+            ("the compositor said nothing: LINEAR", vec![(BLOCK, 1, copy_and_sample)], vec![], vec![LINEAR]),
+            ("the driver has none: LINEAR", vec![], vec![(XR24, BLOCK)], vec![LINEAR]),
         ];
         for (name, driver, offered, want) in rows {
-            assert_eq!(slot_modifiers(driver, offered, XR24), want, "{name}");
+            assert_eq!(slot_modifiers(&driver, &offered, XR24), want, "{name}");
         }
     }
 
