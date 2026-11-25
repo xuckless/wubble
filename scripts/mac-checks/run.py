@@ -19,6 +19,7 @@ Standard library only.
 """
 import argparse
 import plistlib
+import urllib.parse
 import datetime
 import functools
 import http.server
@@ -73,6 +74,7 @@ button.a{font:15px -apple-system,sans-serif;background:#fff;color:#000;border-ra
 <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 <script>
 const q = new URLSearchParams(location.search);
+if (q.get('from')) addEventListener('pageshow', () => fetch('/log?page=next').catch(() => {}));
 document.body.style.background = '#' + (q.get('c') || 'ffffff');
 const v = document.getElementById('v');
 if (q.get('still')) document.getElementById('spin').remove();
@@ -88,6 +90,25 @@ document.getElementById('src').ondragstart = e => e.dataTransfer.setData('text/p
 zone.ondragover = e => e.preventDefault();
 zone.ondrop = e => { e.preventDefault(); zone.style.background = '#00ff00'; };
 document.getElementById('after').onclick = e => e.target.style.background = '#0000ff';
+</script>
+"""
+
+# The editing-keys fixture: one plain <input>, its value and selection sent to `/log` on every
+# change; `pageshow` sends which page shows (Back from the bfcache too).
+EDIT = """<!doctype html><meta charset=utf-8><title>edit</title>
+<style>html,body{margin:0;height:100%;background:#e0218a;font:16px -apple-system,sans-serif}
+input{position:absolute;left:40px;top:40px;width:400px;height:40px;font-size:18px}
+a{position:absolute;left:40px;top:120px;display:block;width:200px;height:40px;background:#fff}</style>
+<input id=f autocomplete=off spellcheck=false>
+<a id=next href="page.html?c=21c4e0&from=edit">next page</a>
+<script>
+const page = new URLSearchParams(location.search).get('name') || 'edit';
+const log = q => fetch('/log?' + new URLSearchParams(q)).catch(() => {});
+const f = document.getElementById('f');
+f.addEventListener('input', () => { document.title = f.value; log({v: f.value}); });
+document.addEventListener('selectionchange', () =>
+  document.activeElement === f && log({sel: f.selectionStart + ',' + f.selectionEnd, len: f.value.length}));
+addEventListener('pageshow', () => log({page}));
 </script>
 """
 
@@ -639,9 +660,6 @@ def c2(h, ctx):
 
 @check("b", "built-in page (Settings) in a split pane")
 def cb(h, ctx):
-    # wubble refuses it by design: `Model::split_with` turns away internal pages
-    # (crates/wubble-core/src/model.rs, `is_internal`); the old steps stay for when that changes
-    raise Skip("built-in pages cannot join a split (Model::split_with refuses internal pages)")
     h.key("cmd+comma", 2.5)  # Settings opens as the last tab, below the video page (tab 3)
     h.key("cmd+3", 1.5)
     h.key("cmd+backslash", 3)
@@ -649,6 +667,11 @@ def cb(h, ctx):
     box = h.bbox(p, C)
     s = h.scale(p)
     bad = []
+    if box and box[4] >= 0.6:
+        # builds up to 0.6.2 refuse it: `Model::split_with` turned internal pages away
+        h.key("cmd+4", 1)
+        h.key("cmd+w", 1)
+        raise Skip("this build does not split a built-in page (Model::split_with refuses internal pages)")
     if not box or not 0.15 < box[4] < 0.6:
         bad.append("the page is not in a pane of its own")
     else:
@@ -1007,17 +1030,123 @@ def co(h, ctx):
     return not bad, ("; ".join(bad) + " | " if bad else "") + table
 
 
-CHECKS = [c16, cs, c4, c1, c3, c2, cb, c7, co, c8, c9, c6, c11, c10, c10b, c13, c14, c17]
+@check("e", "macOS editing keys in a plain <input>, and Cmd+Left as Back outside one")
+def ce(h, ctx):
+    h.open_tab(ctx["base"] + "/edit.html")
+    p = h.shot("edit")
+    if not h.bbox(p, A):
+        return False, "edit page not on screen"
+    h.h("click", *h.page_point(p, A, (240, 60)))
+    time.sleep(0.4)
+    bad, seen = [], []
+
+    def step(label, keys, want, key="v"):
+        if bad:  # after a failed step the field's state is unknown: the rest would only echo it
+            return
+        m = event_mark()
+        for k in keys:
+            if k.startswith("type:"):
+                h.h("type", k[5:])
+            else:
+                h.key(k)
+            time.sleep(0.15)
+        e = last_event(m, key)
+        got = e.get(key) if e else None
+        if key == "sel" and e:
+            got = f"{e['sel']}/{e['len']}"
+        seen.append(f"{label}: {got!r}")
+        if got != want:
+            shot = h.shot(f"edit-failed-{label.replace(' ', '').replace(',', '-')}")
+            bad.append(f"{label}: got {got!r}, want {want!r} (see {shot.name}; later steps not run)")
+
+    step("type", ["type:hello world foo"], "hello world foo")
+    step("Option+Delete", ["alt+delete"], "hello world ")
+    step("Cmd+Delete", ["cmd+delete"], "")
+    step("retype", ["type:hello world foo"], "hello world foo")
+    step("Cmd+Left, type", ["cmd+left", "type:X"], "Xhello world foo")
+    step("Shift+Cmd+Left", ["cmd+right", "shift+cmd+left"], "0,16/16", key="sel")
+    step("Ctrl+A, type", ["right", "ctrl+a", "type:Y"], "YXhello world foo")
+    step("Ctrl+E, type", ["ctrl+e", "type:Z"], "YXhello world fooZ")
+    step("Ctrl+A, Ctrl+K", ["ctrl+a", "ctrl+k"], "")
+    # Cmd+Left outside a text field: Back (from a fresh edit page if a step above went wrong)
+    if bad:
+        h.reset("cmd+1")
+        h.open_tab(ctx["base"] + "/edit.html")
+        p = h.shot("edit-again")
+    m = event_mark()
+    h.h("click", *h.page_point(p, A, (140, 140)))
+    nxt = last_event(m, "page", 4)
+    if not nxt or nxt["page"] != "next":
+        bad.append("the link to the next page did not load")
+    else:
+        time.sleep(1)
+        q = h.shot("edit-next")
+        if h.bbox(q, B):
+            h.h("click", *h.page_point(q, B, QUIET))  # page background: no field focused
+        time.sleep(0.3)
+        m = event_mark()
+        h.key("cmd+left")
+        back = last_event(m, "page", 4)
+        seen.append(f"Cmd+Left on the page: {back['page'] if back else 'nothing'}")
+        if not back or back["page"] != "edit":
+            bad.append("Cmd+Left outside a field did not go Back")
+    h.key("cmd+w", 1)
+    return not bad, "; ".join(bad) or "; ".join(seen)
+
+
+@check("r", "CEF frame rate matches the built-in display")
+def cr(h, ctx):
+    rates = [re.search(r"CEF frame rate (\d+) \(display (.*?) mHz\)", l) for l in h.log.lines()]
+    rates = [m for m in rates if m]
+    if not rates:
+        return False, "no `CEF frame rate` line in the log"
+    rate, display = int(rates[-1].group(1)), rates[-1].group(2)
+    return rate == 120, f"CEF frame rate {rate} (display {display} mHz); want 120 on the built-in display"
+
+
+CHECKS = [cr, ce, c16, cs, c4, c1, c3, c2, cb, c7, co, c8, c9, c6, c11, c10, c10b, c13, c14, c17]
+
+
+# What fixture pages report to `/log?k=v` (an input's value, a selection, a page shown), in order.
+EVENTS = []
+EVENTS_LOCK = threading.Lock()
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_GET(self):
+        if self.path.startswith("/log?"):
+            q = urllib.parse.parse_qs(self.path[5:], keep_blank_values=True)
+            with EVENTS_LOCK:
+                EVENTS.append({k: v[0] for k, v in q.items()})
+            self.send_response(204)
+            self.end_headers()
+            return
+        super().do_GET()
+
+
+def event_mark():
+    with EVENTS_LOCK:
+        return len(EVENTS)
+
+
+def last_event(mark, key, wait=1.5):
+    """The latest event since `mark` carrying `key`, waiting up to `wait` s for one."""
+    end = time.time() + wait
+    while True:
+        with EVENTS_LOCK:
+            hits = [e for e in EVENTS[mark:] if key in e]
+        if hits or time.time() > end:
+            return hits[-1] if hits else None
+        time.sleep(0.1)
+
 
 def fixture(dirpath):
     dirpath.mkdir(parents=True, exist_ok=True)
     (dirpath / "page.html").write_text(PAGE)
+    (dirpath / "edit.html").write_text(EDIT)
     clip = dirpath / "clip.webm"
     try:
         sh("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -1051,7 +1180,7 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     port = server.server_address[1]
     url = lambda c: f"http://127.0.0.1:{port}/page.html?c={c}" + ("&v=1" if c == C else "")
-    ctx = {"video": video, "url": url, "video_seconds": []}
+    ctx = {"video": video, "url": url, "video_seconds": [], "base": f"http://127.0.0.1:{port}"}
     version = sh(h.bin, "--version", check=False)
     print(f"mac-checks: {version} -> {out}", flush=True)
     try:

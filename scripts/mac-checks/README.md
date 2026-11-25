@@ -41,7 +41,8 @@ Automated: 1 split, 2 sidebar spring and peek, 3 seam drag, 4 tab switch and clo
 inside the page then the next click, 7 find and command bar over a video, 8 context menu, 9 `<select>`,
 10 picture-in-picture on a tab switch (and from a split pane), 11 page fullscreen, 13 resize,
 14 minimise and restore, 16 the OS screenshot, 17 a private window; `s` a still page reaching its layer;
-`o` shell popups (find bar, command bar, context menu, zoom toast) held over a playing video against
-the video alone: CPU, GPU, renders, snapshots. Settings in a split pane is skipped: built-in pages
-cannot join a split. By hand (printed at the end): 5 input methods, 6 OS drag and drop, 12 second
+`e` macOS editing keys in a plain `<input>` (Option/Cmd+Delete, Cmd+Left, Shift+Cmd+Left, Ctrl+A/E/K;
+judged from the value the page reports to the harness's `/log`) and Cmd+Left as Back outside a field;
+`r` the `CEF frame rate` log line at 120 on the built-in display; `o` shell popups (find bar, command bar, context menu, zoom toast) held over a playing video against
+the video alone: CPU, GPU, renders, snapshots. `b` Settings in a split pane beside a page (SKIP on a build that refuses it, as 0.6.2 does). By hand (printed at the end): 5 input methods, 6 OS drag and drop, 12 second
 display, 15 sleep and wake, 16 `--shot`, 18 an external 60 Hz display, and everything by eye.
