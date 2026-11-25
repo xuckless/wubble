@@ -1,4 +1,4 @@
-/* wubble.cc: downloads, copy, the download button's stretch, section entrances. No network requests. */
+/* wubble.cc: downloads, copy, the card row, the download button's stretch, section entrances. No network requests. */
 (function () {
   'use strict';
 
@@ -38,7 +38,7 @@
     var a = ASSETS[os];
     dl.href = a.url; label.textContent = a.label;
     dl.setAttribute('aria-label', a.label + ', ' + a.file);
-    forEl.textContent = os === 'mac' ? 'macOS, Apple silicon' : 'Linux, x86_64';
+    forEl.textContent = os === 'mac' ? 'Free for macOS' : 'Free for Linux';
     var mine = $(os === 'mac' ? '#os-mac' : '#os-linux');
     mine.classList.add('mine');
     $('#platforms').prepend(mine);
@@ -46,11 +46,9 @@
   } else {
     // both are listed below; the hero sends people there
     dl.href = '#install'; label.textContent = 'Downloads';
-    $('#hero-cmd').hidden = true;
     $('#hero-other').hidden = true; $('#hero-other-sep').hidden = true;
-    forEl.textContent = 'Linux and macOS';
     $('#windows').hidden = false;
-    if (os === 'windows') forEl.textContent = 'Linux and macOS, not Windows yet';
+    if (os === 'windows') forEl.textContent = 'Free for Linux and macOS, not Windows yet';
   }
 
   // ── Copy the install command: the Copy ↔ Copied swap is the design's Overlap (240 in, 190 out) ──
@@ -130,6 +128,22 @@
       if (e.key === 'Enter') { st.v += 2.4; kick(); }
     });
   });
+
+  // ── Who it's for: the card row swipes on its own; the arrows step one card and grey out at the ends ──
+  var cards = $('#cards'), prev = $('#deck-prev'), next = $('#deck-next');
+  function ends() {
+    var max = cards.scrollWidth - cards.clientWidth - 2;
+    prev.disabled = cards.scrollLeft <= 2; next.disabled = cards.scrollLeft >= max;
+  }
+  function page(dir) {
+    var c = cards.firstElementChild, gap = parseFloat(getComputedStyle(cards).columnGap) || 0;
+    cards.scrollBy({ left: dir * (c.offsetWidth + gap), behavior: reduced && reduced.matches ? 'auto' : 'smooth' });
+  }
+  prev.addEventListener('click', function () { page(-1); });
+  next.addEventListener('click', function () { page(1); });
+  cards.addEventListener('scroll', ends, { passive: true });
+  window.addEventListener('resize', ends);
+  ends();
 
   // ── Section entrances: Overlap in, 30 ms apart, the first time a section is seen (pages/found-ui.tsx) ──
   var secs = $$('.sec');

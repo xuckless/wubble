@@ -3,27 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>wubble, a Chromium-based browser where the whole window is one scene</title>
-  <meta name="description" content="wubble is an open-source web browser for Linux and macOS. It runs on Chromium, and its whole window, pages included, is drawn as one piece of glass on the GPU.">
+  <title>wubble: a calm, beautiful web browser for Linux and macOS</title>
+  <meta name="description" content="wubble is a free, open-source browser for Linux and macOS with vertical tabs, Spaces and split view. It runs on Chromium, so sites work as they do in Chrome. A home for Arc and Zen users.">
   <meta name="theme-color" content="#08090D">
   <meta name="color-scheme" content="dark">
   <link rel="canonical" href="https://wubble.cc/">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://wubble.cc/">
   <meta property="og:site_name" content="wubble">
-  <meta property="og:title" content="wubble">
-  <meta property="og:description" content="A Chromium-based browser where the whole window is one scene. Open source, for Linux and macOS.">
+  <meta property="og:title" content="wubble: calm, beautiful browsing">
+  <meta property="og:description" content="A free, open-source browser for Linux and macOS with vertical tabs, Spaces and split view. Just Wubble it.">
   <meta property="og:image" content="https://wubble.cc/assets/img/social-preview.png">
   <meta property="og:image:width" content="1280">
   <meta property="og:image:height" content="640">
-  <meta property="og:image:alt" content="The wubble logo and its window">
+  <meta property="og:image:alt" content="wubble, calm, beautiful browsing: the browser window with its tab sidebar and Start page">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="wubble: calm, beautiful browsing">
+  <meta name="twitter:description" content="A free, open-source browser for Linux and macOS with vertical tabs, Spaces and split view.">
+  <meta name="twitter:image" content="https://wubble.cc/assets/img/social-preview.png">
+  <meta name="twitter:image:alt" content="wubble, calm, beautiful browsing: the browser window with its tab sidebar and Start page">
   <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="assets/img/favicon-32.png" sizes="32x32" type="image/png">
   <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
   <link rel="preload" href="assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="assets/fonts/fredoka-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="assets/css/site.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "wubble",
+    "url": "https://wubble.cc/",
+    "applicationCategory": "BrowserApplication",
+    "operatingSystem": "Linux, macOS",
+    "description": "A free, open-source web browser for Linux and macOS with vertical tabs, Spaces and split view, built on Chromium.",
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "screenshot": "https://wubble.cc/assets/img/start-1360.jpg",
+    "downloadUrl": "https://github.com/xuckless/wubble/releases/latest",
+    "codeRepository": "https://github.com/xuckless/wubble"
+  }
+  </script>
   <script>document.documentElement.classList.add('js');</script>
 </head>
 <body>
@@ -57,9 +78,9 @@
     <nav aria-label="Sections">
       <ul class="thin glass">
         <li class="wide"><a href="#features">Features</a></li>
-        <li class="wide"><a href="#how">How it works</a></li>
+        <li class="wide"><a href="#compare">Compare</a></li>
+        <li class="wide"><a href="#faq">FAQ</a></li>
         <li><a href="#install">Install</a></li>
-        <li><a href="https://github.com/xuckless/wubble">GitHub</a></li>
       </ul>
     </nav>
   </div>
@@ -74,25 +95,15 @@
         <circle cx="51" cy="21" r="2.6" fill="#FFFFFF" opacity=".7"/>
       </svg>
     </div>
-    <h1 class="display">wubble</h1>
-    <p class="lede">A Chromium-based browser where the whole window is one scene</p>
+    <h1 class="display">Calm, beautiful browsing</h1>
+    <p class="lede">Just Wubble it.</p>
 
     <div class="get">
-      <div class="get-row">
-        <a class="dl stretch film" id="hero-dl" href="https://github.com/xuckless/wubble/releases/latest">
-          <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
-          <span id="hero-dl-label">Download</span>
-        </a>
-        <div class="cmd thin glass film" id="hero-cmd">
-          <span class="p" aria-hidden="true">$</span>
-          <code tabindex="0" aria-label="Install command">curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh</code>
-          <button class="copy press" type="button" data-copy="install" aria-label="Copy the install command">
-            <span class="sw"><svg class="cp" width="18" height="18" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ok" width="18" height="18" aria-hidden="true"><use href="#i-check"/></svg></span>
-            <span class="tip" aria-hidden="true">Copied</span>
-          </button>
-        </div>
-      </div>
-      <p class="meta"><span class="mono" data-version>Latest release</span><span class="sep" aria-hidden="true">·</span><span id="hero-for">Linux and macOS</span><span class="sep" id="hero-other-sep" aria-hidden="true">·</span><a href="#install" id="hero-other">Other downloads</a></p>
+      <a class="dl stretch film" id="hero-dl" href="https://github.com/xuckless/wubble/releases/latest">
+        <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
+        <span id="hero-dl-label">Download</span>
+      </a>
+      <p class="meta"><span id="hero-for">Free for Linux and macOS</span><span class="sep" id="hero-other-sep" aria-hidden="true">·</span><a href="#install" id="hero-other">Other downloads</a></p>
     </div>
   </div>
 </header>
@@ -102,15 +113,57 @@
     <figure class="shot">
       <picture>
         <source type="image/webp" srcset="assets/img/start-1360.webp 1360w, assets/img/start-2720.webp 2720w" sizes="(min-width: 1240px) 1096px, calc(100vw - 9vw)">
-        <img src="assets/img/start-1360.jpg" width="1360" height="880" alt="The wubble window: the vertical tab sidebar on dyed glass beside the Start page, with its soap bubble over the moving liquid and the search field" fetchpriority="low">
+        <img src="assets/img/start-1360.jpg" width="1360" height="880" alt="The wubble browser: a tinted sidebar of vertical tabs beside a calm Start page with a soap bubble and a search field" fetchpriority="low">
       </picture>
     </figure>
   </div>
 
+  <section class="sec wrap" id="for" aria-labelledby="for-h">
+    <div class="head r">
+      <h2 id="for-h">Made for how you browse</h2>
+      <p>wubble is a free, open-source browser for Linux and macOS. Your tabs live in a sidebar, grouped into Spaces, and every site works as it does in Chrome.</p>
+    </div>
+    <div class="deck r" id="deck">
+      <ul class="cards" id="cards" aria-label="Who wubble is for">
+        <li class="card" id="from-arc" style="--tint: var(--wb-sky)">
+          <div class="card-text">
+            <p class="kicker">Coming from Arc</p>
+            <h3>Your Spaces and sidebar, still moving forward</h3>
+            <p>Arc no longer gets new features. wubble keeps the sidebar, Spaces and split view you liked, adds Linux, and brings your Spaces, tabs and bookmarks across in one import.</p>
+          </div>
+          <img src="assets/img/sidebar.svg" width="840" height="380" loading="lazy" decoding="async" alt="The wubble sidebar open, shrunk to a rail, hidden, and peeking back in from the window edge">
+        </li>
+        <li class="card" id="from-zen" style="--tint: var(--wb-lilac)">
+          <div class="card-text">
+            <p class="kicker">Coming from Zen</p>
+            <h3>The calm workflow, on Chrome's engine</h3>
+            <p>Keep vertical tabs, Spaces and split view, and stop meeting sites that only work in Chrome. Import your Spaces, tabs, bookmarks and history from Zen or Firefox.</p>
+          </div>
+          <img src="assets/img/split.svg" width="840" height="380" loading="lazy" decoding="async" alt="A wubble window opening two and then three pages side by side">
+        </li>
+        <li class="card" id="for-agents" style="--tint: var(--wb-blush)">
+          <div class="card-text">
+            <p class="kicker">Working with AI agents</p>
+            <h3>Let your agent browse, on your terms</h3>
+            <p>Claude Code, Codex, Gemini CLI or Cursor can browse in wubble. Each session asks you first, gets a Space of its own and only visits the sites you allow. It's off until you turn it on.</p>
+          </div>
+          <picture>
+            <source type="image/webp" srcset="assets/img/agent-900.webp 900w, assets/img/agent-1800.webp 1800w" sizes="(min-width: 960px) 600px, 86vw">
+            <img src="assets/img/agent-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="wubble asking whether to let Claude Code browse in a Space of its own, with Deny and Allow buttons">
+          </picture>
+        </li>
+      </ul>
+      <div class="deck-nav">
+        <button class="arrow press" type="button" id="deck-prev" aria-controls="cards" aria-label="Previous card"><svg width="20" height="20" aria-hidden="true" style="transform: scaleX(-1)"><use href="#i-arrow"/></svg></button>
+        <button class="arrow press" type="button" id="deck-next" aria-controls="cards" aria-label="Next card"><svg width="20" height="20" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+      </div>
+    </div>
+  </section>
+
   <section class="sec wrap" id="features" aria-labelledby="features-h">
     <div class="head r">
       <h2 id="features-h">Features</h2>
-      <p>wubble is an open-source web browser for Linux and macOS. It runs on Chromium, so sites work as they do in Chrome, and its whole window, pages included, is drawn as one piece of glass on the GPU.</p>
+      <p>Everything you reach for every day, and nothing that gets in the way.</p>
     </div>
 
     <div class="groups">
@@ -118,20 +171,20 @@
         <div class="group-text r">
           <h3 id="g-tabs">Tabs and Spaces</h3>
           <ul class="list">
-            <li>Vertical tabs in a sidebar that collapses to a rail or hides and peeks from the edge</li>
-            <li>Spaces, each with its own name, icon, colour and cookies</li>
+            <li>Vertical tabs in a sidebar you can shrink to a rail or hide</li>
+            <li>Spaces for work, home and side projects, each with its own colour and logins</li>
             <li>Pinned tabs, folders, and an archive for tabs you stopped visiting</li>
-            <li>Tabs you are not looking at go to sleep and wake when selected</li>
+            <li>Tabs you are not using sleep to save memory, and wake when you click them</li>
           </ul>
         </div>
         <div class="group-vis">
           <figure class="r">
-            <div class="plate"><img src="assets/img/sidebar.svg" width="840" height="380" loading="lazy" decoding="async" alt="The wubble sidebar springing through extended, rail, hidden, and a floating frosted-glass edge peek over the page"></div>
-            <figcaption><b>The sidebar</b>Extended, a narrow rail, or hidden. When hidden, the window's edge brings it back over the page.</figcaption>
+            <div class="plate"><img src="assets/img/sidebar.svg" width="840" height="380" loading="lazy" decoding="async" alt="The wubble sidebar open, shrunk to a rail, hidden, and peeking back in from the window edge"></div>
+            <figcaption><b>Your sidebar, your way</b>Open, slim, or out of sight until you reach for the edge.</figcaption>
           </figure>
           <figure class="r">
-            <div class="plate"><img src="assets/img/sleep.svg" width="840" height="380" loading="lazy" decoding="async" alt="Inactive tabs in wubble's dyed vertical sidebar dim to asleep; selecting one glides the glass highlight with spring physics, wakes the tab with a bounce, and restores its page"></div>
-            <figcaption><b>Tabs that sleep</b>Tabs you are not looking at go to sleep and wake when selected.</figcaption>
+            <div class="plate"><img src="assets/img/sleep.svg" width="840" height="380" loading="lazy" decoding="async" alt="Unused tabs dimmed asleep in the sidebar; clicking one wakes it with its page just as it was"></div>
+            <figcaption><b>Tabs that rest</b>Quiet tabs sleep to save memory. Click one and it wakes up.</figcaption>
           </figure>
         </div>
       </article>
@@ -141,63 +194,37 @@
           <h3 id="g-browse">Browsing</h3>
           <ul class="list" style="--dot: var(--wb-lilac)">
             <li>Split view: up to three pages side by side</li>
-            <li>A command bar that finds tabs, history and actions</li>
+            <li>One bar to find any tab, page from your history, or action</li>
             <li>Peek at a link without leaving the page <span class="nw">(<kbd>Shift</kbd>+click)</span></li>
-            <li>Reader, find in page, zoom, PDF, print, screenshots, link hints, picture-in-picture</li>
-            <li>Video controls over any video: speed, loop, frame step, save</li>
-            <li>H.264 and AAC playback (protected, DRM video does not play)</li>
+            <li>Reader view, PDF, screenshots and picture-in-picture</li>
+            <li>Speed, loop and save controls on any video</li>
           </ul>
         </div>
         <div class="group-vis">
           <figure class="r">
-            <div class="plate"><img src="assets/img/split.svg" width="840" height="380" loading="lazy" decoding="async" alt="A wubble window splitting from one page into two and then three panes side by side, with elastic seams bowing like rubber strings and settling straight"></div>
-            <figcaption><b>Split view</b>Up to three pages side by side.</figcaption>
+            <div class="plate"><img src="assets/img/split.svg" width="840" height="380" loading="lazy" decoding="async" alt="A wubble window opening two and then three pages side by side"></div>
+            <figcaption><b>Split view</b>Compare, read and write without juggling windows.</figcaption>
           </figure>
           <figure class="r">
             <div class="shot">
               <picture>
                 <source type="image/webp" srcset="assets/img/command-bar-900.webp 900w, assets/img/command-bar-1800.webp 1800w" sizes="(min-width: 1240px) 680px, (min-width: 960px) 56vw, 92vw">
-                <img src="assets/img/command-bar-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="The command bar open in frosted glass over a page, offering to search with Google or DuckDuckGo">
+                <img src="assets/img/command-bar-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="wubble's command bar open over a page, ready to search the web, your tabs and your history">
               </picture>
             </div>
-            <figcaption><b>The command bar</b>Finds tabs, history and actions.</figcaption>
+            <figcaption><b>The command bar</b>Type a few letters to jump anywhere.</figcaption>
           </figure>
         </div>
       </article>
 
-      <article class="group" aria-labelledby="g-agents">
+      <article class="group" aria-labelledby="g-private">
         <div class="group-text r">
-          <h3 id="g-agents">For AI agents</h3>
-          <ul class="list" style="--dot: var(--wb-blush)">
-            <li>A built-in <a href="https://modelcontextprotocol.io">MCP</a> server lets an agent on your computer (Claude Code, Codex, Gemini CLI, Cursor and others) browse in wubble</li>
-            <li>Off by default; every session needs your approval, runs in its own Space, and is limited to the sites you allow</li>
-            <li>Local only: a private socket, never a network port</li>
-          </ul>
-        </div>
-        <div class="group-vis">
-          <figure class="r">
-            <div class="shot">
-              <picture>
-                <source type="image/webp" srcset="assets/img/agent-900.webp 900w, assets/img/agent-1800.webp 1800w" sizes="(min-width: 1240px) 680px, (min-width: 960px) 56vw, 92vw">
-                <img src="assets/img/agent-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="wubble asking whether to let Claude Code browse in a Space of its own, with the secrets and sites it may use, and Deny and Allow buttons">
-              </picture>
-            </div>
-            <figcaption><b>Every session asks first</b>Each agent session waits for your approval and runs in a Space of its own.</figcaption>
-          </figure>
-        </div>
-      </article>
-
-      <article class="group" aria-labelledby="g-native">
-        <div class="group-text r">
-          <h3 id="g-native">Privacy, and the rest</h3>
+          <h3 id="g-private">Private by default</h3>
           <ul class="list" style="--dot: var(--wb-mint)">
-            <li>A content blocker built on Brave's <a href="https://github.com/brave/adblock-rust">adblock-rust</a>, with cookie-banner and tracking-parameter lists</li>
-            <li>An encrypted password manager with autofill</li>
-            <li>Nothing phones home: wubble makes no request of its own unless you turn it on (the update check is the one default)</li>
-            <li>Native menus, dialogs, downloads and settings, with search and a shortcut editor</li>
-            <li>History, bookmarks, downloads, a task manager and DevTools</li>
-            <li>Import Spaces, tabs, bookmarks and history from Zen, Firefox and Arc</li>
-            <li>Signed automatic updates</li>
+            <li>Ads, trackers and cookie banners blocked out of the box</li>
+            <li>A built-in, encrypted password manager with autofill</li>
+            <li>No account, no telemetry: the only thing wubble checks on its own is updates, and you can turn that off</li>
+            <li>Settings you can search, with a shortcut editor</li>
           </ul>
         </div>
         <div class="group-vis">
@@ -205,10 +232,10 @@
             <div class="shot">
               <picture>
                 <source type="image/webp" srcset="assets/img/settings-900.webp 900w, assets/img/settings-1800.webp 1800w" sizes="(min-width: 1240px) 680px, (min-width: 960px) 56vw, 92vw">
-                <img src="assets/img/settings-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="wubble's native Settings page: a search field, a list of sections, and the General section's toggles, slider and choices">
+                <img src="assets/img/settings-900.jpg" width="900" height="582" loading="lazy" decoding="async" alt="wubble's Settings: a search field, a list of sections, and simple switches">
               </picture>
             </div>
-            <figcaption><b>Settings</b>Native settings, with search and a shortcut editor.</figcaption>
+            <figcaption><b>Settings</b>Find any setting by typing its name.</figcaption>
           </figure>
         </div>
       </article>
@@ -217,80 +244,111 @@
     <ul class="keys r" aria-label="Keyboard shortcuts">
       <li><kbd>Ctrl</kbd><kbd>T</kbd><span>new tab</span></li>
       <li><kbd>Ctrl</kbd><kbd>L</kbd><span>address</span></li>
-      <li><kbd>Ctrl</kbd><kbd>W</kbd><span>close</span></li>
       <li><kbd>Ctrl</kbd><kbd>F</kbd><span>find</span></li>
       <li><kbd>Ctrl</kbd><kbd>\</kbd><span>split</span></li>
       <li><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Z</kbd><span>sidebar</span></li>
     </ul>
-    <p class="note coming r">Coming: extensions, sync, Windows. The order is in the <a href="https://github.com/xuckless/wubble/blob/main/TODO.md">roadmap</a>.</p>
   </section>
 
-  <section class="sec wrap" id="how" aria-labelledby="how-h">
+  <section class="sec wrap" id="compare" aria-labelledby="compare-h">
     <div class="head r">
-      <h2 id="how-h">How it works</h2>
-      <p>Chromium renders each page off-screen. The shell, written in <a href="https://slint.dev">Slint</a>, draws those pages as GPU textures beside its own glass, so the sidebar, the page and every animation land in the same frame. Page frames never pass through the CPU.</p>
+      <h2 id="compare-h">wubble, Arc, Zen, Chrome and Brave</h2>
+      <p>An honest side by side, including where wubble falls short today.</p>
     </div>
-    <div class="how">
-      <figure class="plate r"><img src="assets/img/one-scene.svg" width="840" height="380" loading="lazy" decoding="async" alt="Chromium renders a web page off-screen to a GPU texture that slides zero-copy into the wubble window beside the dyed glass sidebar, while a frosted command bar pops over the live page in the same frame"></figure>
-      <figure class="plate r"><img src="assets/img/pipeline.svg" width="840" height="350" loading="lazy" decoding="async" alt="Frames travel on the GPU from Chromium through a shared GPU texture and wgpu import into Slint, above the pure wubble-core state machine emitting effects to engine and gfx"></figure>
+    <div class="table r" tabindex="0" role="region" aria-labelledby="compare-h">
+      <table>
+        <thead>
+          <tr><th scope="col"><span class="vh">Feature</span></th><th scope="col" class="us">wubble</th><th scope="col">Arc</th><th scope="col">Zen</th><th scope="col">Chrome</th><th scope="col">Brave</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Sites work as they do in Chrome</th><td class="us y">Yes</td><td class="y">Yes</td><td class="n">Firefox engine</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Vertical tabs and Spaces in one sidebar</th><td class="us y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">No</td><td class="n">Vertical tabs only</td></tr>
+          <tr><th scope="row">Linux</th><td class="us y">Yes</td><td class="n">No</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Windows</th><td class="us n">Not yet</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Free and open source</th><td class="us y">Yes</td><td class="n">No</td><td class="y">Yes</td><td class="n">No</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Ad and tracker blocking built in</th><td class="us y">Yes</td><td class="n">No</td><td class="n">No</td><td class="n">No</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Still getting new features</th><td class="us y">Yes</td><td class="n">Maintenance only</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Extensions</th><td class="us n">Not yet</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+          <tr><th scope="row">Netflix and other protected video</th><td class="us n">No</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td></tr>
+        </tbody>
+      </table>
     </div>
-    <p class="note stack-note r">wubble is written in Rust on <a href="https://bitbucket.org/chromiumembedded/cef">CEF</a>, <a href="https://slint.dev">Slint</a> and <a href="https://wgpu.rs">wgpu</a>.</p>
+    <div class="notes pick">
+      <p class="r"><b>Pick wubble</b>if you want Arc's way of working on Linux or macOS, open source, with every site working.</p>
+      <p class="r"><b>Pick something else</b>if you need extensions, Netflix or Windows today: Chrome and Brave have all three, and Zen if you prefer Firefox.</p>
+      <p class="r"><b>Checked November 2026</b>If something here has changed, <a href="https://github.com/xuckless/wubble/issues">tell us</a> and we'll fix it.</p>
+    </div>
+  </section>
+
+  <section class="sec wrap" id="faq" aria-labelledby="faq-h">
+    <div class="head r">
+      <h2 id="faq-h">Questions</h2>
+    </div>
+    <div class="faq">
+      <details class="r"><summary>Is wubble a good Arc alternative?</summary><p>Yes, if you liked Arc's sidebar, Spaces and split view. wubble has all three, runs on Linux as well as macOS, and imports your Arc Spaces, tabs and bookmarks. It doesn't have extensions yet, so check that first if you rely on them.</p></details>
+      <details class="r"><summary>Will my websites work?</summary><p>Yes. wubble runs on Chromium, the engine inside Chrome, so sites work as they do in Chrome. The exception is protected video such as Netflix, which doesn't play yet.</p></details>
+      <details class="r"><summary>Can I bring my tabs and bookmarks?</summary><p>Yes, from Arc, Zen and Firefox: Spaces, tabs, bookmarks and history.</p></details>
+      <details class="r"><summary>Is it free?</summary><p>Yes, free and open source under the GPL-3.0 licence. There is no account and nothing to pay.</p></details>
+      <details class="r"><summary>Does wubble collect my data?</summary><p>No. wubble sends nothing about you anywhere. The one request it makes on its own is checking for updates, and you can turn that off in Settings.</p></details>
+      <details class="r"><summary>Can an AI agent use wubble safely?</summary><p>Agent browsing is off until you turn it on. Then every session asks for your approval, runs in its own Space, separate from your logins, and can only visit the sites you allow. It works only on your computer, never over the network.</p></details>
+      <details class="r"><summary>Does it support extensions?</summary><p>Not yet. They are coming in a later release; the order is on the <a href="https://github.com/xuckless/wubble/blob/main/TODO.md">roadmap</a>. Ads, trackers and cookie banners are already blocked without one.</p></details>
+      <details class="r"><summary>Is it ready to use every day?</summary><p>It's a preview: usable every day on Linux, but young, so keep another browser around for now.</p></details>
+    </div>
   </section>
 
   <section class="sec wrap" id="install" aria-labelledby="install-h">
     <div class="head r">
       <h2 id="install-h">Install</h2>
-      <p class="preview">Preview<span class="mono" data-version>latest release</span></p>
-      <p>Usable day to day on Linux, but young: keep another browser around. No root needed, on Linux (x86_64) and macOS (Apple silicon).</p>
+      <p class="preview">Preview<span data-version>latest release</span></p>
+      <p>Free, no account, no admin rights needed.</p>
     </div>
 
     <div class="platforms" id="platforms">
       <article class="os r" id="os-linux" aria-labelledby="linux-h">
         <div class="os-head">
           <h3 id="linux-h">Linux<span class="here">This computer</span></h3>
-          <span class="mono">x86_64</span>
+          <span class="arch">Intel and AMD (x86_64)</span>
         </div>
+        <a class="dl ghost stretch film" data-asset="linux" href="https://github.com/xuckless/wubble/releases/latest">
+          <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
+          <span data-file="linux">Download</span>
+        </a>
+        <p class="or">Or paste this into a terminal:</p>
         <div class="cmd film">
-          <span class="p" aria-hidden="true">$</span>
           <code tabindex="0" aria-label="Install command for Linux">curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh</code>
           <button class="copy press" type="button" data-copy="install" aria-label="Copy the install command">
             <span class="sw"><svg class="cp" width="18" height="18" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ok" width="18" height="18" aria-hidden="true"><use href="#i-check"/></svg></span>
             <span class="tip" aria-hidden="true">Copied</span>
           </button>
         </div>
-        <a class="dl ghost stretch film" data-asset="linux" href="https://github.com/xuckless/wubble/releases/latest">
-          <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
-          <span data-file="linux">Download the .tar.xz</span>
-        </a>
-        <p class="note">Tested on Fedora (GNOME, Wayland). Ubuntu 23.10 and later restrict the sandbox Chromium needs, so wubble may not start there yet.</p>
+        <p class="note">Tested on Fedora. Ubuntu 23.10 and later may not start it yet.</p>
       </article>
 
       <article class="os r" id="os-mac" aria-labelledby="mac-h">
         <div class="os-head">
           <h3 id="mac-h">macOS<span class="here">This computer</span></h3>
-          <span class="mono">Apple silicon</span>
+          <span class="arch">Apple silicon</span>
         </div>
+        <a class="dl ghost stretch film" data-asset="mac" href="https://github.com/xuckless/wubble/releases/latest">
+          <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
+          <span data-file="mac">Download</span>
+        </a>
+        <p class="or">Open it and drag wubble to Applications. Or paste this into Terminal:</p>
         <div class="cmd film">
-          <span class="p" aria-hidden="true">$</span>
           <code tabindex="0" aria-label="Install command for macOS">curl -fsSL https://raw.githubusercontent.com/xuckless/wubble/main/scripts/release/install.sh | sh</code>
           <button class="copy press" type="button" data-copy="install" aria-label="Copy the install command">
             <span class="sw"><svg class="cp" width="18" height="18" aria-hidden="true"><use href="#i-copy"/></svg><svg class="ok" width="18" height="18" aria-hidden="true"><use href="#i-check"/></svg></span>
             <span class="tip" aria-hidden="true">Copied</span>
           </button>
         </div>
-        <a class="dl ghost stretch film" data-asset="mac" href="https://github.com/xuckless/wubble/releases/latest">
-          <svg width="18" height="18" aria-hidden="true"><use href="#i-download"/></svg>
-          <span data-file="mac">Download the .dmg</span>
-        </a>
-        <p class="note">The same command works on a Mac, or open the <code>.dmg</code> and drag wubble to Applications.</p>
       </article>
     </div>
     <p class="note windows" id="windows" hidden>Windows is not available yet.</p>
 
     <div class="notes">
-      <p class="r"><b>Checked downloads</b>The script checks the archive's sha256, and the signatures of the archive and the release manifest too when <a href="https://jedisct1.github.io/minisign/">minisign</a> is installed. Add <code>-s -- --require-signature</code> to refuse without it.</p>
-      <p class="r"><b>Updates</b>wubble checks GitHub when it opens and installs a new version on the next start, signature-checked. That check is the only request wubble makes by itself, and Settings, Updates turns it off.</p>
-      <p class="r"><b>Uninstall</b>Add <code>-s -- --uninstall</code> to the install command. Your profile is kept.</p>
+      <p class="r"><b>Updates itself</b>New versions install on the next start, signed and checked.</p>
+      <p class="r"><b>Safe downloads</b>The installer checks every file before it runs it.</p>
+      <p class="r"><b>Uninstall</b>Add <code>-s -- --uninstall</code> to the command. Your data is kept.</p>
     </div>
   </section>
 </main>
@@ -302,9 +360,9 @@
       <li><a href="https://github.com/xuckless/wubble">GitHub</a></li>
       <li><a href="https://github.com/xuckless/wubble/releases">Releases</a></li>
       <li><a href="https://github.com/xuckless/wubble/blob/main/TODO.md">Roadmap</a></li>
-      <li><a href="https://github.com/xuckless/wubble/blob/main/LICENSE">GPL-3.0-only</a></li>
+      <li><a href="https://github.com/xuckless/wubble/blob/main/LICENSE">GPL-3.0</a></li>
     </ul>
-    <small>wubble is free software under the GPL-3.0-only licence. This site loads nothing from anywhere else.</small>
+    <small>Built in Rust on Chromium; <a href="https://github.com/xuckless/wubble#how-it-works">how it's made</a> is on GitHub. Free software under the GPL-3.0-only licence.</small>
   </div>
 </footer>
 

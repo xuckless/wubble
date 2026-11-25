@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 380" width="840" height="380" role="img" aria-labelledby="t d">
-<title id="t">The sidebar</title>
-<desc id="d">The wubble sidebar smoothly springs between Extended, Rail, Hidden, and Edge Peek (a floating frosted-glass panel over the page).</desc>
+<title id="t">Your sidebar, your way</title>
+<desc id="d">Keep the tab sidebar open, shrink it to a slim rail, or hide it. When hidden, it slides back in from the window edge whenever you need it.</desc>
 
   <defs>
     <clipPath id="card"><rect width="840" height="380" rx="20"/></clipPath>
@@ -122,7 +122,7 @@
         <rect x="0.8" y="3.8" width="6.4" height="4.8" rx="1.2"/>
         <path d="M2.2 3.8V2.5a1.8 1.8 0 0 1 3.6 0v1.3"/>
       </g>
-      <text x="21" y="15.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
+      <text x="21" y="15.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
       
       <g transform="translate(114 7.5)" opacity=".75">
         <path d="M4 0.5L7.5 2v2.8c0 2-1.5 3.4-3.5 4.2C2 8.2 0.5 6.8 0.5 4.8V2L4 0.5Z" fill="none" stroke="#8AF2D0" stroke-width="1"/>
@@ -260,7 +260,7 @@
         <rect x="0.8" y="3.8" width="6.4" height="4.8" rx="1.2"/>
         <path d="M2.2 3.8V2.5a1.8 1.8 0 0 1 3.6 0v1.3"/>
       </g>
-      <text x="21" y="15.5" font-family="ui-monospace, 'Geist Mono', 'SFMono-Regular', Menlo, Consolas, monospace" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
+      <text x="21" y="15.5" font-family="ui-sans-serif, system-ui, -apple-system, 'Geist', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="9.5" fill="#E6EAF6" fill-opacity=".92">wikipedia.org</text>
       
       <g transform="translate(114 7.5)" opacity=".75">
         <path d="M4 0.5L7.5 2v2.8c0 2-1.5 3.4-3.5 4.2C2 8.2 0.5 6.8 0.5 4.8V2L4 0.5Z" fill="none" stroke="#8AF2D0" stroke-width="1"/>
