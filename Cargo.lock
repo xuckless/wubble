@@ -8652,7 +8652,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "wubble"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes 0.9.4",
  "arboard",
@@ -8709,7 +8709,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-ax"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "accesskit",
  "serde_json",
@@ -8717,7 +8717,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-blocker"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "adblock",
  "serde_json",
@@ -8729,7 +8729,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-bundle"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "cef",
  "plist",
@@ -8738,7 +8738,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-core"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes 0.9.4",
  "base64 0.22.1",
@@ -8760,7 +8760,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-engine"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes 0.9.4",
  "base64 0.22.1",
@@ -8782,7 +8782,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-gfx"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "naga",
  "objc2 0.6.5",
@@ -8798,7 +8798,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-helper"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "cef",
  "welding",
@@ -8806,7 +8806,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-import"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "lz4_flex",
  "rusqlite",
@@ -8818,14 +8818,14 @@ dependencies = [
 
 [[package]]
 name = "wubble-mcp"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "wubble-release"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "chrono",
  "clap",
@@ -8836,7 +8836,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-store"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "pollster 0.4.0",
  "serde_json",
@@ -8848,7 +8848,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-sysmem"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "libc",
  "sysinfo",
@@ -8858,7 +8858,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-ui"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "i-slint-backend-testing",
  "i-slint-renderer-skia",
@@ -8873,7 +8873,7 @@ dependencies = [
 
 [[package]]
 name = "wubble-vault"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "aes-gcm",
  "csv",
